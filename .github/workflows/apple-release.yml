@@ -166,7 +166,7 @@ jobs:
           path: |
             apple/.release-source-packages
             apple/.release-cef-download-cache
-          key: apple-release-macos-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/blau.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+          key: apple-release-macos-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Import Developer ID identity
         shell: bash
         env:
@@ -238,7 +238,7 @@ jobs:
         run: |
           apple/bin/install-xcodegen.sh generate \
             --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/blau.xcodeproj
+          git diff --exit-code -- apple/made.xcodeproj
           apple/bin/app-icon-tool.swift validate
       - name: Run the signed Chromium release gates
         env:
@@ -263,7 +263,7 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/Pilot.xcarchive"
           xcodebuild archive \
-            -project apple/blau.xcodeproj \
+            -project apple/made.xcodeproj \
             -scheme Pilot \
             -configuration Chromium \
             -destination 'generic/platform=macOS' \
@@ -278,12 +278,12 @@ jobs:
             MARKETING_VERSION="$RELEASE_VERSION" \
             CURRENT_PROJECT_VERSION="$RELEASE_BUILD_NUMBER"
           [[ "$(plutil -extract CFBundleShortVersionString raw \
-            "$archive/Products/Applications/Cockpit.app/Contents/Info.plist")" \
+            "$archive/Products/Applications/made.app/Contents/Info.plist")" \
             == "$RELEASE_VERSION" ]]
           [[ "$(plutil -extract CFBundleVersion raw \
-            "$archive/Products/Applications/Cockpit.app/Contents/Info.plist")" \
+            "$archive/Products/Applications/made.app/Contents/Info.plist")" \
             == "$RELEASE_BUILD_NUMBER" ]]
-      - name: Export Developer ID signed Cockpit
+      - name: Export Developer ID signed made
         shell: bash
         run: |
           export_options="$RUNNER_TEMP/DeveloperIDExportOptions.plist"
@@ -300,7 +300,7 @@ jobs:
             -exportPath "$RUNNER_TEMP/Pilot-export" \
             -exportOptionsPlist "$export_options"
 
-          app="$RUNNER_TEMP/Pilot-export/Cockpit.app"
+          app="$RUNNER_TEMP/Pilot-export/made.app"
           apple/bin/validate-chromium-archive.sh "$app"
           [[ "$(plutil -extract CFBundleShortVersionString raw \
             "$app/Contents/Info.plist")" == "$RELEASE_VERSION" ]]
@@ -309,7 +309,7 @@ jobs:
       - name: Notarize and staple Pilot
         shell: bash
         run: |
-          app="$RUNNER_TEMP/Pilot-export/Cockpit.app"
+          app="$RUNNER_TEMP/Pilot-export/made.app"
           submission="$RUNNER_TEMP/Pilot-notarization.zip"
           ditto -c -k --keepParent "$app" "$submission"
           xcrun notarytool submit "$submission" \
@@ -324,10 +324,10 @@ jobs:
         shell: bash
         run: |
           release_directory="$RUNNER_TEMP/apple-release"
-          asset="Cockpit-${RELEASE_VERSION}-macOS.zip"
+          asset="made-${RELEASE_VERSION}-macOS.zip"
           mkdir -p "$release_directory"
           ditto -c -k --keepParent \
-            "$RUNNER_TEMP/Pilot-export/Cockpit.app" \
+            "$RUNNER_TEMP/Pilot-export/made.app" \
             "$release_directory/$asset"
           (
             cd "$release_directory"
@@ -362,7 +362,7 @@ jobs:
               --ed-key-file - \
               --download-url-prefix \
                 "https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/" \
-              --link 'https://blau.app' \
+              --link 'https://blau.app/made' \
               --maximum-deltas 0 \
               -o "$release_directory/appcast.xml" \
               "$release_directory"
@@ -371,7 +371,7 @@ jobs:
               "$release_directory/appcast.xml"
           grep -Fq 'sparkle:edSignature=' "$release_directory/appcast.xml"
           grep -Fq \
-            "releases/download/$RELEASE_TAG/Cockpit-${RELEASE_VERSION}-macOS.zip" \
+            "releases/download/$RELEASE_TAG/made-${RELEASE_VERSION}-macOS.zip" \
             "$release_directory/appcast.xml"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -436,7 +436,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apple/.release-source-packages
-          key: apple-release-mobile-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/blau.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift') }}
+          key: apple-release-mobile-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift') }}
       - name: Install App Store Connect API key
         shell: bash
         run: |
@@ -453,7 +453,7 @@ jobs:
         run: |
           apple/bin/install-xcodegen.sh generate \
             --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/blau.xcodeproj
+          git diff --exit-code -- apple/made.xcodeproj
           apple/bin/app-icon-tool.swift validate
       - name: Archive ${{ matrix.scheme }}
         shell: bash
@@ -462,7 +462,7 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/$SCHEME.xcarchive"
           xcodebuild archive \
-            -project apple/blau.xcodeproj \
+            -project apple/made.xcodeproj \
             -scheme "$SCHEME" \
             -configuration Release \
             -destination 'generic/platform=iOS' \
@@ -542,7 +542,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
         run: |
           cd "$RUNNER_TEMP/apple-release"
-          asset="Cockpit-${RELEASE_VERSION}-macOS.zip"
+          asset="made-${RELEASE_VERSION}-macOS.zip"
           [[ -f "$asset" && -f "$asset.sha256" && -f appcast.xml ]]
           [[ "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" == 3 ]]
           shasum -a 256 -c "$asset.sha256"
@@ -564,8 +564,8 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --latest \
-            --title "blau $RELEASE_VERSION" \
+            --title "made $RELEASE_VERSION" \
             --generate-notes \
-            "$RUNNER_TEMP/apple-release/Cockpit-${RELEASE_VERSION}-macOS.zip" \
-            "$RUNNER_TEMP/apple-release/Cockpit-${RELEASE_VERSION}-macOS.zip.sha256" \
+            "$RUNNER_TEMP/apple-release/made-${RELEASE_VERSION}-macOS.zip" \
+            "$RUNNER_TEMP/apple-release/made-${RELEASE_VERSION}-macOS.zip.sha256" \
             "$RUNNER_TEMP/apple-release/appcast.xml"

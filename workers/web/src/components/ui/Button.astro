@@ -1,6 +1,6 @@
 ---
 interface Props {
-  variant?: 'default' | 'outline';
+  variant?: 'primary' | 'secondary';
   size?: 'default' | 'lg';
   rounded?: boolean;
   class?: string;
@@ -15,7 +15,7 @@ interface Props {
 }
 
 const {
-  variant = 'default',
+  variant = 'primary',
   size = 'default',
   rounded = false,
   class: className,

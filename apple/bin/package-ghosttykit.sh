@@ -408,7 +408,7 @@ package_framework() {
     "  \"requiredZigVersion\": \"$REQUIRED_ZIG\"," \
     "  \"requiredXcodeMajorVersion\": \"$REQUIRED_XCODE_MAJOR\"," \
     "  \"xcodeVersion\": \"$xcode_version\"," \
-    '  "packagingRepository": "https://github.com/joeblau/blau",' \
+    '  "packagingRepository": "https://github.com/joeblau/made",' \
     "  \"packagingRevision\": \"$packaging_revision\"," \
     "  \"packagingScriptSHA256\": \"$packaging_script_sha\"," \
     "  \"zigProvenanceScriptSHA256\": \"$zig_provenance_script_sha\"," \

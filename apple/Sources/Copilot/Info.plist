@@ -32,9 +32,9 @@
 		<string>_blau-sync._udp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Walkie uses the local network to sync with Cockpit.</string>
+	<string>Walkie uses the local network to sync with made.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Walkie uses the microphone for push-to-talk audio to Cockpit.</string>
+	<string>Walkie uses the microphone for push-to-talk audio to made.</string>
 	<key>UILaunchScreen</key>
 	<dict>
 		<key>UILaunchScreen</key>

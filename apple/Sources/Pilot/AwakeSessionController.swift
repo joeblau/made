@@ -61,7 +61,7 @@ private final class SystemAwakeAssertionCoordinator: AwakeAssertionCoordinating 
             let result = IOPMAssertionCreateWithName(
                 assertionType(for: kind),
                 IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                "Cockpit Keep Awake Session" as CFString,
+                "made Keep Awake Session" as CFString,
                 &assertionID
             )
             guard result == kIOReturnSuccess else {

@@ -1,4 +1,4 @@
-// Swift-interface Fastfile for the blau screenshot harness.
+// Swift-interface Fastfile for the made screenshot harness.
 //
 // fastlane is iOS-only here, so it captures the two iOS apps:
 //   - Copilot (iPhone 16 Pro)
@@ -27,7 +27,7 @@ class Fastfile: LaneFile {
     func snapshotCopilotLane() {
         desc("Capture Copilot (iPhone) screenshots in demo mode")
         captureScreenshots(
-            project: .userDefined("blau.xcodeproj"),
+            project: .userDefined("made.xcodeproj"),
             devices: .userDefined(["iPhone 16 Pro"]),
             outputDirectory: "../workers/web/public/screenshots/copilot",
             reinstallApp: .userDefined(true),
@@ -40,7 +40,7 @@ class Fastfile: LaneFile {
     func snapshotPlotterLane() {
         desc("Capture Plotter (iPad) screenshots in demo mode")
         captureScreenshots(
-            project: .userDefined("blau.xcodeproj"),
+            project: .userDefined("made.xcodeproj"),
             devices: .userDefined(["iPad Pro 13-inch (M4)"]),
             outputDirectory: "../workers/web/public/screenshots/plotter",
             reinstallApp: .userDefined(true),

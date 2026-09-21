@@ -31,7 +31,7 @@ The URLs are versioned HTTPS assets. Floating branches, `latest` aliases, and
 unverified mirrors are not accepted.
 
 The app assembly copies the artifact's exact `LICENSE.txt` and `CREDITS.html`
-to `Cockpit.app/Contents/Resources/Chromium/CEF`. Archive validation rejects a
+to `made.app/Contents/Resources/Chromium/CEF`. Archive validation rejects a
 missing or modified legal-notice copy.
 
 ## Validate without downloading
@@ -120,7 +120,7 @@ It selects an installed Xcode 26 when `xcode-select` points elsewhere, refuses
 to install a bundle without the embedded framework, helper bundles, or a valid
 signature, and swaps the destination atomically so an interrupted copy cannot
 replace a working app with a partial one. The destination defaults to
-`/Applications/Cockpit.app` and is overridable with `--destination` or
+`/Applications/made.app` and is overridable with `--destination` or
 `BLAU_PILOT_INSTALL_PATH`. Pass `--skip-build` to install the current build as
 is, or `--quit-running` to ask a copy already running from the destination to
 quit and wait up to 30 seconds for it, rather than refusing the install. The
@@ -213,7 +213,7 @@ After notarization and stapling, require Gatekeeper and stapler validation:
 ```sh
 apple/bin/validate-chromium-archive.sh \
   --require-notarization \
-  path/to/Cockpit.app
+  path/to/made.app
 ```
 
 Nested code is signed inside-out: framework Mach-O files and dylibs, the
@@ -243,7 +243,7 @@ Restore the prior checked-in manifest and associated bridge changes, run the
 manifest gate, and reinstall. Because cache entries include the release ID and
 SHA-256, the previous immutable archives can be reused without accepting the
 new release's files. Rebuild using `Chromium`, validate the resulting archive,
-and republish under a new Blau release identifier if distribution is needed.
+and republish under a new made release identifier if distribution is needed.
 Rollback does not require deleting browser profiles; profile migrations must
 remain backward-compatible or be guarded independently.
 

@@ -601,6 +601,9 @@ struct ContentView: View {
     @State private var notesToggleMonitor: Any?
     @State private var persistenceFailure: PersistenceFailure?
     @FocusState private var renamingWorkspaceID: UUID?
+    @State private var isGroupNamePresented = false
+    @State private var editingGroupID: UUID?
+    @State private var groupName = ""
 
     var body: some View {
         let activeInspectorRepoPath = isInspectorPresentedForSelectedWorkspace ? selectedWorkspaceRootPath : nil
@@ -611,7 +614,6 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: sidebarSelectionBinding) {
                 let pinned = workspaces.filter(\.isPinned)
-                let unpinned = workspaces.filter { !$0.isPinned }
 
                 Section {
                     Label("Notes", systemImage: "note.text")
@@ -636,10 +638,30 @@ struct ContentView: View {
                 }
 
                 Section(isExpanded: $workspacesSectionExpanded) {
-                    ForEach(unpinned) { workspace in
-                        workspaceRow(workspace)
+                    ForEach(store.workspaceGroups.items(workspaceIDs: store.unpinnedWorkspaceIDs)) { item in
+                        switch item {
+                        case .workspace(let id):
+                            if let workspace = workspaces.first(where: { $0.id == id }) {
+                                workspaceRow(workspace)
+                            }
+                        case .group(let id):
+                            if let group = store.workspaceGroups.group(id) {
+                                WorkspaceGroupSidebarRow(group: group, store: store) {
+                                    editingGroupID = group.id
+                                    groupName = group.name
+                                    isGroupNamePresented = true
+                                } workspaceRow: { workspace in
+                                    workspaceRow(workspace)
+                                }
+                            }
+                        }
                     }
-                    .onMove(perform: store.moveUnpinnedWorkspaces)
+                    .onMove { offsets, destination in
+                        store.workspaceGroups.moveItems(
+                            workspaceIDs: store.unpinnedWorkspaceIDs,
+                            fromOffsets: offsets, toOffset: destination
+                        )
+                    }
                 } header: {
                     Text("Workspaces")
                 }
@@ -663,12 +685,39 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
+            .alert(editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
+                   isPresented: $isGroupNamePresented) {
+                TextField("Group name", text: $groupName)
+                Button("Cancel", role: .cancel) {}
+                Button(editingGroupID == nil ? "Create" : "Save") {
+                    if let editingGroupID {
+                        store.workspaceGroups.rename(editingGroupID, to: groupName)
+                    } else {
+                        store.workspaceGroups.add(name: groupName, workspaceIDs: store.unpinnedWorkspaceIDs)
+                        workspacesSectionExpanded = true
+                    }
+                }
+                .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
             .navigationSplitViewColumnWidth(min: 180, ideal: 220)
             .toolbar {
                 ToolbarItem(placement: .navigation) {
-                    Button(action: store.addWorkspace) {
+                    Menu {
+                        Button(action: store.addWorkspace) {
+                            Label("New Workspace", systemImage: "rectangle.on.rectangle")
+                        }
+                        Button {
+                            editingGroupID = nil
+                            groupName = ""
+                            isGroupNamePresented = true
+                        } label: {
+                            Label("New Workspace Group", systemImage: "folder.badge.plus")
+                        }
+                    } label: {
                         Label("New Workspace", systemImage: "plus")
                     }
+                    .menuIndicator(.hidden)
+                    .help("New workspace or workspace group")
                 }
             }
         } detail: {
@@ -807,7 +856,7 @@ struct ContentView: View {
             usageStore.stop()
         }
         .onReceive(NotificationCenter.default.publisher(for: .pilotPersistenceSaveFailed)) { notification in
-            let operation = notification.userInfo?["operation"] as? String ?? "Saving Cockpit data"
+            let operation = notification.userInfo?["operation"] as? String ?? "Saving made data"
             let message = notification.userInfo?["message"] as? String ?? "Unknown persistence error"
             persistenceFailure = PersistenceFailure(operation: operation, message: message)
         }
@@ -819,7 +868,7 @@ struct ContentView: View {
                 title: Text("Changes could not be saved"),
                 message: Text("\(failure.operation) failed: \(failure.message)\n\nYour non-destructive edits remain in memory. Free disk space or fix permissions, then retry."),
                 primaryButton: .default(Text("Retry")) {
-                    _ = store.modelContext.saveReporting(operation: "Retrying Cockpit data save")
+                    _ = store.modelContext.saveReporting(operation: "Retrying made data save")
                 },
                 secondaryButton: .cancel()
             )

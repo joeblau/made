@@ -12,10 +12,8 @@ struct AgenticUseView: View {
     var body: some View {
         VStack(spacing: 0) {
             headerBar
-            Divider()
             if let warning = store.scanWarning {
                 warningBanner(warning)
-                Divider()
             }
             content
         }

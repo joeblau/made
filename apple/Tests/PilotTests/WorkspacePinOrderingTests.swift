@@ -49,6 +49,30 @@ struct WorkspacePinOrderingTests {
         #expect(store.workspaces.map(\.name) == ["Gamma", "Alpha", "Beta"])
     }
 
+    @Test("Moving groups never moves them above Pinned and unpinning returns to the top")
+    func groupsStayBelowPinned() throws {
+        let fixture = try makeFixture(names: ["Alpha", "Beta", "Gamma"])
+        let suite = "WorkspacePinOrderingTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let groups = WorkspaceGroups(defaults: defaults)
+        let store = WorkspaceStore(modelContext: fixture.container.mainContext, workspaceGroups: groups)
+        let group = groups.add(name: "Project", workspaceIDs: store.unpinnedWorkspaceIDs)
+        store.moveWorkspace(fixture.workspaces[1], toGroup: group)
+        store.togglePin(fixture.workspaces[2])
+        groups.moveItems(workspaceIDs: store.unpinnedWorkspaceIDs, fromOffsets: [1], toOffset: 0)
+        #expect(store.workspaces.map(\.name) == ["Gamma", "Beta", "Alpha"])
+        store.togglePin(fixture.workspaces[2])
+        #expect(store.workspaces.map(\.name) == ["Gamma", "Beta", "Alpha"])
+        #expect(groups.items(workspaceIDs: store.unpinnedWorkspaceIDs).first == .workspace(fixture.workspaces[2].id))
+        store.togglePin(fixture.workspaces[1])
+        #expect(groups.group(group)?.workspaceIDs.isEmpty == true)
+        #expect(store.workspaces.first?.name == "Beta")
+        store.moveWorkspace(fixture.workspaces[1], toGroup: group)
+        #expect(!fixture.workspaces[1].isPinned)
+        #expect(groups.group(group)?.workspaceIDs == [fixture.workspaces[1].id])
+    }
+
     private func names(ofPinned pinned: Bool, in store: WorkspaceStore) -> [String] {
         store.workspaces.filter { $0.isPinned == pinned }.map(\.name)
     }

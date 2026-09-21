@@ -1,8 +1,9 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "ui": "tui",
   "tasks": {
     "build": {
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**", ".open-next/**"]
+      "outputs": ["dist/**", ".worker-assets/**"]
     },
     "check": {},
     "lint": {},

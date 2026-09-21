@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$APPLE_ROOT/blau.xcodeproj"
+PROJECT="$APPLE_ROOT/made.xcodeproj"
 DEVELOPER_DIR="${DEVELOPER_DIR:-$(xcode-select -p)}"
 export DEVELOPER_DIR
 export DISABLE_SWIFTLINT=YES

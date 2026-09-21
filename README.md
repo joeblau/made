@@ -1,20 +1,21 @@
-# blau
+# made
 
-blau is a native Apple development cockpit: four companion apps, a public web
-site, and an optional rendezvous relay.
+**made** (Multimodal Agentic Development Environment) is a native Apple
+development environment: four companion apps, a public website, and an optional
+rendezvous relay.
 
-- **Cockpit** (macOS, internal target `Pilot`) combines terminals, editing, browser previews, GitHub work,
+- **made** (macOS, internal target `Pilot`) combines terminals, editing, browser previews, GitHub work,
   device capture, simulators, remote screens, and local container control (see
   [the Docker section](docs/docker-section.md)).
 - **Walkie** (iOS, internal target `Copilot`) supplies a trackpad, voice transcription, settings, and
   secure peer messaging.
-- **Kneeboard** (iPadOS, internal target `Plotter`) mirrors a Cockpit window with low-latency HEVC and sends
+- **Kneeboard** (iPadOS, internal target `Plotter`) mirrors a made window with low-latency HEVC and sends
   normalized PencilKit annotations. It supports rotation, Split View, and
   Stage Manager; see [the display policy](docs/plotter-display-policy.md).
 - **Trigger** (watchOS, internal target `Wingman`) sends live, short-lived terminal control gestures
   through its paired Walkie.
-- **App** is the Bun-managed Next.js/OpenNext Worker at [blau.app](https://blau.app),
-  initially showing “Hello world”. See [its setup guide](workers/app/README.md).
+- **blau.app** is the parent Next.js/OpenNext site, maintained and deployed
+  separately in [joeblau/blau](https://github.com/joeblau/blau).
 - **Web** is the static Astro site at [blau.app/made](https://blau.app/made).
 - **Rendezvous** is a Cloudflare Durable Object WebSocket relay for encrypted
   peers that cannot discover one another locally. It cannot read peer payloads.
@@ -22,6 +23,19 @@ site, and an optional rendezvous relay.
 The peer trust, verification-code, encryption, replay, and framing design is
 documented in [device pairing and FrameLink](docs/device-pairing-and-framelink.md)
 and [secure messaging](docs/p2p-secure-messaging.md).
+
+## Project identity
+
+The project and macOS app are published as **made** — **Multimodal Agentic
+Development Environment** — from [joeblau/made](https://github.com/joeblau/made).
+The macOS bundle is `made.app`, and `bun made` builds and installs it.
+`bun cockpit` remains a compatibility alias.
+
+The internal Apple target names, `app.blau.*` bundle identifiers, stored-data
+keys, and peer protocol identifiers remain stable for existing installations.
+The website is published at `blau.app/made`, and the relay continues to use
+`rendezvous.blau.app`. Existing dependency release tags retain their original
+names and checksums.
 
 ## Prerequisites
 
@@ -42,16 +56,16 @@ not rely on an arbitrary global installation.
 ## Clean-checkout setup
 
 ```bash
-git clone https://github.com/joeblau/blau.git
-cd blau
+git clone https://github.com/joeblau/made.git
+cd made
 git lfs install
 git lfs pull
 
 bun install --frozen-lockfile
 brew bundle --file apple/Brewfile
 apple/bin/install-xcodegen.sh generate --spec apple/project.yml --project apple
-xcodebuild -resolvePackageDependencies -project apple/blau.xcodeproj
-open apple/blau.xcodeproj
+xcodebuild -resolvePackageDependencies -project apple/made.xcodeproj
+open apple/made.xcodeproj
 ```
 
 SwiftPM verifies the checksummed GhosttyKit release artifact declared by the
@@ -96,15 +110,14 @@ at the narrowest declaration and explain why; do not grow the baseline.
 
 ```bash
 # Build, install, and launch the desktop, phone, and tablet apps
-bun cockpit
+bun made
 bun walkie
 bun kneeboard
 
-# Next.js, Astro, and rendezvous development servers through Turborepo
+# Astro and rendezvous development servers through Turborepo
 bun run dev
 
 # A single service
-bun run --cwd workers/app dev
 bun run --cwd workers/web dev
 bun run --cwd workers/rendezvous dev
 
@@ -150,7 +163,7 @@ developer account, not checked-in certificates.
 
 ## Security
 
-Cockpit Notes is a local plaintext scratchpad. Its value masking is only a visual
+made Notes is a local plaintext scratchpad. Its value masking is only a visual
 shoulder-surfing aid; it is not encryption or a password manager.
 
 Please report vulnerabilities privately using the process in
@@ -162,9 +175,9 @@ security problem.
 Generated Xcode project changes must match `apple/project.yml`; CI regenerates
 the project and rejects drift. Use [CLAUDE.md](CLAUDE.md) as portable repository
 guidance for contributors and coding agents. Work is tracked in
-[GitHub Issues](https://github.com/joeblau/blau/issues), not by adding stale
+[GitHub Issues](https://github.com/joeblau/made/issues), not by adding stale
 source line references to [TODOS.md](TODOS.md).
 
 ## Optional Chromium browser
 
-Cockpit's Chromium-backed browser panel is opt-in; clean Debug and Release builds continue to use WebKit without downloading CEF. Validate the immutable artifact lock with `bash apple/bin/package-chromiumkit.sh manifest`, then follow the [Chromium browser guide](docs/chromium-browser.md) and [ChromiumKit setup](apple/Packages/ChromiumKit/README.md) to install, build, run `apple/bin/test-chromium-runtime.sh`, sign, and validate the Chromium configuration.
+made's Chromium-backed browser panel is opt-in; clean Debug and Release builds continue to use WebKit without downloading CEF. Validate the immutable artifact lock with `bash apple/bin/package-chromiumkit.sh manifest`, then follow the [Chromium browser guide](docs/chromium-browser.md) and [ChromiumKit setup](apple/Packages/ChromiumKit/README.md) to install, build, run `apple/bin/test-chromium-runtime.sh`, sign, and validate the Chromium configuration.

@@ -1,4 +1,4 @@
-name: blau
+name: made
 options:
   bundleIdPrefix: app.blau
   deploymentTarget:
@@ -138,7 +138,7 @@ targets:
   Pilot:
     type: application
     platform: macOS
-    productName: Cockpit
+    productName: made
     sources:
       - Sources/Pilot
       - path: Sources/Shared
@@ -172,9 +172,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.blau.pilot
-        PRODUCT_NAME: Cockpit
+        PRODUCT_NAME: made
         # The Swift module keeps the Pilot name: tests and qualified references
-        # use it, and only the bundle/executable were renamed to Cockpit.
+        # use it, and only the bundle/executable were renamed to made.
         PRODUCT_MODULE_NAME: Pilot
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: 1
@@ -221,6 +221,27 @@ targets:
             - "$(inherited)"
             - "-lcef_dll_wrapper"
     postBuildScripts:
+      - name: Embed AirPlay Receiver
+        basedOnDependencyAnalysis: false
+        inputFiles:
+          - "$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"
+        # Declare every embedded output so an incremental helper/source update
+        # invalidates the app's resource seal and schedules CodeSign again.
+        outputFiles:
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/MacOS/CockpitAirPlayReceiver"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/README.md"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/LICENSE-UxPlay"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/LICENSE-libplist"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/LICENSE-OpenSSL"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/Sources/uxplay.tar.gz"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/Sources/libplist.tar.bz2"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/Sources/openssl.tar.gz"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/Sources/main.cpp"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/Sources/bounds.patch"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/Sources/tests.cpp"
+          - "$(TARGET_BUILD_DIR)/$(WRAPPER_NAME)/Contents/Resources/AirPlay/Sources/build-airplay-receiver.sh"
+        script: |
+          "$SRCROOT/bin/embed-airplay-receiver.sh"
       - name: Embed Sparkle
         # Xcode embeds the linked Sparkle binary product implicitly; this
         # phase re-signs that copy in place (see embed-sparkle.sh). The inputs
@@ -405,7 +426,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: app.blau.pilot.tests
         GENERATE_INFOPLIST_FILE: true
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Cockpit.app/Contents/MacOS/Cockpit"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/made.app/Contents/MacOS/made"
         BUNDLE_LOADER: "$(TEST_HOST)"
       configs:
         Chromium:

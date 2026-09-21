@@ -142,7 +142,7 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             adv.startAdvertisingPeer()
 
         case .browser:
-            updateStatus("Browsing for Cockpit sync service")
+            updateStatus("Browsing for made sync service")
             let br = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.serviceType)
             br.delegate = self
             browser = br
@@ -198,7 +198,7 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
                 self.advertiser = adv
                 adv.startAdvertisingPeer()
             case .browser:
-                self.updateStatus("Restarting Cockpit discovery")
+                self.updateStatus("Restarting made discovery")
                 self.browser?.stopBrowsingForPeers()
                 let br = MCNearbyServiceBrowser(peer: self.peerID, serviceType: Self.serviceType)
                 br.delegate = self
@@ -219,7 +219,7 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             try session.send(envelope, toPeers: [activePeer], with: mode)
             return true
         } catch {
-            updateStatus("Could not send to Cockpit: \(error.localizedDescription)")
+            updateStatus("Could not send to made: \(error.localizedDescription)")
             return false
         }
     }
@@ -471,7 +471,7 @@ extension PeerSyncService: MCNearbyServiceBrowserDelegate {
             guard let self, self.browser === browser else { return }
             self.clearPendingPairing(
                 for: peerID,
-                status: "Lost Cockpit sync peer \(peerID.displayName)"
+                status: "Lost made sync peer \(peerID.displayName)"
             )
             self.scheduleReconnect()
         }
@@ -546,7 +546,7 @@ private extension PeerSyncService {
             trusted: authenticator.peerPublicKeyBase64
         ) {
         case .trusted:
-            updateStatus("Inviting trusted Cockpit sync peer \(peerID.displayName)")
+            updateStatus("Inviting trusted made sync peer \(peerID.displayName)")
             browser.invitePeer(
                 peerID,
                 to: session,
@@ -572,7 +572,7 @@ private extension PeerSyncService {
             }
 
         case .reject:
-            updateStatus("Ignored Cockpit sync service without a valid identity")
+            updateStatus("Ignored made sync service without a valid identity")
         }
     }
 }

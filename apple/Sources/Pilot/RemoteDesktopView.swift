@@ -23,7 +23,6 @@ struct RemoteDesktopView: View {
     var body: some View {
         VStack(spacing: 0) {
             groupBar
-            Divider()
             grid
         }
         .background(.black)
@@ -113,11 +112,6 @@ struct RemoteDesktopView: View {
                                         ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08),
                                     in: RoundedRectangle(cornerRadius: 7)
                                 )
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 7)
-                                        .strokeBorder(group.id == groups.selectedGroupID
-                                            ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1)
-                                }
                         }
                         .buttonStyle(.plain)
                         .contextMenu {
@@ -211,7 +205,6 @@ struct RemoteDesktopView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { store.selectedRemoteConnectionID = id }
                 .draggable(id.uuidString)
-                Divider()
                 RemoteConnectionPane(
                     connection: connection,
                     session: sessions.session(for: id),
@@ -463,17 +456,13 @@ private struct RemoteComputerPicker: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
-            Divider()
-
             discoveredList
                 .frame(maxHeight: 280)
-
-            Divider()
 
             HStack(spacing: 8) {
                 Image(systemName: "network")
                     .foregroundStyle(.secondary)
-                TextField("Host, IP, or MagicDNS (e.g. mini01.tailnet.ts.net)", text: $manualHost)
+                TextField("Enter a host, IP address, or MagicDNS name", text: $manualHost)
                     .textFieldStyle(.plain)
                     .focused($manualFocused)
                     .onSubmit(connectManual)
@@ -485,10 +474,6 @@ private struct RemoteComputerPicker: View {
         }
         .frame(width: 520)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1)
-        )
         .shadow(color: .black.opacity(0.25), radius: 24, y: 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.top, 60)
@@ -543,7 +528,7 @@ private struct RemoteComputerPicker: View {
                 Image(systemName: "wifi.exclamationmark")
                     .font(.system(size: 26))
                     .foregroundStyle(.secondary)
-                Text("Cockpit can't browse the local network")
+                Text("made can't browse the local network")
                     .font(.callout.weight(.medium))
             default:
                 ProgressView().controlSize(.small)
@@ -553,7 +538,7 @@ private struct RemoteComputerPicker: View {
                     .multilineTextAlignment(.center)
             }
 
-            Text("The target Mac needs Screen Sharing on (System Settings → General → Sharing), and Cockpit needs Local Network access. You can still connect by typing a host below.")
+            Text("The target Mac needs Screen Sharing on (System Settings → General → Sharing), and made needs Local Network access. You can still connect by typing a host below.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

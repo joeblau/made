@@ -52,41 +52,55 @@ enum AgenticUsagePricing {
     /// Default cache-read rate: 0.1x the model's input rate.
     static let cacheReadMultiplier = 0.1
 
-    /// USD per 1M tokens. Adding a model is one line. Non-Claude rates match
-    /// what ccusage bills (models.dev / LiteLLM), verified against its daily
-    /// cost output to the cent for the high-volume models.
+    /// USD per 1M tokens. Adding a model is one line. Rates match what
+    /// ccusage bills (the Anthropic price sheet for Claude; LiteLLM and
+    /// models.dev for the rest), verified against its daily cost output to
+    /// the cent for every model with usage in the last 30 days (2026-09-01).
     static let rates: [String: AgenticModelRate] = [
-        // Claude (Anthropic price sheet).
+        // Claude (Anthropic price sheet). Fable 5.1 and Mythos 5.1 bill cache
+        // reads at 0.025x input ($0.25/M), not the usual 0.1x.
         "claude-opus-5": AgenticModelRate(input: 5.00, output: 25.00, fastInput: 10.00, fastOutput: 50.00),
+        "claude-fable-5-1": AgenticModelRate(input: 10.00, output: 50.00, cacheRead: 0.25),
+        "claude-mythos-5-1": AgenticModelRate(input: 10.00, output: 50.00, cacheRead: 0.25),
         "claude-fable-5": AgenticModelRate(input: 10.00, output: 50.00),
         "claude-mythos-5": AgenticModelRate(input: 10.00, output: 50.00),
         "claude-opus-4-8": AgenticModelRate(input: 5.00, output: 25.00),
         "claude-opus-4-7": AgenticModelRate(input: 5.00, output: 25.00),
         "claude-opus-4-6": AgenticModelRate(input: 5.00, output: 25.00),
         "claude-opus-4-5": AgenticModelRate(input: 5.00, output: 25.00),
-        "claude-sonnet-5": AgenticModelRate(input: 3.00, output: 15.00),
+        // Sonnet 5's $2/$10 launch pricing became the standard price; the
+        // announced $3/$15 increase for 2026-09-01 was cancelled.
+        "claude-sonnet-5": AgenticModelRate(input: 2.00, output: 10.00),
         "claude-sonnet-4-6": AgenticModelRate(input: 3.00, output: 15.00),
         "claude-sonnet-4-5": AgenticModelRate(input: 3.00, output: 15.00),
         "claude-haiku-4-5": AgenticModelRate(input: 1.00, output: 5.00),
         // Codex (OpenAI). Cache reads are a flat 0.1x input and no model here
         // has a long-context tier — the tiered rate sheets belong to the
         // hosted variants (databricks-*, *@eu), not the CLI's models.
-        "gpt-5.6-sol": AgenticModelRate(input: 5.00, output: 30.00),
+        "gpt-5.6-sol": AgenticModelRate(input: 4.00, output: 20.00),
         "gpt-5.5": AgenticModelRate(input: 5.00, output: 30.00),
         "gpt-5.4": AgenticModelRate(input: 2.50, output: 15.00),
         "gpt-5.3-codex": AgenticModelRate(input: 1.75, output: 14.00),
         "gpt-5.3-codex-spark": AgenticModelRate(input: 1.75, output: 14.00),
         "gpt-5.2-codex": AgenticModelRate(input: 1.75, output: 14.00),
-        "gpt-5.1-codex-mini": AgenticModelRate(input: 0.225, output: 1.80),
+        "gpt-5.1-codex-mini": AgenticModelRate(input: 0.25, output: 2.00),
         "gpt-5-codex": AgenticModelRate(input: 1.25, output: 10.00),
-        "gpt-5": AgenticModelRate(input: 1.375, output: 10.96, cacheRead: 0.156),
+        "gpt-5": AgenticModelRate(input: 1.25, output: 10.00),
         // Grok (xAI). Normally billed from the log's own costUsdTicks; these
-        // rates are the fallback for turns that lack a native cost.
+        // rates are the fallback for turns that lack a native cost and the
+        // full-rate baseline behind the cache-savings stat.
+        "grok-4.6": AgenticModelRate(input: 2.00, output: 6.00, cacheRead: 0.50),
+        "grok-4.6-build": AgenticModelRate(input: 2.00, output: 6.00, cacheRead: 0.50),
         "grok-4.5": AgenticModelRate(input: 2.00, output: 6.00, cacheRead: 0.50),
         "grok-4.5-build": AgenticModelRate(input: 2.00, output: 6.00, cacheRead: 0.50),
-        // Kimi (Moonshot). k3-256k, k3-max, and kimi-for-coding have no
-        // published rate and surface as unpriced, matching ccusage.
+        // Kimi (Moonshot). ccusage bills the bare "k3" the Kimi Code CLI logs
+        // at kimi-k3-fast rates. "kimi-for-coding" is the subscription's
+        // routing alias, which ccusage bills as kimi-k2.6 for anything logged
+        // after 2026-04-20 (kimi-k2.5 before; this table has no dated rows).
+        // k3-256k and k3-max have no published rate and surface as unpriced,
+        // matching ccusage.
         "k3": AgenticModelRate(input: 4.50, output: 22.50),
+        "kimi-for-coding": AgenticModelRate(input: 0.95, output: 4.00, cacheRead: 0.16),
         "moonshot-ai/kimi-k3": AgenticModelRate(input: 3.00, output: 15.00),
     ]
 

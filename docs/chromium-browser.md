@@ -4,8 +4,8 @@ Status: Accepted for implementation
 
 Date: 2026-07-28
 
-Tracking: [#184](https://github.com/joeblau/blau/issues/184) and
-[#185](https://github.com/joeblau/blau/issues/185)
+Tracking: [#184](https://github.com/joeblau/made/issues/184) and
+[#185](https://github.com/joeblau/made/issues/185)
 
 ## Decision
 
@@ -195,7 +195,7 @@ artifact or uses an explicitly supplied, checksum-identical local cache.
 The assembled application follows CEF's required layout:
 
 ```text
-Cockpit.app/
+made.app/
   Contents/
     Frameworks/
       Chromium Embedded Framework.framework/
@@ -209,7 +209,7 @@ The manifest, not ad hoc build-script conditionals, defines required helpers.
 Helper bundle names come from the manifest rather than from the app's
 executable name: ChromiumKit passes the base helper path to CEF explicitly
 (`browser_subprocess_path`), so the `Pilot Helper` bundles keep working inside
-`Cockpit.app`, and renaming them is a ChromiumKit lock change with its own
+`made.app`, and renaming them is a ChromiumKit lock change with its own
 immutable runtime release rather than an app-target setting.
 Archive validation rejects missing helpers, unexpected helpers, mismatched
 architectures, incorrect bundle identifiers, unsafe entitlements, invalid
@@ -263,7 +263,7 @@ or mutable network response.
 The exact upstream `LICENSE.txt` and Chromium `CREDITS.html` selected by the
 artifact manifest must remain byte-identical across architecture inputs. The
 packager preserves both in the immutable runtime artifact, the app assembler
-copies them to `Cockpit.app/Contents/Resources/Chromium/CEF`, and archive
+copies them to `made.app/Contents/Resources/Chromium/CEF`, and archive
 validation rejects missing or changed copies.
 
 ## Storage and security policy

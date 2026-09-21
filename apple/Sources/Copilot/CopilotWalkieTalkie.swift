@@ -2,7 +2,7 @@ import Foundation
 
 /// Serializes one microphone cycle through final transcription and reliable
 /// transport. Enter is deferred until the transcript has been sent, and uses
-/// the same recording ID so Cockpit can execute in the captured input pane.
+/// the same recording ID so made can execute in the captured input pane.
 @MainActor
 @Observable
 final class CopilotWalkieTalkie {
@@ -56,7 +56,7 @@ final class CopilotWalkieTalkie {
         recording = attempt
         pendingExecution = nil
         guard isConnected() else {
-            statusMessage = "Connect to Cockpit before recording."
+            statusMessage = "Connect to made before recording."
             return
         }
         transcript = ""
@@ -80,7 +80,7 @@ final class CopilotWalkieTalkie {
             guard self.recording?.id == attempt.id else { return }
             self.recording?.didAnnounce = sent
             if !sent {
-                self.statusMessage = "Cockpit disconnected. Your transcript will stay on this phone."
+                self.statusMessage = "made disconnected. Your transcript will stay on this phone."
             }
         }
     }
@@ -111,8 +111,8 @@ final class CopilotWalkieTalkie {
                         workspaceID: attempt.workspaceID, text: text, recordingID: attempt.id
                     ))) : false
                 self.recording?.didSend = sent
-                self.statusMessage = sent ? "Sent to Cockpit. Hold Volume Up to execute."
-                    : "Could not send to Cockpit. Your transcript is below; copy it to keep it."
+                self.statusMessage = sent ? "Sent to made. Hold Volume Up to execute."
+                    : "Could not send to made. Your transcript is below; copy it to keep it."
             } else {
                 self.statusMessage = attempt.didStart ? "No speech detected. Hold Volume Down to try again."
                     : "Recording ended before the microphone was ready. Hold Volume Down to try again."
@@ -176,7 +176,7 @@ final class CopilotWalkieTalkie {
     private func performExecution(workspaceID: UUID?, generation: Int) async {
         guard generation == interruptionGeneration, !Task.isCancelled else { return }
         guard isConnected() else {
-            statusMessage = "Connect to Cockpit before sending Enter."
+            statusMessage = "Connect to made before sending Enter."
             return
         }
         if let recording {
@@ -193,7 +193,7 @@ final class CopilotWalkieTalkie {
                 self.recording?.didExecute = false
                 statusMessage = "Could not send Enter. Hold Volume Up to try again."
             } else {
-                statusMessage = "Enter sent to Cockpit."
+                statusMessage = "Enter sent to made."
             }
         } else {
             // Before any dictation, Up can submit an already typed command.
@@ -207,7 +207,7 @@ final class CopilotWalkieTalkie {
 }
 
 /// Ignore workspace snapshots already in flight when a local volume tap was
-/// sent. Once Cockpit confirms the selection, its normal updates take over.
+/// sent. Once made confirms the selection, its normal updates take over.
 struct CopilotWorkspaceSelectionState {
     private var pendingID: UUID?
     private var pendingUntil: Date?

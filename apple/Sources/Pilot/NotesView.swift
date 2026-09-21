@@ -63,9 +63,7 @@ struct NotesView: View {
         let notes = store.notes
         VStack(spacing: 0) {
             tabBar(notes: notes)
-            Divider()
             secretStorageDisclosure
-            Divider()
             editor
         }
         .overlay(alignment: .bottom) {
@@ -179,9 +177,6 @@ struct NotesView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             }
-
-            Divider()
-                .frame(height: 26)
 
             wordWrapMenu
                 .padding(.horizontal, 12)
@@ -1368,7 +1363,6 @@ private struct CopiedSecretToast: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             .background(.regularMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(.separator.opacity(0.4), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.3), radius: 10, y: 3)
     }
 }
@@ -1387,16 +1381,22 @@ private struct NoteTab: View {
             Text(title)
                 .scaledFont(size: 12, weight: isSelected ? .semibold : .regular)
                 .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-            if isHovering || isSelected {
-                Button(action: onClose) {
-                    Image(systemName: "xmark")
-                        .scaledFont(size: 9, weight: .bold)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Close Note")
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .scaledFont(size: 9, weight: .bold)
+                    .frame(width: 18)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            // Reserve the trailing slot so hovering never shifts the title.
+            .opacity(isHovering || isSelected ? 1 : 0)
+            .disabled(!isHovering && !isSelected)
+            .allowsHitTesting(isHovering || isSelected)
+            .accessibilityHidden(!isHovering && !isSelected)
+            .help("Close Note")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
@@ -1406,10 +1406,6 @@ private struct NoteTab: View {
             interactive: true,
             in: RoundedRectangle(cornerRadius: 7, style: .continuous)
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(isSelected ? Color.accentColor.opacity(0.5) : .clear, lineWidth: 1)
-        }
         // Insertion marker on the leading edge — a drop places the dragged tab
         // just before this one.
         .overlay(alignment: .leading) {

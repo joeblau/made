@@ -152,7 +152,6 @@ struct AndroidPaneView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
             .background(.regularMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(.separator.opacity(0.4), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
             .transition(.opacity.combined(with: .scale(scale: 0.85)))
             .allowsHitTesting(false)
@@ -206,7 +205,6 @@ private struct AndroidPickerView: View {
                 .help("Re-scan connected Android devices")
             }
             .padding(12)
-            Divider()
 
             if session.devices.isEmpty && session.bootableAVDs.isEmpty {
                 emptyState

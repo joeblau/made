@@ -57,8 +57,8 @@ struct AgenticUseHeroPanel: View {
             }
 
             ForEach(providerGroups) { group in
-                Divider()
                 AgenticUseProviderSection(group: group)
+                    .padding(.top, 8)
             }
 
             Spacer(minLength: 0)
