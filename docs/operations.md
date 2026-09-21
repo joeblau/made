@@ -2,7 +2,7 @@
 
 ## Required GitHub configuration
 
-The `production` environment owns both Cloudflare deploy jobs. Protect it with
+The `production` environment owns all three Cloudflare deploy jobs. Protect it with
 required reviewers if deployments should pause for approval, and store these
 environment secrets there:
 
@@ -11,9 +11,11 @@ environment secrets there:
 
 The token should be an account-scoped custom token limited to the blau account
 with **Workers Scripts: Write**. The Workers Custom Domains API accepts that
-permission for attaching `blau.app` and `rendezvous.blau.app`; this deployment
-does not need DNS write, zone-wide route write, account administration, KV, R2,
-or user permissions. Rotate the token if its scope is broader and confirm both
+permission for attaching `blau.app` and `rendezvous.blau.app`. The OpenNext
+`blau-app` Worker additionally requires **Workers Routes: Write** and
+**Zone: Read**, restricted to the `blau.app` zone, for its `blau.app/*` route.
+No DNS write, account administration, KV, R2, or user permissions are needed.
+Rotate the token if its scope is broader and confirm all
 jobs still deploy before deleting the old token.
 
 All Actions and build tools are pinned. Dependabot proposes weekly Bun-workspace
@@ -23,13 +25,15 @@ and GitHub Actions updates, which must pass the same CI gates before merge.
 
 Pushes to `main` run all Worker quality gates, then deploy only the changed
 service with the lockfile-installed Wrangler. A manual Deploy workflow run
-deploys both services. The workflow is serialized so two production deploys
+deploys all three services. The workflow is serialized so two production deploys
 cannot race.
 
 To inspect or roll back a service locally with the same pinned CLI:
 
 ```bash
 bun install --frozen-lockfile
+bun run --cwd workers/app deploy:list
+bun run --cwd workers/app rollback -- <VERSION_ID>
 bun run --cwd workers/web deploy:list
 bun run --cwd workers/web rollback -- <VERSION_ID>
 bun run --cwd workers/rendezvous deploy:list
@@ -40,12 +44,19 @@ After a deploy, verify the public endpoints:
 
 ```bash
 curl --fail --silent --show-error https://rendezvous.blau.app/healthz
-curl --fail --silent --show-error --head https://blau.app
+curl --fail --silent --show-error https://blau.app/
+curl --fail --silent --show-error --location --head https://blau.app/made
 ```
 
-The site response must include its CSP, `nosniff`, `DENY`, referrer policy,
+The Astro site response at `/made` must include its CSP, `nosniff`, `DENY`, referrer policy,
 permissions policy, COOP, and HSTS headers. The build checks the same policy and
 rejects inline scripts, inline styles, and event handlers before deployment.
+
+The OpenNext Worker serves `/` and `/_next/`. `/made` and `/made/` serve the
+Astro homepage; other paths are forwarded unchanged to `blau-web` through its
+`MADE_SITE` service binding. Keep the existing Astro
+Worker and its apex Custom Domain deployed. See the
+[OpenNext setup guide](../workers/app/README.md) for local preview and deployment.
 
 ## HSTS decision
 

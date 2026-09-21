@@ -13,7 +13,9 @@ site, and an optional rendezvous relay.
   Stage Manager; see [the display policy](docs/plotter-display-policy.md).
 - **Trigger** (watchOS, internal target `Wingman`) sends live, short-lived terminal control gestures
   through its paired Walkie.
-- **Web** is the static Astro site at [blau.app](https://blau.app).
+- **App** is the Bun-managed Next.js/OpenNext Worker at [blau.app](https://blau.app),
+  initially showing “Hello world”. See [its setup guide](workers/app/README.md).
+- **Web** is the static Astro site at [blau.app/made](https://blau.app/made).
 - **Rendezvous** is a Cloudflare Durable Object WebSocket relay for encrypted
   peers that cannot discover one another locally. It cannot read peer payloads.
 
@@ -98,10 +100,11 @@ bun cockpit
 bun walkie
 bun kneeboard
 
-# Astro + rendezvous development servers through Turborepo
+# Next.js, Astro, and rendezvous development servers through Turborepo
 bun run dev
 
 # A single service
+bun run --cwd workers/app dev
 bun run --cwd workers/web dev
 bun run --cwd workers/rendezvous dev
 
