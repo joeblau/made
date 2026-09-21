@@ -605,7 +605,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
             alert.alertStyle = .informational
             alert.messageText = "Allow \(names) access?"
             alert.informativeText =
-                "\(origin.serialized) is requesting access. This decision applies only to this origin for this Cockpit session."
+                "\(origin.serialized) is requesting access. This decision applies only to this origin for this made session."
             alert.addButton(withTitle: "Allow")
             alert.addButton(withTitle: "Deny")
             return alert.runModal() == .alertFirstButtonReturn ? .allow : .deny

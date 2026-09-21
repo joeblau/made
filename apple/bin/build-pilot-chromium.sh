@@ -27,7 +27,7 @@ grep -Eq '^Xcode 26\.' <<<"$selected_xcode" || {
 export DISABLE_SWIFTLINT=YES
 cd "$REPOSITORY_ROOT"
 exec xcodebuild \
-  -project "$APPLE_ROOT/blau.xcodeproj" \
+  -project "$APPLE_ROOT/made.xcodeproj" \
   -scheme Pilot \
   -configuration Chromium \
   -destination 'platform=macOS' \

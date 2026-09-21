@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 
 export default defineConfig({
   site: 'https://blau.app',
+  base: '/made',
   // React renders the QR codes at build time only; no client directives are
   // used, so no React runtime ships to the browser.
   integrations: [react()],

@@ -1,7 +1,7 @@
 excluded:
   - fastlane
   - Frameworks
-  - blau.xcodeproj
+  - made.xcodeproj
 
 # Start with deterministic correctness/consistency checks. Length and
 # complexity limits are intentionally generous and can be ratcheted down as

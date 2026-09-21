@@ -50,7 +50,7 @@ struct DockerRequest: Sendable {
         var head = "\(method) \(path) HTTP/1.1\r\n"
         head += "Host: docker\r\n"
         head += "Accept: application/json\r\n"
-        head += "User-Agent: Cockpit\r\n"
+        head += "User-Agent: made\r\n"
         head += "Connection: close\r\n"
         if let body {
             head += "Content-Type: application/json\r\n"

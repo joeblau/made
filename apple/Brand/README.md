@@ -1,7 +1,7 @@
 # App icon source and export
 
 `AppIconMaster.png` is the single authoritative 1024×1024 opaque sRGB source
-for Cockpit, Walkie, Kneeboard, and Trigger. Its SHA-256 is
+for made, Walkie, Kneeboard, and Trigger. Its SHA-256 is
 `43621e02055dce6da8352f2b7184d1f9d5aeb907511782d815ebb191e0c2662f`.
 
 Regenerate every catalog slot and the iOS dark/tinted appearances with:

@@ -89,7 +89,7 @@ and installed-app launch are release checks after SwiftPM resolves the binary.
    `GhosttyKit.checksums.txt` without renaming.
 4. Put `swift package compute-checksum GhosttyKit.xcframework.zip` in
    `apple/Packages/GhosttyKit/Package.swift`.
-5. Regenerate `apple/blau.xcodeproj`, resolve packages from a clean cache, run
+5. Regenerate `apple/made.xcodeproj`, resolve packages from a clean cache, run
    `apple/bin/build-ci.sh` and `apple/bin/test.sh pilot`, then archive and launch
    the signed Pilot app.
 

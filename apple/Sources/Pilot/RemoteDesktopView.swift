@@ -543,7 +543,7 @@ private struct RemoteComputerPicker: View {
                 Image(systemName: "wifi.exclamationmark")
                     .font(.system(size: 26))
                     .foregroundStyle(.secondary)
-                Text("Cockpit can't browse the local network")
+                Text("made can't browse the local network")
                     .font(.callout.weight(.medium))
             default:
                 ProgressView().controlSize(.small)
@@ -553,7 +553,7 @@ private struct RemoteComputerPicker: View {
                     .multilineTextAlignment(.center)
             }
 
-            Text("The target Mac needs Screen Sharing on (System Settings → General → Sharing), and Cockpit needs Local Network access. You can still connect by typing a host below.")
+            Text("The target Mac needs Screen Sharing on (System Settings → General → Sharing), and made needs Local Network access. You can still connect by typing a host below.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)

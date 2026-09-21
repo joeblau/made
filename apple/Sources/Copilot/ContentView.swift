@@ -161,8 +161,8 @@ struct ContentView: View {
         }
         .alert(
             syncService.pairingRequest?.isKeyChange == true
-                ? "Trust New Cockpit Identity?"
-                : "Pair with Cockpit?",
+                ? "Trust New made Identity?"
+                : "Pair with made?",
             isPresented: Binding(
                 get: { syncService.pairingRequest != nil },
                 set: { if !$0 { syncService.resolvePairingRequest(approved: false) } }
@@ -184,9 +184,9 @@ struct ContentView: View {
     private var mainContent: some View {
         if !isPeerConnected && workspaces.isEmpty {
             ContentUnavailableView {
-                Label("Looking for Cockpit...", systemImage: "antenna.radiowaves.left.and.right")
+                Label("Looking for made...", systemImage: "antenna.radiowaves.left.and.right")
             } description: {
-                Text("Make sure Cockpit is running on your Mac.")
+                Text("Make sure made is running on your Mac.")
             } actions: {
                 ProgressView()
             }
@@ -194,7 +194,7 @@ struct ContentView: View {
             ContentUnavailableView(
                 "No Workspaces",
                 systemImage: "rectangle.on.rectangle.slash",
-                description: Text("Create a workspace in Cockpit.")
+                description: Text("Create a workspace in made.")
             )
         } else {
             workspaceList
@@ -393,7 +393,7 @@ struct ContentView: View {
             TabSummary(id: UUID(), title: "Browser", systemImageName: "safari")
         ]
         let demo: [WorkspaceSummary] = [
-            WorkspaceSummary(id: UUID(), name: "blau", isPinned: true, badgeCount: 0,
+            WorkspaceSummary(id: UUID(), name: "made", isPinned: true, badgeCount: 0,
                              tabs: demoTabs, selectedTabID: demoTabs.first?.id),
             WorkspaceSummary(id: UUID(), name: "web", badgeCount: 2),
             WorkspaceSummary(id: UUID(), name: "infra", badgeCount: 0),

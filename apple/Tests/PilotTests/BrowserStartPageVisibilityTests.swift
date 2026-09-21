@@ -123,7 +123,7 @@ struct BrowserEngineTests {
     func demoStateKeepsChromiumOfflineAndDeterministic() throws {
         let workspaces = WorkspaceStore.makeDemoWorkspaces()
 
-        #expect(workspaces.map(\.name) == ["blau", "web", "infra"])
+        #expect(workspaces.map(\.name) == ["made", "web", "infra"])
         #expect(workspaces.map(\.workspaceSortOrder) == [0, 1, 2])
         #expect(workspaces.map(\.isPinned) == [true, false, false])
 

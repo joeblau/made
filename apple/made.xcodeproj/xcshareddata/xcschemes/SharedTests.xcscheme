@@ -15,10 +15,10 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "478609A031F3B4AB51EDD75F"
-               BuildableName = "PilotTests.xctest"
-               BlueprintName = "PilotTests"
-               ReferencedContainer = "container:blau.xcodeproj">
+               BlueprintIdentifier = "03753BC8999BD4C9A3C85A3C"
+               BuildableName = "SharedTests.xctest"
+               BlueprintName = "SharedTests"
+               ReferencedContainer = "container:made.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "478609A031F3B4AB51EDD75F"
-            BuildableName = "PilotTests.xctest"
-            BlueprintName = "PilotTests"
-            ReferencedContainer = "container:blau.xcodeproj">
+            BlueprintIdentifier = "03753BC8999BD4C9A3C85A3C"
+            BuildableName = "SharedTests.xctest"
+            BlueprintName = "SharedTests"
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -44,10 +44,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "478609A031F3B4AB51EDD75F"
-               BuildableName = "PilotTests.xctest"
-               BlueprintName = "PilotTests"
-               ReferencedContainer = "container:blau.xcodeproj">
+               BlueprintIdentifier = "03753BC8999BD4C9A3C85A3C"
+               BuildableName = "SharedTests.xctest"
+               BlueprintName = "SharedTests"
+               ReferencedContainer = "container:made.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -67,10 +67,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "478609A031F3B4AB51EDD75F"
-            BuildableName = "PilotTests.xctest"
-            BlueprintName = "PilotTests"
-            ReferencedContainer = "container:blau.xcodeproj">
+            BlueprintIdentifier = "03753BC8999BD4C9A3C85A3C"
+            BuildableName = "SharedTests.xctest"
+            BlueprintName = "SharedTests"
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
    </LaunchAction>
@@ -83,10 +83,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "478609A031F3B4AB51EDD75F"
-            BuildableName = "PilotTests.xctest"
-            BlueprintName = "PilotTests"
-            ReferencedContainer = "container:blau.xcodeproj">
+            BlueprintIdentifier = "03753BC8999BD4C9A3C85A3C"
+            BuildableName = "SharedTests.xctest"
+            BlueprintName = "SharedTests"
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
    </ProfileAction>

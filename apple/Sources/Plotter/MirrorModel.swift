@@ -76,10 +76,10 @@ final class MirrorModel {
                 if !connected { self?.pilotColorScheme = nil }
                 // Drive the widget + Live Activity off connection state.
                 PlotterSnapshotStore.writeStatus(
-                    PlotterSnapshotStore.Status(isConnected: connected, title: "Cockpit", updatedAt: Date())
+                    PlotterSnapshotStore.Status(isConnected: connected, title: "made", updatedAt: Date())
                 )
                 WidgetCenter.shared.reloadAllTimelines()
-                PlotterActivityController.shared.setConnected(connected, title: "Cockpit")
+                PlotterActivityController.shared.setConnected(connected, title: "made")
             }
         }
         receiver.onPairingRequestChanged = { [weak self] request in
@@ -119,7 +119,7 @@ final class MirrorModel {
         pairingRequest = nil
         receiver.revokePairing()
         frameCount = 0
-        statusText = "Cockpit pairing revoked"
+        statusText = "made pairing revoked"
     }
 
     /// Seeds representative state for screenshots: a 16:10 dark still, a
@@ -129,8 +129,8 @@ final class MirrorModel {
         let size = CGSize(width: 1600, height: 1000)
         videoSize = size
         demoImage = Self.makeDemoFrame(size: size)
-        statusText = "Connected to Cockpit (demo)"
-        annotationStatusText = "Cockpit received your annotations"
+        statusText = "Connected to made (demo)"
+        annotationStatusText = "made received your annotations"
         // Any non-zero value hides the SearchingOverlay (gated on == 0).
         frameCount = 1
     }
@@ -224,7 +224,7 @@ final class MirrorModel {
     }
 
     private func acknowledgeAnnotation(_ seq: UInt32) {
-        annotationStatusText = "Cockpit received your annotations"
+        annotationStatusText = "made received your annotations"
     }
 
     /// Called on the receiver's internal queue.
@@ -313,10 +313,10 @@ final class MirrorModel {
             // a recent still, and nudge them to refresh.
             PlotterSnapshotStore.writeSnapshot(
                 jpeg: data,
-                status: PlotterSnapshotStore.Status(isConnected: true, title: "Cockpit", updatedAt: Date())
+                status: PlotterSnapshotStore.Status(isConnected: true, title: "made", updatedAt: Date())
             )
             WidgetCenter.shared.reloadAllTimelines()
-            PlotterActivityController.shared.touch(title: "Cockpit")
+            PlotterActivityController.shared.touch(title: "made")
         }
     }
 }

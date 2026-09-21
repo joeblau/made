@@ -1,5 +1,5 @@
 {
-  "name": "blau",
+  "name": "made",
   "private": true,
   "type": "module",
   "workspaces": ["workers/*"],
@@ -24,7 +24,8 @@
     "test": "turbo run test",
     "audit": "bun audit",
     "xcodegen": "apple/bin/install-xcodegen.sh generate --spec apple/project.yml --project apple",
-    "cockpit": "apple/bin/install-pilot-chromium.sh --quit-running && open /Applications/Cockpit.app",
+    "made": "apple/bin/install-pilot-chromium.sh --quit-running && open /Applications/made.app",
+    "cockpit": "bun run made",
     "walkie": "apple/bin/deploy-mobile-app.sh walkie",
     "kneeboard": "apple/bin/deploy-mobile-app.sh kneeboard",
     "ci": "bun run lint && bun run check && bun run test && bun run build && bun run audit",

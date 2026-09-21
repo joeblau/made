@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$APPLE_ROOT/blau.xcodeproj"
+PROJECT="$APPLE_ROOT/made.xcodeproj"
 SUITE="${1:-all}"
 DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-tests}"
 PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"

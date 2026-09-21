@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "474C5A4305C5C5138E36D5C1"
-               BuildableName = "Cockpit.app"
+               BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
+               BuildableName = "made.app"
                BlueprintName = "Pilot"
-               ReferencedContainer = "container:blau.xcodeproj">
+               ReferencedContainer = "container:made.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +32,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "474C5A4305C5C5138E36D5C1"
-            BuildableName = "Cockpit.app"
+            BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
+            BuildableName = "made.app"
             BlueprintName = "Pilot"
-            ReferencedContainer = "container:blau.xcodeproj">
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -55,10 +55,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "474C5A4305C5C5138E36D5C1"
-            BuildableName = "Cockpit.app"
+            BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
+            BuildableName = "made.app"
             BlueprintName = "Pilot"
-            ReferencedContainer = "container:blau.xcodeproj">
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -74,10 +74,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "474C5A4305C5C5138E36D5C1"
-            BuildableName = "Cockpit.app"
+            BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
+            BuildableName = "made.app"
             BlueprintName = "Pilot"
-            ReferencedContainer = "container:blau.xcodeproj">
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

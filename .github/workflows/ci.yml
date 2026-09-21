@@ -112,7 +112,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/blau.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Validate Chromium artifact lock
         run: |
           bash apple/bin/package-chromiumkit.sh manifest
@@ -122,7 +122,7 @@ jobs:
       - name: Verify generated Xcode project
         run: |
           apple/bin/install-xcodegen.sh generate --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/blau.xcodeproj
+          git diff --exit-code -- apple/made.xcodeproj
       - name: Compile every application
         run: apple/bin/build-ci.sh
       - name: Run unit tests
@@ -152,7 +152,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/blau.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -195,7 +195,7 @@ jobs:
         run: |
           derived_data="$RUNNER_TEMP/chromium-smoke-derived-data"
           DISABLE_SWIFTLINT=1 xcodebuild build -quiet \
-            -project apple/blau.xcodeproj \
+            -project apple/made.xcodeproj \
             -scheme Pilot \
             -configuration Chromium \
             -destination 'generic/platform=macOS' \
@@ -208,7 +208,7 @@ jobs:
             DEVELOPMENT_TEAM= \
             BLAU_CHROMIUM_CODESIGN_TIMESTAMP=NO
           apple/bin/validate-chromium-archive.sh --allow-ad-hoc \
-            "$derived_data/Build/Products/Chromium/Cockpit.app"
+            "$derived_data/Build/Products/Chromium/made.app"
 
   complete:
     if: always()

@@ -40,7 +40,7 @@ mkdir -p "$OUT_DIR"
 # watchOS 26.0 deployment target). Override with WINGMAN_SIM if you like.
 SIM_NAME="${WINGMAN_SIM:-Apple Watch Series 11 (46mm)}"
 SCHEME="Wingman Watch App"
-PROJECT="$APPLE_DIR/blau.xcodeproj"
+PROJECT="$APPLE_DIR/made.xcodeproj"
 BUNDLE_ID="app.blau.copilot.watchkitapp"
 DERIVED=""
 UDID=""

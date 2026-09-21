@@ -10,11 +10,11 @@ struct PrivacyManifestTests {
         #expect(description?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
     }
 
-    @Test("Cockpit embeds the reviewed Sparkle update policy")
+    @Test("made embeds the reviewed Sparkle update policy")
     func sparkleUpdatePolicyIsPresent() {
         #expect(
             Bundle.main.object(forInfoDictionaryKey: "SUFeedURL") as? String
-                == "https://github.com/joeblau/blau/releases/latest/download/appcast.xml"
+                == "https://github.com/joeblau/made/releases/latest/download/appcast.xml"
         )
         #expect(
             Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String

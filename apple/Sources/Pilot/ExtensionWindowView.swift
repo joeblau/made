@@ -43,7 +43,7 @@ enum PilotWindowLaunchPolicy {
 }
 
 /// Resolves remote terminal input without baking Main-window ownership into the
-/// transport protocol. Walkie knows the canonical project ID, while Cockpit is
+/// transport protocol. Walkie knows the canonical project ID, while made is
 /// the only process that knows which local window and pane are active.
 @MainActor
 enum PilotRemoteInputRoutingPolicy {
@@ -80,7 +80,7 @@ enum PilotRemoteInputRoutingPolicy {
 
 /// Reports the concrete AppKit window that owns a Pilot surface. Main uses the
 /// ID to pin screen mirroring; both Main and Extendo use it to route remote
-/// keyboard input to whichever Cockpit window was active most recently.
+/// keyboard input to whichever made window was active most recently.
 @MainActor
 struct PilotWindowReader: NSViewRepresentable {
     var onWindowChange: @MainActor (CGWindowID?) -> Void
@@ -697,8 +697,8 @@ struct ExtensionWindowView: View {
                             systemImage: "rectangle.on.rectangle.slash",
                             description: Text(
                                 store.workspaces.isEmpty
-                                    ? "Create a workspace in the main Cockpit window."
-                                    : "Select a workspace in the main Cockpit window."
+                                    ? "Create a workspace in the main made window."
+                                    : "Select a workspace in the main made window."
                             )
                         )
                         .accessibilityIdentifier("extension.empty")

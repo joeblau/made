@@ -3,7 +3,7 @@
 The `Apple Release` GitHub Actions workflow turns a `vMAJOR.MINOR.PATCH` tag
 on `main` into one coordinated Apple release:
 
-- Cockpit (the `Pilot` target) is built as a universal Chromium-enabled macOS
+- made (the `Pilot` target) is built as a universal Chromium-enabled macOS
   app, signed with Developer ID, notarized, stapled, and attached to a GitHub
   Release as a ZIP with a SHA-256 checksum and a signed Sparkle appcast.
 - Walkie, including Trigger, is uploaded to App Store Connect for TestFlight.
@@ -39,7 +39,7 @@ and `notarytool` are authorized. The private `.p8` file can only be downloaded
 once. Individual API keys do not support the provisioning endpoints or
 `notarytool`, so they cannot replace the team key in this workflow.
 
-Create a **Developer ID Application** certificate for Cockpit. Export the
+Create a **Developer ID Application** certificate for made. Export the
 certificate and its private key from Keychain Access as a password-protected
 `.p12`. An Apple Distribution certificate is not stored in GitHub: Xcode uses
 the team API key and Apple's cloud-managed distribution signing for the App
@@ -76,7 +76,7 @@ base64 -i DeveloperIDApplication.p12 | pbcopy
 ```
 
 The Sparkle private key is distinct from every Apple credential. Its matching
-public key is committed as `SUPublicEDKey` in Cockpit's Info.plist. Keep an
+public key is committed as `SUPublicEDKey` in made's Info.plist. Keep an
 encrypted backup of the private key outside GitHub; GitHub secrets cannot be
 read back after creation.
 
@@ -92,44 +92,44 @@ then push the version tag:
 ```bash
 git switch main
 git pull --ff-only
-git tag -s v1.2.3 -m "blau 1.2.3"
+git tag -s v1.2.3 -m "made 1.2.3"
 git push origin v1.2.3
 ```
 
-The first Cockpit release for a pinned Chromium version reproduces the verified
+The first made release for a pinned Chromium version reproduces the verified
 runtime from its locked upstream archives. Later releases reuse the immutable
 `chromiumkit-<release-id>` GitHub Release when one exists and verify its
 release attestation and asset bytes before installation.
 
-## Cockpit updates
+## made updates
 
-Cockpit uses Sparkle 2 for updates outside the Mac App Store. Each semantic app
+made uses Sparkle 2 for updates outside the Mac App Store. Each semantic app
 release is explicitly marked as GitHub's latest release and publishes:
 
-- `Cockpit-<version>-macOS.zip`
-- `Cockpit-<version>-macOS.zip.sha256`
+- `made-<version>-macOS.zip`
+- `made-<version>-macOS.zip.sha256`
 - `appcast.xml`
 
 The appcast points at the immutable, versioned GitHub Release URL rather than a
 mutable asset URL. The release workflow signs both the update enclosure and the
-feed with `SPARKLE_PRIVATE_KEY`; Cockpit verifies them with its embedded public
+feed with `SPARKLE_PRIVATE_KEY`; made verifies them with its embedded public
 key and verifies the Developer ID signature before installation. ChromiumKit
 support releases are explicitly prevented from replacing the semantic app
 release as GitHub's latest release.
 
 The first release containing Sparkle must still be installed manually. Once
 that version is running, later semantic releases appear automatically and can
-also be requested from **Cockpit > Check for Updates…**.
+also be requested from **made > Check for Updates…**.
 
 Successful upload makes each mobile build appear in App Store Connect after
 Apple finishes processing it. Assigning tester groups, completing export
 compliance, submitting an external beta for review, and promoting a build to
 the App Store remain explicit App Store Connect operations.
 
-If both TestFlight jobs succeed but Cockpit fails, merge the Cockpit fix and run
+If both TestFlight jobs succeed but made fails, merge the made fix and run
 **Apple Release** manually from `main`. Supply the unchanged release tag and
 the failed release run ID. The workflow verifies that both TestFlight jobs in
-that run succeeded for the exact tagged commit, then runs only Cockpit and
+that run succeeded for the exact tagged commit, then runs only made and
 publishes the GitHub Release. This recovery path never moves the tag or uploads
 the mobile builds again.
 

@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Do not open a public issue for a suspected vulnerability. Use GitHub's
-[private vulnerability reporting form](https://github.com/joeblau/blau/security/advisories/new)
+[private vulnerability reporting form](https://github.com/joeblau/made/security/advisories/new)
 so the report, proof of concept, and remediation discussion remain private.
 
 Include the affected app or service, tested revision, platform/toolchain

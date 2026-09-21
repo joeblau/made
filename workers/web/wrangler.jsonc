@@ -1,20 +1,18 @@
 {
-  // Deploys the built Astro site (./dist) as a Cloudflare Workers Static Assets
-  // project. There is no Worker script — Cloudflare's asset server serves the
-  // files directly. Build with `bun run build` first, then `wrangler deploy`.
-  "name": "blau-web",
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Astro emits /made URLs; the build stages files under .worker-assets/made
+  // so the asset server handles the unchanged incoming URL, including redirects.
+  "name": "web-made",
   "compatibility_date": "2026-06-02",
   "workers_dev": false,
   "preview_urls": false,
   "assets": {
-    "directory": "./dist",
+    "directory": "./.worker-assets",
     // Serve Astro's generated 404.html for unknown paths (falls back to a
     // default 404 if the site has no 404 page).
     "not_found_handling": "404-page"
   },
 
-  // blau.app is served by this Worker (cut over from GitHub Pages). The apex's
-  // old GitHub Pages A records (185.199.x.153) must be removed from the
-  // Cloudflare zone for the custom-domain bind to take the apex.
-  "routes": [{ "pattern": "blau.app", "custom_domain": true }]
+  // Internal service only. The blau-app parent owns the blau.app domain.
+  "routes": []
 }

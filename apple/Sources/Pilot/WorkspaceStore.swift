@@ -544,7 +544,7 @@ final class WorkspaceStore {
     /// Chromium pane stays blank so demo capture never depends on a public
     /// website or mutable network response.
     static func makeDemoWorkspaces() -> [Workspace] {
-        let names = ["blau", "web", "infra"]
+        let names = ["made", "web", "infra"]
         return names.enumerated().map { index, name in
             let workspace = Workspace(name: name)
             workspace.workspaceSortOrder = index

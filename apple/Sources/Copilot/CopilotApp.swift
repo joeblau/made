@@ -175,13 +175,13 @@ final class PhoneSessionDelegate: NSObject, WCSessionDelegate, UNUserNotificatio
             copilotConnectivityLogger.notice("Rejected stale Trigger command over \(transport, privacy: .public).")
             return false
         case .rejectUnavailable:
-            copilotConnectivityLogger.notice("Rejected Trigger command because Cockpit is disconnected.")
+            copilotConnectivityLogger.notice("Rejected Trigger command because made is disconnected.")
             return false
         case .acknowledgeDuplicate:
             copilotConnectivityLogger.info("Acknowledged already-executed Trigger command over \(transport, privacy: .public).")
             return true
         case .acceptAndExecute:
-            copilotConnectivityLogger.info("Accepted fresh double pinch over \(transport, privacy: .public). Forwarding as Enter to Cockpit.")
+            copilotConnectivityLogger.info("Accepted fresh double pinch over \(transport, privacy: .public). Forwarding as Enter to made.")
             PhoneSessionDelegate.playDoublePinchHaptic()
             syncService?.send(.terminalInput(.enter))
             return true

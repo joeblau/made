@@ -9,16 +9,30 @@
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
+            buildForRunning = "YES"
+            buildForProfiling = "YES"
+            buildForArchiving = "YES"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C50B63D57972D4B958D611DC"
+               BuildableName = "Copilot.app"
+               BlueprintName = "Copilot"
+               ReferencedContainer = "container:made.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
             buildForRunning = "NO"
             buildForProfiling = "NO"
             buildForArchiving = "NO"
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E2B7E3418BCFFEC2F64892C1"
-               BuildableName = "SharedTests.xctest"
-               BlueprintName = "SharedTests"
-               ReferencedContainer = "container:blau.xcodeproj">
+               BlueprintIdentifier = "B56FAA8F6EF63F11878AE746"
+               BuildableName = "CopilotUITests.xctest"
+               BlueprintName = "CopilotUITests"
+               ReferencedContainer = "container:made.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -32,10 +46,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "E2B7E3418BCFFEC2F64892C1"
-            BuildableName = "SharedTests.xctest"
-            BlueprintName = "SharedTests"
-            ReferencedContainer = "container:blau.xcodeproj">
+            BlueprintIdentifier = "C50B63D57972D4B958D611DC"
+            BuildableName = "Copilot.app"
+            BlueprintName = "Copilot"
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -44,10 +58,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E2B7E3418BCFFEC2F64892C1"
-               BuildableName = "SharedTests.xctest"
-               BlueprintName = "SharedTests"
-               ReferencedContainer = "container:blau.xcodeproj">
+               BlueprintIdentifier = "B56FAA8F6EF63F11878AE746"
+               BuildableName = "CopilotUITests.xctest"
+               BlueprintName = "CopilotUITests"
+               ReferencedContainer = "container:made.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -64,15 +78,16 @@
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
       allowLocationSimulation = "YES">
-      <MacroExpansion>
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "E2B7E3418BCFFEC2F64892C1"
-            BuildableName = "SharedTests.xctest"
-            BlueprintName = "SharedTests"
-            ReferencedContainer = "container:blau.xcodeproj">
+            BlueprintIdentifier = "C50B63D57972D4B958D611DC"
+            BuildableName = "Copilot.app"
+            BlueprintName = "Copilot"
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
-      </MacroExpansion>
+      </BuildableProductRunnable>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -80,15 +95,16 @@
       savedToolIdentifier = ""
       useCustomWorkingDirectory = "NO"
       debugDocumentVersioning = "YES">
-      <MacroExpansion>
+      <BuildableProductRunnable
+         runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "E2B7E3418BCFFEC2F64892C1"
-            BuildableName = "SharedTests.xctest"
-            BlueprintName = "SharedTests"
-            ReferencedContainer = "container:blau.xcodeproj">
+            BlueprintIdentifier = "C50B63D57972D4B958D611DC"
+            BuildableName = "Copilot.app"
+            BlueprintName = "Copilot"
+            ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
-      </MacroExpansion>
+      </BuildableProductRunnable>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

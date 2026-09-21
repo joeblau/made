@@ -44,7 +44,7 @@ if grep -EnR 'Three-app ecosystem|only workflow|Workspace\.swift:[0-9]|TODO[S]?:
   status=1
 fi
 
-if ! grep -Eq 'Cockpit.*Walkie.*Kneeboard.*Trigger|four companion apps' README.md; then
+if ! grep -Eq 'made.*Walkie.*Kneeboard.*Trigger|four companion apps' README.md; then
   echo "README must describe all four Apple applications" >&2
   status=1
 fi

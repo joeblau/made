@@ -31,13 +31,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ $# == 1 ]] ||
-  fail "usage: validate-chromium-archive.sh [--require-notarization] [--allow-ad-hoc] <Cockpit.app|xcarchive>"
+  fail "usage: validate-chromium-archive.sh [--require-notarization] [--allow-ad-hoc] <made.app|xcarchive>"
 [[ "$REQUIRE_NOTARIZATION" == 0 || "$ALLOW_AD_HOC" == 0 ]] ||
   fail "--require-notarization cannot be combined with --allow-ad-hoc"
 
 input="$1"
 if [[ "$input" == *.xcarchive ]]; then
-  APP="$input/Products/Applications/Cockpit.app"
+  APP="$input/Products/Applications/made.app"
 else
   APP="$input"
 fi
@@ -214,7 +214,7 @@ while IFS= read -r additional_framework; do
   if [[ "$(basename "$additional_framework")" == "Sparkle.framework" ]]; then
     sparkle_version="$(jq -r '
       .pins[] | select(.identity == "sparkle") | .state.version
-    ' "$APPLE_ROOT/blau.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved")"
+    ' "$APPLE_ROOT/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved")"
     [[ -n "$sparkle_version" && "$sparkle_version" != "null" ]] ||
       fail "Sparkle is missing from Package.resolved"
     [[ "$(plutil -extract CFBundleShortVersionString raw \

@@ -34,8 +34,8 @@ struct ContentView: View {
         }
         .alert(
             mirror.pairingRequest?.isKeyChange == true
-                ? "Trust New Cockpit Identity?"
-                : "Pair with Cockpit?",
+                ? "Trust New made Identity?"
+                : "Pair with made?",
             isPresented: Binding(
                 get: { mirror.pairingRequest != nil },
                 set: { if !$0 { mirror.resolvePairingRequest(approved: false) } }
@@ -48,7 +48,7 @@ struct ContentView: View {
                 mirror.resolvePairingRequest(approved: true)
             }
         } message: {
-            Text("Verify this fingerprint on Cockpit before approving:\n\n\(mirror.pairingRequest?.fingerprint ?? "")")
+            Text("Verify this fingerprint on made before approving:\n\n\(mirror.pairingRequest?.fingerprint ?? "")")
         }
     }
 }
@@ -67,17 +67,17 @@ private struct ConnectionStatusBadge: View {
             .foregroundStyle(connected ? Color.green : Color.white.opacity(0.5))
             .padding(8)
             .background(.black.opacity(0.42), in: Capsule())
-            .help(connected ? "Connected to Cockpit" : "Searching for Cockpit")
-            .accessibilityLabel(connected ? "Connected to Cockpit" : "Not connected to Cockpit")
+            .help(connected ? "Connected to made" : "Searching for made")
+            .accessibilityLabel(connected ? "Connected to made" : "Not connected to made")
             .contextMenu {
-                Button("Forget Paired Cockpit", role: .destructive) {
+                Button("Forget Paired made", role: .destructive) {
                     mirror.forgetPilot()
                 }
             }
     }
 }
 
-/// The "searching for Cockpit" placeholder. Isolated into its own view so the
+/// The "searching for made" placeholder. Isolated into its own view so the
 /// per-frame `frameCount` updates only re-render this text — not the video or
 /// PencilKit canvas siblings.
 private struct SearchingOverlay: View {
@@ -86,9 +86,9 @@ private struct SearchingOverlay: View {
     var body: some View {
         if mirror.frameCount == 0 {
             ContentUnavailableView {
-                Label("Searching for Cockpit", systemImage: "antenna.radiowaves.left.and.right")
+                Label("Searching for made", systemImage: "antenna.radiowaves.left.and.right")
             } description: {
-                Text("Make sure Cockpit is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
+                Text("Make sure made is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
             } actions: {
                 ProgressView()
             }
