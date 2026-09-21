@@ -6,6 +6,10 @@ export default [
   {
     ignores: [
       '**/.astro/**',
+      '**/.next/**',
+      '**/.open-next/**',
+      '**/cloudflare-env.d.ts',
+      '**/next-env.d.ts',
       '**/.turbo/**',
       '**/dist/**',
       '**/node_modules/**',
@@ -20,6 +24,6 @@ export default [
   },
   ...tseslint.configs.recommended.map((config) => ({
     ...config,
-    files: ['workers/**/*.ts'],
+    files: ['workers/**/*.{ts,tsx}'],
   })),
 ];
