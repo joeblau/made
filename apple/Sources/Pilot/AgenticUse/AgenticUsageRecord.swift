@@ -115,6 +115,7 @@ enum AgenticModel {
     /// not listed here sort after all known ones (they also render unpriced).
     static let presentationOrder: [String] = [
         "claude-opus-5",
+        "claude-fable-5-1",
         "claude-fable-5",
         "claude-opus-4-8",
         "claude-opus-4-7",
@@ -124,6 +125,7 @@ enum AgenticModel {
         "claude-sonnet-4-6",
         "claude-sonnet-4-5",
         "claude-haiku-4-5",
+        "claude-mythos-5-1",
         "claude-mythos-5",
         "gpt-5.6-sol",
         "gpt-5.5",
@@ -134,6 +136,8 @@ enum AgenticModel {
         "gpt-5.1-codex-mini",
         "gpt-5-codex",
         "gpt-5",
+        "grok-4.6-build",
+        "grok-4.6",
         "grok-4.5-build",
         "grok-4.5",
         "k3",

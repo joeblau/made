@@ -876,7 +876,7 @@ public final class FrameReceiver: @unchecked Sendable {
             guard self.browser === browser else { return }
             switch state {
             case .ready:
-                self.updateStatus("Browsing for Cockpit frame stream")
+                self.updateStatus("Browsing for made frame stream")
             case .failed, .cancelled:
                 self.updateStatus("Frame browser stopped")
                 self.browser = nil
@@ -894,7 +894,7 @@ public final class FrameReceiver: @unchecked Sendable {
             guard self.browser === browser else { return }
             self.discoveredEndpoints = results.map(\.endpoint)
             if self.discoveredEndpoints.isEmpty {
-                self.updateStatus("No Cockpit frame stream found")
+                self.updateStatus("No made frame stream found")
                 return
             }
             self.connectIfPossible()
@@ -922,7 +922,7 @@ public final class FrameReceiver: @unchecked Sendable {
               let endpoint = discoveredEndpoints.first else { return }
         connectionRetryWork?.cancel()
         connectionRetryWork = nil
-        updateStatus("Found Cockpit frame stream")
+        updateStatus("Found made frame stream")
         connect(to: endpoint)
     }
 
@@ -942,7 +942,7 @@ public final class FrameReceiver: @unchecked Sendable {
 
     private func connect(to endpoint: NWEndpoint) {
         let connection = NWConnection(to: endpoint, using: FrameLink.tcpParameters())
-        updateStatus("Connecting to Cockpit frame stream")
+        updateStatus("Connecting to made frame stream")
         connection.stateUpdateHandler = { [weak self] state in
             guard let self else { return }
             guard self.connection === connection else { return }
@@ -952,7 +952,7 @@ public final class FrameReceiver: @unchecked Sendable {
                     self.teardownConnection(connection)
                     return
                 }
-                self.updateStatus("Authenticating Cockpit frame stream")
+                self.updateStatus("Authenticating made frame stream")
                 self.sendRecord(hello)
                 self.scheduleConnectionDeadline(for: connection, after: 60)
                 self.receiveNext(from: connection)
@@ -983,7 +983,7 @@ public final class FrameReceiver: @unchecked Sendable {
                   self.running,
                   self.connection === connection,
                   !self.security.isAuthenticated else { return }
-            self.updateStatus("Cockpit frame connection timed out; retrying")
+            self.updateStatus("made frame connection timed out; retrying")
             self.teardownConnection(connection)
         }
         connectionDeadlineWork = work
@@ -1053,7 +1053,7 @@ public final class FrameReceiver: @unchecked Sendable {
 
     private func processSecureRecords(_ records: [Data], from connection: NWConnection) {
         for record in records {
-            guard let opened = security.receive(record, displayName: "Cockpit") else {
+            guard let opened = security.receive(record, displayName: "made") else {
                 recordInvalidPacket()
                 updateStatus("Rejected unauthenticated frame stream")
                 teardownConnection(connection)
@@ -1070,7 +1070,7 @@ public final class FrameReceiver: @unchecked Sendable {
                 }
                 pairingRequest = request
                 onPairingRequestChanged?(request)
-                updateStatus("Approval required to pair Cockpit")
+                updateStatus("Approval required to pair made")
                 scheduleConnectionDeadline(for: connection, after: 60)
 
             case .waiting:
@@ -1092,7 +1092,7 @@ public final class FrameReceiver: @unchecked Sendable {
         guard approved,
               let approval = security.approvePending(publicKey: request.publicKey) else {
             security.rejectPending()
-            updateStatus("Cockpit pairing rejected")
+            updateStatus("made pairing rejected")
             teardownConnection(retry: false)
             return
         }
@@ -1162,7 +1162,7 @@ public final class FrameReceiver: @unchecked Sendable {
     private func countReceivedFrame() {
         framesReceived += 1
         if framesReceived == 1 {
-            updateStatus("Receiving Cockpit frames")
+            updateStatus("Receiving made frames")
         }
         onFrameCountChanged?(framesReceived)
     }

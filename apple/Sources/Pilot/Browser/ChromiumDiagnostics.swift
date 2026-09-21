@@ -81,7 +81,7 @@ enum ChromiumUnavailableReason: Equatable, Sendable {
         case .notInThisBuild:
             "Chromium isn't in this build. Build the Chromium configuration to enable it."
         case .clearingBrowsingData:
-            "Cockpit is clearing Chromium browsing data."
+            "made is clearing Chromium browsing data."
         case .engineUnavailable:
             "Chromium couldn't start. See Settings → Chromium diagnostics."
         }

@@ -1,16 +1,70 @@
+/*
+ * Design tokens: primitives first, then semantic aliases that resolve for
+ * both color schemes through light-dark(). Components only ever reference the
+ * semantic layer. The scheme follows the OS by default; data-theme on <html>
+ * pins it (used by previews and tests).
+ */
 :root {
-  color-scheme: dark;
-  --background: #09090b;
-  --foreground: #fafafa;
-  --primary: #fafafa;
-  --primary-foreground: #09090b;
-  --border: #27272a;
-  --ring: #d4d4d8;
+  color-scheme: light dark;
+
+  /* Primitives */
+  --zinc-50: #fafafa;
+  --zinc-100: #f4f4f5;
+  --zinc-200: #e4e4e7;
+  --zinc-300: #d4d4d8;
+  --zinc-400: #a1a1aa;
+  --zinc-500: #71717a;
+  --zinc-700: #3f3f46;
+  --zinc-800: #27272a;
+  --zinc-900: #18181b;
+  --zinc-950: #09090b;
+  --white: #fff;
+  --black: #000;
+
+  /* Semantic: color / element / priority / state */
+  --color-background: light-dark(var(--zinc-50), var(--zinc-950));
+  --color-surface-raised: light-dark(var(--white), var(--zinc-900));
+  --color-surface-tonal: light-dark(var(--zinc-200), var(--zinc-800));
+  --color-surface-tonal-hover: light-dark(var(--zinc-300), var(--zinc-700));
+  --color-text-primary: light-dark(var(--zinc-950), var(--zinc-50));
+  --color-text-secondary: light-dark(var(--zinc-700), var(--zinc-400));
+  --color-button-primary: light-dark(var(--zinc-950), var(--zinc-50));
+  --color-button-primary-hover: light-dark(var(--zinc-800), var(--zinc-200));
+  --color-button-primary-foreground: light-dark(var(--zinc-50), var(--zinc-950));
+  --color-focus-ring: light-dark(var(--zinc-950), var(--zinc-300));
+  /* Scrims mix the page background into the scene at varying strength. */
+  --color-scrim-strong: color-mix(in srgb, var(--color-background) 75%, transparent);
+  --color-scrim: color-mix(in srgb, var(--color-background) 45%, transparent);
+  --color-scrim-soft: color-mix(in srgb, var(--color-background) 30%, transparent);
+  --color-scrim-none: color-mix(in srgb, var(--color-background) 0%, transparent);
+  --color-backdrop: color-mix(in srgb, var(--black) 55%, transparent);
+  --color-shadow: color-mix(in srgb, var(--black) 35%, transparent);
+
+  /* Shape, spacing, type */
   --radius: 0.625rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-11: 2.75rem;
+  --button-min-width: 11.5rem;
   --font-rounded: ui-rounded, "SF Pro Rounded", "Nunito Variable", sans-serif;
   --font-display: var(--font-rounded);
   --font-text: var(--font-rounded);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   font-family: var(--font-text);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 *,
@@ -24,14 +78,14 @@ body {
   min-width: 320px;
   min-height: 100%;
   margin: 0;
-  background: var(--background);
+  background: var(--color-background);
   /* Touch drags steer the cockpit background; keep the pinned page from
      rubber-banding along with them. */
   overscroll-behavior: none;
 }
 
 body {
-  color: var(--foreground);
+  color: var(--color-text-primary);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -52,7 +106,7 @@ main {
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  background: var(--background);
+  background: var(--color-background);
 }
 
 .cockpit-bg canvas {
@@ -63,12 +117,14 @@ main {
   height: 100%;
 }
 
+/* One scene, one scrim: the vignette tints the render toward the page
+   background so type keeps contrast in either scheme. */
 .cockpit-bg__vignette {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse at 50% 42%, rgb(0 0 0 / 0) 45%, rgb(0 0 0 / 0.55) 100%),
-    linear-gradient(rgb(9 9 11 / 0.3), rgb(9 9 11 / 0.45));
+    radial-gradient(ellipse at 50% 42%, var(--color-scrim-none) 45%, var(--color-scrim) 100%),
+    linear-gradient(var(--color-scrim-soft), var(--color-scrim));
 }
 
 .landing {
@@ -76,25 +132,42 @@ main {
   display: grid;
   min-height: 100svh;
   place-items: center;
-  padding: 2rem 1.5rem;
+  padding: var(--space-8) var(--space-6);
 }
 
 .landing__content {
+  position: relative;
   display: grid;
   width: min(100%, 78rem);
   justify-items: center;
   gap: clamp(2.5rem, 6vh, 4rem);
 }
 
+/* Soft glow of the page background behind the copy block: the scrim that
+   sits between the hero image and the type hierarchy. */
+.landing__content::before {
+  content: "";
+  position: absolute;
+  inset: -25% -15%;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse at 50% 50%,
+    var(--color-scrim-strong) 0%,
+    var(--color-scrim) 40%,
+    var(--color-scrim-none) 72%
+  );
+}
+
 .landing__intro {
   display: grid;
   justify-items: center;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .landing h1 {
   margin: 0;
-  color: var(--foreground);
+  color: var(--color-text-primary);
   font-family: var(--font-display);
   font-size: clamp(4.5rem, 13vw, 8rem);
   font-weight: 600;
@@ -104,7 +177,7 @@ main {
 
 .landing__tagline {
   margin: 0;
-  color: rgb(250 250 250 / 0.55);
+  color: var(--color-text-secondary);
   font-family: var(--font-display);
   font-size: clamp(1rem, 2.2vw, 1.25rem);
   font-weight: 500;
@@ -115,34 +188,36 @@ main {
 .landing__actions {
   display: flex;
   flex: none;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .landing__download {
   display: grid;
   justify-items: center;
-  gap: 0.75rem;
+  gap: var(--space-3);
 }
 
 .landing__download h2 {
   margin: 0;
-  color: var(--foreground);
+  color: var(--color-text-primary);
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.02em;
 }
 
+/* Buttons: one primary per view, tonal secondaries, no strokes. */
 .button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 0.5rem;
-  height: 2.5rem;
-  padding-inline: 1rem;
-  border: 1px solid transparent;
+  gap: var(--space-2);
+  min-width: var(--button-min-width);
+  height: var(--space-10);
+  padding-inline: var(--space-4);
+  border: 0;
   border-radius: var(--radius);
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--color-button-primary);
+  color: var(--color-button-primary-foreground);
   font-family: var(--font-text);
   font-size: 0.875rem;
   font-weight: 500;
@@ -150,10 +225,10 @@ main {
   text-decoration: none;
   outline: none;
   white-space: nowrap;
+  cursor: pointer;
   transition:
-    background-color 150ms ease,
-    border-color 150ms ease,
-    box-shadow 150ms ease;
+    background-color 150ms var(--ease-out),
+    transform 150ms var(--ease-out);
 }
 
 .button svg {
@@ -164,15 +239,14 @@ main {
   pointer-events: none;
 }
 
-.button[data-variant="outline"] {
-  border-color: var(--border);
-  background: transparent;
-  color: var(--foreground);
+.button[data-variant="secondary"] {
+  background: var(--color-surface-tonal);
+  color: var(--color-text-primary);
 }
 
 .button[data-size="lg"] {
-  height: 2.75rem;
-  padding-inline: 2rem;
+  height: var(--space-11);
+  padding-inline: var(--space-8);
 }
 
 .button--rounded {
@@ -180,12 +254,20 @@ main {
 }
 
 .button:hover:not(:disabled) {
-  background: #e4e4e7;
+  background: var(--color-button-primary-hover);
+}
+
+.button[data-variant="secondary"]:hover:not(:disabled) {
+  background: var(--color-surface-tonal-hover);
+}
+
+.button:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 .button:focus-visible {
-  border-color: var(--ring);
-  box-shadow: 0 0 0 3px rgb(212 212 216 / 0.35);
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 3px;
 }
 
 .button:disabled {
@@ -193,25 +275,37 @@ main {
   pointer-events: none;
 }
 
+/* Overlay: backdrop dims and blurs, then the card scales and fades in. */
 .qr-dialog {
   display: grid;
   justify-items: center;
-  gap: 1.25rem;
+  gap: var(--space-5);
   width: min(90vw, 22rem);
   margin: auto;
-  padding: 2rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: #101012;
-  color: var(--foreground);
+  padding: var(--space-8);
+  border: 0;
+  border-radius: calc(var(--radius) + var(--space-4));
+  background: var(--color-surface-raised);
+  color: var(--color-text-primary);
+  box-shadow: 0 24px 64px var(--color-shadow);
 }
 
 .qr-dialog:not([open]) {
   display: none;
 }
 
+.qr-dialog[open] {
+  animation: dialog-in 240ms var(--ease-out);
+}
+
 .qr-dialog::backdrop {
-  background: rgb(0 0 0 / 0.65);
+  background: var(--color-backdrop);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.qr-dialog[open]::backdrop {
+  animation: backdrop-in 200ms var(--ease-out);
 }
 
 .qr-dialog__title {
@@ -222,12 +316,14 @@ main {
   text-align: center;
 }
 
+/* QR modules stay black on white in both schemes so cameras can read them;
+   the quiet zone is the card's own padding, not a border. */
 .qr-dialog__code {
   width: 13rem;
-  padding: 0.875rem;
+  padding: var(--space-4);
   border-radius: var(--radius);
-  background: #fff;
-  color: #09090b;
+  background: var(--white);
+  color: var(--black);
 }
 
 .qr-dialog__code svg {
@@ -236,14 +332,14 @@ main {
 
 .qr-dialog__hint {
   margin: 0;
-  color: rgb(250 250 250 / 0.55);
+  color: var(--color-text-secondary);
   font-size: 0.875rem;
   text-align: center;
 }
 
 .landing__footer {
   position: fixed;
-  bottom: 1.5rem;
+  bottom: var(--space-6);
   left: 50%;
   transform: translateX(-50%);
 }
@@ -251,25 +347,49 @@ main {
 .landing__footer nav {
   display: flex;
   align-items: center;
-  gap: 1.25rem;
+  gap: var(--space-5);
 }
 
 .landing__footer a {
-  color: rgb(250 250 250 / 0.55);
+  color: var(--color-text-secondary);
   font-size: 0.8125rem;
   font-weight: 500;
   text-decoration: none;
-  transition: color 150ms ease;
+  transition: color 150ms var(--ease-out);
 }
 
 .landing__footer a:hover {
-  color: var(--foreground);
+  color: var(--color-text-primary);
 }
 
 .landing__footer a:focus-visible {
-  border-radius: 0.25rem;
-  outline: 2px solid var(--ring);
+  border-radius: var(--space-1);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 4px;
+}
+
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .qr-dialog[open],
+  .qr-dialog[open]::backdrop {
+    animation: none;
+  }
+
+  .button {
+    transition: none;
+  }
 }
 
 @media (max-width: 40rem) {
@@ -278,8 +398,15 @@ main {
   }
 
   .landing__actions {
-    align-items: center;
+    align-items: stretch;
     flex-direction: column;
-    gap: 1rem;
+    width: 100%;
+    max-width: 22rem;
+    gap: var(--space-4);
+  }
+
+  .landing__download,
+  .landing__download .button {
+    width: 100%;
   }
 }

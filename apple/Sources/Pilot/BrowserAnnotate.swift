@@ -686,7 +686,7 @@ enum BrowserAnnotate {
         let rawHTML = singleLine(outerHTML)
         let html = rawHTML.count > 2000 ? String(rawHTML.prefix(2000)) + " …(truncated)" : rawHTML
         var parts = [
-            "[Cockpit Browser Annotate]",
+            "[made Browser Annotate]",
             "Instruction: \(singleLine(instruction))",
             "BEGIN UNTRUSTED PAGE CONTEXT",
             "Page URL: \(singleLine(url))",

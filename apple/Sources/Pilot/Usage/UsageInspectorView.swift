@@ -17,6 +17,10 @@ struct UsageListView: View {
 
     @Environment(\.openSettings) private var openSettings
     @AppStorage(SettingsTab.storageKey) private var selectedSettingsTab = SettingsTab.general
+    @AppStorage(UsageConsent.claudeKey) private var claudeEnabled = false
+    @AppStorage(UsageConsent.codexKey) private var codexEnabled = false
+    @AppStorage(UsageConsent.grokKey) private var grokEnabled = false
+    @AppStorage(UsageConsent.kimiKey) private var kimiEnabled = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +33,7 @@ struct UsageListView: View {
                         tint: .orange,
                         cli: "claude",
                         state: store.anthropic,
+                        enable: enableClaude,
                         openSetup: openSetup
                     )
                     ProviderCard(
@@ -37,6 +42,7 @@ struct UsageListView: View {
                         tint: .green,
                         cli: "codex",
                         state: store.openAI,
+                        enable: enableCodex,
                         openSetup: openSetup
                     )
                     ProviderCard(
@@ -45,6 +51,7 @@ struct UsageListView: View {
                         tint: .blue,
                         cli: "kimi login",
                         state: store.moonshot,
+                        enable: enableKimi,
                         openSetup: openSetup
                     )
                     ProviderCard(
@@ -53,6 +60,7 @@ struct UsageListView: View {
                         tint: .purple,
                         cli: "grok",
                         state: store.xAI,
+                        enable: enableGrok,
                         openSetup: openSetup
                     )
                 }
@@ -75,6 +83,30 @@ struct UsageListView: View {
     private func openSetup() {
         selectedSettingsTab = SettingsTab.usage
         openSettings()
+    }
+
+    private func enableClaude() {
+        claudeEnabled = true
+        usageConsentChanged()
+    }
+
+    private func enableCodex() {
+        codexEnabled = true
+        usageConsentChanged()
+    }
+
+    private func enableGrok() {
+        grokEnabled = true
+        usageConsentChanged()
+    }
+
+    private func enableKimi() {
+        kimiEnabled = true
+        usageConsentChanged()
+    }
+
+    private func usageConsentChanged() {
+        NotificationCenter.default.post(name: UsageConsent.changedNotification, object: nil)
     }
 }
 
@@ -100,6 +132,7 @@ private struct ProviderCard: View {
     let tint: Color
     let cli: String
     let state: ProviderState
+    let enable: () -> Void
     let openSetup: () -> Void
 
     var body: some View {
@@ -134,7 +167,17 @@ private struct ProviderCard: View {
     private var content: some View {
         switch state {
         case .disabled:
-            setupPrompt(message: "Disabled. Enable this provider in Usage settings before Cockpit reads its CLI credentials.")
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Allow made to read this CLI's credentials and request plan usage.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button(action: enable) {
+                    Label("Enable", systemImage: "checkmark.circle")
+                        .font(.callout)
+                }
+                .buttonStyle(.link)
+            }
 
         case .loading:
             ProgressView().controlSize(.small)
@@ -158,8 +201,8 @@ private struct ProviderCard: View {
                     }
                 }
                 if let credits = usage.credits, !credits.isEmpty {
-                    Divider().padding(.vertical, 2)
                     creditsRow(credits)
+                        .padding(.top, 4)
                 }
             }
         }

@@ -18,7 +18,7 @@ import SwiftUI
 /// maps these to `PRODUCT_NAME` / `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION`.
 enum AppInfo {
     static var name: String {
-        bundleString("CFBundleDisplayName") ?? bundleString("CFBundleName") ?? "blau"
+        bundleString("CFBundleDisplayName") ?? bundleString("CFBundleName") ?? "made"
     }
     static var version: String { bundleString("CFBundleShortVersionString") ?? "—" }
     static var build: String { bundleString("CFBundleVersion") ?? "—" }

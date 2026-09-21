@@ -125,10 +125,6 @@ private struct LocalServerCard: View {
                             RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.6))
                         }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
-                        }
                 }
                 Circle()
                     .fill(isLive ? .green : Color(nsColor: .tertiaryLabelColor))
@@ -179,10 +175,6 @@ private struct BrowserPreviewThumbnail: View {
         .background {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.white)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(Color.black.opacity(0.15), lineWidth: 0.5)
         }
         .foregroundStyle(.black)
     }

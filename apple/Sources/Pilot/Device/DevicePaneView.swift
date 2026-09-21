@@ -72,15 +72,35 @@ struct DevicePaneView: View {
 
     private var activeContent: some View {
         let session = DeviceCaptureRegistry.shared.session(for: paneID)
+        let wireless = DeviceCaptureRegistry.shared.wirelessSession(for: paneID)
         return ZStack {
             PreviewCanvasBackground()
-            switch session.status {
-            case .streaming:
-                DeviceCaptureContainerView(session: session)
-            case .picking:
-                IOSDevicePickerView(session: session, isPolling: isActive && !isCollapsed)
-            case .connecting, .failed:
-                DeviceStatusOverlay(session: session)
+            if wireless.isEnabled {
+                WirelessDeviceView(session: wireless) {
+                    wireless.useUSB()
+                    session.start()
+                }
+            } else {
+                switch session.status {
+                case .streaming:
+                    DeviceCaptureContainerView(session: session)
+                case .picking:
+                    IOSDevicePickerView(session: session, isPolling: isActive && !isCollapsed) {
+                        session.stop()
+                        wireless.start()
+                    }
+                case .connecting, .failed:
+                    DeviceStatusOverlay(session: session)
+                        .safeAreaInset(edge: .top) {
+                            Button {
+                                session.stop()
+                                wireless.start()
+                            } label: {
+                                Label("Share Wirelessly…", systemImage: "airplay.video")
+                            }
+                            .padding(12)
+                        }
+                }
             }
 
             if let toast {
@@ -113,7 +133,9 @@ struct DevicePaneView: View {
                 paneID: paneID,
                 presentationID: presentationID
             )
-            DeviceCaptureRegistry.shared.session(for: paneID).start()
+            if !DeviceCaptureRegistry.shared.wirelessSession(for: paneID).isEnabled {
+                DeviceCaptureRegistry.shared.session(for: paneID).start()
+            }
         } else {
             DevicePanePresentationCoordinator.shared.deactivate(
                 paneID: paneID,
@@ -145,6 +167,7 @@ struct DeviceToolbarControls: View {
 
     var body: some View {
         let session = DeviceCaptureRegistry.shared.session(for: paneID)
+        let wireless = DeviceCaptureRegistry.shared.wirelessSession(for: paneID)
         let isStreaming = session.status == .streaming
 
         Button {
@@ -176,12 +199,21 @@ struct DeviceToolbarControls: View {
         .help("Copy a screenshot of the iPhone screen to the clipboard")
 
         Button {
+            wireless.useUSB()
             session.chooseAnotherDevice()
         } label: {
             Label("Choose Device", systemImage: "list.bullet")
         }
         .disabled(session.isCameraPermissionDenied)
         .help("Pick a different iPhone or iPad")
+
+        Button {
+            session.stop()
+            wireless.start()
+        } label: {
+            Label("Share Wirelessly…", systemImage: "airplay.video")
+        }
+        .help("Receive Screen Mirroring from an iPhone or iPad on Wi-Fi")
 
         Button {
             SafariWebInspector.open()
@@ -197,6 +229,7 @@ struct DeviceToolbarControls: View {
 private struct IOSDevicePickerView: View {
     let session: DeviceCaptureSession
     let isPolling: Bool
+    let startWireless: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -217,7 +250,14 @@ private struct IOSDevicePickerView: View {
                 .help("Re-scan connected iPhones and iPads")
             }
             .padding(12)
-            Divider()
+
+            Button(action: startWireless) {
+                Label("Share Wirelessly…", systemImage: "airplay.video")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderless)
+            .padding(8)
 
             if let preferredName = session.preferredDeviceName {
                 Label("Waiting for \(preferredName)", systemImage: "cable.connector")
@@ -226,7 +266,6 @@ private struct IOSDevicePickerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                Divider()
             }
 
             if session.devices.isEmpty {
@@ -299,7 +338,7 @@ private struct IOSDevicePickerView: View {
                 Image(systemName: "apps.iphone")
                     .font(.system(size: 34))
                     .foregroundStyle(.secondary)
-                Text("No iOS devices found").font(.headline)
+                Text("No USB devices found").font(.headline)
                 Text("Connect an iPhone or iPad over USB, trust this Mac, and keep its screen awake.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -327,7 +366,6 @@ private struct DeviceToastView: View {
             .padding(.horizontal, 18)
             .padding(.vertical, 12)
             .background(.regularMaterial, in: Capsule())
-            .overlay(Capsule().strokeBorder(.separator.opacity(0.4), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
     }
 }

@@ -81,22 +81,22 @@ final class ChromiumRealEngineSmokeTests: XCTestCase {
         let budgets = try performanceBudgets()
         let runtimeBudget = budgets.runtime.current
 
-        XCTAssertEqual(report.firstJavaScriptTitle, "Cockpit Chromium probe first")
-        XCTAssertEqual(report.secondJavaScriptTitle, "Cockpit Chromium probe second")
-        XCTAssertEqual(report.survivingBrowserTitle, "Cockpit Chromium probe survivor")
+        XCTAssertEqual(report.firstJavaScriptTitle, "made Chromium probe first")
+        XCTAssertEqual(report.secondJavaScriptTitle, "made Chromium probe second")
+        XCTAssertEqual(report.survivingBrowserTitle, "made Chromium probe survivor")
         XCTAssertEqual(report.historyBackURL, server.baseURL)
         XCTAssertEqual(
             report.historyForwardURL,
             server.baseURL.appendingPathComponent("second-page.html")
         )
-        XCTAssertEqual(report.restoredBrowserTitle, "Cockpit Chromium probe restored")
+        XCTAssertEqual(report.restoredBrowserTitle, "made Chromium probe restored")
         XCTAssertEqual(
             report.policy.blockedNavigationURL,
             URL(fileURLWithPath: "/etc/passwd")
         )
         XCTAssertEqual(
             report.policy.blockedScriptPopupTitle,
-            "Cockpit Chromium script popup blocked"
+            "made Chromium script popup blocked"
         )
         XCTAssertEqual(
             report.policy.interceptedPopupURL,
@@ -131,11 +131,11 @@ final class ChromiumRealEngineSmokeTests: XCTestCase {
         )
         XCTAssertEqual(
             report.policy.hostileMessageSurvivorTitle,
-            "Cockpit Chromium hostile messages ignored"
+            "made Chromium hostile messages ignored"
         )
         XCTAssertEqual(
             report.rendererRecoveryTitle,
-            "Cockpit Chromium probe renderer recovered"
+            "made Chromium probe renderer recovered"
         )
         XCTAssertGreaterThanOrEqual(report.rendererTerminationStatus, 0)
         XCTAssertEqual(report.peakBrowserCount, 2)

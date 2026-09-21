@@ -45,21 +45,14 @@ struct AgenticUseBreakdownView: View {
                     headerCell("TOKENS")
                         .gridColumnAlignment(.trailing)
                 }
-                Divider()
                 switch mode {
                 case .model:
                     ForEach(modelTotals) { total in
                         modelRow(total)
-                        if total.id != modelTotals.last?.id {
-                            Divider().opacity(0.5)
-                        }
                     }
                 case .day:
                     ForEach(dayTotals) { day in
                         dayRow(day)
-                        if day.id != dayTotals.last?.id {
-                            Divider().opacity(0.5)
-                        }
                     }
                 }
             }

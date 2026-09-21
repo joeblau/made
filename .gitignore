@@ -60,6 +60,7 @@ xcuserdata/
 ### Web ###
 node_modules/
 workers/web/dist/
+workers/web/.worker-assets/
 workers/web/.astro/
 
 ### Turborepo ###

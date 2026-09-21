@@ -7,8 +7,8 @@
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
 
-# Astro fingerprints everything under /_astro/ (content-hashed filenames), so
+# Astro fingerprints everything under /made/_astro/ (content-hashed filenames), so
 # browsers and the Cloudflare edge can cache those forever. HTML and other
 # unhashed files keep the default revalidation behavior.
-/_astro/*
+/made/_astro/*
   Cache-Control: public, max-age=31536000, immutable

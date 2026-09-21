@@ -15,13 +15,8 @@ struct AgenticUseStatRow: View {
 
     var body: some View {
         let cells = cells
-        return HStack(spacing: 0) {
-            ForEach(Array(cells.enumerated()), id: \.element.id) { index, cell in
-                if index > 0 {
-                    Divider()
-                        .frame(height: 44)
-                        .padding(.horizontal, 12)
-                }
+        return HStack(spacing: 24) {
+            ForEach(cells) { cell in
                 VStack(alignment: .leading, spacing: 3) {
                     Text(cell.label.uppercased())
                         .scaledFont(size: 10, weight: .semibold)

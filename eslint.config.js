@@ -6,10 +6,9 @@ export default [
   {
     ignores: [
       '**/.astro/**',
-      '**/.next/**',
-      '**/.open-next/**',
+      '**/.worker-assets/**',
+      '**/.wrangler/**',
       '**/cloudflare-env.d.ts',
-      '**/next-env.d.ts',
       '**/.turbo/**',
       '**/dist/**',
       '**/node_modules/**',

@@ -167,11 +167,11 @@ enum ChromiumBrowsingDataClearAvailability: Equatable, Sendable {
         case .available:
             nil
         case .runtimeRunning:
-            "Close Chromium and relaunch Cockpit before clearing its browsing data."
+            "Close Chromium and relaunch made before clearing its browsing data."
         case .clearInProgress:
-            "Cockpit is already clearing Chromium browsing data."
+            "made is already clearing Chromium browsing data."
         case .profileUnavailable:
-            "Cockpit could not resolve its managed Chromium profile."
+            "made could not resolve its managed Chromium profile."
         }
     }
 }
@@ -220,7 +220,7 @@ enum ChromiumBrowsingDataController {
     static var profileLocationCategory: String {
         managedProfileURL() == nil
             ? "Unavailable"
-            : "Cockpit Application Support (isolated)"
+            : "made Application Support (isolated)"
     }
 
     @MainActor

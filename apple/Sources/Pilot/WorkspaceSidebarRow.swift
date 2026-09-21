@@ -65,6 +65,12 @@ struct WorkspaceSidebarRow: View {
                     systemImage: workspace.isPinned ? "pin.slash" : "pin"
                 )
             }
+            Menu("Move to Group") {
+                Button("Ungrouped") { store.moveWorkspace(workspace, toGroup: nil) }
+                ForEach(store.workspaceGroups.groups) { group in
+                    Button(group.name) { store.moveWorkspace(workspace, toGroup: group.id) }
+                }
+            }
             Divider()
             Button("Delete", role: .destructive) {
                 store.deleteWorkspace(workspace)
@@ -291,5 +297,47 @@ struct WorkspaceGaugeArc: InsettableShape {
         var copy = self
         copy.insetAmount += amount
         return copy
+    }
+}
+
+/// A group participates in the outer list's move operation; its children have
+/// their own move operation so dragging a group preserves the child order.
+struct WorkspaceGroupSidebarRow<WorkspaceRow: View>: View {
+    let group: WorkspaceGroup
+    let store: WorkspaceStore
+    let onRename: () -> Void
+    @ViewBuilder var workspaceRow: (Workspace) -> WorkspaceRow
+
+    var body: some View {
+        DisclosureGroup(isExpanded: Binding(
+            get: { store.workspaceGroups.group(group.id)?.isExpanded ?? true },
+            set: { store.workspaceGroups.setExpanded(group.id, $0) }
+        )) {
+            let members = store.workspaces.filter { !$0.isPinned && group.workspaceIDs.contains($0.id) }
+            ForEach(members) { workspace in
+                workspaceRow(workspace)
+            }
+            .onMove { offsets, destination in
+                store.workspaceGroups.moveMembers(
+                    group.id, workspaceIDs: store.unpinnedWorkspaceIDs,
+                    fromOffsets: offsets, toOffset: destination
+                )
+            }
+        } label: {
+            Label(group.name, systemImage: "folder")
+                .lineLimit(1)
+        }
+        .contextMenu {
+            Button("New Workspace in Group") {
+                store.addWorkspace()
+                if let workspace = store.selectedWorkspace {
+                    store.moveWorkspace(workspace, toGroup: group.id)
+                }
+            }
+            Button("Rename Group", action: onRename)
+            Button("Ungroup Workspaces") {
+                store.workspaceGroups.remove(group.id, workspaceIDs: store.unpinnedWorkspaceIDs)
+            }
+        }
     }
 }

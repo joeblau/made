@@ -164,6 +164,10 @@ enum TerminalFastCommandStore {
 }
 
 enum PersistentTerminalSession {
+    private static let runtimeCache = TerminalRuntimeCache<PaneRuntime> { sessionName in
+        guard let tmuxPath = tmuxExecutablePath() else { return nil }
+        return await loadPaneRuntime(sessionName: sessionName, executable: URL(fileURLWithPath: tmuxPath))
+    }
     private static let tmuxCandidates = [
         "/opt/homebrew/bin/tmux",
         "/usr/local/bin/tmux",
@@ -211,17 +215,14 @@ enum PersistentTerminalSession {
         guard pane.kind == .terminal,
               let tmuxPath = tmuxExecutablePath() else { return }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
-        process.arguments = ["kill-session", "-t", pane.persistentSessionName]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return
+        let sessionName = pane.persistentSessionName
+        runtimeCache.invalidate(sessionName)
+        Task {
+            _ = try? await ProcessRunner.run(ProcessInvocation(
+                executableURL: URL(fileURLWithPath: tmuxPath),
+                arguments: ["kill-session", "-t", sessionName],
+                timeout: .seconds(1), standardOutputLimit: 1024, standardErrorLimit: 4096
+            ))
         }
     }
 
@@ -235,30 +236,16 @@ enum PersistentTerminalSession {
     /// the agent. Cursor visibility distinguishes an agent working from one
     /// parked at its input composer for agents that use the native cursor.
     static func paneRuntime(sessionName: String) -> PaneRuntime? {
-        guard let tmuxPath = tmuxExecutablePath() else { return nil }
+        runtimeCache.snapshot(for: sessionName)
+    }
 
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
-        process.arguments = [
-            "display-message",
-            "-p",
-            "-t",
-            sessionName,
-            "#{pane_pid}\t#{cursor_flag}",
-        ]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-
-        guard process.terminationStatus == 0 else { return nil }
-        let text = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    static func loadPaneRuntime(sessionName: String, executable: URL) async -> PaneRuntime? {
+        guard let result = try? await ProcessRunner.run(ProcessInvocation(
+            executableURL: executable,
+            arguments: ["display-message", "-p", "-t", sessionName, "#{pane_pid}\t#{cursor_flag}"],
+            timeout: .seconds(1), standardOutputLimit: 4096, standardErrorLimit: 4096
+        )) else { return nil }
+        let text = result.standardOutputString
         let fields = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: "\t", omittingEmptySubsequences: false)
         guard fields.count == 2,
@@ -288,34 +275,12 @@ enum PersistentTerminalSession {
 
     static func foregroundActivity(sessionName: String) async -> TerminalProcessActivity {
         guard let tmuxPath = tmuxExecutablePath() else { return .idle }
-
-        return await Task.detached(priority: .utility) {
-            let process = Process()
-            let output = Pipe()
-            process.executableURL = URL(fileURLWithPath: tmuxPath)
-            process.arguments = [
-                "display-message",
-                "-p",
-                "-t",
-                sessionName,
-                "#{pane_current_command}",
-            ]
-            process.standardOutput = output
-            process.standardError = FileHandle.nullDevice
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-            } catch {
-                return .idle
-            }
-
-            guard process.terminationStatus == 0 else { return .idle }
-            let data = output.fileHandleForReading.readDataToEndOfFile()
-            let command = String(decoding: data, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return TerminalProcessActivity.classify(currentCommand: command)
-        }.value
+        guard let result = try? await ProcessRunner.run(ProcessInvocation(
+            executableURL: URL(fileURLWithPath: tmuxPath),
+            arguments: ["display-message", "-p", "-t", sessionName, "#{pane_current_command}"],
+            timeout: .seconds(1), standardOutputLimit: 4096, standardErrorLimit: 4096
+        )) else { return .running }
+        return TerminalProcessActivity.classify(currentCommand: result.standardOutputString)
     }
 
     /// Interrupts the foreground process group and waits until tmux reports

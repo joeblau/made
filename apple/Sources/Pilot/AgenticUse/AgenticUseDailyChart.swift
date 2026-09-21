@@ -194,7 +194,6 @@ struct AgenticUseDailyChartPanel: View {
                         .foregroundStyle(.tertiary)
                         .contentTransition(.numericText(value: Double(hiddenCount)))
                 }
-                Divider()
                 HStack(spacing: 6) {
                     Text("Total")
                         .scaledFont(size: 10, weight: .medium)

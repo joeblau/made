@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class WorkspaceStore {
     let modelContext: ModelContext
+    let workspaceGroups: WorkspaceGroups
     var changeCount: Int = 0
     var selectedWorkspaceID: UUID? {
         didSet {
@@ -135,7 +136,7 @@ final class WorkspaceStore {
         }
 
         let extensionWorkspaceIDs = Set(extensionWorkspaceLinks.compactMap { $0.workspace?.id })
-        return items.filter { !extensionWorkspaceIDs.contains($0.id) }.sorted { lhs, rhs in
+        let sorted = items.filter { !extensionWorkspaceIDs.contains($0.id) }.sorted { lhs, rhs in
             if lhs.isPinned != rhs.isPinned {
                 return lhs.isPinned && !rhs.isPinned
             }
@@ -146,6 +147,18 @@ final class WorkspaceStore {
 
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
+        let unpinned = sorted.filter { !$0.isPinned }
+        let byID = Dictionary(uniqueKeysWithValues: unpinned.map { ($0.id, $0) })
+        return sorted.filter(\.isPinned)
+            + workspaceGroups.orderedWorkspaceIDs(unpinned.map(\.id)).compactMap { byID[$0] }
+    }
+
+    var unpinnedWorkspaceIDs: [UUID] { workspaces.filter { !$0.isPinned }.map(\.id) }
+
+    func moveWorkspace(_ workspace: Workspace, toGroup groupID: UUID?) {
+        if let groupID, workspaceGroups.group(groupID) == nil { return }
+        if workspace.isPinned { togglePin(workspace) }
+        workspaceGroups.place(workspace.id, in: groupID, workspaceIDs: unpinnedWorkspaceIDs)
     }
 
     /// Extension companion workspaces are created and pruned by a sibling
@@ -188,16 +201,21 @@ final class WorkspaceStore {
         }
 
         normalizeWorkspaceSortOrder(pinned + unpinned)
+        if workspace.isPinned {
+            workspaceGroups.forget(workspace.id)
+        } else {
+            workspaceGroups.place(workspace.id, in: nil, workspaceIDs: unpinned.map(\.id), atTop: true)
+        }
         _ = modelContext.saveReporting()
         changeCount += 1
     }
 
     func movePinnedWorkspaces(fromOffsets: IndexSet, toOffset: Int) {
-        moveWorkspaces(inPinnedSection: true, fromOffsets: fromOffsets, toOffset: toOffset)
-    }
-
-    func moveUnpinnedWorkspaces(fromOffsets: IndexSet, toOffset: Int) {
-        moveWorkspaces(inPinnedSection: false, fromOffsets: fromOffsets, toOffset: toOffset)
+        var pinned = workspaces.filter(\.isPinned)
+        pinned.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        normalizeWorkspaceSortOrder(pinned + workspaces.filter { !$0.isPinned })
+        _ = modelContext.saveReporting()
+        changeCount += 1
     }
 
     var selectedWorkspace: Workspace? {
@@ -489,8 +507,9 @@ final class WorkspaceStore {
         }
     }
 
-    init(modelContext: ModelContext) {
+    init(modelContext: ModelContext, workspaceGroups: WorkspaceGroups = WorkspaceGroups()) {
         self.modelContext = modelContext
+        self.workspaceGroups = workspaceGroups
         if let stored = UserDefaults.standard.string(forKey: "selectedWorkspaceID") {
             self.selectedWorkspaceID = UUID(uuidString: stored)
         }
@@ -544,7 +563,7 @@ final class WorkspaceStore {
     /// Chromium pane stays blank so demo capture never depends on a public
     /// website or mutable network response.
     static func makeDemoWorkspaces() -> [Workspace] {
-        let names = ["blau", "web", "infra"]
+        let names = ["made", "web", "infra"]
         return names.enumerated().map { index, name in
             let workspace = Workspace(name: name)
             workspace.workspaceSortOrder = index
@@ -592,6 +611,7 @@ final class WorkspaceStore {
             changeCount += 1
             return false
         }
+        workspaceGroups.forget(workspace.id)
         for paneID in deletedDevicePaneIDs {
             DeviceCaptureRegistry.shared.clearPreference(paneID: paneID)
         }
@@ -754,20 +774,5 @@ final class WorkspaceStore {
                 return lhs.offset < rhs.offset
             }?
             .element
-    }
-
-    private func moveWorkspaces(inPinnedSection isPinned: Bool, fromOffsets: IndexSet, toOffset: Int) {
-        var pinned = workspaces.filter(\.isPinned)
-        var unpinned = workspaces.filter { !$0.isPinned }
-
-        if isPinned {
-            pinned.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        } else {
-            unpinned.move(fromOffsets: fromOffsets, toOffset: toOffset)
-        }
-
-        normalizeWorkspaceSortOrder(pinned + unpinned)
-        _ = modelContext.saveReporting()
-        changeCount += 1
     }
 }

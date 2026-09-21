@@ -1,14 +1,15 @@
 {
-  "name": "blau-web",
+  "name": "web-made",
   "type": "module",
   "version": "0.0.1",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build && node scripts/check-build-size.mjs && node scripts/check-security-headers.mjs",
+    "build": "astro build && node scripts/check-build-size.mjs && node scripts/check-security-headers.mjs && node scripts/prepare-worker-assets.mjs",
     "check": "astro check",
     "check:size": "node scripts/check-build-size.mjs",
     "lint": "eslint .",
     "preview": "astro preview",
+    "preview:worker": "wrangler dev --port 8788 --inspector-port 9230",
     "test": "node --test test/*.test.mjs",
     "deploy": "wrangler deploy",
     "deploy:list": "wrangler deployments list",

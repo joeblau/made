@@ -238,8 +238,8 @@ struct PilotApp: App {
     @State private var walkieInput = PilotWalkieInputState()
     @State private var mainWindowID: CGWindowID?
     @State private var extensionWindowID: CGWindowID?
-    /// `NSApp.keyWindow` is nil while Cockpit is in the background. Retain the
-    /// last active Cockpit surface so Walkie still targets the window the user
+    /// `NSApp.keyWindow` is nil while made is in the background. Retain the
+    /// last active made surface so Walkie still targets the window the user
     /// most recently worked in instead of falling back to Main.
     @State private var lastRemoteInputSurface: WorkspacePaneSurface = .main
     @State private var didSetupSync = false
@@ -527,7 +527,7 @@ struct PilotApp: App {
     }
 
     var body: some Scene {
-        Window("Cockpit", id: PilotWindowID.main) {
+        Window("made", id: PilotWindowID.main) {
             ContentView(
                 store: store,
                 syncService: syncService,
@@ -819,7 +819,7 @@ struct PilotApp: App {
 
     private func remoteInputSurface() -> WorkspacePaneSurface {
         // A sheet or Settings can be key while its parent workspace window is
-        // still AppKit's main window, so consult both while Cockpit is active.
+        // still AppKit's main window, so consult both while made is active.
         // Once the phone takes focus, rely on activation events remembered by
         // `PilotWindowReader`; AppKit may no longer expose a key window.
         var activeWindows = [NSApp.keyWindow].compactMap { $0 }
@@ -979,7 +979,7 @@ struct PilotApp: App {
         syncService.onReceive = { (message: SyncMessage) in
             switch message {
             case .selectWorkspace(let sel):
-                // Workspace selection follows the active Cockpit window.
+                // Workspace selection follows the active made window.
                 selectRemoteWorkspace(sel.workspaceID, on: remoteInputSurface())
             case .selectTab(let sel):
                 if sel.workspaceID == WorkspaceStore.remoteDesktopWorkspaceID {
@@ -1110,8 +1110,6 @@ private struct PilotSettingsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
 
-                Divider()
-
                 List(selection: sidebarSelection) {
                     if matchesSearch("General identity keys about version updates") {
                         Label("General", systemImage: "gearshape")
@@ -1155,7 +1153,7 @@ private struct PilotSettingsView: View {
             Form {
                 PilotSettingsPageHeader(
                     title: "General",
-                    subtitle: "Manage Cockpit identity, pairing, and app information.",
+                    subtitle: "Manage made identity, pairing, and app information.",
                     systemImage: "gearshape.fill",
                     tint: .blue
                 )

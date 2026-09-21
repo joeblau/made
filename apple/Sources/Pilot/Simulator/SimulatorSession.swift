@@ -357,7 +357,7 @@ final class SimulatorSession {
     private static func captureScreenshotData(udid: String) async -> ScreenshotDataResult {
         await Task.detached(priority: .userInitiated) {
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("Cockpit Simulator Screenshot \(UUID().uuidString).png")
+                .appendingPathComponent("made Simulator Screenshot \(UUID().uuidString).png")
             defer { try? FileManager.default.removeItem(at: url) }
             do {
                 try SimctlBridge.takeScreenshot(udid: udid, to: url)

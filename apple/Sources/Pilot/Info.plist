@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Cockpit</string>
+	<string>made</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CFBundleName</key>
-	<string>Cockpit</string>
+	<string>made</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,8 +22,13 @@
 	<string>PilotApplication</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<!-- Isolate installer launchd calls from made's main thread. This is
+	     intentional even though made is not sandboxed: SMJobRemove can
+	     wait indefinitely inside Sparkle's in-process installer launcher. -->
+	<key>SUEnableInstallerLauncherService</key>
+	<true/>
 	<key>SUFeedURL</key>
-	<string>https://github.com/joeblau/blau/releases/latest/download/appcast.xml</string>
+	<string>https://github.com/joeblau/made/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>BIQoEzT2ALEKrU/qHI6ZCBZXrHMmq+GQxRgy9dCpEBg=</string>
 	<key>SURequireSignedFeed</key>
@@ -34,19 +39,17 @@
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>LSUIElement</key>
 	<false/>
-	<key>SUFeedURL</key>
-	<string>https://github.com/joeblau/blau/releases/latest/download/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>BIQoEzT2ALEKrU/qHI6ZCBZXrHMmq+GQxRgy9dCpEBg=</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Cockpit listens for push-to-talk dictation from the Walkie app.</string>
+	<string>made listens for push-to-talk dictation from the Walkie app.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Cockpit accesses an attached iPhone camera feed so its Device pane can preview, capture, and record the device screen.</string>
+	<string>made accesses an attached iPhone camera feed so its Device pane can preview, capture, and record the device screen.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Cockpit connects to nearby Walkie and Kneeboard devices, and discovers Macs offering Screen Sharing, over the local network.</string>
+	<string>made receives wireless iPhone and iPad screen sharing, connects to Walkie and Kneeboard, and discovers Macs over the local network.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_blau-frames._tcp</string>
+		<string>_airplay._tcp</string>
+		<string>_raop._tcp</string>
 		<string>_blau-annotate._tcp</string>
 		<string>_blau-sync._tcp</string>
 		<string>_blau-sync._udp</string>
@@ -60,7 +63,7 @@
 				<string>public.data</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>Cockpit Workspace Pane</string>
+			<string>made Workspace Pane</string>
 			<key>UTTypeIdentifier</key>
 			<string>app.blau.pilot.pane</string>
 		</dict>
@@ -70,7 +73,7 @@
 				<string>public.data</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>Cockpit Note Tab</string>
+			<string>made Note Tab</string>
 			<key>UTTypeIdentifier</key>
 			<string>app.blau.pilot.note-tab</string>
 		</dict>

@@ -40,7 +40,7 @@ extension ModelContext {
     /// restore the deleted models when durability cannot be guaranteed.
     @discardableResult
     func saveReporting(
-        operation: String = "Saving Cockpit data",
+        operation: String = "Saving made data",
         rollbackOnFailure: Bool = false,
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {

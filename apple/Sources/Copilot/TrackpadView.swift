@@ -13,10 +13,6 @@ struct TrackpadView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 32, style: .continuous)
-                    .stroke(.secondary, lineWidth: 1)
-            }
             .frame(height: 200)
             .contentShape(Rectangle())
             .gesture(

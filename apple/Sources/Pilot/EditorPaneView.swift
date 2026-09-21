@@ -290,8 +290,6 @@ struct EditorPaneView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
-            Divider()
-
             // Results / status.
             resultsBody
                 .frame(maxHeight: 360)
@@ -299,10 +297,6 @@ struct EditorPaneView: View {
         .frame(maxWidth: 520)
         .frame(maxHeight: 360)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.4), lineWidth: 1)
-        )
         .shadow(color: .black.opacity(0.25), radius: 24, y: 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 12)
@@ -437,10 +431,6 @@ struct EditorPaneView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color.red.opacity(0.4), lineWidth: 1)
-        )
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)

@@ -7,7 +7,7 @@ MANIFEST="${BLAU_CHROMIUM_MANIFEST:-$PACKAGE_ROOT/cef-artifacts.json}"
 
 usage() {
   printf '%s\n' \
-    'Usage: assemble-chromium-runtime.sh <Cockpit.app> <helper-template.app> [signing-identity]' >&2
+    'Usage: assemble-chromium-runtime.sh <made.app> <helper-template.app> [signing-identity]' >&2
   exit 2
 }
 

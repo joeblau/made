@@ -88,7 +88,7 @@ Before accepting a candidate:
 ## Rebuild and test
 
 Change the complete lock and its mirrored diagnostics constants in one review.
-Increment the Blau release suffix even when returning to an older CEF version;
+Increment the made release suffix even when returning to an older CEF version;
 an immutable release ID is never reused.
 
 Run the artifact-free gates first:
@@ -143,7 +143,7 @@ asset, mix CEF revisions, or distribute a locally copied archive.
 2. Create a rollback branch from the affected Pilot release. Restore the prior
    lock, bridge compatibility changes, helper layout, entitlements, budgets,
    and diagnostics constants as one unit.
-3. Increment the Blau release suffix to a new unused ID. Preserve any
+3. Increment the made release suffix to a new unused ID. Preserve any
    unrelated application fixes required by the current Pilot release.
 4. Run all artifact-free, two-architecture real-engine, reproducibility,
    archive, signing, notarization, and publication gates above.

@@ -30,7 +30,7 @@
 		<string>_blau-sync._udp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Kneeboard connects to your Mac running Cockpit over the local network to mirror its screen and sync drawings.</string>
+	<string>Kneeboard connects to your Mac running made over the local network to mirror its screen and sync drawings.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
 	<key>UILaunchScreen</key>

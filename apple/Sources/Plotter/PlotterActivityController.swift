@@ -28,7 +28,7 @@ final class PlotterActivityController {
         }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         activity = try? Activity.request(
-            attributes: PlotterActivityAttributes(sessionName: title.isEmpty ? "Cockpit" : title),
+            attributes: PlotterActivityAttributes(sessionName: title.isEmpty ? "made" : title),
             content: ActivityContent(state: makeState(connected: true, title: title), staleDate: nil)
         )
     }

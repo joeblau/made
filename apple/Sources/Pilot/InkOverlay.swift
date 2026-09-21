@@ -124,13 +124,13 @@ struct InkOverlay: View {
                     }
             }
 
-            Divider().frame(height: 18)
+            Color.clear.frame(width: 4)
 
             toolButton("eraser", active: model.isEraser) { model.isEraser.toggle() }
             toolButton("arrow.uturn.backward", disabled: model.strokes.isEmpty) { model.undo() }
             toolButton("trash", disabled: model.strokes.isEmpty) { model.clear() }
 
-            Divider().frame(height: 18)
+            Color.clear.frame(width: 4)
 
             Button("Done") { isActive = false }
                 .buttonStyle(.plain)
@@ -140,7 +140,6 @@ struct InkOverlay: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.separator.opacity(0.4), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }
 
@@ -176,13 +175,11 @@ struct RemoteInkControls: View {
     var body: some View {
         HStack(spacing: 10) {
             button("arrow.uturn.backward", help: "Undo last Kneeboard stroke") { model.undo() }
-            Divider().frame(height: 18)
             button("trash", help: "Clear Kneeboard annotations") { model.clear() }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.separator.opacity(0.4), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }
 

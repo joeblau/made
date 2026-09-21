@@ -128,6 +128,7 @@ final class UsageStore {
 
     private var loadTask: Task<Void, Never>?
     private var pollTimer: Timer?
+    private var activeProviders: Set<Provider> = []
     private let defaults: UserDefaults
     private let fetchers: Fetchers
 
@@ -170,6 +171,14 @@ final class UsageStore {
         pollTimer = nil
         loadTask?.cancel()
         loadTask = nil
+        isLoading = false
+        // A cancelled request did not produce a reusable result. Let the next
+        // presentation retry immediately instead of leaving a loading card
+        // stranded behind the normal two-minute request spacing.
+        for provider in activeProviders {
+            lastAttempt[provider] = nil
+        }
+        activeProviders.removeAll()
     }
 
     /// May we hit `provider` right now? Respects both the rate-limit backoff and
@@ -182,7 +191,6 @@ final class UsageStore {
 
     /// Detect sessions and fetch providers that aren't spaced-out or backed-off.
     func reload() {
-        loadTask?.cancel()
         let now = Date()
         let claudeEnabled = UsageConsent.isClaudeEnabled(defaults: defaults)
         let codexEnabled = UsageConsent.isCodexEnabled(defaults: defaults)
@@ -192,14 +200,33 @@ final class UsageStore {
         if !codexEnabled { openAI = .disabled }
         if !grokEnabled { xAI = .disabled }
         if !kimiEnabled { moonshot = .disabled }
+
+        // Multiple view lifecycle events can request a refresh together when
+        // the inspector is presented. Keep the in-flight load: cancelling it
+        // here records an attempt, then the spacing guard prevents its
+        // replacement from running and leaves the cards without a result.
+        guard loadTask == nil else { return }
+
         let doAnthropic = claudeEnabled && mayFetch(.anthropic, now: now)
         let doOpenAI = codexEnabled && mayFetch(.openAI, now: now)
         let doGrok = grokEnabled && mayFetch(.xAI, now: now)
         let doKimi = kimiEnabled && mayFetch(.moonshot, now: now)
-        if doAnthropic { lastAttempt[.anthropic] = now }
-        if doOpenAI { lastAttempt[.openAI] = now }
-        if doGrok { lastAttempt[.xAI] = now }
-        if doKimi { lastAttempt[.moonshot] = now }
+        if doAnthropic {
+            lastAttempt[.anthropic] = now
+            if case .usage = anthropic {} else { anthropic = .loading }
+        }
+        if doOpenAI {
+            lastAttempt[.openAI] = now
+            if case .usage = openAI {} else { openAI = .loading }
+        }
+        if doGrok {
+            lastAttempt[.xAI] = now
+            if case .usage = xAI {} else { xAI = .loading }
+        }
+        if doKimi {
+            lastAttempt[.moonshot] = now
+            if case .usage = moonshot {} else { moonshot = .loading }
+        }
 
         // Nothing to do this tick — everything is spaced-out or backed-off.
         guard doAnthropic || doOpenAI || doGrok || doKimi else {
@@ -208,6 +235,12 @@ final class UsageStore {
         }
 
         isLoading = true
+        activeProviders = Set([
+            doAnthropic ? Provider.anthropic : nil,
+            doOpenAI ? Provider.openAI : nil,
+            doGrok ? Provider.xAI : nil,
+            doKimi ? Provider.moonshot : nil,
+        ].compactMap { $0 })
         let fetchers = fetchers
         loadTask = Task {
             async let anthropicResult = Self.fetch(when: doAnthropic, using: fetchers.claude)
@@ -221,11 +254,24 @@ final class UsageStore {
                 moonshotResult
             )
             if Task.isCancelled { return }
-            anthropic = resolve(.anthropic, previous: anthropic, result: aRes)
-            openAI = resolve(.openAI, previous: openAI, result: oRes)
-            xAI = resolve(.xAI, previous: xAI, result: xRes)
-            moonshot = resolve(.moonshot, previous: moonshot, result: kRes)
+            anthropic = UsageConsent.isClaudeEnabled(defaults: defaults)
+                ? resolve(.anthropic, previous: anthropic, result: aRes)
+                : .disabled
+            openAI = UsageConsent.isCodexEnabled(defaults: defaults)
+                ? resolve(.openAI, previous: openAI, result: oRes)
+                : .disabled
+            xAI = UsageConsent.isGrokEnabled(defaults: defaults)
+                ? resolve(.xAI, previous: xAI, result: xRes)
+                : .disabled
+            moonshot = UsageConsent.isKimiEnabled(defaults: defaults)
+                ? resolve(.moonshot, previous: moonshot, result: kRes)
+                : .disabled
             isLoading = false
+            activeProviders.removeAll()
+            loadTask = nil
+            // Pick up a provider enabled while this batch was in flight. The
+            // spacing guard skips every provider that just completed.
+            reload()
         }
     }
 

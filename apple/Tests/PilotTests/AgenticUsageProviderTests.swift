@@ -67,6 +67,40 @@ struct AgenticUsageProviderTests {
         #expect(records.first?.model == "gpt-5")
     }
 
+    @Test("Codex token counts whose cumulative totals did not advance are repeats")
+    func codexRepeatedTotalsSkipped() {
+        // Codex re-emits token_count at turn boundaries with the previous
+        // call's last_token_usage and unchanged totals — no API call happened.
+        let repeat1 = codexTokenCount
+            .replacingOccurrences(of: "\"ordinal\":17", with: "\"ordinal\":18")
+            .replacingOccurrences(of: "02:34:35.653Z", with: "02:34:36.100Z")
+        let secondCall = """
+        {"timestamp":"2026-08-14T02:35:10.000Z","ordinal":25,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":36433,"cached_input_tokens":27008,"cache_write_input_tokens":0,"output_tokens":519,"reasoning_output_tokens":171,"total_tokens":36952},"last_token_usage":{"input_tokens":20000,"cached_input_tokens":16000,"cache_write_input_tokens":0,"output_tokens":300,"reasoning_output_tokens":100,"total_tokens":20300}}}}
+        """
+        let records = parse(
+            [codexTurnContext, codexTokenCount, repeat1, secondCall],
+            provider: .codex
+        )
+        #expect(records.count == 2)
+        #expect(records.first?.outputTokens == 219)
+        #expect(records.last?.inputTokens == 20000 - 16000)
+        #expect(records.last?.cacheReadTokens == 16000)
+        #expect(records.last?.outputTokens == 300)
+    }
+
+    @Test("Codex token counts without last usage bill the delta of the totals")
+    func codexTotalsDeltaFallback() {
+        let totalsOnly = """
+        {"timestamp":"2026-08-14T02:35:10.000Z","ordinal":25,"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":36433,"cached_input_tokens":27008,"cache_write_input_tokens":0,"output_tokens":519,"reasoning_output_tokens":171,"total_tokens":36952}}}}
+        """
+        let records = parse([codexTurnContext, codexTokenCount, totalsOnly], provider: .codex)
+        #expect(records.count == 2)
+        #expect(records.last?.inputTokens == (36433 - 16433) - (27008 - 11008))
+        #expect(records.last?.cacheReadTokens == 27008 - 11008)
+        #expect(records.last?.outputTokens == 519 - 219)
+        #expect(records.last?.thinkingTokens == 171 - 71)
+    }
+
     @Test("Codex resume replays dedup despite rewritten timestamps")
     func codexReplayDedup() {
         let replayed = codexTokenCount.replacingOccurrences(
@@ -117,6 +151,19 @@ struct AgenticUsageProviderTests {
         #expect(AgenticUsagePricing.cost(of: record) == nil)
     }
 
+    @Test("Kimi session-scoped usage records are cumulative totals, not calls")
+    func kimiSkipsSessionScope() {
+        let turn = """
+        {"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":2134,"output":99,"inputCacheRead":18944,"inputCacheCreation":0},"usageScope":"turn","time":1786115071956}
+        """
+        let session = """
+        {"type":"usage.record","agentId":"main","model":"kimi-code/k3","usage":{"inputOther":302420,"output":1259,"inputCacheRead":19456,"inputCacheCreation":0},"usageScope":"session","time":1787540236494}
+        """
+        let records = parse([turn, session], provider: .kimi)
+        #expect(records.count == 1)
+        #expect(records.first?.inputTokens == 2134)
+    }
+
     // MARK: Pricing
 
     private func record(
@@ -148,11 +195,11 @@ struct AgenticUsageProviderTests {
     func codexFlatPricing() throws {
         let small = record(model: "gpt-5.6-sol", input: 100_000, output: 1_000_000)
         let smallCost = try #require(AgenticUsagePricing.cost(of: small))
-        #expect(abs(smallCost - (0.1 * 5.00 + 1.0 * 30.00)) < 1e-9)
+        #expect(abs(smallCost - (0.1 * 4.00 + 1.0 * 20.00)) < 1e-9)
 
         let large = record(model: "gpt-5.6-sol", input: 50_000, cacheRead: 250_000, output: 1_000_000)
         let largeCost = try #require(AgenticUsagePricing.cost(of: large))
-        #expect(abs(largeCost - (0.05 * 5.00 + 0.25 * 0.50 + 1.0 * 30.00)) < 1e-9)
+        #expect(abs(largeCost - (0.05 * 4.00 + 0.25 * 0.40 + 1.0 * 20.00)) < 1e-9)
     }
 
     @Test("Cache reads default to 0.1x input unless overridden")
@@ -160,7 +207,21 @@ struct AgenticUsageProviderTests {
         let k3 = record(model: "k3", cacheRead: 1_000_000)
         #expect(try abs(#require(AgenticUsagePricing.cost(of: k3)) - 0.45) < 1e-9)
         let gpt5 = record(model: "gpt-5", cacheRead: 1_000_000)
-        #expect(try abs(#require(AgenticUsagePricing.cost(of: gpt5)) - 0.156) < 1e-9)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: gpt5)) - 0.125) < 1e-9)
+        // Fable 5.1 bills cache reads at 0.025x input, not the usual 0.1x.
+        let fable51 = record(model: "claude-fable-5-1", cacheRead: 1_000_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: fable51)) - 0.25) < 1e-9)
+        let fable5 = record(model: "claude-fable-5", cacheRead: 1_000_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: fable5)) - 1.00) < 1e-9)
+    }
+
+    @Test("Rates ccusage changed since the table was first verified")
+    func recentRateChanges() throws {
+        let sonnet = record(model: "claude-sonnet-5", input: 1_000_000, output: 1_000_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: sonnet)) - (2.00 + 10.00)) < 1e-9)
+        let kimiForCoding = record(model: "kimi-for-coding", input: 1_000_000, cacheRead: 1_000_000, output: 1_000_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: kimiForCoding)) - (0.95 + 0.16 + 4.00)) < 1e-9)
+        #expect(AgenticModel.displayName(for: "claude-fable-5-1") == "Fable 5.1")
     }
 
     // MARK: All-time range

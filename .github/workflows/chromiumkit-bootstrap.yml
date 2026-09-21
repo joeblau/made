@@ -123,7 +123,7 @@ jobs:
         run: |
           archive="$RUNNER_TEMP/Pilot.xcarchive"
           xcodebuild archive \
-            -project apple/blau.xcodeproj \
+            -project apple/made.xcodeproj \
             -scheme Pilot \
             -configuration Chromium \
             -destination 'generic/platform=macOS' \
@@ -149,14 +149,14 @@ jobs:
             -exportPath "$export_path" \
             -exportOptionsPlist "$export_options"
 
-          archive_app="$archive/Products/Applications/Cockpit.app"
+          archive_app="$archive/Products/Applications/made.app"
           rm -rf "$archive_app"
-          ditto "$export_path/Cockpit.app" "$archive_app"
+          ditto "$export_path/made.app" "$archive_app"
           apple/bin/validate-chromium-archive.sh "$archive"
       - name: Notarize, staple, and validate
         run: |
           ditto -c -k --keepParent \
-            "$RUNNER_TEMP/Pilot.xcarchive/Products/Applications/Cockpit.app" \
+            "$RUNNER_TEMP/Pilot.xcarchive/Products/Applications/made.app" \
             "$RUNNER_TEMP/Pilot-notarization.zip"
           xcrun notarytool submit "$RUNNER_TEMP/Pilot-notarization.zip" \
             --apple-id "$APPLE_ID" \
@@ -164,7 +164,7 @@ jobs:
             --team-id "$APPLE_TEAM_ID" \
             --wait
           xcrun stapler staple \
-            "$RUNNER_TEMP/Pilot.xcarchive/Products/Applications/Cockpit.app"
+            "$RUNNER_TEMP/Pilot.xcarchive/Products/Applications/made.app"
           apple/bin/validate-chromium-archive.sh \
             --require-notarization "$RUNNER_TEMP/Pilot.xcarchive"
       - name: Prepare immutable release assets

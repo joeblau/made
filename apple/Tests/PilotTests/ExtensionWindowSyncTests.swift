@@ -78,7 +78,7 @@ struct ExtensionWindowSyncTests {
         #expect(PilotWindowLaunchPolicy.requiredCompanion(for: PilotWindowID.main) == nil)
     }
 
-    @Test("Remote input follows the active Cockpit window")
+    @Test("Remote input follows the active made window")
     func remoteInputWindowRouting() {
         let mainWindowID: CGWindowID = 41
         let extensionWindowID: CGWindowID = 82

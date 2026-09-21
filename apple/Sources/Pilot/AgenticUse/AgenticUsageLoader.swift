@@ -334,8 +334,10 @@ actor AgenticUsageLoader {
         let decoder = JSONDecoder()
         var records: [AgenticUsageRecord] = []
         records.reserveCapacity(candidates.count)
-        // Codex attributes token counts to the most recent turn's model.
+        // Codex attributes token counts to the most recent turn's model and
+        // reports cumulative totals that tell repeats from new calls.
         var codexModel: String?
+        var codexTotals: RawCodexTokenUsage?
         for range in candidates {
             let line = data.subdata(in: range.lowerBound..<range.upperBound)
             switch provider {
@@ -345,7 +347,11 @@ actor AgenticUsageLoader {
                 }
             case .codex:
                 decodeCodexLine(
-                    from: line, decoder: decoder, currentModel: &codexModel, into: &records
+                    from: line,
+                    decoder: decoder,
+                    currentModel: &codexModel,
+                    previousTotals: &codexTotals,
+                    into: &records
                 )
             case .grok:
                 decodeGrokRecords(from: line, decoder: decoder, into: &records)
@@ -459,18 +465,26 @@ actor AgenticUsageLoader {
 
     // MARK: - Codex
 
-    /// Codex logs one `token_count` event per API call, attributed to the
-    /// model named by the most recent `turn_context` (or `world_state`)
+    /// Codex logs a `token_count` event after each API call, attributed to
+    /// the model named by the most recent `turn_context` (or `world_state`)
     /// line. `last_token_usage.input_tokens` includes the cached portion, so
-    /// uncached input is `input - cached`. Resumed sessions replay their
-    /// history — with rewritten timestamps — into new rollout files, so the
-    /// dedup key fingerprints `(ordinal, last usage, cumulative usage)`,
-    /// which replays copy verbatim. Sessions predating per-turn model
-    /// context fall back to "gpt-5", matching ccusage.
+    /// uncached input is `input - cached`.
+    ///
+    /// Codex also re-emits `token_count` on events that made no API call
+    /// (turn boundaries, settings changes); those carry the previous call's
+    /// `last_token_usage` again but leave `total_token_usage` unchanged, so an
+    /// event whose cumulative totals did not advance is a repeat, not a new
+    /// call (matching ccusage). An event with totals but no last usage bills
+    /// the delta of the totals. Resumed sessions replay their history — with
+    /// rewritten timestamps — into new rollout files, so the dedup key
+    /// fingerprints `(ordinal, last usage, cumulative usage)`, which replays
+    /// copy verbatim. Sessions predating per-turn model context fall back to
+    /// "gpt-5", matching ccusage.
     private nonisolated static func decodeCodexLine(
         from line: Data,
         decoder: JSONDecoder,
         currentModel: inout String?,
+        previousTotals: inout RawCodexTokenUsage?,
         into records: inout [AgenticUsageRecord]
     ) {
         guard let raw = try? decoder.decode(RawCodexLine.self, from: line) else { return }
@@ -484,15 +498,29 @@ actor AgenticUsageLoader {
         }
         guard raw.payload?.type == "token_count",
               let info = raw.payload?.info,
-              let last = info.lastTokenUsage,
               let timestamp = raw.timestamp.flatMap(parseFlexibleTimestamp)
         else { return }
 
-        let input = max(0, last.inputTokens ?? 0)
-        let cached = min(input, max(0, last.cachedInputTokens ?? 0))
-        let output = max(0, last.outputTokens ?? 0)
-        let reasoning = last.reasoningOutputTokens
         let total = info.totalTokenUsage
+        let advanced = total == nil || previousTotals != total
+        let usage: RawCodexTokenUsage?
+        if let last = info.lastTokenUsage, advanced {
+            usage = last
+        } else if let total {
+            usage = total.subtracting(previousTotals)
+        } else {
+            usage = nil
+        }
+        if let total { previousTotals = total }
+        guard let usage else { return }
+
+        let input = max(0, usage.inputTokens ?? 0)
+        let cached = min(input, max(0, usage.cachedInputTokens ?? 0))
+        let cacheWrite = max(0, usage.cacheWriteInputTokens ?? 0)
+        let output = max(0, usage.outputTokens ?? 0)
+        let reasoning = usage.reasoningOutputTokens
+        guard input > 0 || cacheWrite > 0 || output > 0 || (reasoning ?? 0) > 0 else { return }
+
         let dedupKey = "x\u{1F}\(raw.ordinal.map(String.init) ?? "null")"
             + "\u{1F}\(input)\u{1F}\(cached)\u{1F}\(output)\u{1F}\(reasoning ?? -1)"
             + "\u{1F}\(total?.inputTokens ?? -1)\u{1F}\(total?.cachedInputTokens ?? -1)"
@@ -504,7 +532,7 @@ actor AgenticUsageLoader {
                 model: currentModel ?? "gpt-5",
                 timestamp: timestamp,
                 inputTokens: input - cached,
-                cacheWriteTokens: max(0, last.cacheWriteInputTokens ?? 0),
+                cacheWriteTokens: cacheWrite,
                 cacheWrite1hTokens: 0,
                 cacheReadTokens: cached,
                 outputTokens: output,
@@ -571,14 +599,18 @@ actor AgenticUsageLoader {
 
     // MARK: - Kimi
 
-    /// Kimi logs one `usage.record` per turn. `inputOther` is already the
-    /// uncached portion. Model ids carry a "kimi-code/" routing prefix.
+    /// Kimi logs one turn-scoped `usage.record` per API call, plus occasional
+    /// session-scoped records that carry the session's cumulative totals;
+    /// only the turn records are billable (matching ccusage). `inputOther`
+    /// is already the uncached portion. Model ids carry a "kimi-code/"
+    /// routing prefix.
     private nonisolated static func decodeKimiRecord(
         from line: Data,
         decoder: JSONDecoder
     ) -> AgenticUsageRecord? {
         guard let raw = try? decoder.decode(RawKimiLine.self, from: line),
               raw.type == "usage.record",
+              raw.usageScope == "turn",
               let usage = raw.usage,
               let rawModel = raw.model,
               let epochMilliseconds = raw.time
@@ -776,7 +808,7 @@ private struct RawCodexTokenInfo: Decodable {
     }
 }
 
-private struct RawCodexTokenUsage: Decodable {
+private struct RawCodexTokenUsage: Decodable, Equatable {
     let inputTokens: Int?
     let cachedInputTokens: Int?
     let cacheWriteInputTokens: Int?
@@ -789,6 +821,36 @@ private struct RawCodexTokenUsage: Decodable {
         case cacheWriteInputTokens = "cache_write_input_tokens"
         case outputTokens = "output_tokens"
         case reasoningOutputTokens = "reasoning_output_tokens"
+    }
+
+    init(
+        inputTokens: Int?,
+        cachedInputTokens: Int?,
+        cacheWriteInputTokens: Int?,
+        outputTokens: Int?,
+        reasoningOutputTokens: Int?
+    ) {
+        self.inputTokens = inputTokens
+        self.cachedInputTokens = cachedInputTokens
+        self.cacheWriteInputTokens = cacheWriteInputTokens
+        self.outputTokens = outputTokens
+        self.reasoningOutputTokens = reasoningOutputTokens
+    }
+
+    /// Per-call usage as the difference between two cumulative totals.
+    /// Clamped at zero: totals never go backwards in a well-formed log.
+    func subtracting(_ previous: RawCodexTokenUsage?) -> RawCodexTokenUsage {
+        func delta(_ current: Int?, _ earlier: Int?) -> Int? {
+            guard let current else { return nil }
+            return max(0, current - (earlier ?? 0))
+        }
+        return RawCodexTokenUsage(
+            inputTokens: delta(inputTokens, previous?.inputTokens),
+            cachedInputTokens: delta(cachedInputTokens, previous?.cachedInputTokens),
+            cacheWriteInputTokens: delta(cacheWriteInputTokens, previous?.cacheWriteInputTokens),
+            outputTokens: delta(outputTokens, previous?.outputTokens),
+            reasoningOutputTokens: delta(reasoningOutputTokens, previous?.reasoningOutputTokens)
+        )
     }
 }
 
@@ -824,6 +886,7 @@ private struct RawKimiLine: Decodable {
     let type: String?
     let model: String?
     let usage: RawKimiUsage?
+    let usageScope: String?
     let time: Double?
 }
 

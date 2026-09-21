@@ -119,7 +119,7 @@ struct WorkspaceView: View {
         .overlay {
             if isDropTarget {
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.8), lineWidth: 1)
+                    .fill(Color.accentColor.opacity(0.18))
             }
         }
         .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -518,10 +518,6 @@ private struct CollapsedPaneSlit: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.85))
-        .overlay {
-            Rectangle()
-                .stroke(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 1)
-        }
     }
 
     @ViewBuilder

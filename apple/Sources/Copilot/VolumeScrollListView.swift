@@ -720,7 +720,7 @@ private struct PreviewItem: Identifiable {
     @Previewable @State var selectedID: UUID?
     let items = [
         PreviewItem(name: "Bloxwap", badgeCount: 2),
-        PreviewItem(name: "Blau"),
+        PreviewItem(name: "made"),
         PreviewItem(name: "Submap"),
         PreviewItem(name: "VeblenHype"),
     ]

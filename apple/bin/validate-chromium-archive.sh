@@ -31,17 +31,23 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ $# == 1 ]] ||
-  fail "usage: validate-chromium-archive.sh [--require-notarization] [--allow-ad-hoc] <Cockpit.app|xcarchive>"
+  fail "usage: validate-chromium-archive.sh [--require-notarization] [--allow-ad-hoc] <made.app|xcarchive>"
 [[ "$REQUIRE_NOTARIZATION" == 0 || "$ALLOW_AD_HOC" == 0 ]] ||
   fail "--require-notarization cannot be combined with --allow-ad-hoc"
 
 input="$1"
 if [[ "$input" == *.xcarchive ]]; then
-  APP="$input/Products/Applications/Cockpit.app"
+  APP="$input/Products/Applications/made.app"
 else
   APP="$input"
 fi
 [[ -d "$APP/Contents" ]] || fail "Pilot application was not found"
+
+# Installer launchd calls can hang indefinitely. Never ship a configuration
+# that runs Sparkle's installer launcher on made's main thread.
+[[ "$(plutil -extract SUEnableInstallerLauncherService raw \
+  "$APP/Contents/Info.plist" 2>/dev/null)" == "true" ]] ||
+  fail "Sparkle installer launcher must run in its XPC service"
 
 for tool in awk cmp codesign file find grep jq lipo plutil readlink sed sort; do
   command -v "$tool" >/dev/null 2>&1 ||
@@ -214,7 +220,7 @@ while IFS= read -r additional_framework; do
   if [[ "$(basename "$additional_framework")" == "Sparkle.framework" ]]; then
     sparkle_version="$(jq -r '
       .pins[] | select(.identity == "sparkle") | .state.version
-    ' "$APPLE_ROOT/blau.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved")"
+    ' "$APPLE_ROOT/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved")"
     [[ -n "$sparkle_version" && "$sparkle_version" != "null" ]] ||
       fail "Sparkle is missing from Package.resolved"
     [[ "$(plutil -extract CFBundleShortVersionString raw \
@@ -291,6 +297,18 @@ app_binary="$APP/Contents/MacOS/$app_executable"
 [[ "$(sorted_architectures "$app_binary")" == "arm64 x86_64" ]] ||
   fail "Pilot executable is not universal"
 printf '%s\n' "${app_binary#"$APP/"}" >> "$allowed_code"
+
+airplay_helper="$APP/Contents/MacOS/CockpitAirPlayReceiver"
+[[ -x "$airplay_helper" ]] || fail "AirPlay receiver helper is missing"
+[[ "$(sorted_architectures "$airplay_helper")" == "arm64 x86_64" ]] ||
+  fail "AirPlay receiver helper is not universal"
+verify_signature "$airplay_helper" "AirPlay receiver" "$app_team"
+verify_exact_entitlements "$airplay_helper" "" "AirPlay receiver"
+printf '%s\n' "${airplay_helper#"$APP/"}" >> "$allowed_code"
+for source in uxplay.tar.gz libplist.tar.bz2 openssl.tar.gz main.cpp bounds.patch tests.cpp build-airplay-receiver.sh; do
+  [[ -s "$APP/Contents/Resources/AirPlay/Sources/$source" ]] ||
+    fail "AirPlay corresponding source is missing: $source"
+done
 
 actual_code="$work/actual-code.txt"
 while IFS= read -r candidate; do
