@@ -124,13 +124,13 @@ struct InkOverlay: View {
                     }
             }
 
-            Color.clear.frame(width: 4)
+            Color.clear.frame(width: 4, height: 1)
 
             toolButton("eraser", active: model.isEraser) { model.isEraser.toggle() }
             toolButton("arrow.uturn.backward", disabled: model.strokes.isEmpty) { model.undo() }
             toolButton("trash", disabled: model.strokes.isEmpty) { model.clear() }
 
-            Color.clear.frame(width: 4)
+            Color.clear.frame(width: 4, height: 1)
 
             Button("Done") { isActive = false }
                 .buttonStyle(.plain)
@@ -139,6 +139,7 @@ struct InkOverlay: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
+        .fixedSize()
         .background(.regularMaterial, in: Capsule())
         .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
     }
