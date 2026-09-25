@@ -154,7 +154,9 @@ def discovery(arguments, pattern):
                                    env={**os.environ, "LC_ALL": "C"})
         os.close(slave)
         slave = None
-        deadline = time.monotonic() + 5
+        # Hosted macOS runners can take several seconds to publish a new
+        # multicast service while the test host and other suites start up.
+        deadline = time.monotonic() + 15
         output = b""
         while time.monotonic() < deadline:
             if select.select([master], [], [], min(0.1, max(0, deadline - time.monotonic())))[0]:
@@ -164,7 +166,7 @@ def discovery(arguments, pattern):
                     return match
                 if len(output) > 65_536:
                     break
-        raise RuntimeError("Receiver was not discoverable through Bonjour within five seconds")
+        raise RuntimeError("Receiver was not discoverable through Bonjour within fifteen seconds")
     finally:
         if process is not None:
             stop(process)
