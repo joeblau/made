@@ -65,7 +65,9 @@ final class AirPlayPackagingTests: XCTestCase {
         do {
             result = try await ProcessRunner.run(ProcessInvocation(
                 executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
-                arguments: [script.path, Bundle.main.bundlePath], timeout: .seconds(45)
+                // Multicast discovery is verified by the standalone installed-app
+                // smoke check; hosted CI VMs do not reliably support it.
+                arguments: [script.path, Bundle.main.bundlePath, "--loopback"], timeout: .seconds(25)
             ))
         } catch let error as ProcessRunnerError {
             // This checker explicitly omits PINs and authentication payloads.
