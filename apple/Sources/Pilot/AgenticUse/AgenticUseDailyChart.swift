@@ -1,7 +1,7 @@
 import Charts
 import SwiftUI
 
-/// The dashboard centerpiece: a stacked per-model area chart of daily cost
+/// The dashboard centerpiece: a stacked per-model chart of daily cost
 /// (hourly for the 24h range) with a COST/TOKENS toggle and a hover tooltip.
 ///
 /// Colors come from the snapshot's fixed `modelOrder` via
@@ -13,6 +13,15 @@ struct AgenticUseDailyChartPanel: View {
 
     @State private var metric: Metric = .cost
     @State private var selection: Date?
+    @State private var selectedModel: String = ""
+    @State private var style: Style = .bars
+
+    enum Style: String, CaseIterable, Identifiable {
+        case bars = "Bars"
+        case area = "Area"
+
+        var id: String { rawValue }
+    }
 
     enum Metric: String, CaseIterable, Identifiable {
         case cost = "Cost"
@@ -27,6 +36,15 @@ struct AgenticUseDailyChartPanel: View {
                 Text(title)
                     .scaledFont(size: 12, weight: .medium)
                 Spacer(minLength: 8)
+                Picker("Chart style", selection: $style) {
+                    ForEach(Style.allCases) { style in
+                        Text(style.rawValue).tag(style)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .controlSize(.small)
+                .labelsHidden()
+                .fixedSize()
                 Picker("Metric", selection: $metric) {
                     ForEach(Metric.allCases) { metric in
                         Text(metric.rawValue.uppercased()).tag(metric)
@@ -37,9 +55,43 @@ struct AgenticUseDailyChartPanel: View {
                 .labelsHidden()
                 .fixedSize()
             }
-            chart
+            HStack {
+                Picker("Model", selection: $selectedModel) {
+                    Text("All models").tag("")
+                    ForEach(snapshot.modelTotals) { model in
+                        Text(model.displayName + (model.isUnpriced ? " (unpriced)" : ""))
+                            .tag(model.model)
+                    }
+                }
+                .fixedSize()
+                Spacer(minLength: 8)
+                Text("Select a model to inspect smaller values")
+                    .scaledFont(size: 10)
+                    .foregroundStyle(.secondary)
+            }
+            if visibleModels.isEmpty && metric == .cost {
+                ContentUnavailableView(
+                    "Pricing unavailable",
+                    systemImage: "dollarsign.circle",
+                    description: Text("Switch to Tokens to view this model’s usage.")
+                )
+                .frame(minHeight: 220)
+            } else {
+                chart
+            }
+            if metric == .cost && snapshot.hasUnpricedModels {
+                Text("Models without pricing are excluded from cost; their usage is available in Tokens.")
+                    .scaledFont(size: 10)
+                    .foregroundStyle(.secondary)
+            }
         }
         .agenticUseCard(minHeight: 280)
+        .onChange(of: snapshot.modelOrder) { _, models in
+            if !models.contains(selectedModel) { selectedModel = "" }
+            selection = nil
+        }
+        .onChange(of: metric) { selection = nil }
+        .onChange(of: selectedModel) { selection = nil }
     }
 
     private var title: String {
@@ -51,19 +103,27 @@ struct AgenticUseDailyChartPanel: View {
 
     private var chart: some View {
         Chart {
-            ForEach(snapshot.dailySeries) { point in
-                AreaMark(
-                    x: .value("Day", point.day, unit: snapshot.range.bucketUnit),
-                    y: .value(metric == .cost ? "Cost" : "Tokens", value(of: point)),
-                    series: .value("Model", point.displayName),
-                    stacking: .standard
-                )
-                .interpolationMethod(.monotone)
-                .foregroundStyle(by: .value("Model", point.displayName))
-                .opacity(0.8)
+            ForEach(visibleSeries) { point in
+                if style == .bars {
+                    BarMark(
+                        x: .value("Day", point.day, unit: snapshot.range.bucketUnit),
+                        y: .value(metric.rawValue, value(of: point)),
+                        stacking: .standard
+                    )
+                    .foregroundStyle(by: .value("Model", point.displayName))
+                } else {
+                    AreaMark(
+                        x: .value("Day", point.day, unit: snapshot.range.bucketUnit),
+                        y: .value(metric.rawValue, value(of: point)),
+                        series: .value("Model", point.displayName),
+                        stacking: .standard
+                    )
+                    .interpolationMethod(.linear)
+                    .foregroundStyle(by: .value("Model", point.displayName))
+                }
             }
             if let bucket = selectedBucket {
-                RuleMark(x: .value("Day", bucket))
+                RuleMark(x: .value("Day", bucket, unit: snapshot.range.bucketUnit))
                     .foregroundStyle(.secondary.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1))
                     .annotation(
@@ -76,18 +136,26 @@ struct AgenticUseDailyChartPanel: View {
                     }
             }
         }
-        .chartForegroundStyleScale(domain: snapshot.modelDisplayNames, range: seriesColors)
+        .chartForegroundStyleScale(domain: visibleModels.map(AgenticModel.displayName(for:)), range: seriesColors)
         .chartLegend(position: .top, alignment: .leading, spacing: 8)
         .chartXSelection(value: $selection)
         .chartOverlay { proxy in
             // `chartXSelection` alone only responds to drag on macOS; hover
             // is the expected tooltip gesture, so feed the same binding.
-            Color.clear.onContinuousHover { phase in
-                switch phase {
-                case .active(let location):
-                    selection = proxy.value(atX: location.x, as: Date.self)
-                case .ended:
-                    selection = nil
+            GeometryReader { geometry in
+                Color.clear.onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        guard let plotFrame = proxy.plotFrame else { return }
+                        let frame = geometry[plotFrame]
+                        guard frame.contains(location) else {
+                            selection = nil
+                            return
+                        }
+                        selection = proxy.value(atX: location.x - frame.minX, as: Date.self)
+                    case .ended:
+                        selection = nil
+                    }
                 }
             }
         }
@@ -113,8 +181,20 @@ struct AgenticUseDailyChartPanel: View {
         .frame(minHeight: 220)
     }
 
+    private var visibleModels: [String] {
+        snapshot.modelOrder.filter { model in
+            (selectedModel.isEmpty || model == selectedModel)
+                && (metric == .tokens || snapshot.modelTotals.contains { $0.model == model && !$0.isUnpriced })
+        }
+    }
+
+    private var visibleSeries: [AgenticDailyPoint] {
+        let models = Set(visibleModels)
+        return snapshot.dailySeries.filter { models.contains($0.model) }
+    }
+
     private var seriesColors: [Color] {
-        snapshot.modelOrder.map(AgenticUseModelPalette.color(for:))
+        visibleModels.map(AgenticUseModelPalette.color(for:))
     }
 
     private var xAxisFormat: Date.FormatStyle {
@@ -144,7 +224,7 @@ struct AgenticUseDailyChartPanel: View {
         } else {
             bucket = calendar.dateInterval(of: .hour, for: selection)?.start
         }
-        guard let bucket, snapshot.dailySeries.contains(where: { $0.day == bucket }) else {
+        guard let bucket, visibleSeries.contains(where: { $0.day == bucket }) else {
             return nil
         }
         return bucket
@@ -156,7 +236,7 @@ struct AgenticUseDailyChartPanel: View {
     private static let tooltipRowLimit = 8
 
     private func tooltip(for bucket: Date) -> some View {
-        let all = snapshot.dailySeries
+        let all = visibleSeries
             .filter { $0.day == bucket && value(of: $0) > 0 }
             .sorted { value(of: $0) > value(of: $1) }
         let total = all.reduce(0) { $0 + value(of: $1) }
@@ -195,7 +275,7 @@ struct AgenticUseDailyChartPanel: View {
                         .contentTransition(.numericText(value: Double(hiddenCount)))
                 }
                 HStack(spacing: 6) {
-                    Text("Total")
+                    Text(selectedModel.isEmpty ? "Total" : "Model total")
                         .scaledFont(size: 10, weight: .medium)
                     Spacer(minLength: 12)
                     Text(tooltipValue(total))
