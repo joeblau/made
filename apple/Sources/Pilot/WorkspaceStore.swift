@@ -586,6 +586,25 @@ final class WorkspaceStore {
         selectWorkspace(workspace.id)
     }
 
+    func requestDeleteWorkspace(_ workspace: Workspace) {
+        let linkedPanes = extensionWorkspaceLinks
+            .filter { $0.sourceWorkspaceID == workspace.id }
+            .compactMap(\.workspace).flatMap(\.panes)
+        let panes = linkedPanes + workspace.panes
+        let originalIDs = Set(panes.map(\.id))
+        Task {
+            await TerminalCloseConfirmation.perform(panes: panes) {
+                guard self.workspaces.contains(where: { $0 === workspace }) else { return }
+                let currentPanes = self.extensionWorkspaceLinks
+                    .filter { $0.sourceWorkspaceID == workspace.id }
+                    .compactMap(\.workspace).flatMap(\.panes) + workspace.panes
+                // Do not destroy a newly added terminal that was never checked.
+                guard Set(currentPanes.map(\.id)).isSubset(of: originalIDs) else { return }
+                self.deleteWorkspace(workspace)
+            }
+        }
+    }
+
     @discardableResult
     func deleteWorkspace(
         _ workspace: Workspace,

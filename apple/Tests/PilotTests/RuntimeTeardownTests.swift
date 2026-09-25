@@ -6,6 +6,83 @@ import Testing
 @Suite("Runtime resource teardown")
 @MainActor
 struct RuntimeTeardownTests {
+    @Test("Cancel preserves a busy terminal without performing teardown")
+    func cancelBusyTerminalClose() async {
+        let pane = Pane(kind: .terminal, sortOrder: 0)
+        var didClose = false
+        var didConfirm = false
+        await TerminalCloseConfirmation.perform(
+            panes: [pane],
+            activity: { _ in .running },
+            confirm: { panes in
+                #expect(panes.map(\.id) == [pane.id])
+                didConfirm = true
+                return false
+            },
+            action: { didClose = true }
+        )
+        #expect(didConfirm)
+        #expect(!didClose)
+    }
+
+    @Test("A busy terminal closes only after explicit confirmation")
+    func confirmBusyTerminalClose() async {
+        let pane = Pane(kind: .terminal, sortOrder: 0)
+        var events: [String] = []
+        await TerminalCloseConfirmation.perform(
+            panes: [pane],
+            activity: { _ in events.append("check"); return .running },
+            confirm: { _ in events.append("confirm"); return true },
+            action: { events.append("close") }
+        )
+        #expect(events == ["check", "confirm", "close"])
+    }
+
+    @Test("Idle terminals and non-terminal panes close without confirmation")
+    func idleCloseDoesNotPrompt() async {
+        let terminal = Pane(kind: .terminal, sortOrder: 0)
+        let browser = Pane(kind: .browser, sortOrder: 1)
+        var checks = 0
+        var didClose = false
+        await TerminalCloseConfirmation.perform(
+            panes: [terminal, browser],
+            activity: { session in
+                #expect(session == terminal.persistentSessionName)
+                checks += 1
+                return .idle
+            },
+            confirm: { _ in Issue.record("Idle close must not prompt"); return false },
+            action: { didClose = true }
+        )
+        #expect(checks == 1)
+        #expect(didClose)
+    }
+
+    @Test("Workspace close checks every terminal and suppresses duplicate close requests")
+    func workspaceCloseAndDuplicateRequests() async {
+        let first = Pane(kind: .terminal, sortOrder: 0)
+        let second = Pane(kind: .terminal, sortOrder: 1)
+        var checks = 0
+        var closeCount = 0
+        await TerminalCloseConfirmation.perform(
+            panes: [first, second],
+            activity: { _ in checks += 1; return .running },
+            confirm: { panes in
+                #expect(panes.count == 2)
+                await TerminalCloseConfirmation.perform(
+                    panes: [second],
+                    activity: { _ in Issue.record("Duplicate close must not run"); return .idle },
+                    confirm: { _ in false },
+                    action: { closeCount += 1 }
+                )
+                return true
+            },
+            action: { closeCount += 1 }
+        )
+        #expect(checks == 2)
+        #expect(closeCount == 1)
+    }
+
     private enum InjectedFailure: Error {
         case unavailable
     }

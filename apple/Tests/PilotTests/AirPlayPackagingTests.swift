@@ -61,10 +61,20 @@ final class AirPlayPackagingTests: XCTestCase {
         let apple = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
         let script = apple.appendingPathComponent("bin/check-airplay-receiver.py")
-        let result = try await ProcessRunner.run(ProcessInvocation(
-            executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
-            arguments: [script.path, Bundle.main.bundlePath], timeout: .seconds(25)
-        ))
+        let result: ProcessRunResult
+        do {
+            result = try await ProcessRunner.run(ProcessInvocation(
+                executableURL: URL(fileURLWithPath: "/usr/bin/python3"),
+                // Multicast discovery is verified by the standalone installed-app
+                // smoke check; hosted CI VMs do not reliably support it.
+                arguments: [script.path, Bundle.main.bundlePath, "--loopback"], timeout: .seconds(25)
+            ))
+        } catch let error as ProcessRunnerError {
+            // This checker explicitly omits PINs and authentication payloads.
+            // Preserve its diagnostic instead of XCTest printing only byte counts.
+            XCTFail(error.result?.standardErrorString ?? error.localizedDescription)
+            return
+        }
         XCTAssertEqual(result.termination, .exit(0), result.standardErrorString)
         XCTAssertTrue(result.standardOutputString.contains("PIN/SRP authentication"))
     }

@@ -273,13 +273,20 @@ enum PersistentTerminalSession {
         return try? await ProcessRunner.run(invocation).standardOutputString
     }
 
-    static func foregroundActivity(sessionName: String) async -> TerminalProcessActivity {
-        guard let tmuxPath = tmuxExecutablePath() else { return .idle }
+    static func foregroundActivity(
+        sessionName: String,
+        unavailableActivity: TerminalProcessActivity = .idle
+    ) async -> TerminalProcessActivity {
+        guard let tmuxPath = tmuxExecutablePath() else { return unavailableActivity }
         guard let result = try? await ProcessRunner.run(ProcessInvocation(
             executableURL: URL(fileURLWithPath: tmuxPath),
             arguments: ["display-message", "-p", "-t", sessionName, "#{pane_current_command}"],
             timeout: .seconds(1), standardOutputLimit: 4096, standardErrorLimit: 4096
         )) else { return .running }
+        guard result.termination == .exit(0),
+              !result.standardOutputString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return unavailableActivity
+        }
         return TerminalProcessActivity.classify(currentCommand: result.standardOutputString)
     }
 

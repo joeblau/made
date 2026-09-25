@@ -73,7 +73,7 @@ struct WorkspaceSidebarRow: View {
             }
             Divider()
             Button("Delete", role: .destructive) {
-                store.deleteWorkspace(workspace)
+                store.requestDeleteWorkspace(workspace)
             }
         }
     }

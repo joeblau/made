@@ -5,6 +5,7 @@ This catches signed installation/metadata failures that an unsigned test host
 can miss. It does not replace mirroring a real iPhone/iPad into the Device pane.
 All subprocess, pipe and socket waits are bounded. No pairing codes are logged.
 """
+import argparse
 import contextlib
 import hashlib
 import os
@@ -173,7 +174,21 @@ def discovery(arguments, pattern):
             os.close(slave)
 
 
-def check(app):
+def loopback_port(process):
+    # Authentication tests run on hosted VMs where multicast discovery may be
+    # unavailable. Query only this receiver's TCP listener; never guess a port
+    # or accidentally authenticate against another running receiver.
+    result = subprocess.run(
+        ["/usr/sbin/lsof", "-nP", "-a", "-p", str(process.pid), "-iTCP", "-sTCP:LISTEN", "-Fn"],
+        capture_output=True, text=True, timeout=3, check=False)
+    ports = {int(line.rsplit(":", 1)[1]) for line in result.stdout.splitlines()
+             if line.startswith("n") and re.search(r":\d+$", line)}
+    if result.returncode != 0 or len(ports) != 1:
+        raise RuntimeError("Could not identify the receiver's unique TCP listener")
+    return ports.pop()
+
+
+def check(app, *, use_loopback=False):
     contents = app / "Contents"
     with (contents / "Info.plist").open("rb") as file:
         info = plistlib.load(file)
@@ -194,9 +209,12 @@ def check(app):
         kind, payload = packet(process.stdout, time.monotonic() + 5)
         if (kind, payload) != (1, b""):
             raise RuntimeError("Receiver did not become ready")
-        port = int(discovery(["-L", name, "_airplay._tcp", "local."],
-                             r"can be reached at [^\r\n]+:(\d+) \(interface").group(1))
-        discovery(["-B", "_raop._tcp", "local."], r"Add[^\r\n]+@" + re.escape(name))
+        if use_loopback:
+            port = loopback_port(process)
+        else:
+            port = int(discovery(["-L", name, "_airplay._tcp", "local."],
+                                 r"can be reached at [^\r\n]+:(\d+) \(interface").group(1))
+            discovery(["-B", "_raop._tcp", "local."], r"Add[^\r\n]+@" + re.escape(name))
         with socket.create_connection(("127.0.0.1", port), timeout=2) as connection:
             connection.sendall(b"POST /pair-pin-start RTSP/1.0\r\nCSeq: 1\r\nContent-Length: 0\r\n\r\n")
             response = b""
@@ -227,11 +245,17 @@ def check(app):
         process.terminate()
         if process.wait(timeout=2) != 0:
             raise RuntimeError("Receiver did not stop cleanly")
-    print("PASS: installed receiver startup, both Bonjour services, PIN/SRP authentication, private key, bounded shutdown")
+    transport = "loopback listener" if use_loopback else "both Bonjour services"
+    print(f"PASS: installed receiver startup, {transport}, PIN/SRP authentication, private key, bounded shutdown")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("app", type=Path, nargs="?", default=Path("/Applications/made.app"))
+    parser.add_argument("--loopback", action="store_true",
+                        help="Test PIN/SRP over the local listener without multicast discovery")
+    options = parser.parse_args()
     try:
-        check(Path(sys.argv[1] if len(sys.argv) > 1 else "/Applications/made.app").resolve())
+        check(options.app.resolve(), use_loopback=options.loopback)
     except (OSError, RuntimeError, subprocess.TimeoutExpired, struct.error) as error:
         sys.exit(f"FAIL: {error}")

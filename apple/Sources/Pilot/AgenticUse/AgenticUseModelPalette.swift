@@ -6,7 +6,7 @@ import SwiftUI
 /// Each provider owns one hue family — Claude orange, Codex blue, Grok
 /// purple, Kimi green — and every model inside a family gets its own shade
 /// of that hue, iPhone-storage-bar style: the flagship model takes the
-/// deepest, most saturated step and successive models step lighter. Color
+/// deepest, most saturated step and adjacent models alternate lightness. Color
 /// follows the canonical model id — never chart order — so a model keeps its
 /// shade when the range filter changes which series are visible. Gray is
 /// reserved for unknown models and always travels with the "unpriced" badge,
@@ -16,7 +16,7 @@ enum AgenticUseModelPalette {
         guard let provider = provider(for: canonicalModel) else { return .gray }
         let family = familyOrder(for: provider)
         guard let index = family.firstIndex(of: canonicalModel) else { return .gray }
-        return shade(hue: hue(for: provider), step: index, of: family.count)
+        return shade(hue: hue(for: provider), step: index)
     }
 
     /// Which provider's hue family a canonical model id belongs to.
@@ -50,14 +50,19 @@ enum AgenticUseModelPalette {
         }
     }
 
-    /// One step of a family's shade ramp: the first model is deep and
-    /// saturated, later models get progressively lighter and softer. The
-    /// ramp spans the same perceptual distance regardless of family size so
-    /// two-model families still contrast.
-    private static func shade(hue degrees: Double, step: Int, of count: Int) -> Color {
-        let fraction = count > 1 ? Double(step) / Double(count - 1) : 0
-        let saturation = 0.92 - 0.50 * fraction
-        let brightness = 0.82 + 0.16 * fraction
-        return Color(hue: degrees / 360, saturation: saturation, brightness: brightness)
+    /// Alternate high-contrast shades instead of spreading tiny increments
+    /// across the entire catalog. The busiest adjacent models must remain
+    /// distinguishable even when a provider has many older models.
+    private static func shade(hue degrees: Double, step: Int) -> Color {
+        let shades: [(saturation: Double, brightness: Double)] = [
+            (0.92, 0.82), (0.38, 1.00), (0.72, 0.96), (0.52, 0.72),
+        ]
+        let shade = shades[step % shades.count]
+        let hueOffset = Double(step / shades.count) * 6
+        return Color(
+            hue: (degrees + hueOffset) / 360,
+            saturation: shade.saturation,
+            brightness: shade.brightness
+        )
     }
 }
