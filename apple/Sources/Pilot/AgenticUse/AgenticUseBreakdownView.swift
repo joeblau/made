@@ -78,7 +78,7 @@ struct AgenticUseBreakdownView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 5)
             numberCell(total.isUnpriced ? "—" : AgenticUseFormat.cost(total.cost))
-            numberCell(AgenticUseFormat.percent(total.costShare))
+            numberCell(total.isUnpriced ? "—" : AgenticUseFormat.percent(total.costShare))
             numberCell(AgenticUseFormat.tokens(total.tokens))
         }
     }

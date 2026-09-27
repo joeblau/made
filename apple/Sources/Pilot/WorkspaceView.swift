@@ -104,7 +104,7 @@ struct WorkspaceView: View {
             // The extension surface may close its last pane (its empty state
             // invites re-adding); the main window always keeps one.
             canClose: workspace.sortedPanes.count > 1 || surface == .extension,
-            onClose: { workspace.removePane(pane) },
+            onClose: { workspace.requestRemovePane(pane) },
             onHide: { workspace.collapsePane(pane) },
             onUnhide: { workspace.expandPane(pane) }
         )
@@ -176,7 +176,7 @@ struct WorkspaceView: View {
             Divider()
 
             Button("Close", role: .destructive) {
-                workspace.removePane(pane)
+                workspace.requestRemovePane(pane)
             }
             .disabled(workspace.sortedPanes.count <= 1 && surface != .extension)
 

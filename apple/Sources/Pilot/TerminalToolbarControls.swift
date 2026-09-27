@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 enum TerminalToolbarSelection {
@@ -138,6 +139,73 @@ struct TerminalFastCommandToolbarActions: View {
                 sessionName: pane.persistentSessionName
             )
             activeAction = nil
+        }
+    }
+}
+
+/// All destructive terminal UI actions pass through this gate. Check tmux at
+/// close time rather than relying on the periodically refreshed tab indicator.
+@MainActor
+enum TerminalCloseConfirmation {
+    private static var pendingPaneIDs: Set<UUID> = []
+
+    static func perform(
+        panes: [Pane],
+        activity: @MainActor (String) async -> TerminalProcessActivity = {
+            // If runtime state cannot be verified, ask before destroying it.
+            await PersistentTerminalSession.foregroundActivity(sessionName: $0, unavailableActivity: .running)
+        },
+        confirm: @MainActor ([Pane]) async -> Bool = { await present(for: $0) },
+        action: @MainActor () -> Void
+    ) async {
+        let terminals = panes.filter { $0.kind == .terminal }
+        let ids = Set(terminals.map(\.id))
+        guard pendingPaneIDs.isDisjoint(with: ids) else { return }
+        pendingPaneIDs.formUnion(ids)
+        defer { pendingPaneIDs.subtract(ids) }
+
+        var busy: [Pane] = []
+        for pane in terminals {
+            if await activity(pane.persistentSessionName) == .running {
+                busy.append(pane)
+            }
+        }
+        guard !Task.isCancelled else { return }
+        if !busy.isEmpty {
+            guard await confirm(busy), !Task.isCancelled else { return }
+        }
+        action()
+    }
+
+    private static func present(for panes: [Pane]) async -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = panes.count == 1 ? "Close busy terminal?" : "Close busy terminals?"
+        alert.informativeText = "Closing will terminate running commands or AI sessions in "
+            + (panes.count == 1 ? "this terminal." : "\(panes.count) terminals.")
+            + " Any work in progress may be lost."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Close Anyway")
+        alert.buttons[0].keyEquivalent = "\r"
+        alert.buttons[1].hasDestructiveAction = true
+        if let window = NSApp.keyWindow {
+            return await alert.beginSheetModal(for: window) == .alertSecondButtonReturn
+        }
+        return alert.runModal() == .alertSecondButtonReturn
+    }
+}
+
+extension Workspace {
+    @MainActor
+    func requestRemovePane(_ pane: Pane) {
+        guard panes.count > 1, panes.contains(where: { $0 === pane }) else { return }
+        Task {
+            await TerminalCloseConfirmation.perform(panes: [pane]) {
+                // The user can change workspaces or move panes while the
+                // activity check or confirmation sheet is pending.
+                guard self.panes.contains(where: { $0 === pane }) else { return }
+                self.removePane(pane)
+            }
         }
     }
 }

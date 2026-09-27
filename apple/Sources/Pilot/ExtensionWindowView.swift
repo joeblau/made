@@ -452,7 +452,7 @@ final class ExtensionWorkspaceController {
     func closeSelectedPane() {
         guard let workspace = selectedWorkspace,
               let pane = workspace.selectedPane else { return }
-        workspace.removePane(pane)
+        workspace.requestRemovePane(pane)
     }
 
     func synchronize(with source: Workspace?) {

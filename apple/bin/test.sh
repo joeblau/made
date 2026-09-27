@@ -7,6 +7,19 @@ SUITE="${1:-all}"
 DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-tests}"
 PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
 
+# xcodebuild -quiet can omit XCTest assertion details. Preserve its exit
+# status while printing the result bundle summary needed to diagnose CI failures.
+report_failure() {
+  local status=$?
+  if [[ "$status" -ne 0 ]]; then
+    while IFS= read -r result; do
+      xcrun xcresulttool get test-results summary --path "$result" || true
+    done < <(find "$DERIVED_ROOT" -name '*.xcresult' -type d -prune 2>/dev/null)
+  fi
+  exit "$status"
+}
+trap report_failure EXIT
+
 pilot() {
   DISABLE_SWIFTLINT=1 xcodebuild test -quiet \
     -project "$PROJECT" \

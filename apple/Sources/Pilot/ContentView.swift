@@ -1004,7 +1004,7 @@ struct ContentView: View {
         guard store.isWorkspaceDetailVisible,
               let workspace = store.selectedWorkspace,
               let pane = workspace.selectedPane else { return }
-        workspace.removePane(pane)
+        workspace.requestRemovePane(pane)
     }
 
     /// Bridges the single-typed `List` selection to the store's split state:
