@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { AlarmSchedule } from "./alarm";
 import { SignalingRoom } from "./signaling";
 
 export { SignalingRoom };
@@ -18,6 +19,11 @@ interface SocketAttachment {
   lastActivityAt: number;
   messageCount: number;
   windowStartedAt: number;
+}
+
+interface ActiveSocket {
+  socket: WebSocket;
+  attachment: SocketAttachment;
 }
 
 interface SignalRequest {
@@ -220,6 +226,8 @@ async function handleGetPeer(request: Request, env: Env): Promise<Response> {
 
 /** A bounded, hibernatable two-party WebSocket relay. */
 export class RendezvousRoom extends DurableObject<Env> {
+  private readonly expiry = new AlarmSchedule(this.ctx.storage);
+
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected a WebSocket upgrade", { status: 426 });
@@ -234,14 +242,15 @@ export class RendezvousRoom extends DurableObject<Env> {
 
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({
+    const attachment: SocketAttachment = {
       byteCount: 0,
       connectedAt: now,
       lastActivityAt: now,
       messageCount: 0,
       windowStartedAt: now,
-    } satisfies SocketAttachment);
-    await this.armAlarm(now);
+    };
+    server.serializeAttachment(attachment);
+    await this.scheduleExpiry([...active, { socket: server, attachment }]);
 
     if (active.length === 1) {
       this.broadcastControl({ type: "peer-joined" });
@@ -291,7 +300,8 @@ export class RendezvousRoom extends DurableObject<Env> {
       return;
     }
 
-    for (const peer of this.activeSockets(now)) {
+    const active = this.activeSockets(now, { socket: sender, attachment });
+    for (const { socket: peer } of active) {
       if (peer === sender) continue;
       const bufferedAmount =
         (peer as WebSocket & { bufferedAmount?: number }).bufferedAmount ?? 0;
@@ -307,24 +317,26 @@ export class RendezvousRoom extends DurableObject<Env> {
         peer.close(1011, "relay unavailable");
       }
     }
-    await this.armAlarm(now);
+    // Activity only moves the sender's idle deadline later, so this normally
+    // keeps the earlier alarm already in storage without writing.
+    await this.scheduleExpiry(active);
   }
 
   async webSocketClose(sender: WebSocket): Promise<void> {
     this.notifyPeerLeft(sender);
-    await this.armAlarm(Date.now());
+    await this.scheduleExpiry(this.activeSockets(Date.now()));
   }
 
   async webSocketError(sender: WebSocket): Promise<void> {
     record(this.env, "websocket-error");
     this.notifyPeerLeft(sender);
-    await this.armAlarm(Date.now());
+    await this.scheduleExpiry(this.activeSockets(Date.now()));
   }
 
   async alarm(): Promise<void> {
-    const now = Date.now();
-    this.activeSockets(now);
-    await this.armAlarm(now);
+    // Closes expired sockets and rearms for the earliest remaining deadline;
+    // an early wake-up from a retained alarm simply rearms here.
+    await this.expiry.replace(this.nextDeadline(this.activeSockets(Date.now())));
   }
 
   private attachment(socket: WebSocket, now: number): SocketAttachment {
@@ -338,36 +350,44 @@ export class RendezvousRoom extends DurableObject<Env> {
     };
   }
 
-  private expired(attachment: SocketAttachment, now: number): boolean {
-    return (
-      now - attachment.lastActivityAt >= SOCKET_IDLE_MS ||
-      now - attachment.connectedAt >= SOCKET_LIFETIME_MS
+  private deadline(attachment: SocketAttachment): number {
+    return Math.min(
+      attachment.lastActivityAt + SOCKET_IDLE_MS,
+      attachment.connectedAt + SOCKET_LIFETIME_MS,
     );
   }
 
-  private activeSockets(now: number): WebSocket[] {
-    return this.ctx.getWebSockets().filter((socket) => {
-      const attachment = this.attachment(socket, now);
-      if (!this.expired(attachment, now)) return true;
-      record(this.env, "websocket-expired");
-      socket.close(1008, "connection expired");
-      return false;
-    });
+  private expired(attachment: SocketAttachment, now: number): boolean {
+    return now >= this.deadline(attachment);
   }
 
-  private async armAlarm(now: number): Promise<void> {
-    const deadlines = this.activeSockets(now).map((socket) => {
-      const attachment = this.attachment(socket, now);
-      return Math.min(
-        attachment.lastActivityAt + SOCKET_IDLE_MS,
-        attachment.connectedAt + SOCKET_LIFETIME_MS,
-      );
-    });
-    if (deadlines.length === 0) {
-      await this.ctx.storage.deleteAlarm();
-      return;
+  /**
+   * Accepted sockets still within their idle and lifetime limits; expired ones
+   * are closed. `known` reuses an attachment the caller already updated so
+   * the message path deserializes each attachment once.
+   */
+  private activeSockets(now: number, known?: ActiveSocket): ActiveSocket[] {
+    const active: ActiveSocket[] = [];
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment =
+        socket === known?.socket ? known.attachment : this.attachment(socket, now);
+      if (!this.expired(attachment, now)) {
+        active.push({ socket, attachment });
+        continue;
+      }
+      record(this.env, "websocket-expired");
+      socket.close(1008, "connection expired");
     }
-    await this.ctx.storage.setAlarm(Math.min(...deadlines));
+    return active;
+  }
+
+  private nextDeadline(active: readonly ActiveSocket[]): number | null {
+    const deadlines = active.map(({ attachment }) => this.deadline(attachment));
+    return deadlines.length === 0 ? null : Math.min(...deadlines);
+  }
+
+  private async scheduleExpiry(active: readonly ActiveSocket[]): Promise<void> {
+    await this.expiry.require(this.nextDeadline(active));
   }
 
   private notifyPeerLeft(sender: WebSocket): void {
