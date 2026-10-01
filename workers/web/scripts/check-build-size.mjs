@@ -4,10 +4,10 @@
  *
  *   initial  - <script src>/modulepreload entries and their static imports.
  *              This is the critical path for the download slate and must stay
- *              free of Three.js. Measured at 3,361 raw / 1,712 gzip bytes when
- *              the cockpit scene was deferred (#269).
+ *              free of Three.js. Measured at 3,404 raw / 1,714 gzip bytes
+ *              with the deferred scene and its controller (#269, #270).
  *   deferred - dynamic import() chunks, i.e. the decorative cockpit scene
- *              fetched after load. Measured at 534,997 raw / 133,704 gzip.
+ *              fetched after load. Measured at 536,586 raw / 134,452 gzip.
  *
  * Thresholds leave roughly 10-15% headroom over those measurements (raw and
  * gzip -9 are both enforced). Modules no page references are reported but not

@@ -22,7 +22,8 @@ const active = new WeakMap();
 /**
  * Builds the scene inside `root`, draws its first frame, and returns its
  * controller ({ state, pause, resume, dispose, memory }). Returns null when
- * the canvases are missing or WebGL is unavailable.
+ * the canvases are missing or WebGL is unavailable. A scene that fails to
+ * build releases its WebGL context and listeners before rethrowing.
  */
 export function initCockpit(root = document) {
   const sceneCanvas = root.querySelector('[data-cockpit-scene]');
@@ -30,6 +31,32 @@ export function initCockpit(root = document) {
   if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return null;
   const existing = active.get(sceneCanvas);
   if (existing) return existing;
+
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
+  } catch {
+    return null; // WebGL unavailable; the loader keeps the static fallback.
+  }
+  const built = {};
+  try {
+    const handle = buildScene(root, sceneCanvas, hudCanvas, renderer, built);
+    if (root instanceof HTMLElement) root.dataset.cockpitState = 'ready';
+    return handle;
+  } catch (error) {
+    try {
+      built.controller?.dispose(); // aborts listeners even if teardown throws
+    } catch {
+      /* partially built scene; the renderer below is what holds the context */
+    }
+    active.delete(sceneCanvas);
+    renderer.dispose();
+    renderer.forceContextLoss();
+    throw error;
+  }
+}
+
+function buildScene(root, sceneCanvas, hudCanvas, renderer, built) {
 
   /* ============================== helpers ============================== */
   const cnv = (w, h) => {
@@ -44,16 +71,11 @@ export function initCockpit(root = document) {
   const D2R = Math.PI / 180;
 
   /* ============================== renderer ============================== */
-  let renderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
-  } catch {
-    return null; // WebGL unavailable; the loader keeps the static fallback.
-  }
   // Function declarations below are hoisted; nothing runs until start().
   const controller = createSceneController({
     win: window, maxFps: MAX_FPS, step, draw, resize, dispose: disposeScene,
   });
+  built.controller = controller;
   const { signal } = controller;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   const scene = new THREE.Scene();

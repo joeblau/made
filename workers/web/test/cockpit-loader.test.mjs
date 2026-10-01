@@ -26,7 +26,7 @@ test('constrained devices keep the static fallback without fetching the scene', 
   ]) {
     const env = environment({ navigator, hasWebGL });
     const root = { dataset: {} };
-    assert.equal(staticReason(env), reason);
+    assert.equal(staticReason(env), reason === 'no-webgl' ? null : reason);
     assert.equal(await startCockpit(root, env), reason);
     assert.equal(root.dataset.cockpitState, 'static');
     assert.equal(env.calls.load, 0, 'the deferred chunk is never requested');
@@ -35,13 +35,19 @@ test('constrained devices keep the static fallback without fetching the scene', 
 
 test('the scene loads only after the page is ready and reveals on success', async () => {
   let release;
+  let probes = 0;
   const ready = new Promise((resolve) => { release = resolve; });
-  const env = environment({ navigator: { connection: { effectiveType: '4g' } }, whenReady: () => ready });
+  const env = environment({
+    navigator: { connection: { effectiveType: '4g' } },
+    whenReady: () => ready,
+    hasWebGL: () => { probes++; return true; },
+  });
   const root = { dataset: {} };
   const started = startCockpit(root, env);
   await Promise.resolve();
   assert.equal(root.dataset.cockpitState, 'pending');
   assert.equal(env.calls.load, 0, 'nothing is fetched before load + idle');
+  assert.equal(probes, 0, 'no WebGL context is created before load + idle');
   release();
   assert.equal(await started, 'ready');
   assert.equal(root.dataset.cockpitState, 'ready');

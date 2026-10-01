@@ -78,10 +78,10 @@ QR dialog. The Three.js cockpit scene is a separate chunk fetched by dynamic
 2G connections. `scripts/check-build-size.mjs` follows the emitted HTML and
 import graph and fails the build when a budget is exceeded:
 
-| Group | Raw budget | gzip budget | Measured when set (#269) |
+| Group | Raw budget | gzip budget | Measured (#269, #270) |
 | --- | --- | --- | --- |
-| Initial JavaScript | 8,000 B | 4,000 B | 3,361 B / 1,712 B |
-| Deferred JavaScript | 600,000 B | 150,000 B | 534,997 B / 133,704 B |
+| Initial JavaScript | 8,000 B | 4,000 B | 3,404 B / 1,714 B |
+| Deferred JavaScript | 600,000 B | 150,000 B | 536,586 B / 134,452 B |
 | CSS (all files) | 35,000 B | — | 8,483 B |
 
 Emitted modules no page references (the React client entry from the build-time

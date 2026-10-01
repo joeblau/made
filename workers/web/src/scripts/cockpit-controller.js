@@ -41,6 +41,9 @@ export function createSceneController({ win, maxFps, step, draw, resize, dispose
   let lastRender = null; // rAF timestamp of the last rendered frame
   let nextDue = null; // schedule time of the next frame
   let stepped = false;
+  // start() always draws a first frame; the first tick of a loop that begins
+  // right after it only anchors the schedule instead of repeating that frame.
+  let skipFirstTick = false;
 
   const reduced = () => motionQuery.matches;
   const hidden = () => win.document.visibilityState === 'hidden';
@@ -63,6 +66,12 @@ export function createSceneController({ win, maxFps, step, draw, resize, dispose
     rafHandle = 0;
     if (state !== 'running') return;
     rafHandle = win.requestAnimationFrame(tick);
+    if (skipFirstTick) {
+      skipFirstTick = false;
+      lastRender = now;
+      nextDue = now + interval;
+      return;
+    }
     if (nextDue !== null && now < nextDue - tolerance) return;
     // Fell more than a frame behind (a long task or a throttled tab): restart
     // the schedule from now instead of rendering a catch-up burst.
@@ -79,7 +88,6 @@ export function createSceneController({ win, maxFps, step, draw, resize, dispose
     if (state === 'disposed' || state === 'idle') return;
     const next = pausedByUser || hidden() ? 'paused' : reduced() ? 'still' : 'running';
     if (next === state) return;
-    const previous = state;
     state = next;
     if (next === 'running') {
       lastRender = null; // resume without a time jump
@@ -87,12 +95,14 @@ export function createSceneController({ win, maxFps, step, draw, resize, dispose
       rafHandle = win.requestAnimationFrame(tick);
     } else {
       cancel();
-      if (next === 'still' || previous === 'idle') stillFrame();
+      skipFirstTick = false;
+      if (next === 'still') stillFrame();
     }
   }
 
   function onResize() {
     resize();
+    skipFirstTick = false;
     // A running loop picks the new size up on its next frame.
     if (state === 'still' || state === 'paused') draw();
   }
@@ -113,12 +123,12 @@ export function createSceneController({ win, maxFps, step, draw, resize, dispose
       win.addEventListener('pagehide', () => { cancel(); if (state === 'running') state = 'paused'; }, { signal });
       win.addEventListener('pageshow', settle, { signal });
       resize();
-      state = 'paused';
-      if (!pausedByUser && !hidden()) {
-        state = 'still';
-        stillFrame();
-      }
-      settle();
+      // Always draw one frame, even for a hidden or paused page, so a started
+      // scene never shows empty canvases once the loader reveals it.
+      stillFrame();
+      skipFirstTick = true;
+      state = pausedByUser || hidden() ? 'paused' : 'still';
+      settle(); // begins the loop unless reduced motion keeps it still
     },
     pause() {
       pausedByUser = true;

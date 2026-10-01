@@ -191,3 +191,20 @@ test('repeated start and dispose leave no frames or listeners behind', () => {
     assert.equal(fake.pendingFrames(), 0, 'a disposed controller stays inert');
   }
 });
+
+test('start draws exactly one first frame, even for a hidden page', () => {
+  const fake = fakeWindow();
+  fake.win.document.visibilityState = 'hidden';
+  const { controller, counts } = scene(fake);
+  controller.start();
+  assert.equal(controller.state, 'paused');
+  assert.deepEqual([counts.step, counts.draw], [1, 1], 'a background tab still gets a first frame');
+  assert.equal(fake.pendingFrames(), 0, 'but no loop');
+
+  fake.setHidden(false);
+  assert.equal(controller.state, 'running');
+  fake.vsync(60, 20); // the first tick only anchors the schedule
+  assert.equal(counts.draw, 1, 'the start frame is not rendered twice');
+  fake.vsync(60, 100, 20);
+  assert.ok(counts.draw > 1, 'the loop then renders at its cadence');
+});

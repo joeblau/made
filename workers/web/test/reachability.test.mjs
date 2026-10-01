@@ -33,6 +33,18 @@ function relativeImports(text) {
   return specifiers;
 }
 
+// Mirrors Vite's resolution of the specifiers this site uses: an exact file,
+// an extensionless module ('./foo' -> foo.ts), or a directory index.
+function resolveSource(all, from, specifier) {
+  const base = resolve(dirname(from), specifier);
+  const candidates = [
+    base,
+    ...sourceExtensions.map((ext) => base + ext),
+    ...sourceExtensions.map((ext) => join(base, `index${ext}`)),
+  ];
+  return candidates.find((candidate) => all.includes(candidate));
+}
+
 test('every web source file is reachable from a page entrypoint', async () => {
   const all = (await filesUnder(src)).filter((path) => sourceExtensions.some((ext) => path.endsWith(ext)));
   const pages = all.filter((path) => relative(src, path).startsWith('pages/'));
@@ -45,8 +57,8 @@ test('every web source file is reachable from a page entrypoint', async () => {
     if (reached.has(file)) continue;
     reached.add(file);
     for (const specifier of relativeImports(await readFile(file, 'utf8'))) {
-      const target = resolve(dirname(file), specifier);
-      assert.ok(all.includes(target), `${relative(src, file)} imports missing ${specifier}`);
+      const target = resolveSource(all, file, specifier);
+      assert.ok(target, `${relative(src, file)} imports ${specifier}, which resolves to no source file`);
       queue.push(target);
     }
   }

@@ -17,12 +17,15 @@
 const IDLE_TIMEOUT_MS = 2000;
 const SLOW_CONNECTIONS = new Set(['slow-2g', '2g']);
 
-/** Returns why the scene should stay static on this device, or null. */
+/**
+ * Returns why the scene should stay static on this connection, or null.
+ * Cheap enough to run at module evaluation; the WebGL probe is not, so it
+ * waits until after load (see startCockpit).
+ */
 export function staticReason(env) {
   const connection = env.navigator?.connection;
   if (connection?.saveData === true) return 'save-data';
   if (SLOW_CONNECTIONS.has(connection?.effectiveType)) return 'slow-connection';
-  if (!env.hasWebGL()) return 'no-webgl';
   return null;
 }
 
@@ -69,6 +72,12 @@ export async function startCockpit(root, env) {
   root.dataset.cockpitState = 'pending';
   try {
     await env.whenReady();
+    // Probing creates (and releases) a GL context, which can start the GPU
+    // process; keep that off the critical path before the load event.
+    if (!env.hasWebGL()) {
+      root.dataset.cockpitState = 'static';
+      return 'no-webgl';
+    }
     const { initCockpit } = await env.load();
     const handle = await initCockpit(root);
     root.dataset.cockpitState = handle ? 'ready' : 'static';
