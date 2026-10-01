@@ -103,8 +103,21 @@ targets:
   ChromiumKit:
     type: framework.static
     platform: macOS
+    # Every unit compiles in every configuration; the CEF-backed units are
+    # empty without BLAU_CHROMIUM_CEF_ENABLED and ChromiumKitUnavailable.mm
+    # is empty with it. The two private headers stay out of the public module.
     sources:
-      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumKit.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumKitSupport.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumRequests.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumEngine.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumBrowserClient.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumRequestPolicy.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumBrowserHostView.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumKitUnavailable.mm
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumKitInternal.h
+        buildPhase: none
+      - path: Packages/ChromiumKit/Sources/ChromiumKit/ChromiumCEFInternal.h
+        buildPhase: none
       - path: Packages/ChromiumKit/Sources/ChromiumKit/include/ChromiumKit/ChromiumKit.h
         buildPhase: headers
         headerVisibility: public

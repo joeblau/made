@@ -13,6 +13,12 @@ struct ProcessInvocation: Sendable {
     var standardOutputLimit = 2 * 1_024 * 1_024
     var standardErrorLimit = 256 * 1_024
     var redactedArgumentIndexes: Set<Int> = []
+    /// Optional scheduling class for the child and its output-draining worker.
+    /// `nil` (the default) leaves `Process.qualityOfService` unset, so the
+    /// child keeps Foundation's default class, and drains on a `.utility`
+    /// queue, which is the runner's long-standing behavior. Set it only when
+    /// the command's latency is itself measured or awaited by a user.
+    var qualityOfService: QualityOfService?
 
     init(
         executableURL: URL,
@@ -23,7 +29,8 @@ struct ProcessInvocation: Sendable {
         terminationGracePeriod: Duration = .milliseconds(250),
         standardOutputLimit: Int = 2 * 1_024 * 1_024,
         standardErrorLimit: Int = 256 * 1_024,
-        redactedArgumentIndexes: Set<Int> = []
+        redactedArgumentIndexes: Set<Int> = [],
+        qualityOfService: QualityOfService? = nil
     ) {
         self.executableURL = executableURL
         self.arguments = arguments
@@ -34,6 +41,7 @@ struct ProcessInvocation: Sendable {
         self.standardOutputLimit = standardOutputLimit
         self.standardErrorLimit = standardErrorLimit
         self.redactedArgumentIndexes = redactedArgumentIndexes
+        self.qualityOfService = qualityOfService
     }
 
     /// A PATH that covers system and common Homebrew developer-tool installs.
@@ -57,6 +65,18 @@ struct ProcessInvocation: Sendable {
             standardOutputLimit: standardOutputLimit,
             standardErrorLimit: standardErrorLimit
         )
+    }
+
+    fileprivate var dispatchQoS: DispatchQoS.QoSClass {
+        guard let qualityOfService else { return .utility }
+        return switch qualityOfService {
+        case .userInteractive: .userInteractive
+        case .userInitiated: .userInitiated
+        case .default: .default
+        case .background: .background
+        case .utility: .utility
+        @unknown default: .utility
+        }
     }
 
     var redactedCommand: String {
@@ -148,7 +168,7 @@ enum ProcessRunner {
             // Process and pipe polling must not occupy Swift's cooperative
             // executor: enough concurrent commands would starve other tasks.
             try await withCheckedThrowingContinuation { continuation in
-                DispatchQueue.global(qos: .utility).async {
+                DispatchQueue.global(qos: invocation.dispatchQoS).async {
                     continuation.resume(with: Result { try execute(invocation, control: control) })
                 }
             }
@@ -169,18 +189,30 @@ enum ProcessRunner {
         )
     }
 
+    /// Builds the child without launching it. Internal so tests can confirm
+    /// the scheduling class a caller gets when it does not opt in.
+    static func makeProcess(for invocation: ProcessInvocation) -> Process {
+        let process = Process()
+        process.executableURL = invocation.executableURL
+        process.arguments = invocation.arguments
+        process.currentDirectoryURL = invocation.currentDirectoryURL
+        if let environment = invocation.environment { process.environment = environment }
+        // Leave the child at Foundation's default unless a caller opts in:
+        // assigning `.utility` here would demote every background command.
+        if let qualityOfService = invocation.qualityOfService {
+            process.qualityOfService = qualityOfService
+        }
+        return process
+    }
+
     private static func execute(
         _ invocation: ProcessInvocation,
         control: ProcessControl,
         cancellationProbe: (() -> Bool)? = nil
     ) throws -> ProcessRunResult {
-        let process = Process()
+        let process = makeProcess(for: invocation)
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.executableURL = invocation.executableURL
-        process.arguments = invocation.arguments
-        process.currentDirectoryURL = invocation.currentDirectoryURL
-        if let environment = invocation.environment { process.environment = environment }
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         process.standardInput = FileHandle.nullDevice
@@ -218,12 +250,17 @@ enum ProcessRunner {
             if cancellationProbe?() == true { control.requestStop(.cancelled) }
             if ContinuousClock.now >= deadline { control.requestStop(.timedOut) }
 
-            stdout.drainAvailable(stdoutPipe.fileHandleForReading)
-            stderr.drainAvailable(stderrPipe.fileHandleForReading)
+            let readStdout = stdout.drainAvailable(stdoutPipe.fileHandleForReading)
+            let readStderr = stderr.drainAvailable(stderrPipe.fileHandleForReading)
             if !running && ((stdout.reachedEOF && stderr.reachedEOF) || control.stopReason != nil) {
                 break
             }
-            Thread.sleep(forTimeInterval: 0.01)
+            // Poll again immediately while wanted output is flowing; a full
+            // pipe otherwise stalls the child for the whole sleep. Each pass is
+            // still bounded, so deadlines and cancellation stay responsive, and
+            // output past a limit is discarded at the sleeping cadence.
+            let flowing = (readStdout && !stdout.isTruncated) || (readStderr && !stderr.isTruncated)
+            if !flowing { Thread.sleep(forTimeInterval: 0.01) }
         }
         let stopReason = control.finish()
 
@@ -274,6 +311,7 @@ private final class OutputCapture {
     private var data = Data()
     private var truncated = false
     private(set) var reachedEOF = false
+    var isTruncated: Bool { truncated }
 
     init(limit: Int) {
         self.limit = max(0, limit)
@@ -287,26 +325,31 @@ private final class OutputCapture {
         }
     }
 
-    func drainAvailable(_ handle: FileHandle) {
-        guard !reachedEOF else { return }
+    /// Returns whether any bytes were read during this pass.
+    @discardableResult
+    func drainAvailable(_ handle: FileHandle) -> Bool {
+        guard !reachedEOF else { return false }
         var buffer = [UInt8](repeating: 0, count: 16 * 1_024)
+        var didRead = false
         // Bound each pass so a continuously writing child cannot starve the
         // other stream, deadline checks, or cancellation.
         for _ in 0..<4 {
             let count = Darwin.read(handle.fileDescriptor, &buffer, buffer.count)
             if count == 0 {
                 reachedEOF = true
-                return
+                return didRead
             }
             if count < 0 {
                 if errno == EINTR { continue }
                 if errno != EAGAIN && errno != EWOULDBLOCK { reachedEOF = true }
-                return
+                return didRead
             }
+            didRead = true
             let remaining = max(0, limit - data.count)
             if remaining > 0 { data.append(contentsOf: buffer.prefix(min(count, remaining))) }
             if count > remaining { truncated = true }
         }
+        return didRead
     }
 
     func snapshot() -> (data: Data, truncated: Bool) {
