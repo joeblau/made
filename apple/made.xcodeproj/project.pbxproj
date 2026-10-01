@@ -146,6 +146,7 @@
 		71DE831F2FF8442C666B35C4 /* ConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395E05EAD577069EA0423647 /* ConnectionState.swift */; };
 		7270AE1F635EDFE6DF1F02F9 /* SecureMessagingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0449657650498C38E5EDC9E /* SecureMessagingView.swift */; };
 		728F2F9AEE22C01E1C8BB17D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5FE2EB583B10A6711F23ACBB /* Assets.xcassets */; };
+		729E9B9DD4C545AB2E4D29EF /* AgenticUsageIncrementalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2EAC8E4864E1A51953D7B59 /* AgenticUsageIncrementalTests.swift */; };
 		72CE2A7F744E4A87D8BC4FCF /* UsageProviderSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40B8E031A603C505CA1307D8 /* UsageProviderSupport.swift */; };
 		730B73A16DB785CA4524E8E2 /* WingmanDeliveryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD24581F338C2987036C440 /* WingmanDeliveryState.swift */; };
 		734F0B3DEE2F018BD95D88C9 /* ExtensionWindowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D596B1D204DE002F6126B259 /* ExtensionWindowView.swift */; };
@@ -609,6 +610,7 @@
 		A0E0AC685082B8093A20DB18 /* AndroidDeviceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidDeviceSession.swift; sourceTree = "<group>"; };
 		A1BF64BD7C8B9FAE9409467D /* BrowserFaviconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserFaviconTests.swift; sourceTree = "<group>"; };
 		A241584504866AF2EDBDBD41 /* RemoteDesktopViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopViewer.swift; sourceTree = "<group>"; };
+		A2EAC8E4864E1A51953D7B59 /* AgenticUsageIncrementalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUsageIncrementalTests.swift; sourceTree = "<group>"; };
 		A41F3A9CC73ED4D24965D612 /* PlotterActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterActivityAttributes.swift; sourceTree = "<group>"; };
 		A5C13691A97640D6126B5C03 /* Pilot.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Pilot.entitlements; sourceTree = "<group>"; };
 		A6287B4C91222DAA0BC988A5 /* CopilotWalkieTalkieTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotWalkieTalkieTests.swift; sourceTree = "<group>"; };
@@ -790,6 +792,7 @@
 			isa = PBXGroup;
 			children = (
 				1E1B563FC6199F022C118B2A /* AdbBridgeParsingTests.swift */,
+				A2EAC8E4864E1A51953D7B59 /* AgenticUsageIncrementalTests.swift */,
 				BA8B2C4A55B63DED9DB4AE47 /* AgenticUsageProviderTests.swift */,
 				AE3343627F7338D5F195BF54 /* AirPlayPackagingTests.swift */,
 				B9AC2860D36E5F493ED250A8 /* AirPlayReceiverTests.swift */,
@@ -2009,6 +2012,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				CDBB0FD5D8F4F4200CF818D4 /* AdbBridgeParsingTests.swift in Sources */,
+				729E9B9DD4C545AB2E4D29EF /* AgenticUsageIncrementalTests.swift in Sources */,
 				7D67FEA191C1BE7B6A1B71C6 /* AgenticUsageProviderTests.swift in Sources */,
 				4A5D59729900D0927AF96285 /* AirPlayPackagingTests.swift in Sources */,
 				27DE47DA0AC4A2C5DF12EDD6 /* AirPlayReceiverTests.swift in Sources */,

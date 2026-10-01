@@ -209,6 +209,9 @@ final class AgenticUsageStore {
     private let defaults: UserDefaults
     private var records: [AgenticUsageRecord] = []
     private var loadTask: Task<Void, Never>?
+    /// Identifies the newest load; progress and results from an older,
+    /// cancelled load are ignored even if they arrive late.
+    private var loadGeneration = 0
     private var aggregateTask: Task<Void, Never>?
     private var hasLoadedOnce = false
     private var isRunning = false
@@ -240,6 +243,7 @@ final class AgenticUsageStore {
         isRunning = false
         loadTask?.cancel()
         loadTask = nil
+        loadGeneration += 1
         aggregateTask?.cancel()
         aggregateTask = nil
         isRefreshing = false
@@ -262,6 +266,8 @@ final class AgenticUsageStore {
 
     private func load(initial: Bool) {
         loadTask?.cancel()
+        loadGeneration += 1
+        let generation = loadGeneration
         if initial {
             phase = .scanning(scanned: 0, total: 0)
         } else {
@@ -272,15 +278,15 @@ final class AgenticUsageStore {
                 let result = try await loader.load { [weak self] scanned, total in
                     guard initial, let store = self else { return }
                     Task { @MainActor in
-                        store.noteScanProgress(scanned: scanned, total: total)
+                        store.noteScanProgress(scanned: scanned, total: total, generation: generation)
                     }
                 }
-                guard let self, !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled, generation == loadGeneration else { return }
                 apply(result)
             } catch is CancellationError {
                 // Whoever cancelled owns the state transition.
             } catch {
-                guard let self, !Task.isCancelled else { return }
+                guard let self, !Task.isCancelled, generation == loadGeneration else { return }
                 isRefreshing = false
                 if records.isEmpty {
                     phase = .failed(reason: error.localizedDescription)
@@ -294,8 +300,9 @@ final class AgenticUsageStore {
 
     /// Progress lands here from the loader's executor via a hop; loads report
     /// out of order under parallelism, so only monotonic updates apply.
-    private func noteScanProgress(scanned: Int, total: Int) {
-        guard case .scanning(let current, _) = phase, scanned >= current else { return }
+    private func noteScanProgress(scanned: Int, total: Int, generation: Int) {
+        guard generation == loadGeneration,
+              case .scanning(let current, _) = phase, scanned >= current else { return }
         phase = .scanning(scanned: scanned, total: total)
     }
 
@@ -329,13 +336,13 @@ final class AgenticUsageStore {
         let records = records
         let range = range
         aggregateTask = Task.detached(priority: .userInitiated) { [records, range, weak self] in
-            let snapshot = AgenticUsageStore.makeSnapshot(
+            guard let snapshot = AgenticUsageStore.makeSnapshot(
                 records: records,
                 range: range,
                 now: Date(),
-                calendar: Calendar.current
-            )
-            guard !Task.isCancelled else { return }
+                calendar: Calendar.current,
+                isCancelled: { Task.isCancelled }
+            ), !Task.isCancelled else { return }
             await self?.publish(snapshot)
         }
     }
@@ -354,6 +361,19 @@ final class AgenticUsageStore {
         now: Date,
         calendar: Calendar
     ) -> AgenticUseSnapshot {
+        // Never cancelled, so always produces a snapshot.
+        makeSnapshot(records: records, range: range, now: now, calendar: calendar) { false }!
+    }
+
+    /// Cancellable aggregation: returns `nil` once `isCancelled` reports
+    /// true at one of its periodic checkpoints.
+    nonisolated static func makeSnapshot(
+        records: [AgenticUsageRecord],
+        range: AgenticUseRange,
+        now: Date,
+        calendar: Calendar,
+        isCancelled: () -> Bool
+    ) -> AgenticUseSnapshot? {
         var interval = range.interval(endingAt: now, calendar: calendar)
         let filtered = records.filter {
             $0.timestamp >= interval.start && $0.timestamp <= interval.end
@@ -384,7 +404,8 @@ final class AgenticUsageStore {
         var totalCost = 0.0
         var fullRateCost = 0.0
 
-        for record in filtered {
+        for (index, record) in filtered.enumerated() {
+            if index.isMultiple(of: 4096), isCancelled() { return nil }
             let cost = AgenticUsagePricing.cost(of: record)
             let tokens = record.totalTokens
 
@@ -451,6 +472,8 @@ final class AgenticUsageStore {
             .sorted { lhs, rhs in
                 lhs.cost == rhs.cost ? lhs.tokens > rhs.tokens : lhs.cost > rhs.cost
             }
+
+        if isCancelled() { return nil }
 
         // Zero-fill every bucket in the window for every model present so the
         // stacked area chart never interpolates across silent days.
