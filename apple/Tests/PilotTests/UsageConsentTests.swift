@@ -147,6 +147,35 @@ struct UsageConsentTests {
         #expect(store.openAI == .disabled)
     }
 
+    @Test("A 429 honors a longer Retry-After and blocks the next request")
+    func rateLimitBacksOffProvider() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: UsageConsent.codexKey)
+        let probe = FetchProbe()
+        let store = UsageStore(
+            defaults: defaults,
+            fetchers: .init(
+                claude: { .notSignedIn },
+                codex: {
+                    _ = await probe.record("Codex")
+                    return .rateLimited(retryAfter: 900)
+                },
+                grok: { .notSignedIn },
+                kimi: { .notSignedIn }
+            )
+        )
+
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(store.openAI == .error("Rate limited — backing off ~15m."))
+
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(await probe.recordedProviders() == ["Codex"])
+        #expect(store.openAI == .error("Rate limited — backing off ~15m."))
+    }
+
     @Test("Kimi credential access is independently opted in and revocable")
     func kimiConsentIsIndependentAndRevocable() async throws {
         let (defaults, suiteName) = try makeDefaults()
