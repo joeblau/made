@@ -16,6 +16,10 @@ export type AlarmStorage = Pick<
  * The scheduled time is cached in memory, but the cache starts unknown on every
  * new (or hibernation-reconstructed) instance and is then read back from
  * storage, so decisions never depend on state that does not survive eviction.
+ *
+ * If `alarm()` throws before `replace`, the cache keeps the fired (now past)
+ * time, so `require` skips writes until the handler runs again. That is safe:
+ * the runtime retries a failed alarm, and the retry rewrites the schedule.
  */
 export class AlarmSchedule {
   #scheduled: number | null | undefined;

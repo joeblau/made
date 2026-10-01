@@ -46,7 +46,7 @@ try {
     },
   );
   if (result.error || result.status !== 0) {
-    console.error(result.error?.message ?? result.stderr ?? result.stdout);
+    console.error(result.error?.message || result.stderr || result.stdout);
     console.error('Rendezvous type check failed: `wrangler types` did not run.');
     process.exitCode = 1;
   } else {

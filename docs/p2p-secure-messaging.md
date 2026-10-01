@@ -354,7 +354,8 @@ produced from `wrangler.jsonc` by the lockfile-pinned Wrangler and is the only
 `bun run --cwd workers/rendezvous types` and commit the result. The package's
 `check` script regenerates into a scratch file and fails on any difference
 without rewriting the committed file. Generation also reads a local
-`.dev.vars`; the Worker needs no secrets, so keep that file absent.
+`.dev.vars` or `.env` in `workers/rendezvous`, and either changes the output;
+the Worker needs no secrets, so keep both files absent.
 
 ### Steps (uses [wrangler](https://developers.cloudflare.com/workers/wrangler/))
 
