@@ -100,7 +100,11 @@ bin/check-docs.sh
 `apple/bin/test.sh pilot` runs only the macOS suite and
 `apple/bin/test.sh shared` runs only the iOS Simulator suite. Set
 `IOS_SIMULATOR_UDID` to select an installed iPhone simulator. The scripts pin
-`Package.resolved`, disable signing, and isolate derived data.
+`Package.resolved`, disable signing, and build the Debug configuration. They
+share one derived-data directory per platform under `BLAU_DERIVED_DATA`
+(default `$TMPDIR/blau-apple-ci`), so `test.sh` after `build-ci.sh` reuses the
+application hosts and compiles only the test bundles. Chromium and release
+builds keep their own derived data.
 
 To lint only a branch diff, run
 `apple/bin/lint-swift.sh --changed origin/main`. Suppress a SwiftLint rule only

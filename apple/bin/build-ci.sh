@@ -1,32 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$APPLE_ROOT/made.xcodeproj"
-DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-builds}"
-PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
+# shellcheck source-path=SCRIPTDIR source=lib/xcodebuild-ci.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/xcodebuild-ci.sh"
 
 "$APPLE_ROOT/bin/app-icon-tool.swift" validate
 
 build() {
   local scheme="$1"
   local destination="$2"
-  # Pin the configuration instead of inheriting the scheme's Run action. A
-  # scheme whose Run action points at Chromium would otherwise make this
-  # artifact-free lane build the CEF-backed configuration and fail on a machine
-  # without the pinned runtime installed — which is every CI runner.
-  DISABLE_SWIFTLINT=1 xcodebuild build -quiet \
-    -project "$PROJECT" \
+  local derived_data="$3"
+  ci_xcodebuild build "$derived_data" \
     -scheme "$scheme" \
-    -configuration Debug \
-    -destination "$destination" \
-    -derivedDataPath "$DERIVED_ROOT/$scheme" \
-    -clonedSourcePackagesDirPath "$PACKAGES" \
-    -onlyUsePackageVersionsFromResolvedFile \
-    -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO
+    -destination "$destination"
 }
 
-build Pilot "platform=macOS,arch=$(uname -m)"
-build Copilot "generic/platform=iOS Simulator"
-build Plotter "generic/platform=iOS Simulator"
+build Pilot "$MACOS_DESTINATION" "$MACOS_DERIVED_DATA"
+# Copilot embeds the Wingman watch app; Plotter embeds its widget extension.
+build Copilot "$IOS_SIMULATOR_BUILD_DESTINATION" "$IOS_SIMULATOR_DERIVED_DATA"
+build Plotter "$IOS_SIMULATOR_BUILD_DESTINATION" "$IOS_SIMULATOR_DERIVED_DATA"
