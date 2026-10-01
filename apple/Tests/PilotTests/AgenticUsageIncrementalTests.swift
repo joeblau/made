@@ -342,6 +342,85 @@ struct AgenticUsageIncrementalTests {
         #expect(after.records.count == 200)
     }
 
+    @Test("A load cancelled at the merge leaves no stale merged result behind")
+    func cancellationAtMergeKeepsResultsExact() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let claudeA = root.appendingPathComponent("claude/a/one.jsonl")
+        let claudeB = root.appendingPathComponent("claude/b/two.jsonl")
+        try write(Self.claude(1) + "\n" + Self.claude(2) + "\n", to: claudeA)
+        try write(Self.claude(10) + "\n", to: claudeB)
+        let loader = AgenticUsageLoader(sources: sources(root))
+        #expect(try await loader.load().records.count == 3)
+
+        // Every file is scanned, then the load's own task is cancelled at the
+        // merge (each load runs in a child Task so the test's task survives).
+        let cancelAtMerge: @Sendable () -> Void = { withUnsafeCurrentTask { $0?.cancel() } }
+
+        try append(Self.claude(3) + "\n", to: claudeA)
+        await loader.setWillMergeHook(cancelAtMerge)
+        await #expect(throws: CancellationError.self) { _ = try await Task { try await loader.load() }.value }
+        await loader.setWillMergeHook(nil)
+        let appended = try await loader.load()
+        #expect(appended.records == (try await rescan(root)))
+        #expect(appended.records.count == 4)
+
+        try FileManager.default.removeItem(at: claudeB)
+        await loader.setWillMergeHook(cancelAtMerge)
+        await #expect(throws: CancellationError.self) { _ = try await Task { try await loader.load() }.value }
+        await loader.setWillMergeHook(nil)
+        let deleted = try await loader.load()
+        #expect(deleted.records == (try await rescan(root)))
+        #expect(deleted.records.count == 3)
+    }
+
+    @Test("Cancellation stops decoding partway through a chunk")
+    func cancellationMidChunk() async throws {
+        let lines = 5_000
+        let data = Data(((1...lines).map { Self.claude($0) }.joined(separator: "\n") + "\n").utf8)
+        let decoded = try await Task { () throws -> Int in
+            withUnsafeCurrentTask { $0?.cancel() }
+            var parser = AgenticUsageLogParser(provider: .claude)
+            do {
+                try parser.consume(data, checkCancellation: true)
+            } catch is CancellationError {
+                return parser.records.count
+            }
+            return -1
+        }.value
+        // One cancellation check per 128 decoded candidates: the parser stops
+        // at the first check instead of decoding the rest of the chunk.
+        #expect(decoded == 127)
+        #expect(decoded < lines)
+    }
+
+    @Test("Progress from a superseded load is ignored")
+    @MainActor
+    func staleProgressIsIgnored() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let suiteName = "AgenticUsageIncrementalTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = AgenticUsageStore(defaults: defaults, sources: sources(root))
+
+        // Both loads are still initial scans, so both report progress.
+        store.start()
+        let superseded = store.loadGeneration
+        store.rescan()
+        let current = store.loadGeneration
+        #expect(current != superseded)
+        #expect(store.phase == .scanning(scanned: 0, total: 0))
+
+        // A late report from the cancelled load would otherwise move the bar.
+        store.noteScanProgress(scanned: 3, total: 4, generation: superseded)
+        #expect(store.phase == .scanning(scanned: 0, total: 0))
+
+        store.noteScanProgress(scanned: 1, total: 4, generation: current)
+        #expect(store.phase == .scanning(scanned: 1, total: 4))
+        store.stop()
+    }
+
     @Test("A superseded load cannot overwrite the newer load's state")
     @MainActor
     func supersededLoadIsIgnored() async throws {

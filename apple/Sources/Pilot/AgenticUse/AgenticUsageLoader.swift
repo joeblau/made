@@ -90,9 +90,16 @@ actor AgenticUsageLoader {
     /// The last merged result and the paths it was built from, reused while
     /// no file's records change.
     private var merged: (paths: [String], records: [AgenticUsageRecord])?
+    /// Test seam: runs inside `load()` just before the merge's first
+    /// cancellation check, after every file has been scanned.
+    private var willMerge: (@Sendable () -> Void)?
 
     init(sources: [Source] = AgenticUsageLoader.defaultSources()) {
         self.sources = sources
+    }
+
+    func setWillMergeHook(_ hook: (@Sendable () -> Void)?) {
+        willMerge = hook
     }
 
     /// The standard scan roots, honoring each CLI's data-dir override.
@@ -146,8 +153,9 @@ actor AgenticUsageLoader {
     /// `onProgress` reports (files scanned, total files), throttled, for the
     /// initial determinate progress bar. Cancelling the surrounding task
     /// stops discovery, scanning, decoding, and merging promptly with
-    /// `CancellationError` and leaves the cache as the last completed load
-    /// left it.
+    /// `CancellationError` and leaves the cache and the merged result exactly
+    /// as the last completed load left them: both are committed together,
+    /// after the last cancellation point.
     func load(onProgress: (@Sendable (_ scanned: Int, _ total: Int) -> Void)? = nil) async throws -> LoadResult {
         let files = try discoverFiles()
         guard !files.isEmpty else {
@@ -195,36 +203,41 @@ actor AgenticUsageLoader {
             total: files.count,
             onProgress: onProgress
         )
-        // A load cancelled while its children finished must not publish
-        // partial state into the cache.
         try Task.checkCancellation()
 
+        // Build the next cache on a copy. It is committed together with the
+        // merge it produced, so a load cancelled anywhere below leaves the
+        // cache and `merged` describing the same, last completed load. (A
+        // cache committed without its merge would match every file on the
+        // next load and serve the stale merge indefinitely.)
+        var nextCache = cache
         var unreadableCount = 0
         var recordsChanged = false
         for outcome in outcomes {
             if let scan = outcome.scan {
                 recordsChanged = recordsChanged || scan.recordsChanged
-                cache[outcome.job.path] = CacheEntry(
+                nextCache[outcome.job.path] = CacheEntry(
                     size: outcome.job.size,
                     modificationDate: outcome.job.modificationDate,
                     cursor: scan.cursor
                 )
             } else {
-                if cache.removeValue(forKey: outcome.job.path) != nil { recordsChanged = true }
+                if nextCache.removeValue(forKey: outcome.job.path) != nil { recordsChanged = true }
                 unreadableCount += 1
             }
         }
 
         // Drop cache entries for files deleted since the last load.
-        let cachedPaths = cache.count
-        cache = cache.filter { livePaths.contains($0.key) }
-        if cache.count != cachedPaths { recordsChanged = true }
+        let cachedPaths = nextCache.count
+        nextCache = nextCache.filter { livePaths.contains($0.key) }
+        if nextCache.count != cachedPaths { recordsChanged = true }
 
         // Flatten in stable path order so dedup is deterministic, then dedup
         // across ALL files before any date filtering happens. When no file's
         // records changed, the previous merge is still exact.
-        let paths = files.map(\.path).filter { cache[$0] != nil }
+        let paths = files.map(\.path).filter { nextCache[$0] != nil }
         if !recordsChanged, let merged, merged.paths == paths {
+            cache = nextCache
             return LoadResult(
                 records: merged.records,
                 fileCount: files.count,
@@ -233,14 +246,17 @@ actor AgenticUsageLoader {
         }
         var all: [AgenticUsageRecord] = []
         for path in paths {
-            if let entry = cache[path] {
-                all.append(contentsOf: entry.cursor.records)
+            if let entry = nextCache[path] {
+                all.append(contentsOf: entry.cursor.parser.records)
+                all.append(contentsOf: entry.cursor.tailRecords)
             }
         }
+        willMerge?()
         try Task.checkCancellation()
         var records = Self.deduplicate(all)
         try Task.checkCancellation()
         records.sort { $0.timestamp < $1.timestamp }
+        cache = nextCache
         merged = (paths, records)
         return LoadResult(
             records: records,
@@ -376,7 +392,9 @@ actor AgenticUsageLoader {
         static let headBytes = 4096
         static let boundaryBytes = 256
 
-        var records: [AgenticUsageRecord] { parser.records + tailRecords }
+        var records: [AgenticUsageRecord] {
+            tailRecords.isEmpty ? parser.records : parser.records + tailRecords
+        }
 
         init(identity: FileIdentity, provider: AgenticProvider, modificationTime: FileTime) {
             self.identity = identity
@@ -430,15 +448,10 @@ actor AgenticUsageLoader {
         return FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino))
     }
 
-    /// Parses one log file. Returns `nil` only when the file itself can't be
-    /// read; malformed content inside a readable file yields whatever records
-    /// could be salvaged.
-    nonisolated static func parseFile(at url: URL, provider: AgenticProvider) -> [AgenticUsageRecord]? {
-        (try? scanFile(at: url, provider: provider, resuming: nil))?.cursor.records
-    }
-
     /// Scans `url`, continuing `previous` when the file only grew since then
-    /// and otherwise parsing from the start. Throws `CancellationError`.
+    /// and otherwise parsing from the start. Returns `nil` only when the file
+    /// itself can't be read; malformed content inside a readable file yields
+    /// whatever records could be salvaged. Throws `CancellationError`.
     nonisolated static func scanFile(
         at url: URL,
         provider: AgenticProvider,
@@ -499,6 +512,13 @@ actor AgenticUsageLoader {
     /// before its offset can have changed: the file did not shrink, an
     /// unchanged length also kept its modification time, and both the head
     /// and the bytes just before the offset still match.
+    ///
+    /// This is a check for append-only logs, not a proof that the prefix is
+    /// unchanged: a same-inode rewrite that keeps the first `headBytes` and
+    /// the `boundaryBytes` before the offset (or that rewrites earlier bytes
+    /// of an unterminated `pending` line) resumes without being noticed.
+    /// Anyone able to write the logs can already forge records, so a full
+    /// prefix hash would cost a full read without adding protection.
     private nonisolated static func canResume(
         _ cursor: FileCursor,
         identity: FileIdentity,

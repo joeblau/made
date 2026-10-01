@@ -211,7 +211,7 @@ final class AgenticUsageStore {
     private var loadTask: Task<Void, Never>?
     /// Identifies the newest load; progress and results from an older,
     /// cancelled load are ignored even if they arrive late.
-    private var loadGeneration = 0
+    private(set) var loadGeneration = 0
     private var aggregateTask: Task<Void, Never>?
     private var hasLoadedOnce = false
     private var isRunning = false
@@ -300,7 +300,7 @@ final class AgenticUsageStore {
 
     /// Progress lands here from the loader's executor via a hop; loads report
     /// out of order under parallelism, so only monotonic updates apply.
-    private func noteScanProgress(scanned: Int, total: Int, generation: Int) {
+    func noteScanProgress(scanned: Int, total: Int, generation: Int) {
         guard generation == loadGeneration,
               case .scanning(let current, _) = phase, scanned >= current else { return }
         phase = .scanning(scanned: scanned, total: total)
