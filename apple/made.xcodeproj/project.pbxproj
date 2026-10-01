@@ -89,6 +89,7 @@
 		3C0FBF70AB51CBE6E8BBE793 /* PlotterGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8918F120AC89BE6FDE09CD52 /* PlotterGeometry.swift */; };
 		3DF30C1B8AF9EFE349F1C73E /* SecureIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA6C3C2EB63210A93CA8B501 /* SecureIdentity.swift */; };
 		3E71E8807A7CD662102CECBF /* FileFinderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6BB061510E1CB0FE5CC715C /* FileFinderTests.swift */; };
+		409A73FD10B13F651129790A /* ReferenceH264AnnexBAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3BFD0B8D39B025F34E323F /* ReferenceH264AnnexBAssembler.swift */; };
 		43C4CB189F104C58F3403238 /* PersistenceReporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7F1FA056B2B49AAA5BEFA0A /* PersistenceReporting.swift */; };
 		43EBAA3B6945DB0C4ADEA757 /* InkOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A733DD090F36816EFC9A0A65 /* InkOverlay.swift */; };
 		47459A9EAFC99F12CEAEC119 /* PilotWalkieInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D829B59AB61D1084FACEF6D /* PilotWalkieInputTests.swift */; };
@@ -610,6 +611,7 @@
 		AA6C3C2EB63210A93CA8B501 /* SecureIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureIdentity.swift; sourceTree = "<group>"; };
 		AB5231560EF50C6F842CED76 /* PlotterActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterActivityController.swift; sourceTree = "<group>"; };
 		AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurePairingStore.swift; sourceTree = "<group>"; };
+		AD3BFD0B8D39B025F34E323F /* ReferenceH264AnnexBAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceH264AnnexBAssembler.swift; sourceTree = "<group>"; };
 		AD73ACDDA52FBB317879255C /* GitHubTaskDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubTaskDecodingTests.swift; sourceTree = "<group>"; };
 		AD9ED59C64849CDE587FE6AD /* WorkspacePaneLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePaneLauncher.swift; sourceTree = "<group>"; };
 		AE3343627F7338D5F195BF54 /* AirPlayPackagingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayPackagingTests.swift; sourceTree = "<group>"; };
@@ -816,6 +818,7 @@
 				070DEF0707E3D775E0143EA8 /* PinnedQuickJumpTests.swift */,
 				1BD82BE89471EC957C86AB57 /* PrivacyManifestTests.swift */,
 				B6238E7669905C82F3C49E3A /* ProcessRunnerTests.swift */,
+				AD3BFD0B8D39B025F34E323F /* ReferenceH264AnnexBAssembler.swift */,
 				606938B713FB5569C5337313 /* RemoteDesktopGroupsTests.swift */,
 				E1BDD5448EBAAF4BFA31959E /* RemoteDesktopKeyboardInputTests.swift */,
 				B8ECB489A2897EA740A61DB4 /* RemoteDesktopSessionTests.swift */,
@@ -2014,6 +2017,7 @@
 				130CC503548F0FA57F589772 /* PinnedQuickJumpTests.swift in Sources */,
 				BFAF4B34A3ADCAB17AAD903A /* PrivacyManifestTests.swift in Sources */,
 				9C264C6E65CF2A6741E00E2E /* ProcessRunnerTests.swift in Sources */,
+				409A73FD10B13F651129790A /* ReferenceH264AnnexBAssembler.swift in Sources */,
 				74ECF956E863457BDAEF3595 /* RemoteDesktopGroupsTests.swift in Sources */,
 				547D4731A01AACA51F35A1CF /* RemoteDesktopKeyboardInputTests.swift in Sources */,
 				8BB192F74FF6F49A9F342D69 /* RemoteDesktopSessionTests.swift in Sources */,
