@@ -123,6 +123,51 @@ struct PilotSchemaMigrationTests {
         }
     }
 
+    @Test("Frozen schema snapshots keep their versions, entity names, and properties")
+    func frozenSchemaIdentityIsStable() {
+        let v1: [String: Set<String>] = [
+            "Workspace": [
+                "id", "name", "selectedPaneID", "frontmostTerminalPaneID", "axisRaw",
+                "isInspectorPresented", "inspectorTabRaw", "focusedPaneID", "isPinned",
+                "workspaceSortOrder", "rootPath", "rootPathSourceRaw", "actionBadgeCount", "panes",
+            ],
+            "Pane": [
+                "id", "kindRaw", "sortOrder", "currentDirectory", "bellCount", "sizeFraction",
+                "isCollapsed", "restoredSizeFraction", "wasCollapsedBeforeFocus",
+                "browserState", "editorState", "workspace",
+            ],
+            "BrowserState": ["urlText", "appearanceModeRaw", "navigationRequestID", "inspectorToggleRequestID"],
+            "EditorState": ["filePath"],
+            "Note": ["id", "body", "sortOrder", "createdAt"],
+            "RemoteDesktopConnection": [
+                "id", "host", "port", "nickname", "username", "sortOrder", "createdAt", "lastConnectedAt",
+            ],
+        ]
+        var v2 = v1
+        v2["ExtensionWorkspaceLink"] = ["sourceWorkspaceID", "workspace"]
+
+        #expect(PilotSchemaV1.versionIdentifier == Schema.Version(1, 0, 0))
+        #expect(PilotSchemaV2.versionIdentifier == Schema.Version(2, 0, 0))
+        #expect(PilotSchemaV3.versionIdentifier == Schema.Version(3, 0, 0))
+        #expect(entityProperties(of: PilotSchemaV1.self) == v1)
+        #expect(entityProperties(of: PilotSchemaV2.self) == v2)
+        #expect(Set(entityProperties(of: PilotSchemaV3.self).keys) == Set(v2.keys))
+        #expect(PilotPersistentStore.currentSchema.entities.map(\.name).sorted() == v2.keys.sorted())
+
+        #expect(
+            PilotMigrationPlan.schemas.map { $0.versionIdentifier }
+                == [Schema.Version(1, 0, 0), Schema.Version(2, 0, 0), Schema.Version(3, 0, 0)]
+        )
+        #expect(PilotMigrationPlan.stages.count == 2)
+    }
+
+    private func entityProperties(of versionedSchema: any VersionedSchema.Type) -> [String: Set<String>] {
+        let schema = Schema(versionedSchema: versionedSchema)
+        return Dictionary(uniqueKeysWithValues: schema.entities.map { entity in
+            (entity.name, Set(entity.properties.map(\.name)))
+        })
+    }
+
     @Test("V1 canonical workspace state survives migration and accepts extension links")
     func v1StoreMigratesWithoutLosingWorkspaceState() throws {
         let directory = FileManager.default.temporaryDirectory

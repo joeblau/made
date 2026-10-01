@@ -27,3 +27,14 @@ struct CheckForSoftwareUpdatesView: View {
             .disabled(!viewModel.canCheckForUpdates)
     }
 }
+
+/// Places Sparkle's "Check for Updates…" after the app's About item.
+struct PilotSoftwareUpdateCommands: Commands {
+    let updater: SPUUpdater
+
+    var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            CheckForSoftwareUpdatesView(updater: updater)
+        }
+    }
+}
