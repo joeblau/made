@@ -23,12 +23,13 @@ creation only when all of these hold:
 - no profile clear is in progress
   (`ChromiumProfileAccessCoordinator.isClearing`).
 
-The menu item and launcher (`PilotApp.swift`, `WorkspacePaneLauncher.swift`)
-consult the same policy, so a disabled entry point means one of the four
-conditions above failed. Open Pilot Settings and read the Chromium
-diagnostics section (`ChromiumDiagnosticsSettings.swift`): the Runtime row
-shows Not started, Starting, Running, Unavailable, or Renderer terminated,
-and the last initialization failure is listed with redacted detail. If the
+The menu item and launcher (`Commands/PilotPaneCommands.swift`,
+`WorkspacePaneLauncher.swift`) consult the same policy, so a disabled entry
+point means one of the four conditions above failed. Open Pilot Settings and
+read the Chromium diagnostics section (`ChromiumDiagnosticsSettings.swift`):
+the Runtime row shows Not started, Starting, Running, Unavailable, or
+Renderer terminated, and the last initialization failure is listed with
+redacted detail. If the
 runtime is not installed, run `apple/bin/update-chromiumkit-artifact.sh`
 followed by `apple/bin/verify-installed-chromiumkit.sh`. If a clear is in
 progress, wait for it to finish; creation is blocked until the detached

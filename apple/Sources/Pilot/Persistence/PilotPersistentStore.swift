@@ -5,6 +5,11 @@ import SwiftData
 /// enforcement, legacy-location rescue, pre-open backups, and the
 /// quarantine-and-recover open path. `PilotApp` asks for one container at
 /// launch; everything that can touch the user's store file lives here.
+///
+/// `makeContainer(isRunningTests:)` is the only production entry point.
+/// `makeModelContainer`, `backUpStore`, `migrateLegacyStoreIfNeeded`, and
+/// `maxStoreBackups` are internal (not private) solely as test seams for
+/// `PilotPersistentStoreTests`; app code must not call them directly.
 @MainActor
 enum PilotPersistentStore {
     /// The newest versioned schema. The store is stamped with this version and
