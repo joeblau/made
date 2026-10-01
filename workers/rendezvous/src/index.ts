@@ -4,14 +4,14 @@ import { SignalingRoom } from "./signaling";
 
 export { SignalingRoom };
 
-interface Env {
-  ROOMS: DurableObjectNamespace<RendezvousRoom>;
-  SIGNALS: DurableObjectNamespace<SignalingRoom>;
-  SIGNAL_RATE_LIMIT: RateLimit;
-  CONNECTION_RATE_LIMIT: RateLimit;
-  ABUSE_METRICS?: AnalyticsEngineDataset;
+/**
+ * Bindings are generated from wrangler.jsonc into worker-configuration.d.ts.
+ * Only `ENVIRONMENT` is refined here: `wrangler dev --var` and tests may
+ * override the production value the configuration declares.
+ */
+type WorkerEnv = Omit<Cloudflare.Env, "ENVIRONMENT"> & {
   ENVIRONMENT: "production" | "development" | "test";
-}
+};
 
 interface SocketAttachment {
   byteCount: number;
@@ -53,7 +53,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function record(env: Env, event: string): void {
+function record(env: WorkerEnv, event: string): void {
   env.ABUSE_METRICS?.writeDataPoint({ blobs: [event], doubles: [1] });
 }
 
@@ -126,7 +126,7 @@ async function readSignalBody(
   return body as SignalRequest;
 }
 
-function trustedSource(request: Request, env: Env): string | null {
+function trustedSource(request: Request, env: WorkerEnv): string | null {
   const edgeAddress = request.headers.get("CF-Connecting-IP")?.trim();
   if (edgeAddress) return edgeAddress;
 
@@ -157,11 +157,11 @@ async function allow(
   return (await binding.limit({ key })).success;
 }
 
-function signalingStub(env: Env, token: string) {
+function signalingStub(env: WorkerEnv, token: string) {
   return env.SIGNALS.get(env.SIGNALS.idFromName(token));
 }
 
-async function handleRegister(request: Request, env: Env): Promise<Response> {
+async function handleRegister(request: Request, env: WorkerEnv): Promise<Response> {
   const source = trustedSource(request, env);
   if (!source) {
     record(env, "untrusted-source");
@@ -200,7 +200,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function handleGetPeer(request: Request, env: Env): Promise<Response> {
+async function handleGetPeer(request: Request, env: WorkerEnv): Promise<Response> {
   const source = trustedSource(request, env);
   if (!source) {
     record(env, "untrusted-source");
@@ -225,7 +225,7 @@ async function handleGetPeer(request: Request, env: Env): Promise<Response> {
 }
 
 /** A bounded, hibernatable two-party WebSocket relay. */
-export class RendezvousRoom extends DurableObject<Env> {
+export class RendezvousRoom extends DurableObject<WorkerEnv> {
   private readonly expiry = new AlarmSchedule(this.ctx.storage);
 
   async fetch(request: Request): Promise<Response> {
@@ -415,7 +415,7 @@ export class RendezvousRoom extends DurableObject<Env> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/healthz") {
@@ -457,4 +457,4 @@ export default {
 
     return env.ROOMS.get(env.ROOMS.idFromName(code)).fetch(request);
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<WorkerEnv>;
