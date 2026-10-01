@@ -59,6 +59,7 @@
 		2766689B543ED859B1BD17CD /* ChromiumFixtureServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 66B592F459C1CEFFE2076FA6 /* ChromiumFixtureServerTests.swift */; };
 		27895181ADC0A3A4A6064F82 /* RemoteScreenDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = B64B2275F5B86DE8CBD99D2A /* RemoteScreenDiscovery.swift */; };
 		27DE47DA0AC4A2C5DF12EDD6 /* AirPlayReceiverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9AC2860D36E5F493ED250A8 /* AirPlayReceiverTests.swift */; };
+		280A45EF76051DED0A29BEDF /* ChromiumProcessObserverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A5E1A4FAABADF61C36FDE3E /* ChromiumProcessObserverTests.swift */; };
 		286CD816B02FA573A936937B /* ChromiumBrowserCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0ED03F523171F3EEF25C9A /* ChromiumBrowserCommandTests.swift */; };
 		2979C6BB84EAF157844A532D /* AgenticUseModelPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31BD7F8FEA34B2C3CD4CD25C /* AgenticUseModelPalette.swift */; };
 		29EFD0F2EFA12648B34CC3F4 /* AirPlayVideoRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AD4872269E54D2304FD9BF /* AirPlayVideoRendererTests.swift */; };
@@ -219,6 +220,7 @@
 		AC8B869380086B835B35979E /* AgenticUseFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6BECAF1FB2AA8B36E370120 /* AgenticUseFormat.swift */; };
 		AD355A463C2DCAEF572D8586 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A727A54C54BA82A6AFA8E10 /* DeviceIdentity.swift */; };
 		AE61C4CE2459C232DB468E5B /* WirelessDeviceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F975074B415A8D1ECC7B49DF /* WirelessDeviceSession.swift */; };
+		AE840B1FA175DA4DD8003461 /* ChromiumProcessObserver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 054B3286C64414670AD92A9A /* ChromiumProcessObserver.swift */; };
 		AF3D0C89CC8863A8B1BD1E25 /* WalletExtensionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D59B92CA10D6BA3D26EC9BA /* WalletExtensionTests.swift */; };
 		B0263ACAF5F4B638DA14F74F /* ReliableMessenger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026F88DA72C107C5BA21FA51 /* ReliableMessenger.swift */; };
 		B06FF86605839B44B7A816D6 /* SecureMessagingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DE55B88D5D3190AEF8E2F0F /* SecureMessagingView.swift */; };
@@ -436,6 +438,7 @@
 /* Begin PBXFileReference section */
 		013D7CA36924CAD376D9E6DC /* ChromiumDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumDiagnosticsTests.swift; sourceTree = "<group>"; };
 		026F88DA72C107C5BA21FA51 /* ReliableMessenger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliableMessenger.swift; sourceTree = "<group>"; };
+		054B3286C64414670AD92A9A /* ChromiumProcessObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumProcessObserver.swift; sourceTree = "<group>"; };
 		05F65749197056761B9D8E8F /* PilotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PilotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0617D049D070BBCBD1AEE5BC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		06860477F9E8DCA481E6C60D /* SecureChannelCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelCore.swift; sourceTree = "<group>"; };
@@ -522,6 +525,7 @@
 		553A35BBB5134886F77EA5F0 /* DockerContainerDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerContainerDecodingTests.swift; sourceTree = "<group>"; };
 		558B70C71B4C69DBF6C22A16 /* GhosttyMenuKeyEquivalentPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyMenuKeyEquivalentPolicy.swift; sourceTree = "<group>"; };
 		58DB20A29ED93A7D1EE1CE0A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		5A5E1A4FAABADF61C36FDE3E /* ChromiumProcessObserverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumProcessObserverTests.swift; sourceTree = "<group>"; };
 		5AAF973E526C4E90667634BF /* WorkspaceTabItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTabItem.swift; sourceTree = "<group>"; };
 		5B3ACA9A0F569FE71344FD94 /* PaneCyclingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneCyclingTests.swift; sourceTree = "<group>"; };
 		5C0317B2BF9E05842D73ABB1 /* WorkspaceGroupsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceGroupsTests.swift; sourceTree = "<group>"; };
@@ -789,6 +793,7 @@
 				013D7CA36924CAD376D9E6DC /* ChromiumDiagnosticsTests.swift */,
 				552715A9B1E5BC229D56BA6A /* ChromiumFixtureServer.swift */,
 				66B592F459C1CEFFE2076FA6 /* ChromiumFixtureServerTests.swift */,
+				5A5E1A4FAABADF61C36FDE3E /* ChromiumProcessObserverTests.swift */,
 				B8101EC64E16D67A381BBCC4 /* ChromiumProfilePolicyTests.swift */,
 				854F5C59C2F6EDF14C12B73F /* ChromiumRealEngineSmokeTests.swift */,
 				3D84F3E5C1D0ECFF89593BF3 /* ChromiumSecurityPolicyTests.swift */,
@@ -1246,6 +1251,7 @@
 				CEFA45E1D941D66C60C3DF7D /* ChromiumBrowserView.swift */,
 				7DD0EE75429A9F0857603878 /* ChromiumDiagnostics.swift */,
 				7270EF11025F63E660529CD8 /* ChromiumDiagnosticsSettings.swift */,
+				054B3286C64414670AD92A9A /* ChromiumProcessObserver.swift */,
 				1187B803F5DBE26FA2A6EC40 /* ChromiumProfilePolicy.swift */,
 				8E7E6F64E494F4DE49EFD95B /* ChromiumRuntimeProbe.swift */,
 				4BFA776154894A6A8293BF75 /* ChromiumRuntimeProbeDelegate.swift */,
@@ -1761,6 +1767,7 @@
 				BC4F2ECD27A6CE38C62BC2F1 /* ChromiumBrowserView.swift in Sources */,
 				8215293A3659A623F1D439BF /* ChromiumDiagnostics.swift in Sources */,
 				1864C88EB0C0EEC276034B72 /* ChromiumDiagnosticsSettings.swift in Sources */,
+				AE840B1FA175DA4DD8003461 /* ChromiumProcessObserver.swift in Sources */,
 				26EAE5F01515353B7DA61502 /* ChromiumProfilePolicy.swift in Sources */,
 				992FD2EC0C030866CF7BA91A /* ChromiumRuntimeProbe.swift in Sources */,
 				BE0E3CA862BBE718B9492F0E /* ChromiumRuntimeProbeDelegate.swift in Sources */,
@@ -1987,6 +1994,7 @@
 				DA74321E6457C331B038DD11 /* ChromiumDiagnosticsTests.swift in Sources */,
 				B9A3B6B37F67D1716644F2F5 /* ChromiumFixtureServer.swift in Sources */,
 				2766689B543ED859B1BD17CD /* ChromiumFixtureServerTests.swift in Sources */,
+				280A45EF76051DED0A29BEDF /* ChromiumProcessObserverTests.swift in Sources */,
 				A9D9B094D5BB8453AD529E15 /* ChromiumProfilePolicyTests.swift in Sources */,
 				96AF60125EA20ABCA2059AD1 /* ChromiumRealEngineSmokeTests.swift in Sources */,
 				00C646AB06BACDB7D1C56EA8 /* ChromiumSecurityPolicyTests.swift in Sources */,

@@ -265,4 +265,22 @@ struct ProcessRunnerTests {
             #expect(result.standardErrorTruncated)
         }
     }
+
+    @Test("Output larger than a pipe buffer is captured completely", arguments: [
+        QualityOfService.utility, .userInitiated,
+    ])
+    func multiMegabyteOutput(qualityOfService: QualityOfService) async throws {
+        let byteCount = 3 * 1_024 * 1_024 + 17
+        let result = try await ProcessRunner.run(ProcessInvocation(
+            executableURL: URL(fileURLWithPath: "/usr/bin/head"),
+            arguments: ["-c", String(byteCount), "/dev/zero"],
+            timeout: .seconds(10),
+            standardOutputLimit: 4 * 1_024 * 1_024,
+            qualityOfService: qualityOfService
+        ))
+        #expect(result.termination == .exit(0))
+        #expect(result.standardOutput.count == byteCount)
+        #expect(!result.standardOutputTruncated)
+        #expect(result.standardOutput.allSatisfy { $0 == 0 })
+    }
 }
