@@ -82,5 +82,23 @@ no event to announce them ("Up 3 minutes"), and it re-runs the handshake when no
 engine is connected, so an engine started after Pilot launched is picked up
 without the user pressing Retry.
 
-`DockerStore.stop()` tears down every task when the section is left — the mode
-takes over the whole detail area, so nothing runs behind it.
+Every list read — handshake, poll, debounced event, the Refresh button, and an
+action completing — goes through one gate: at most one `containers/json`
+request is in flight, and triggers that arrive meanwhile collapse into a single
+follow-up read. A poll tick is answered by the read already in flight and queues
+nothing; the other triggers report a change that read may have missed, so they
+queue the follow-up. The progress indicator stays up across the read and its
+follow-up rather than blinking between them.
+
+Each client is tagged with a connection generation. Reconnecting or leaving the
+section retires it, and any reply, error, or handshake that the old client
+returns afterwards is dropped instead of overwriting the current list or engine
+state.
+
+`DockerStore.stop()` tears down every socket task when the section is left — the
+mode takes over the whole detail area, so nothing runs behind it. The exception
+is a lifecycle request already sent: cancelling it would close the socket while
+the daemon may be partway through a stop or remove, so it runs to completion,
+its row stays guarded against a second click until then, and its result is
+discarded. A success still prompts a list read through the current connection
+when the section is showing.

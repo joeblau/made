@@ -93,6 +93,7 @@
 		43EBAA3B6945DB0C4ADEA757 /* InkOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A733DD090F36816EFC9A0A65 /* InkOverlay.swift */; };
 		47459A9EAFC99F12CEAEC119 /* PilotWalkieInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D829B59AB61D1084FACEF6D /* PilotWalkieInputTests.swift */; };
 		485326731976B5846A11BE33 /* WorkspaceSidebarRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC710253E3E48ABCF64E4971 /* WorkspaceSidebarRow.swift */; };
+		487E41C66441FF84A4E15B90 /* DockerStoreRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C1CA5AF0F78C873A2C334B /* DockerStoreRefreshTests.swift */; };
 		4A5D59729900D0927AF96285 /* AirPlayPackagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE3343627F7338D5F195BF54 /* AirPlayPackagingTests.swift */; };
 		4A6DC4558935C5CEF0082405 /* AgenticUseDailyChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730CAADECFA121BB0719111E /* AgenticUseDailyChart.swift */; };
 		4B2E24563415777F48E0B39E /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = BF0E310D1DFC93ED0BE1CB94 /* WhisperKit */; };
@@ -589,6 +590,7 @@
 		91DA92F745D31E1163B46A77 /* ExtensionWindowSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionWindowSyncTests.swift; sourceTree = "<group>"; };
 		941AFCF1EFB53E8D1CAD5B5F /* Renderer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Renderer.entitlements; sourceTree = "<group>"; };
 		948AB2018F218B875833A701 /* AwakeSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwakeSessionController.swift; sourceTree = "<group>"; };
+		95C1CA5AF0F78C873A2C334B /* DockerStoreRefreshTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerStoreRefreshTests.swift; sourceTree = "<group>"; };
 		99FBD4FF911ED668812EFC61 /* H264AnnexBAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264AnnexBAssemblerTests.swift; sourceTree = "<group>"; };
 		9A59083B564B415C04500D75 /* ActiveConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveConnection.swift; sourceTree = "<group>"; };
 		9C877FAF376467B9363E1F58 /* AirPlayReceiverWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayReceiverWorker.swift; sourceTree = "<group>"; };
@@ -797,6 +799,7 @@
 				553A35BBB5134886F77EA5F0 /* DockerContainerDecodingTests.swift */,
 				E0D1B4F15F96F23AFD699685 /* DockerEngineSmokeTests.swift */,
 				6E9C030E0F4E4C15C365301F /* DockerHTTPParsingTests.swift */,
+				95C1CA5AF0F78C873A2C334B /* DockerStoreRefreshTests.swift */,
 				6732BE81058BC78D5A8C6D43 /* EmulatorBridgeTests.swift */,
 				91DA92F745D31E1163B46A77 /* ExtensionWindowSyncTests.swift */,
 				F6BB061510E1CB0FE5CC715C /* FileFinderTests.swift */,
@@ -1995,6 +1998,7 @@
 				FDD63501A309DB55427BF066 /* DockerContainerDecodingTests.swift in Sources */,
 				1759C87EC9985DFE5E832530 /* DockerEngineSmokeTests.swift in Sources */,
 				CD7EB08D14A25F6AB172A462 /* DockerHTTPParsingTests.swift in Sources */,
+				487E41C66441FF84A4E15B90 /* DockerStoreRefreshTests.swift in Sources */,
 				302A7AAFF1DFBF76EC4AE3FD /* EmulatorBridgeTests.swift in Sources */,
 				0E066620BF4A5A6D085E097B /* ExtensionWindowSyncTests.swift in Sources */,
 				3E71E8807A7CD662102CECBF /* FileFinderTests.swift in Sources */,

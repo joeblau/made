@@ -1,6 +1,47 @@
 import Foundation
 import Observation
 
+/// Decides when a container-list read may start. At most one read is in flight;
+/// triggers that arrive meanwhile either ride on it or, when the in-flight read
+/// may predate whatever prompted them, queue a single follow-up.
+struct DockerRefreshGate {
+    enum Decision: Equatable {
+        /// Nothing is in flight: issue a read now.
+        case start
+        /// A read is already in flight; this trigger is covered by it or by the
+        /// queued follow-up.
+        case coalesced
+    }
+
+    private(set) var isActive = false
+    private(set) var hasFollowUp = false
+
+    mutating func request(needsFreshRead: Bool) -> Decision {
+        guard isActive else {
+            isActive = true
+            return .start
+        }
+        if needsFreshRead { hasFollowUp = true }
+        return .coalesced
+    }
+
+    /// The in-flight read finished. Returns whether the queued follow-up should
+    /// start now, in which case the gate stays active for it.
+    mutating func finish() -> Bool {
+        guard hasFollowUp else {
+            isActive = false
+            return false
+        }
+        hasFollowUp = false
+        return true
+    }
+
+    mutating func reset() {
+        isActive = false
+        hasFollowUp = false
+    }
+}
+
 /// Live state behind the Docker section.
 ///
 /// Owns the engine handshake, the container list, and the `/events` watch that
@@ -21,8 +62,19 @@ final class DockerStore {
         }
     }
 
+    /// What asked for a list read. Only a poll tick is fully answered by a read
+    /// that was already in flight; every other trigger reports a change that
+    /// read may have missed.
+    private enum RefreshTrigger {
+        case handshake, poll, event, manual, action
+
+        var needsFreshRead: Bool { self != .poll }
+    }
+
     private(set) var engine: Engine = .checking
     private(set) var containers: [DockerContainerSummary] = []
+    /// True from the first list read of a burst until its follow-up (if any)
+    /// lands, so the indicator doesn't blink between the two.
     private(set) var isRefreshing = false
     /// Last failed lifecycle action, shown as a dismissible banner. Cleared by
     /// the next successful action or refresh.
@@ -41,31 +93,50 @@ final class DockerStore {
     /// irreversible delete. Transient — mirrors the Remote Desktop pattern.
     var containerPendingRemoval: DockerContainerSummary?
 
-    private let defaults: UserDefaults
-    private let makeClient: @MainActor (String) -> DockerEngineClient
-    private let resolveSocketPath: @MainActor () -> String?
-    private var client: DockerEngineClient?
-    private var connectTask: Task<Void, Never>?
-    private var eventsTask: Task<Void, Never>?
-    private var pollTask: Task<Void, Never>?
-    private var refreshTask: Task<Void, Never>?
-    private var isRunning = false
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let makeClient: @MainActor (String) -> any DockerEngineAPI
+    @ObservationIgnored private let resolveSocketPath: @MainActor () -> String?
+    @ObservationIgnored private let pollInterval: Duration
+    @ObservationIgnored private var client: (any DockerEngineAPI)?
+    @ObservationIgnored private var isRunning = false
+
+    /// Identifies the current client. Bumped whenever the client is replaced or
+    /// the section stops; every reply carries the generation it was issued
+    /// under and is dropped on a mismatch, whether or not its task noticed
+    /// being cancelled.
+    @ObservationIgnored private var generation: UInt64 = 0
+    @ObservationIgnored private var connectTask: Task<Void, Never>?
+    @ObservationIgnored private var eventsTask: Task<Void, Never>?
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
+    @ObservationIgnored private var eventDebounceTask: Task<Void, Never>?
+    @ObservationIgnored private var listTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshGate = DockerRefreshGate()
+    /// Lifecycle requests in flight, by container ID. Leaving the section or
+    /// reconnecting does not cancel these: cancelling closes the socket, and a
+    /// stop or remove the daemon is partway through should finish rather than
+    /// be abandoned. Their results are simply no longer shown.
+    @ObservationIgnored private var actionTasks: [String: Task<Void, Never>] = [:]
 
     private static let showsStoppedKey = "docker.showsStopped"
-    /// How often the safety-net poll runs. `/events` carries state changes
-    /// promptly; this exists for the things no event announces (a status string
-    /// aging from "Up 3 minutes" to "Up 4 minutes") and for recovering after a
-    /// dropped stream.
-    private static let pollInterval = Duration.seconds(15)
+    /// Events arrive in bursts — a compose stack coming up fires one per
+    /// container — so a quiet period is awaited before reading the list.
+    private static let eventDebounce = Duration.milliseconds(250)
+    private static let eventStreamRetryDelay = Duration.seconds(5)
 
+    /// - Parameter pollInterval: How often the safety-net poll runs. `/events`
+    ///   carries state changes promptly; the poll exists for the things no
+    ///   event announces (a status string aging from "Up 3 minutes" to "Up 4
+    ///   minutes") and for recovering after a dropped stream.
     init(
         defaults: UserDefaults = .standard,
         resolveSocketPath: @escaping @MainActor () -> String? = { DockerSocketLocator.resolve() },
-        makeClient: @escaping @MainActor (String) -> DockerEngineClient = { DockerEngineClient(socketPath: $0) }
+        makeClient: @escaping @MainActor (String) -> any DockerEngineAPI = { DockerEngineClient(socketPath: $0) },
+        pollInterval: Duration = .seconds(15)
     ) {
         self.defaults = defaults
         self.resolveSocketPath = resolveSocketPath
         self.makeClient = makeClient
+        self.pollInterval = pollInterval
         // Default to showing stopped containers: the list is as much "what can I
         // bring up" as "what is up".
         self.showsStopped = defaults.object(forKey: Self.showsStoppedKey) as? Bool ?? true
@@ -83,17 +154,12 @@ final class DockerStore {
     }
 
     /// Stop all socket work. The section is a full-detail mode, so leaving it
-    /// leaves nothing running behind it.
+    /// leaves nothing running behind it except lifecycle requests already sent.
     func stop() {
         isRunning = false
-        connectTask?.cancel()
-        connectTask = nil
-        eventsTask?.cancel()
-        eventsTask = nil
+        retireConnection()
         pollTask?.cancel()
         pollTask = nil
-        refreshTask?.cancel()
-        refreshTask = nil
     }
 
     /// Re-run the handshake from scratch — the Retry button, and the path back
@@ -105,11 +171,30 @@ final class DockerStore {
         startPoll()
     }
 
+    /// Cancel the current client's socket work and make sure nothing it has
+    /// already started can publish.
+    private func retireConnection() {
+        generation &+= 1
+        connectTask?.cancel()
+        connectTask = nil
+        eventsTask?.cancel()
+        eventsTask = nil
+        eventDebounceTask?.cancel()
+        eventDebounceTask = nil
+        listTask?.cancel()
+        listTask = nil
+        refreshGate.reset()
+        isRefreshing = false
+    }
+
+    private func isCurrent(_ issuedUnder: UInt64) -> Bool {
+        isRunning && issuedUnder == generation
+    }
+
     /// Handshake, then load the list and start watching. Replaces any in-flight
     /// attempt so repeated Retry taps can't stack up.
     private func connect() {
-        eventsTask?.cancel()
-        eventsTask = nil
+        retireConnection()
 
         guard let socketPath = resolveSocketPath() else {
             client = nil
@@ -120,59 +205,95 @@ final class DockerStore {
 
         let client = makeClient(socketPath)
         self.client = client
-        connectTask?.cancel()
+        let generation = generation
         connectTask = Task { [weak self] in
+            let version: DockerEngineVersion
             do {
-                let version = try await client.version()
-                guard let self, !Task.isCancelled else { return }
-                engine = .connected(version: version, socketPath: socketPath)
-                await reload()
-                guard isRunning, !Task.isCancelled else { return }
-                watchEvents()
+                version = try await client.version()
             } catch {
-                guard let self, !Task.isCancelled else { return }
+                guard let self, isCurrent(generation) else { return }
                 containers = []
                 engine = .unavailable(reason: Self.describe(error))
+                return
             }
+            guard let self, isCurrent(generation) else { return }
+            engine = .connected(version: version, socketPath: socketPath)
+            requestRefresh(.handshake)
+            watchEvents(from: client, generation: generation)
         }
     }
 
     // MARK: - Refreshing
 
-    /// Coalesced refresh. Events arrive in bursts — a compose stack coming up
-    /// fires one per container — so a scheduled refresh replaces any pending one
-    /// instead of queueing a list call per event.
+    /// Event-driven refresh, debounced so a burst of events costs one read.
     func scheduleRefresh() {
-        guard client != nil else { return }
-        refreshTask?.cancel()
-        refreshTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
-            guard let self, !Task.isCancelled else { return }
-            await reload()
+        guard isRunning, engine.isConnected else { return }
+        eventDebounceTask?.cancel()
+        let generation = generation
+        eventDebounceTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.eventDebounce)
+            guard let self, !Task.isCancelled, isCurrent(generation) else { return }
+            eventDebounceTask = nil
+            requestRefresh(.event)
         }
     }
 
     func refreshNow() {
-        refreshTask?.cancel()
-        refreshTask = Task { [weak self] in
-            await self?.reload()
+        requestRefresh(.manual)
+    }
+
+    /// The single entry point for container-list reads.
+    private func requestRefresh(_ trigger: RefreshTrigger) {
+        guard isRunning, engine.isConnected, client != nil else { return }
+        switch refreshGate.request(needsFreshRead: trigger.needsFreshRead) {
+        case .start:
+            startListRead()
+        case .coalesced:
+            break
         }
     }
 
-    private func reload() async {
-        guard let client else { return }
+    private func startListRead() {
+        guard let client else {
+            refreshGate.reset()
+            isRefreshing = false
+            return
+        }
+        // A debounced event that arrived before this read is answered by it.
+        eventDebounceTask?.cancel()
+        eventDebounceTask = nil
         isRefreshing = true
-        defer { isRefreshing = false }
-        do {
-            let fetched = try await client.containers()
-            guard !Task.isCancelled else { return }
+
+        let generation = generation
+        listTask = Task { [weak self] in
+            let result: Result<[DockerContainerSummary], any Error>
+            do {
+                result = .success(try await client.containers())
+            } catch {
+                result = .failure(error)
+            }
+            guard let self, isCurrent(generation) else { return }
+            finishListRead(result)
+        }
+    }
+
+    private func finishListRead(_ result: Result<[DockerContainerSummary], any Error>) {
+        listTask = nil
+        switch result {
+        case .success(let fetched):
             containers = fetched
             actionError = nil
             if let selectedContainerID, !fetched.contains(where: { $0.id == selectedContainerID }) {
                 self.selectedContainerID = nil
             }
-        } catch {
-            guard !Task.isCancelled else { return }
+            if refreshGate.finish() {
+                startListRead()
+            } else {
+                isRefreshing = false
+            }
+        case .failure(let error):
+            refreshGate.reset()
+            isRefreshing = false
             containers = []
             engine = .unavailable(reason: Self.describe(error))
         }
@@ -183,12 +304,13 @@ final class DockerStore {
     /// the user touching Retry.
     private func startPoll() {
         guard pollTask == nil else { return }
+        let interval = pollInterval
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: Self.pollInterval)
+                try? await Task.sleep(for: interval)
                 guard let self, !Task.isCancelled, isRunning else { return }
                 if engine.isConnected {
-                    await reload()
+                    requestRefresh(.poll)
                 } else {
                     connect()
                 }
@@ -196,8 +318,7 @@ final class DockerStore {
         }
     }
 
-    private func watchEvents() {
-        guard let client else { return }
+    private func watchEvents(from client: any DockerEngineAPI, generation: UInt64) {
         eventsTask?.cancel()
         eventsTask = Task { [weak self] in
             // Reconnect with a fixed backoff if the daemon restarts or the
@@ -205,14 +326,14 @@ final class DockerStore {
             while !Task.isCancelled {
                 do {
                     for try await _ in client.containerEvents() {
-                        guard let self, !Task.isCancelled else { return }
+                        guard let self, !Task.isCancelled, isCurrent(generation) else { return }
                         scheduleRefresh()
                     }
                 } catch {
                     guard !Task.isCancelled else { return }
                 }
-                guard let self, !Task.isCancelled, isRunning else { return }
-                try? await Task.sleep(for: .seconds(5))
+                guard self?.isCurrent(generation) == true, !Task.isCancelled else { return }
+                try? await Task.sleep(for: Self.eventStreamRetryDelay)
             }
         }
     }
@@ -220,21 +341,42 @@ final class DockerStore {
     // MARK: - Actions
 
     func perform(_ action: DockerContainerAction, on container: DockerContainerSummary) {
-        guard let client, !busyContainerIDs.contains(container.id) else { return }
+        guard isRunning, let client, !busyContainerIDs.contains(container.id) else { return }
         busyContainerIDs.insert(container.id)
-        Task { [weak self] in
+        let generation = generation
+        actionTasks[container.id] = Task { [weak self] in
+            let failure: (any Error)?
             do {
                 try await client.perform(action, containerID: container.id)
-                guard let self else { return }
-                busyContainerIDs.remove(container.id)
-                actionError = nil
-                await reload()
+                failure = nil
             } catch {
-                guard let self else { return }
-                busyContainerIDs.remove(container.id)
-                actionError = "\(action.label) “\(container.name)” failed: \(Self.describe(error))"
+                failure = error
             }
+            self?.finishAction(action, on: container, issuedUnder: generation, failure: failure)
         }
+    }
+
+    private func finishAction(
+        _ action: DockerContainerAction,
+        on container: DockerContainerSummary,
+        issuedUnder generation: UInt64,
+        failure: (any Error)?
+    ) {
+        // The request is over whichever client sent it, so the row is free.
+        actionTasks[container.id] = nil
+        busyContainerIDs.remove(container.id)
+
+        if let failure {
+            guard isCurrent(generation) else { return }
+            actionError = "\(action.label) “\(container.name)” failed: \(Self.describe(failure))"
+            return
+        }
+        if isCurrent(generation) {
+            actionError = nil
+        }
+        // The daemon's state changed either way; read it through the current
+        // client, if the section is still showing.
+        requestRefresh(.action)
     }
 
     func requestRemoval(of container: DockerContainerSummary) {
