@@ -1,10 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 
 /**
- * Signaling / rendezvous Durable Object for UDP hole punching (issue #51,
- * Phase 1). One instance per shared pairing `token`. It records at most two
- * distinct peers (a pair) so two devices that present the same token can learn
- * each other's public UDP endpoint and then punch a hole directly.
+ * Signaling / rendezvous Durable Object for UDP hole punching. One instance
+ * per shared pairing `token`. It records at most two distinct peers (a pair)
+ * so two devices that present the same token can learn each other's public
+ * UDP endpoint and then punch a hole directly.
  *
  * The server is intentionally dumb about crypto: it only stores each peer's
  * long-term public key (opaque base64), the observed source IP, and the UDP

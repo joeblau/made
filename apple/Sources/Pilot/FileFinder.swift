@@ -4,52 +4,42 @@ import Foundation
 struct FileItem: Identifiable, Hashable {
     var id: String { path }
     let path: String          // absolute
-    let relativePath: String  // path relative to root, shown in the UI
-    let name: String          // basename
+    let relativePath: String
+    let name: String
 }
 
 /// In-memory file index + fuzzy search for the editor's "open file" finder.
 ///
-/// `start(root:)` recursively builds or refreshes the index off the main actor,
-/// then `setQuery(_:)` filters it off the main actor on every keystroke via
-/// `FuzzyMatcher`. Obsolete scans are cancelled and only the best 300 results
-/// are retained, keeping the 200k-file ceiling away from the MainActor. Indexing prefers
-/// `git ls-files` so `.gitignore` is honored for free (plus a pruned scan that
-/// adds back `.env*` / `.dev.vars` — gitignored, but exactly the files you open
-/// by hand), and falls back to a pruned filesystem walk outside git repos.
+/// Indexing and filtering both run off the main actor; obsolete work is
+/// cancelled and only the best `maxResults` items are published. Indexing
+/// prefers `git ls-files` so `.gitignore` is honored (plus a pruned scan that
+/// adds back gitignored `.env*` / `.dev.vars` files), and falls back to a
+/// pruned filesystem walk outside git repos.
 @MainActor
 @Observable
 final class FileFinder {
-    /// The current search results — already filtered, scored, sorted, and capped.
+    /// Filtered, scored, sorted, and capped.
     private(set) var results: [FileItem] = []
-    /// True while the background index is being built.
     private(set) var isIndexing: Bool = false
 
-    /// The full, unfiltered index. Filtering reads from here on every keystroke.
     @ObservationIgnored private var index: [FileItem] = []
-    /// The root the current `index` was (or is being) built for. Used both to
-    /// make `start` idempotent and to drop results from a stale indexing task
-    /// when the root changes mid-flight.
+    /// The root `index` was (or is being) built for; a scan for any other root
+    /// is discarded.
     @ObservationIgnored private var indexedRoot: String?
-    /// The live query, retained so a freshly-built index can immediately reflect
-    /// whatever the user has already typed.
+    /// Retained so a freshly built index reflects what the user already typed.
     @ObservationIgnored private var query: String = ""
-    /// Bumped on every query change (and refilter). The off-main filter task
-    /// captures the value at dispatch time and only publishes its results if it
-    /// still matches — so a slow scan for an old keystroke can't clobber a newer
-    /// one (last-write-wins by generation, not by completion order).
+    /// A filter task publishes only if this still matches its dispatch value,
+    /// so a slow scan for an old keystroke can't clobber a newer one.
     @ObservationIgnored private var queryGeneration = 0
-    /// Handles let a new root/query stop obsolete work instead of merely hiding
-    /// its eventual result. This is essential at the 200k-file ceiling: stale
-    /// scans should not compete with the query the user is still typing.
+    /// Cancelled (not merely ignored) when superseded so stale scans at the
+    /// 200k-file ceiling don't compete with the current query.
     @ObservationIgnored private var indexTask: Task<Void, Never>?
     @ObservationIgnored private var filterTask: Task<Void, Never>?
-    /// A separate scan generation also invalidates same-path refreshes.
+    /// Also invalidates same-root refreshes.
     @ObservationIgnored private var indexGeneration = 0
 
-    /// Caps:
-    /// - `maxIndexedFiles` bounds memory and indexing time on huge trees.
-    /// - `maxResults` bounds what we hand back to SwiftUI per keystroke.
+    /// Bound memory and indexing time on huge trees, and the per-keystroke
+    /// result set handed to SwiftUI.
     nonisolated private static let maxIndexedFiles = 200_000
     nonisolated private static let maxResults = 300
 
@@ -90,11 +80,9 @@ final class FileFinder {
         let normalized = Self.normalize(root)
         let isNewRoot = indexedRoot != normalized
 
-        // Re-index on every explicit open so files created or removed since the
-        // last scan show up — the index used to be built once per root and then
-        // cached forever, which left the finder stale (e.g. an agent writes new
-        // files in a sibling terminal and they never appear). Skip only when a
-        // scan for this exact root is already in flight.
+        // Re-index on every explicit open so files that agents create or remove
+        // in sibling terminals show up. Skip only when a scan for this exact
+        // root is already in flight.
         if !isNewRoot && isIndexing { return }
 
         if isNewRoot {
@@ -153,8 +141,7 @@ final class FileFinder {
         isIndexing = false
     }
 
-    /// Updates the query and recomputes `results` off the main actor. Cheap on
-    /// the MainActor (just trims + bumps a counter); the scan happens elsewhere.
+    /// Updates the query and recomputes `results` off the main actor.
     func setQuery(_ query: String) {
         self.query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         refilter()
@@ -256,9 +243,8 @@ final class FileFinder {
         let score: Int
     }
 
-    /// Evaluates both filename and relative path. Taking the stronger score fixes
-    /// the old early-return behavior where any weak basename subsequence hid a
-    /// much better exact directory/path match.
+    /// Takes the stronger of the filename and relative-path scores, so a weak
+    /// basename subsequence can't hide a much better directory/path match.
     private nonisolated static func score(term: SearchTerm, item: FileItem) -> Int? {
         let nameScore = smartScore(term: term, candidate: item.name, isBasename: true)
         let pathScore = smartScore(term: term, candidate: item.relativePath, isBasename: false)
