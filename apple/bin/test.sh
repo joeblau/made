@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$APPLE_ROOT/made.xcodeproj"
+# shellcheck source-path=SCRIPTDIR source=lib/xcodebuild-ci.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/xcodebuild-ci.sh"
 SUITE="${1:-all}"
-DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-tests}"
-PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
+
+case "$SUITE" in
+  pilot|shared|all) ;;
+  *) echo "Usage: apple/bin/test.sh [pilot|shared|all]" >&2; exit 2 ;;
+esac
+
+# Result bundles from earlier runs persist in the shared derived data; only
+# summarize the ones this invocation produced.
+mkdir -p "$DERIVED_ROOT"
+RUN_MARKER="$(mktemp "$DERIVED_ROOT/.test-run.XXXXXX")"
 
 # xcodebuild -quiet can omit XCTest assertion details. Preserve its exit
 # status while printing the result bundle summary needed to diagnose CI failures.
@@ -14,22 +22,19 @@ report_failure() {
   if [[ "$status" -ne 0 ]]; then
     while IFS= read -r result; do
       xcrun xcresulttool get test-results summary --path "$result" || true
-    done < <(find "$DERIVED_ROOT" -name '*.xcresult' -type d -prune 2>/dev/null)
+    done < <(find "$DERIVED_ROOT" -name '*.xcresult' -type d -newer "$RUN_MARKER" -prune 2>/dev/null)
   fi
+  rm -f "$RUN_MARKER"
   exit "$status"
 }
 trap report_failure EXIT
 
+# Builds Cockpit as the test host incrementally: after build-ci.sh only the test
+# bundle compiles.
 pilot() {
-  DISABLE_SWIFTLINT=1 xcodebuild test -quiet \
-    -project "$PROJECT" \
+  ci_xcodebuild test "$MACOS_DERIVED_DATA" \
     -scheme PilotTests \
-    -destination "platform=macOS,arch=$(uname -m)" \
-    -derivedDataPath "$DERIVED_ROOT/pilot" \
-    -clonedSourcePackagesDirPath "$PACKAGES" \
-    -onlyUsePackageVersionsFromResolvedFile \
-    -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO
+    -destination "$MACOS_DESTINATION"
 }
 
 shared() {
@@ -43,20 +48,22 @@ shared() {
     ')"
   fi
   [[ -n "$udid" ]] || { echo "No available iPhone simulator; set IOS_SIMULATOR_UDID." >&2; exit 1; }
-  DISABLE_SWIFTLINT=1 xcodebuild test -quiet \
-    -project "$PROJECT" \
+  # Build the Copilot host and SharedTests for the same generic destination as
+  # build-ci.sh so the host is reused, then run exactly the products that this
+  # invocation just built. Removing earlier test-run descriptions and stopping
+  # on a failed build (set -e) keeps test-without-building from running stale
+  # or foreign products.
+  rm -f "$IOS_SIMULATOR_DERIVED_DATA"/Build/Products/SharedTests_*.xctestrun
+  ci_xcodebuild build-for-testing "$IOS_SIMULATOR_DERIVED_DATA" \
     -scheme SharedTests \
-    -destination "platform=iOS Simulator,id=$udid" \
-    -derivedDataPath "$DERIVED_ROOT/shared" \
-    -clonedSourcePackagesDirPath "$PACKAGES" \
-    -onlyUsePackageVersionsFromResolvedFile \
-    -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO
+    -destination "$IOS_SIMULATOR_BUILD_DESTINATION"
+  ci_xcodebuild test-without-building "$IOS_SIMULATOR_DERIVED_DATA" \
+    -scheme SharedTests \
+    -destination "platform=iOS Simulator,id=$udid"
 }
 
 case "$SUITE" in
   pilot) pilot ;;
   shared) shared ;;
   all) pilot; shared ;;
-  *) echo "Usage: apple/bin/test.sh [pilot|shared|all]" >&2; exit 2 ;;
 esac

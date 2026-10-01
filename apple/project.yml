@@ -434,11 +434,15 @@ targets:
             - "$(inherited)"
             - BLAU_CHROMIUM_REAL_ENGINE_TESTS
 
+  # Both snapshot UI-test bundles compile the one vendored fastlane helper in
+  # Tests/UITestSupport. List it per UI-test target only; it imports XCTest and
+  # must stay out of application and unit-test targets.
   CopilotUITests:
     type: bundle.ui-testing
     platform: iOS
     sources:
       - Tests/CopilotUITests
+      - Tests/UITestSupport/SnapshotHelper.swift
     dependencies:
       - target: Copilot
     settings:
@@ -452,6 +456,7 @@ targets:
     platform: iOS
     sources:
       - Tests/PlotterUITests
+      - Tests/UITestSupport/SnapshotHelper.swift
     dependencies:
       - target: Plotter
     settings:

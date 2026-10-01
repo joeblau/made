@@ -100,7 +100,17 @@ bin/check-docs.sh
 `apple/bin/test.sh pilot` runs only the macOS suite and
 `apple/bin/test.sh shared` runs only the iOS Simulator suite. Set
 `IOS_SIMULATOR_UDID` to select an installed iPhone simulator. The scripts pin
-`Package.resolved`, disable signing, and isolate derived data.
+`Package.resolved`, disable signing, and build the Debug configuration. They
+share one derived-data directory per platform under `BLAU_DERIVED_DATA`
+(default `$TMPDIR/blau-apple-ci`), so `test.sh` after `build-ci.sh` can reuse
+the application hosts instead of rebuilding them. Because the two scripts share
+those directories, run them one after the other rather than concurrently, or
+point each at its own `BLAU_DERIVED_DATA`; Xcode locks the build database.
+`test.sh shared` builds `SharedTests` for the generic iOS Simulator
+destination, as `build-ci.sh` does, and then runs it on the selected simulator
+without rebuilding. Result bundles accumulate under the shared directories;
+delete `BLAU_DERIVED_DATA` to reclaim the space. Chromium and release builds
+keep their own derived data.
 
 To lint only a branch diff, run
 `apple/bin/lint-swift.sh --changed origin/main`. Suppress a SwiftLint rule only
@@ -147,6 +157,13 @@ non-interactive selection.
 
 The screenshot harness uses deterministic demo state and writes to
 `workers/web/public/screenshots/`. It never requires a live peer.
+
+Both iOS UI-test bundles compile one vendored fastlane helper,
+`apple/Tests/UITestSupport/SnapshotHelper.swift`, which `apple/project.yml`
+lists only in `CopilotUITests` and `PlotterUITests`. Keep it byte-identical to
+the upstream asset and its `SnapshotHelperVersion` marker. To update it, run
+`fastlane snapshot update --force` from `apple/`, confirm that it reports only
+that path, review the diff, and regenerate the Xcode project.
 
 ## Deployment and secrets
 
