@@ -162,6 +162,71 @@ struct RemoteDesktopSessionManagerTests {
 @Suite("Remote desktop connection lifecycle")
 @MainActor
 struct RemoteDesktopConnectionLifecycleTests {
+    @Test("Apple authentication gets a bounded deadline that success cancels", arguments: [false, true])
+    func authenticationHasSeparateDeadline(succeeds: Bool) async throws {
+        let server = try SilentVNCServer()
+        defer { server.stop() }
+        try await waitUntil { server.port != nil }
+        let session = RemoteDesktopSession(
+            connectionID: UUID(), timeout: .milliseconds(100), authenticationTimeout: .milliseconds(500)
+        )
+        defer { session.disconnect() }
+        connect(session, port: try #require(server.port))
+        let connection = try #require(session.activeConnection)
+        let relay = try #require(session.connectionDelegate)
+        let credential = await withCheckedContinuation { continuation in
+            relay.connection(connection, credentialFor: .appleRemoteDesktop) {
+                continuation.resume(returning: $0 != nil)
+            }
+        }
+        #expect(credential)
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(session.status == .connecting)
+        if succeeds {
+            relay.connection(connection, stateDidChange: .connected)
+            try await waitUntil { session.status == .connected }
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(session.status == .connected)
+            return
+        }
+        try await waitUntil { !session.isLive }
+        guard case .failed(let message) = session.status else {
+            Issue.record("Stalled authentication should time out")
+            return
+        }
+        #expect(message.contains("authentication timed out"))
+        #expect(!session.credentialRejected)
+        #expect(session.activeConnection == nil)
+    }
+
+    @Test("A stale credential request cannot extend a replacement connection's deadline")
+    func staleAuthenticationDoesNotExtendDeadline() async throws {
+        let server = try SilentVNCServer()
+        defer { server.stop() }
+        try await waitUntil { server.port != nil }
+        let session = RemoteDesktopSession(
+            connectionID: UUID(), timeout: .milliseconds(150), authenticationTimeout: .seconds(10)
+        )
+        defer { session.disconnect() }
+        let port = try #require(server.port)
+        connect(session, port: port)
+        let oldConnection = try #require(session.activeConnection)
+        let oldRelay = try #require(session.connectionDelegate)
+        connect(session, port: port)
+        let rejected = await withCheckedContinuation { continuation in
+            oldRelay.connection(oldConnection, credentialFor: .appleRemoteDesktop) {
+                continuation.resume(returning: $0 == nil)
+            }
+        }
+        #expect(rejected)
+        try await waitUntil { !session.isLive }
+        guard case .failed(let message) = session.status else {
+            Issue.record("The replacement connection should keep its negotiation deadline")
+            return
+        }
+        #expect(message.contains("connection timed out"))
+    }
+
     @Test("Disconnect and timeout keep the saved password")
     func interruptedConnectionKeepsPassword() async throws {
         let server = try SilentVNCServer()

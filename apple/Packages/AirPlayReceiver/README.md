@@ -1,6 +1,6 @@
-# made AirPlay receiver
+# Cockpit AirPlay receiver
 
-This standalone executable adapts UxPlay's libairplay to made's bounded pipe
+This standalone executable adapts UxPlay's libairplay to Cockpit's bounded pipe
 protocol. It supports native iPhone/iPad Control Center screen mirroring over
 the same Wi-Fi network. It currently discards audio and does not implement HLS
 or protected video playback. Bluetooth pairing alone does not carry the stream.
@@ -8,14 +8,14 @@ or protected video playback. Bluetooth pairing alone does not carry the stream.
 The adapter is GPL-3.0-or-later. UxPlay (including libairplay and its bundled
 Playfair/llhttp sources), libplist and OpenSSL retain their own notices and
 licenses; see each source archive. The executable runs as a separate process
-and is not linked into made. No GStreamer runtime is used.
+and is not linked into Cockpit. No GStreamer runtime is used.
 
 `apple/bin/build-airplay-receiver.sh` pins and verifies every download and builds
 both arm64 and x86_64 with Xcode's compiler. It needs macOS, Xcode 26, make,
 Perl, curl and tar. Build artifacts are cached under `.build` and excluded from
 version control. Xcode's Embed AirPlay Receiver phase signs the result and ships
 the complete corresponding source archives, adapter and build recipe in
-`made.app/Contents/Resources/AirPlay/Sources`.
+`Cockpit.app/Contents/Resources/AirPlay/Sources`.
 
 To rebuild from the bundled sources, create `apple/Packages/AirPlayReceiver`
 and `apple/bin` in a working directory. Put `main.cpp`, `bounds.patch` and
@@ -23,7 +23,7 @@ and `apple/bin` in a working directory. Put `main.cpp`, `bounds.patch` and
 script in `apple/bin`, and the three dependency archives in the package's
 `.build/downloads` directory. Run `bash apple/bin/build-airplay-receiver.sh`.
 The result is `.build/CockpitAirPlayReceiver`; it can be substituted into a
-locally signed copy of made or used with another pipe consumer.
+locally signed copy of Cockpit or used with another pipe consumer.
 
 Starting a receiver generates an ephemeral device identity and a private
 Ed25519 key in a mode-0700 temporary directory, then requires an on-screen PIN.
@@ -54,7 +54,7 @@ dates to be at least as recent as Info.plist and the receiver executable.
 After installing a signed build, run:
 
 ```sh
-python3 apple/bin/check-airplay-receiver.py /Applications/made.app
+python3 apple/bin/check-airplay-receiver.py /Applications/Cockpit.app
 ```
 
 This checks actual Bonjour discovery for both services, a local pairing request
@@ -75,7 +75,7 @@ authentication cannot be skipped using transient pairing or an early SETUP.
 Run the independent client handshake regression suite with:
 
 ```sh
-uv run apple/Tests/AirPlay/pairing_test.py --helper /Applications/made.app/Contents/MacOS/CockpitAirPlayReceiver
+uv run apple/Tests/AirPlay/pairing_test.py --helper /Applications/Cockpit.app/Contents/MacOS/CockpitAirPlayReceiver
 ```
 
 Its pinned test-only cryptography dependency verifies the encrypted key exchange

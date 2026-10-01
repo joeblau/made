@@ -155,10 +155,74 @@ final class WorkspaceStore {
 
     var unpinnedWorkspaceIDs: [UUID] { workspaces.filter { !$0.isPinned }.map(\.id) }
 
-    func moveWorkspace(_ workspace: Workspace, toGroup groupID: UUID?) {
+    func moveWorkspace(_ workspace: Workspace, toGroup groupID: UUID?, at memberOffset: Int? = nil) {
         if let groupID, workspaceGroups.group(groupID) == nil { return }
         if workspace.isPinned { togglePin(workspace) }
-        workspaceGroups.place(workspace.id, in: groupID, workspaceIDs: unpinnedWorkspaceIDs)
+        workspaceGroups.place(
+            workspace.id, in: groupID, workspaceIDs: unpinnedWorkspaceIDs, memberOffset: memberOffset
+        )
+    }
+
+    @discardableResult
+    func acceptWorkspaceDrop(_ items: [WorkspaceSidebarDragPayload], toGroup groupID: UUID?, at memberOffset: Int? = nil) -> Bool {
+        guard items.count == 1, let item = items.first,
+              groupID == nil || groupID.flatMap(workspaceGroups.group) != nil,
+              let workspace = workspaces.first(where: { $0.id == item.workspaceID }) else { return false }
+        moveWorkspace(workspace, toGroup: groupID, at: memberOffset)
+        return true
+    }
+
+    @discardableResult
+    func acceptSidebarDrop(_ payload: WorkspaceSidebarDragPayload, before row: WorkspaceSidebarRowItem?) -> Bool {
+        let topLevel = workspaceGroups.items(workspaceIDs: unpinnedWorkspaceIDs)
+        let target: WorkspaceSidebarItem?
+        switch row {
+        case .workspace(let id, let groupID):
+            if let groupID, payload.workspaceID != nil {
+                let members = workspaceGroups.group(groupID)?.workspaceIDs.filter { unpinnedWorkspaceIDs.contains($0) } ?? []
+                guard let offset = members.firstIndex(of: id) else { return false }
+                return acceptWorkspaceDrop([payload], toGroup: groupID, at: offset)
+            }
+            target = groupID.map(WorkspaceSidebarItem.group) ?? .workspace(id)
+        case .emptyGroup(let id):
+            if payload.workspaceID != nil { return acceptWorkspaceDrop([payload], toGroup: id) }
+            target = .group(id)
+        case .group(let id): target = .group(id)
+        case nil: target = nil
+        }
+        let offset = target.flatMap { topLevel.firstIndex(of: $0) } ?? topLevel.count
+        return acceptTopLevelWorkspaceDrop(payload, at: offset)
+    }
+
+    @discardableResult
+    func acceptTopLevelWorkspaceDrop(_ payload: WorkspaceSidebarDragPayload, at offset: Int) -> Bool {
+        let items = workspaceGroups.items(workspaceIDs: unpinnedWorkspaceIDs)
+        guard (0...items.count).contains(offset) else { return false }
+        let target = offset < items.count ? items[offset] : nil
+        switch payload.item {
+        case .workspace(let id):
+            guard let workspace = workspaces.first(where: { $0.id == id }) else { return false }
+            if workspace.isPinned { togglePin(workspace) }
+        case .group(let id):
+            guard workspaceGroups.group(id) != nil else { return false }
+        }
+        workspaceGroups.placeAtTopLevel(payload.item, before: target, workspaceIDs: unpinnedWorkspaceIDs)
+        return true
+    }
+
+    @discardableResult
+    func acceptPinnedWorkspaceDrop(_ payload: WorkspaceSidebarDragPayload, at offset: Int) -> Bool {
+        let pinned = workspaces.filter(\.isPinned)
+        guard (0...pinned.count).contains(offset), let id = payload.workspaceID,
+              let workspace = workspaces.first(where: { $0.id == id }) else { return false }
+        let target = offset < pinned.count ? pinned[offset].id : nil
+        if target == id { return true }
+        if !workspace.isPinned { togglePin(workspace) }
+        let updated = workspaces.filter(\.isPinned)
+        guard let source = updated.firstIndex(where: { $0.id == id }) else { return false }
+        let destination = target.flatMap { target in updated.firstIndex { $0.id == target } } ?? updated.count
+        movePinnedWorkspaces(fromOffsets: [source], toOffset: destination)
+        return true
     }
 
     /// Extension companion workspaces are created and pruned by a sibling

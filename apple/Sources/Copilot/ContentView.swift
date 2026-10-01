@@ -161,8 +161,8 @@ struct ContentView: View {
         }
         .alert(
             syncService.pairingRequest?.isKeyChange == true
-                ? "Trust New made Identity?"
-                : "Pair with made?",
+                ? "Trust New Cockpit Identity?"
+                : "Pair with Cockpit?",
             isPresented: Binding(
                 get: { syncService.pairingRequest != nil },
                 set: { if !$0 { syncService.resolvePairingRequest(approved: false) } }
@@ -184,9 +184,9 @@ struct ContentView: View {
     private var mainContent: some View {
         if !isPeerConnected && workspaces.isEmpty {
             ContentUnavailableView {
-                Label("Looking for made...", systemImage: "antenna.radiowaves.left.and.right")
+                Label("Looking for Cockpit...", systemImage: "antenna.radiowaves.left.and.right")
             } description: {
-                Text("Make sure made is running on your Mac.")
+                Text("Make sure Cockpit is running on your Mac.")
             } actions: {
                 ProgressView()
             }
@@ -194,7 +194,7 @@ struct ContentView: View {
             ContentUnavailableView(
                 "No Workspaces",
                 systemImage: "rectangle.on.rectangle.slash",
-                description: Text("Create a workspace in made.")
+                description: Text("Create a workspace in Cockpit.")
             )
         } else {
             workspaceList

@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
-               BuildableName = "made.app"
+               BuildableName = "Cockpit.app"
                BlueprintName = "Pilot"
                ReferencedContainer = "container:made.xcodeproj">
             </BuildableReference>
@@ -33,7 +33,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
-            BuildableName = "made.app"
+            BuildableName = "Cockpit.app"
             BlueprintName = "Pilot"
             ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
@@ -56,7 +56,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
-            BuildableName = "made.app"
+            BuildableName = "Cockpit.app"
             BlueprintName = "Pilot"
             ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>
@@ -75,7 +75,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "F6906DBE47B9A9844F2DCF39"
-            BuildableName = "made.app"
+            BuildableName = "Cockpit.app"
             BlueprintName = "Pilot"
             ReferencedContainer = "container:made.xcodeproj">
          </BuildableReference>

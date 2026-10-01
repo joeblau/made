@@ -21,7 +21,7 @@ test('the built landing page renders the download slate', async () => {
   assert.match(html, /<canvas data-cockpit-hud>/);
   assert.match(html, /<h1 id="page-title">made<\/h1>/);
   assert.match(html, /<p class="landing__tagline">Multimodal Agentic Development Environment<\/p>/);
-  assert.match(html, /<h2>made<\/h2>/);
+  assert.match(html, /<h2>Cockpit<\/h2>/);
   assert.match(html, /<h2>Walkie\/Trigger<\/h2>/);
   assert.match(html, /<h2>Kneeboard<\/h2>/);
   assert.match(html, />Download for macOS<\/span>/);

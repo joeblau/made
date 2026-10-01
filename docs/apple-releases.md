@@ -3,7 +3,7 @@
 The `Apple Release` GitHub Actions workflow turns a `vMAJOR.MINOR.PATCH` tag
 on `main` into one coordinated Apple release:
 
-- made (the `Pilot` target) is built as a universal Chromium-enabled macOS
+- Cockpit (the `Pilot` target) is built as a universal Chromium-enabled macOS
   app, signed with Developer ID, notarized, stapled, and attached to a GitHub
   Release as a ZIP with a SHA-256 checksum and a signed Sparkle appcast.
 - Walkie, including Trigger, is uploaded to App Store Connect for TestFlight.
@@ -39,7 +39,7 @@ and `notarytool` are authorized. The private `.p8` file can only be downloaded
 once. Individual API keys do not support the provisioning endpoints or
 `notarytool`, so they cannot replace the team key in this workflow.
 
-Create a **Developer ID Application** certificate for made. Export the
+Create a **Developer ID Application** certificate for Cockpit. Export the
 certificate and its private key from Keychain Access as a password-protected
 `.p12`. An Apple Distribution certificate is not stored in GitHub: Xcode uses
 the team API key and Apple's cloud-managed distribution signing for the App
@@ -76,7 +76,7 @@ base64 -i DeveloperIDApplication.p12 | pbcopy
 ```
 
 The Sparkle private key is distinct from every Apple credential. Its matching
-public key is committed as `SUPublicEDKey` in made's Info.plist. Keep an
+public key is committed as `SUPublicEDKey` in Cockpit's Info.plist. Keep an
 encrypted backup of the private key outside GitHub; GitHub secrets cannot be
 read back after creation.
 
@@ -101,9 +101,9 @@ runtime from its locked upstream archives. Later releases reuse the immutable
 `chromiumkit-<release-id>` GitHub Release when one exists and verify its
 release attestation and asset bytes before installation.
 
-## made updates
+## Cockpit updates
 
-made uses Sparkle 2 for updates outside the Mac App Store. Each semantic app
+Cockpit uses Sparkle 2 for updates outside the Mac App Store. Each semantic app
 release is explicitly marked as GitHub's latest release and publishes:
 
 - `made-<version>-macOS.zip`
@@ -112,19 +112,19 @@ release is explicitly marked as GitHub's latest release and publishes:
 
 The appcast points at the immutable, versioned GitHub Release URL rather than a
 mutable asset URL. The release workflow signs both the update enclosure and the
-feed with `SPARKLE_PRIVATE_KEY`; made verifies them with its embedded public
+feed with `SPARKLE_PRIVATE_KEY`; Cockpit verifies them with its embedded public
 key and verifies the Developer ID signature before installation. ChromiumKit
 support releases are explicitly prevented from replacing the semantic app
 release as GitHub's latest release.
 
 The first release containing Sparkle must still be installed manually. Once
 that version is running, later semantic releases appear automatically and can
-also be requested from **made > Check for Updates…**.
+also be requested from **Cockpit > Check for Updates…**.
 
-made enables `SUEnableInstallerLauncherService` and embeds Sparkle's signed
+Cockpit enables `SUEnableInstallerLauncherService` and embeds Sparkle's signed
 `Installer.xpc`. This is intentional for our unsandboxed app: Sparkle 2.9.5's
 in-process launcher dispatches synchronous `SMJobRemove` calls to the main
-queue. A live hang captured on macOS 27 showed made indefinitely waiting
+queue. A live hang captured on macOS 27 showed Cockpit indefinitely waiting
 there. Running the launcher in its XPC service keeps that wait outside the UI
 process. Keep the service enabled when updating Sparkle or changing packaging;
 the normal recommendation to remove XPC services from unsandboxed apps does
@@ -152,10 +152,10 @@ Apple finishes processing it. Assigning tester groups, completing export
 compliance, submitting an external beta for review, and promoting a build to
 the App Store remain explicit App Store Connect operations.
 
-If both TestFlight jobs succeed but made fails, merge the made fix and run
+If both TestFlight jobs succeed but Cockpit fails, merge the Cockpit fix and run
 **Apple Release** manually from `main`. Supply the unchanged release tag and
 the failed release run ID. The workflow verifies that both TestFlight jobs in
-that run succeeded for the exact tagged commit, then runs only made and
+that run succeeded for the exact tagged commit, then runs only Cockpit and
 publishes the GitHub Release. This recovery path never moves the tag or uploads
 the mobile builds again.
 

@@ -118,6 +118,7 @@
 		5A1FACF763C45CAD27CA21C2 /* RepositoryPollingScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F494B70BE7239A214ED3F27F /* RepositoryPollingScheduler.swift */; };
 		5A8552C5C6684B322B5B4A7C /* WorkspaceQuickJump.swift in Sources */ = {isa = PBXBuildFile; fileRef = B937A3E020F2099C3A80F812 /* WorkspaceQuickJump.swift */; };
 		5B9D47A5BEC1E53CCA4F409D /* SimulatorPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7FF06552F3744B76571236C /* SimulatorPaneView.swift */; };
+		5BF9BEB9622DF3CA05E2685C /* WorkspaceSidebarList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6956D170AED16754A78A493 /* WorkspaceSidebarList.swift */; };
 		5C17D3C9E677B3F2BC7C0CFE /* H264AnnexBAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99FBD4FF911ED668812EFC61 /* H264AnnexBAssemblerTests.swift */; };
 		5D56358082265F38ACD1321A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E3DFD0094A19FB8BB361ED2A /* Assets.xcassets */; };
 		5D598C6B90D2F92BFEEC8E31 /* SafariWebInspector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2CA50CD82BC124C8966C5BCE /* SafariWebInspector.swift */; };
@@ -214,6 +215,7 @@
 		AA438D367553C3A1D274D4A4 /* PilotEditorTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 364A99D5E241228A8E17E2A4 /* PilotEditorTheme.swift */; };
 		AA8FE45519DADA3E4882AE48 /* PlotterGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8918F120AC89BE6FDE09CD52 /* PlotterGeometry.swift */; };
 		AAF2C1ED07ED6D8932A3C909 /* ReplayWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF2CE47E300C860F3A949839 /* ReplayWindow.swift */; };
+		ABAF0EA8BE56AA03E49C694C /* WorkspaceSidebarDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6F7D223D434BBC284EFA9A /* WorkspaceSidebarDrag.swift */; };
 		AC8B869380086B835B35979E /* AgenticUseFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6BECAF1FB2AA8B36E370120 /* AgenticUseFormat.swift */; };
 		AD355A463C2DCAEF572D8586 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A727A54C54BA82A6AFA8E10 /* DeviceIdentity.swift */; };
 		AE61C4CE2459C232DB468E5B /* WirelessDeviceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F975074B415A8D1ECC7B49DF /* WirelessDeviceSession.swift */; };
@@ -468,7 +470,6 @@
 		1F2FAA91CD094C780B3CF6F0 /* SecureChannelResponder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelResponder.swift; sourceTree = "<group>"; };
 		20BD0ECBEF38020DEA31A295 /* RemoteDesktopKeyboardInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopKeyboardInput.swift; sourceTree = "<group>"; };
 		245AF30397DB998A089D3DE7 /* ActiveConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveConnectionTests.swift; sourceTree = "<group>"; };
-		259B2B52D7D4E9E8D911215F /* made.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = made.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		25F7342047ADD2BC10513404 /* PullRequestListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PullRequestListView.swift; sourceTree = "<group>"; };
 		268DE5CA8E14D127C3AA54D3 /* AndroidInputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidInputInjector.swift; sourceTree = "<group>"; };
 		291474D85FF92A9D26A1ACC4 /* PersistenceReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceReportingTests.swift; sourceTree = "<group>"; };
@@ -503,6 +504,7 @@
 		46AD7879E93CFA7C19B281CA /* SecurePairingStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurePairingStoreTests.swift; sourceTree = "<group>"; };
 		46D01BA1950FB279D464ECC3 /* PilotWalkieDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotWalkieDelivery.swift; sourceTree = "<group>"; };
 		47290F44A2E7A13BD8B8C011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		48465A9AC711AF1733BDA6CB /* Cockpit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cockpit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4964B07F4BFF22977DDCB169 /* WalletPopupPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletPopupPanel.swift; sourceTree = "<group>"; };
 		4A727A54C54BA82A6AFA8E10 /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		4B8FFE42FBC3B8F82ED2E42A /* UsageSessions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageSessions.swift; sourceTree = "<group>"; };
@@ -598,6 +600,7 @@
 		A41F3A9CC73ED4D24965D612 /* PlotterActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterActivityAttributes.swift; sourceTree = "<group>"; };
 		A5C13691A97640D6126B5C03 /* Pilot.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Pilot.entitlements; sourceTree = "<group>"; };
 		A6287B4C91222DAA0BC988A5 /* CopilotWalkieTalkieTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotWalkieTalkieTests.swift; sourceTree = "<group>"; };
+		A6956D170AED16754A78A493 /* WorkspaceSidebarList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSidebarList.swift; sourceTree = "<group>"; };
 		A6BECAF1FB2AA8B36E370120 /* AgenticUseFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseFormat.swift; sourceTree = "<group>"; };
 		A6DC9C91B2F017F673927008 /* MarkdownTableFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTableFormatter.swift; sourceTree = "<group>"; };
 		A733DD090F36816EFC9A0A65 /* InkOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkOverlay.swift; sourceTree = "<group>"; };
@@ -687,6 +690,7 @@
 		EA21CE5F668A930A95245288 /* WorkspaceBranchStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceBranchStore.swift; sourceTree = "<group>"; };
 		EA551A7D6AED62412DEDB9E3 /* SignalingClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingClientTests.swift; sourceTree = "<group>"; };
 		EBD0797F864DEAF47B5CD157 /* ProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRunner.swift; sourceTree = "<group>"; };
+		EC6F7D223D434BBC284EFA9A /* WorkspaceSidebarDrag.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSidebarDrag.swift; sourceTree = "<group>"; };
 		EC7E0AE4C7E6AB9EA45ED412 /* AdbBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdbBridge.swift; sourceTree = "<group>"; };
 		EC927C007E0598E88489F912 /* AndroidScreenStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidScreenStream.swift; sourceTree = "<group>"; };
 		EE76BD6645B07B60502D3173 /* H264AnnexBAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264AnnexBAssembler.swift; sourceTree = "<group>"; };
@@ -1044,6 +1048,8 @@
 				0996308D95F727BDE1DE2596 /* WorkspaceGroups.swift */,
 				AD9ED59C64849CDE587FE6AD /* WorkspacePaneLauncher.swift */,
 				B937A3E020F2099C3A80F812 /* WorkspaceQuickJump.swift */,
+				EC6F7D223D434BBC284EFA9A /* WorkspaceSidebarDrag.swift */,
+				A6956D170AED16754A78A493 /* WorkspaceSidebarList.swift */,
 				CC710253E3E48ABCF64E4971 /* WorkspaceSidebarRow.swift */,
 				7544DB2CD816807473787E40 /* WorkspaceStore.swift */,
 				3D5870DE7B53D77258F4400D /* WorkspaceStore+Walkie.swift */,
@@ -1148,9 +1154,9 @@
 			isa = PBXGroup;
 			children = (
 				F0562E4DE3DD61CCBA735BBC /* ChromiumKit.framework */,
+				48465A9AC711AF1733BDA6CB /* Cockpit.app */,
 				4648BA584E03882419D9E36E /* Copilot.app */,
 				E049F62849A8FF8619A7E61E /* CopilotUITests.xctest */,
-				259B2B52D7D4E9E8D911215F /* made.app */,
 				2E6A0599CC51C7335D7308E7 /* PilotChromiumHelperTemplate.app */,
 				05F65749197056761B9D8E8F /* PilotTests.xctest */,
 				C2147E29B3253F46979AE96A /* Plotter.app */,
@@ -1493,7 +1499,7 @@
 				F74A3ECCAD546E8558A95DD2 /* Sparkle */,
 			);
 			productName = Pilot;
-			productReference = 259B2B52D7D4E9E8D911215F /* made.app */;
+			productReference = 48465A9AC711AF1733BDA6CB /* Cockpit.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -1864,6 +1870,8 @@
 				B79C4DFAB3EE3DDB28B77F72 /* WorkspaceGroups.swift in Sources */,
 				54FF74F77D33065F81075B15 /* WorkspacePaneLauncher.swift in Sources */,
 				5A8552C5C6684B322B5B4A7C /* WorkspaceQuickJump.swift in Sources */,
+				ABAF0EA8BE56AA03E49C694C /* WorkspaceSidebarDrag.swift in Sources */,
+				5BF9BEB9622DF3CA05E2685C /* WorkspaceSidebarList.swift in Sources */,
 				485326731976B5846A11BE33 /* WorkspaceSidebarRow.swift in Sources */,
 				4E651F19B0BEA4B6B7C612C8 /* WorkspaceStore+Walkie.swift in Sources */,
 				EB418EA6BCDE956F2E823566 /* WorkspaceStore.swift in Sources */,
@@ -2284,7 +2292,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.pilot.tests;
 				SDKROOT = macosx;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/made.app/Contents/MacOS/made";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Cockpit.app/Contents/MacOS/Cockpit";
 			};
 			name = Debug;
 		};
@@ -2456,7 +2464,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.pilot;
 				PRODUCT_MODULE_NAME = Pilot;
-				PRODUCT_NAME = made;
+				PRODUCT_NAME = Cockpit;
 				SDKROOT = macosx;
 			};
 			name = Release;
@@ -2517,7 +2525,7 @@
 					"$(inherited)",
 					BLAU_CHROMIUM_REAL_ENGINE_TESTS,
 				);
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/made.app/Contents/MacOS/made";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Cockpit.app/Contents/MacOS/Cockpit";
 			};
 			name = Chromium;
 		};
@@ -2753,7 +2761,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.pilot;
 				PRODUCT_MODULE_NAME = Pilot;
-				PRODUCT_NAME = made;
+				PRODUCT_NAME = Cockpit;
 				SDKROOT = macosx;
 			};
 			name = Debug;
@@ -2924,7 +2932,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.pilot;
 				PRODUCT_MODULE_NAME = Pilot;
-				PRODUCT_NAME = made;
+				PRODUCT_NAME = Cockpit;
 				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
 					"$(inherited)",
@@ -2989,7 +2997,7 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.pilot.tests;
 				SDKROOT = macosx;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/made.app/Contents/MacOS/made";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Cockpit.app/Contents/MacOS/Cockpit";
 			};
 			name = Release;
 		};

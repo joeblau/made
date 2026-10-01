@@ -600,7 +600,6 @@ struct ContentView: View {
     @AppStorage("inspector.width") private var inspectorWidth = 280.0
     @State private var notesToggleMonitor: Any?
     @State private var persistenceFailure: PersistenceFailure?
-    @FocusState private var renamingWorkspaceID: UUID?
     @State private var isGroupNamePresented = false
     @State private var editingGroupID: UUID?
     @State private var groupName = ""
@@ -612,60 +611,18 @@ struct ContentView: View {
         let workspaceShortcutIDs = workspaces.prefix(9).map(\.id)
 
         NavigationSplitView {
-            List(selection: sidebarSelectionBinding) {
-                let pinned = workspaces.filter(\.isPinned)
-
-                Section {
-                    Label("Notes", systemImage: "note.text")
-                        .tag(SidebarSelection.notes)
-                    Label("Remote Desktop", systemImage: "macbook.and.iphone")
-                        .tag(SidebarSelection.remoteDesktop)
-                    Label("Docker", systemImage: "shippingbox")
-                        .tag(SidebarSelection.docker)
-                    Label("Agentic Use", systemImage: "chart.bar.xaxis")
-                        .tag(SidebarSelection.agenticUse)
-                }
-
-                if !pinned.isEmpty {
-                    Section(isExpanded: $pinnedSectionExpanded) {
-                        ForEach(pinned) { workspace in
-                            workspaceRow(workspace)
-                        }
-                        .onMove(perform: store.movePinnedWorkspaces)
-                    } header: {
-                        Text("Pinned")
-                    }
-                }
-
-                Section(isExpanded: $workspacesSectionExpanded) {
-                    ForEach(store.workspaceGroups.items(workspaceIDs: store.unpinnedWorkspaceIDs)) { item in
-                        switch item {
-                        case .workspace(let id):
-                            if let workspace = workspaces.first(where: { $0.id == id }) {
-                                workspaceRow(workspace)
-                            }
-                        case .group(let id):
-                            if let group = store.workspaceGroups.group(id) {
-                                WorkspaceGroupSidebarRow(group: group, store: store) {
-                                    editingGroupID = group.id
-                                    groupName = group.name
-                                    isGroupNamePresented = true
-                                } workspaceRow: { workspace in
-                                    workspaceRow(workspace)
-                                }
-                            }
-                        }
-                    }
-                    .onMove { offsets, destination in
-                        store.workspaceGroups.moveItems(
-                            workspaceIDs: store.unpinnedWorkspaceIDs,
-                            fromOffsets: offsets, toOffset: destination
-                        )
-                    }
-                } header: {
-                    Text("Workspaces")
-                }
-            }
+            WorkspaceSidebarList(
+                store: store,
+                selection: sidebarSelectionBinding,
+                pinnedExpanded: $pinnedSectionExpanded,
+                workspacesExpanded: $workspacesSectionExpanded,
+                onRenameGroup: { group in
+                    editingGroupID = group.id
+                    groupName = group.name
+                    isGroupNamePresented = true
+                },
+                workspaceRow: workspaceRow
+            )
             .safeAreaInset(edge: .bottom) {
                 HStack(spacing: 12) {
                     RecordingStatusIndicator(isRecording: isPeerRecording)
@@ -856,7 +813,7 @@ struct ContentView: View {
             usageStore.stop()
         }
         .onReceive(NotificationCenter.default.publisher(for: .pilotPersistenceSaveFailed)) { notification in
-            let operation = notification.userInfo?["operation"] as? String ?? "Saving made data"
+            let operation = notification.userInfo?["operation"] as? String ?? "Saving Cockpit data"
             let message = notification.userInfo?["message"] as? String ?? "Unknown persistence error"
             persistenceFailure = PersistenceFailure(operation: operation, message: message)
         }
@@ -868,7 +825,7 @@ struct ContentView: View {
                 title: Text("Changes could not be saved"),
                 message: Text("\(failure.operation) failed: \(failure.message)\n\nYour non-destructive edits remain in memory. Free disk space or fix permissions, then retry."),
                 primaryButton: .default(Text("Retry")) {
-                    _ = store.modelContext.saveReporting(operation: "Retrying made data save")
+                    _ = store.modelContext.saveReporting(operation: "Retrying Cockpit data save")
                 },
                 secondaryButton: .cancel()
             )
@@ -1116,7 +1073,6 @@ struct ContentView: View {
         WorkspaceSidebarRow(
             workspace: workspace,
             branch: branchStore.branches[workspace.id],
-            renamingWorkspaceID: $renamingWorkspaceID,
             store: store,
             onUpdateRootPath: { presentRootPathPicker(for: workspace) }
         )

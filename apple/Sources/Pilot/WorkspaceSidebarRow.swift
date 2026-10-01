@@ -1,5 +1,16 @@
 import SwiftUI
 
+struct WorkspaceSidebarHeading: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .scaledFont(size: 11, weight: .semibold)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+}
+
 /// One workspace row in the sidebar: an in-place rename field, the current
 /// git branch as secondary text, the badge count, and the row's context menu.
 ///
@@ -10,23 +21,47 @@ import SwiftUI
 struct WorkspaceSidebarRow: View {
     let workspace: Workspace
     let branch: String?
-    @FocusState.Binding var renamingWorkspaceID: UUID?
     let store: WorkspaceStore
     let onUpdateRootPath: () -> Void
+
+    /// Edit mode is deliberately decoupled from focus. A focused view that
+    /// resigns first responder writes `nil` back into its `@FocusState`, so
+    /// one state driving both "show the field" and "focus the field" tears
+    /// the field down on any spurious resign — the context menu closing,
+    /// a row rebuild — before the user can type or press Return.
+    @State private var isRenaming = false
+    @State private var draftName = ""
+    @FocusState private var renameFocused: Bool
 
     var body: some View {
         // Hidden while renaming so the branch never competes with the field
         // the user is typing in.
-        let branch = renamingWorkspaceID == workspace.id ? nil : branch
+        let branch = isRenaming ? nil : branch
 
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
-                TextField("Name", text: Bindable(workspace).name)
-                    .focused($renamingWorkspaceID, equals: workspace.id)
-                    .onSubmit {
-                        renamingWorkspaceID = nil
-                    }
-                    .layoutPriority(1)
+                if isRenaming {
+                    TextField("Name", text: $draftName)
+                        .focused($renameFocused)
+                        .onSubmit(commitRename)
+                        .onExitCommand(perform: cancelRename)
+                        .onChange(of: renameFocused) { _, focused in
+                            // Clicking away commits whatever was typed.
+                            if !focused, isRenaming { commitRename() }
+                        }
+                        .onAppear {
+                            draftName = workspace.name
+                            // The field exists only now; focus it once the
+                            // context menu that opened it has closed.
+                            DispatchQueue.main.async { renameFocused = true }
+                        }
+                        .layoutPriority(1)
+                } else {
+                    Text(workspace.name)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(1)
+                }
 
                 // The gauge outranks the name field for space. The field is
                 // greedy, so without a higher priority and a fixed size the
@@ -41,12 +76,18 @@ struct WorkspaceSidebarRow: View {
             }
         }
         .tag(SidebarSelection.workspace(workspace.id))
+        .contentShape(Rectangle())
+        .draggable(WorkspaceSidebarDragPayload(workspaceID: workspace.id)) {
+            Text(workspace.name)
+                .padding(8)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+        }
         .contextMenu {
             Button {
-                let workspaceID = workspace.id
-                DispatchQueue.main.async {
-                    renamingWorkspaceID = workspaceID
-                }
+                // Defer past the menu's own tracking loop; flipping view
+                // state from inside a context-menu action is otherwise
+                // swallowed while the menu is still closing.
+                DispatchQueue.main.async { isRenaming = true }
             } label: {
                 Label("Rename Workspace", systemImage: "pencil")
             }
@@ -76,6 +117,20 @@ struct WorkspaceSidebarRow: View {
                 store.requestDeleteWorkspace(workspace)
             }
         }
+    }
+
+    /// Writes the draft back to the model, keeping the current name when the
+    /// draft is empty or all whitespace.
+    private func commitRename() {
+        let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            workspace.name = trimmed
+        }
+        isRenaming = false
+    }
+
+    private func cancelRename() {
+        isRenaming = false
     }
 
     private func branchLabel(_ branch: String) -> some View {
@@ -300,33 +355,38 @@ struct WorkspaceGaugeArc: InsettableShape {
     }
 }
 
-/// A group participates in the outer list's move operation; its children have
-/// their own move operation so dragging a group preserves the child order.
-struct WorkspaceGroupSidebarRow<WorkspaceRow: View>: View {
+/// A group header is one list row; its members are sibling rows with indentation.
+/// Keeping them out of a nested DisclosureGroup lets every row export its drag.
+struct WorkspaceGroupSidebarRow: View {
     let group: WorkspaceGroup
     let store: WorkspaceStore
     let onRename: () -> Void
-    @ViewBuilder var workspaceRow: (Workspace) -> WorkspaceRow
+    @State private var isDropTarget = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: Binding(
-            get: { store.workspaceGroups.group(group.id)?.isExpanded ?? true },
-            set: { store.workspaceGroups.setExpanded(group.id, $0) }
-        )) {
-            let members = store.workspaces.filter { !$0.isPinned && group.workspaceIDs.contains($0.id) }
-            ForEach(members) { workspace in
-                workspaceRow(workspace)
-            }
-            .onMove { offsets, destination in
-                store.workspaceGroups.moveMembers(
-                    group.id, workspaceIDs: store.unpinnedWorkspaceIDs,
-                    fromOffsets: offsets, toOffset: destination
-                )
-            }
+        Button {
+            store.workspaceGroups.setExpanded(group.id, !group.isExpanded)
         } label: {
-            Label(group.name, systemImage: "folder")
-                .lineLimit(1)
+            HStack(spacing: 6) {
+                Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
+                    .scaledFont(size: 9, weight: .semibold)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 10)
+                WorkspaceSidebarHeading(title: group.name)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+            .background(isDropTarget ? Color.accentColor.opacity(0.15) : .clear)
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(group.name)
+        .accessibilityValue(group.isExpanded ? "Expanded" : "Collapsed")
+        .onDrop(of: [.pilotWorkspace], isTargeted: $isDropTarget) { providers in
+            WorkspaceSidebarDragPayload.load(providers) { item in
+                store.acceptWorkspaceDrop([item], toGroup: group.id)
+            }
+        }
+        .draggable(WorkspaceSidebarDragPayload(groupID: group.id))
         .contextMenu {
             Button("New Workspace in Group") {
                 store.addWorkspace()

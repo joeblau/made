@@ -32,7 +32,7 @@ final class AirPlayPackagingTests: XCTestCase {
         let helper = try XCTUnwrap(Bundle.main.url(forAuxiliaryExecutable: "CockpitAirPlayReceiver"))
         let worker = AirPlayReceiverWorker()
         defer { worker.cancel() }
-        worker.run(executable: helper, arguments: ["--receive", "made Test \(UUID().uuidString.prefix(8))"],
+        worker.run(executable: helper, arguments: ["--receive", "Cockpit Test \(UUID().uuidString.prefix(8))"],
                    consume: { _ in false })
         let deadline = ProcessInfo.processInfo.systemUptime + 5
         while worker.snapshot == .starting, ProcessInfo.processInfo.systemUptime < deadline {
