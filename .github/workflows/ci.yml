@@ -126,9 +126,9 @@ jobs:
           git diff --exit-code -- apple/made.xcodeproj
       - name: Validate Apple CI script orchestration
         run: bash apple/bin/test-apple-ci-scripts.sh
-      # build-ci.sh and test.sh share per-platform derived data, so the test
-      # step reuses the compiled Cockpit and Walkie hosts and compiles only the
-      # test bundles.
+      # build-ci.sh and test.sh share per-platform derived data so the test
+      # step can reuse the compiled Cockpit and Walkie hosts instead of
+      # rebuilding them (measured for Cockpit; confirm Walkie from this log).
       - name: Compile every application
         run: apple/bin/build-ci.sh
       - name: Run unit tests

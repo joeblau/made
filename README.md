@@ -102,9 +102,15 @@ bin/check-docs.sh
 `IOS_SIMULATOR_UDID` to select an installed iPhone simulator. The scripts pin
 `Package.resolved`, disable signing, and build the Debug configuration. They
 share one derived-data directory per platform under `BLAU_DERIVED_DATA`
-(default `$TMPDIR/blau-apple-ci`), so `test.sh` after `build-ci.sh` reuses the
-application hosts and compiles only the test bundles. Chromium and release
-builds keep their own derived data.
+(default `$TMPDIR/blau-apple-ci`), so `test.sh` after `build-ci.sh` can reuse
+the application hosts instead of rebuilding them. Because the two scripts share
+those directories, run them one after the other rather than concurrently, or
+point each at its own `BLAU_DERIVED_DATA`; Xcode locks the build database.
+`test.sh shared` builds `SharedTests` for the generic iOS Simulator
+destination, as `build-ci.sh` does, and then runs it on the selected simulator
+without rebuilding. Result bundles accumulate under the shared directories;
+delete `BLAU_DERIVED_DATA` to reclaim the space. Chromium and release builds
+keep their own derived data.
 
 To lint only a branch diff, run
 `apple/bin/lint-swift.sh --changed origin/main`. Suppress a SwiftLint rule only
