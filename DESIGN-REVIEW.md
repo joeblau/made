@@ -155,12 +155,10 @@ than a cleanup, so it is left for you. Source: 1554384338619453440.
 
 ## Outside catalog (reviewer judgment)
 
-- **Dead landing sections.** `Nav`, `Cta`, `Features`, `Devices`,
-  `Security`, `TerminalPane`, `UsagePanel` and the scripts `interactions.ts`,
-  `liquid-glass.ts`, `tag-cloud.ts` are not imported by any page, and their
-  class names (`.btn`, `.feature-card`, `.nav__links`, `--accent`) no longer
-  exist in `global.css`. They are uncommitted, so they were left alone; delete
-  them or they will drift further from the token system.
+- **Dead landing sections (since removed).** The unreferenced landing
+  sections and micro-interaction scripts this review flagged were deleted in
+  #271; `workers/web/test/reachability.test.mjs` now fails if a component or
+  script under `workers/web/src` stops being reachable from a page.
 - **Light mode over a dark render.** The cockpit scene is dark in its lower
   half by nature, so light mode leans on the scrim (finding 3) to keep dark
   type legible. If the haze reads as washed out, the alternative is to treat
