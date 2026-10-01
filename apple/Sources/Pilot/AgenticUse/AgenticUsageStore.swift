@@ -13,7 +13,6 @@ enum AgenticUseRange: String, CaseIterable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Segmented-control label.
     var label: String {
         switch self {
         case .day: "24h"
@@ -66,7 +65,6 @@ enum AgenticUseRange: String, CaseIterable, Sendable, Identifiable {
 struct AgenticModelTotal: Sendable, Identifiable, Equatable {
     /// Canonical model id — the palette/legend key.
     let model: String
-    /// "Opus 5", "Fable 5", …
     let displayName: String
     /// USD. Zero when `isUnpriced`.
     let cost: Double
@@ -86,7 +84,6 @@ struct AgenticModelTotal: Sendable, Identifiable, Equatable {
 struct AgenticDailyPoint: Sendable, Identifiable, Equatable {
     /// Bucket start (local midnight, or top of the hour for 24h).
     let day: Date
-    /// Canonical model id.
     let model: String
     let displayName: String
     let cost: Double
@@ -112,13 +109,10 @@ struct AgenticUseStats: Sendable, Equatable {
     let activeDays: Int
     /// processedTokens / activeDays (0 when no active days).
     let processedPerActiveDay: Int
-    /// Cache-read tokens.
     let cachedInputTokens: Int
     /// cacheRead / (input + cacheWrite + cacheRead); 0 when nothing observed.
     let cachedInputShare: Double
-    /// Plain input tokens.
     let uncachedInputTokens: Int
-    /// Cache-write tokens (the "N cache writes" caption).
     let cacheWriteTokens: Int
     let outputTokens: Int
     /// Reported reasoning tokens. Only recent Claude Code versions log
@@ -184,7 +178,7 @@ final class AgenticUsageStore {
     }
 
     private(set) var phase: Phase = .idle
-    /// The aggregates for the current range. `nil` until first load.
+    /// `nil` until first load.
     private(set) var snapshot: AgenticUseSnapshot?
     /// A non-initial reload is in flight (header spinner, not the scan view).
     private(set) var isRefreshing = false
@@ -321,8 +315,6 @@ final class AgenticUsageStore {
     // MARK: Aggregation
 
     /// Recompute the snapshot for the current range off the main actor.
-    /// 60K+ records reduce in a few milliseconds, but not milliseconds the
-    /// main thread needs to spend.
     private func recompute() {
         aggregateTask?.cancel()
         guard !records.isEmpty else { return }

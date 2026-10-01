@@ -94,13 +94,7 @@ struct EditorPaneView: View {
     @State private var selectedIndex = 0
     @FocusState private var searchFocused: Bool
 
-    // AppKit key-down monitor: SwiftUI's `.onKeyPress` reliably handles Return
-    // and Escape, but a focused `TextField` swallows the up/down arrows before
-    // SwiftUI sees them, so arrow navigation goes through this local monitor
-    // instead (installed only while the finder is open and this pane is the
-    // active, selected one, mirroring `ContentView.installNotesToggleMonitor`).
-    // The token is removed on dismiss, on disappear, and whenever `isActive` or
-    // `isSelected` flips false.
+    // Arrow-key fallback for the finder; see `installKeyMonitor()`.
     @State private var keyMonitor: Any?
 
     @Environment(\.colorScheme) private var colorScheme
@@ -109,8 +103,7 @@ struct EditorPaneView: View {
         ZStack {
             editorLayer
 
-            // Save / auto-save failures need to be visible while editing, not just
-            // buried in the finder's status line — float a dismissible banner on top.
+            // Save failures must stay visible while editing, not only in the finder.
             if session.document != nil, let errorMessage = session.errorMessage {
                 errorBanner(errorMessage)
             }
@@ -257,7 +250,6 @@ struct EditorPaneView: View {
 
     private var finderOverlay: some View {
         VStack(spacing: 0) {
-            // Search field.
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -273,7 +265,6 @@ struct EditorPaneView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
 
-            // Results / status.
             resultsBody
                 .frame(maxHeight: 360)
         }
@@ -419,7 +410,6 @@ struct EditorPaneView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    /// The directory part of a relative path (everything but the basename).
     private func directoryPortion(of relativePath: String) -> String {
         let directory = (relativePath as NSString).deletingLastPathComponent
         return directory
@@ -452,8 +442,6 @@ struct EditorPaneView: View {
 
     // MARK: - Lifecycle
 
-    /// Configure the pane on appear: load the persisted file if there is one,
-    /// otherwise present the finder.
     private func activate() {
         session.attach(store: state)
         if let url = state.fileURL {
@@ -541,23 +529,17 @@ struct EditorPaneView: View {
 
     // MARK: - Key monitor (arrow nav fallback)
 
-    /// Installs a local key-down monitor for up/down arrows while the finder is
-    /// open and this pane is the active, selected one. The focused search field
-    /// consumes arrow keys before SwiftUI's `.onKeyPress` sees them, so we intercept
-    /// here and return `nil` to swallow the event. Return/Escape still flow through
-    /// `.onKeyPress`.
+    /// A focused `TextField` consumes up/down arrows before `.onKeyPress` sees
+    /// them, so the finder intercepts them with a local monitor while it is open
+    /// in the active, selected pane. Return and Escape still use `.onKeyPress`.
     ///
-    /// The monitor's *liveness* is owned by the `onChange(of: isActive)` and
-    /// `onChange(of: isSelected)` removals, not by the closure: the `isActive` /
-    /// `isSelected` values captured here are install-time snapshots (this is a
-    /// value-type view, so `self` doesn't see later updates) and must not be relied
-    /// on to decide whether to keep handling events. The only live guard inside is
-    /// `self.showFinder`, which reads through to current @State.
+    /// The `isActive`/`isSelected` values captured here are install-time
+    /// snapshots of a value-type view, so the monitor's lifetime is owned by the
+    /// `onChange` handlers that remove it. `showFinder` reads through to current
+    /// `@State` and is the only live guard.
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Live guard only; selection/activity changes tear the monitor down via
-            // the onChange handlers above.
             guard self.showFinder else { return event }
             switch event.keyCode {
             case 125: // down arrow
