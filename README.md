@@ -148,6 +148,13 @@ non-interactive selection.
 The screenshot harness uses deterministic demo state and writes to
 `workers/web/public/screenshots/`. It never requires a live peer.
 
+Both iOS UI-test bundles compile one vendored fastlane helper,
+`apple/Tests/UITestSupport/SnapshotHelper.swift`, which `apple/project.yml`
+lists only in `CopilotUITests` and `PlotterUITests`. Keep it byte-identical to
+the upstream asset and its `SnapshotHelperVersion` marker. To update it, run
+`fastlane snapshot update --force` from `apple/`, confirm that it reports only
+that path, review the diff, and regenerate the Xcode project.
+
 ## Deployment and secrets
 
 Production deployment and rollback are owned by the protected GitHub

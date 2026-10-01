@@ -5,6 +5,7 @@ import XCTest
 /// Runs against demo mode (`-demoMode YES`), which injects representative
 /// fixture state so the screens render without a live Pilot peer on the
 /// network. See the Foundation harness / DEMO-MODE convention.
+@MainActor
 final class CopilotUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
