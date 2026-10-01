@@ -9,6 +9,7 @@ export default [
       '**/.worker-assets/**',
       '**/.wrangler/**',
       '**/cloudflare-env.d.ts',
+      '**/.worker-configuration.check.d.ts',
       '**/.turbo/**',
       '**/dist/**',
       '**/node_modules/**',
