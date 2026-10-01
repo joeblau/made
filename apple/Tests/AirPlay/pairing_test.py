@@ -76,7 +76,7 @@ class PairingTests(unittest.TestCase):
     def setUpClass(cls):
         cls.directory = tempfile.TemporaryDirectory(prefix="cockpit-pairing-tests-")
         cls.addClassCleanup(cls.directory.cleanup)
-        name = "made-Pairing-Test-" + uuid.uuid4().hex[:8]
+        name = "Cockpit-Pairing-Test-" + uuid.uuid4().hex[:8]
         cls.receiver = subprocess.Popen([str(options.helper.resolve()), "--receive", name,
                                          str(Path(cls.directory.name) / "pairing.pem")],
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)

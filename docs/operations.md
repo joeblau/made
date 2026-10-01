@@ -11,7 +11,7 @@ environment secrets there:
 
 The token should be an account-scoped custom token limited to the blau account
 with **Workers Scripts: Write**. The Workers Custom Domains API accepts that
-permission for attaching `rendezvous.blau.app`. The child `web-made` has no
+permission for attaching `rendezvous.blau.app`. The child `blau-made` has no
 Custom Domain. The separately maintained OpenNext
 `blau-app` Worker additionally requires **Workers Routes: Write** and
 **Zone: Read**, restricted to the `blau.app` zone, for its `blau.app/*` route.
@@ -53,10 +53,10 @@ rejects inline scripts, inline styles, and event handlers before deployment.
 
 ## MADE mount and parent ownership
 
-`workers/web` deploys the internal `web-made` Worker. It has no Custom Domain,
+`workers/web` deploys the internal `blau-made` Worker. It has no Custom Domain,
 zone route, workers.dev endpoint, or preview URL. The independently deployed
 `blau-app` parent in [joeblau/blau](https://github.com/joeblau/blau) owns
-`blau.app` and binds `MADE` to `web-made` in the same Cloudflare account.
+`blau.app` and binds `MADE` to `blau-made` in the same Cloudflare account.
 Do not add a Worker in this repository that claims `blau.app`; that would
 overwrite the parent site.
 
@@ -81,19 +81,19 @@ bun run --cwd workers/web preview:worker
 
 In the parent repository, run `bun run build`, then
 `bun run preview -- --port 8787`. Wrangler connects to the local child on port
-8788 by its `web-made` name. Visit `http://localhost:8787/made` through the
+8788 by its `blau-made` name. Visit `http://localhost:8787/made` through the
 parent. Plain Next.js dev does not run the parent's Worker router.
 
 ### First deployment and migration
 
 1. Verify the child build and tests; deploy this repository's `web` job first.
-   It must create `web-made` in the same account used by the parent.
-2. Deploy the parent from `joeblau/blau`. Its Action checks for `web-made`
+   It must create `blau-made` in the same account used by the parent.
+2. Deploy the parent from `joeblau/blau`. Its Action checks for `blau-made`
    before deployment. Both repositories need their own Cloudflare credentials.
 3. Transfer the existing `blau.app` Custom Domain from legacy `blau-web` to
    `blau-app` as declared by the parent config. If Wrangler reports an existing
    owner, complete the transfer in Cloudflare and rerun the parent deployment.
-   Retain the parent's `blau.app/*` route. Do not assign this domain to `web-made`.
+   Retain the parent's `blau.app/*` route. Do not assign this domain to `blau-made`.
 4. Check the public endpoints above, plus `/made/favicon.svg`, `/made/og.jpg`,
    and a real `/made/_astro/` bundle. `/made-up` must return the parent 404;
    `/made/_astro/example.js` should return the child 404 if that file is absent.

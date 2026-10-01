@@ -10,4 +10,4 @@ await mkdir(assets, { recursive: true });
 await cp(dist, new URL('made/', assets), { recursive: true });
 // Cloudflare reads _headers at the asset root, with /made-prefixed patterns.
 await rename(new URL('made/_headers', assets), new URL('_headers', assets));
-console.log('Prepared web-made assets under /made');
+console.log('Prepared blau-made assets under /made');

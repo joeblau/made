@@ -10,9 +10,10 @@ set -euo pipefail
 # notarized release workflow and validate-chromium-archive.sh.
 
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DESTINATION="${BLAU_PILOT_INSTALL_PATH:-/Applications/made.app}"
+DESTINATION="${BLAU_PILOT_INSTALL_PATH:-/Applications/Cockpit.app}"
 SKIP_BUILD=0
 QUIT_RUNNING=0
+export BLAU_PILOT_DERIVED_DATA="${BLAU_PILOT_DERIVED_DATA:-$APPLE_ROOT/.build/cockpit}"
 
 fail() {
   printf 'Pilot Chromium install error: %s\n' "$*" >&2
@@ -22,10 +23,10 @@ fail() {
 usage() {
   printf '%s\n' \
     'Usage: install-pilot-chromium.sh [--skip-build] [--quit-running]' \
-    '                                 [--destination <made.app>]' \
+    '                                 [--destination <Cockpit.app>]' \
     '' \
     'Builds the Chromium configuration and installs it to a stable location.' \
-    'Destination defaults to /Applications/made.app and can also be set with' \
+    'Destination defaults to /Applications/Cockpit.app and can also be set with' \
     'BLAU_PILOT_INSTALL_PATH.' \
     '' \
     '--quit-running asks a copy already running from the destination to quit' \
@@ -107,22 +108,13 @@ if [[ "$SKIP_BUILD" -eq 0 ]]; then
       break
     done
   fi
-  "$APPLE_ROOT/bin/build-pilot-chromium.sh"
+  "$APPLE_ROOT/bin/build-pilot-chromium.sh" --local
 fi
 
-# Ask the build system where it actually put the product rather than guessing at
-# the DerivedData hash.
-BUILT_PRODUCTS_DIR="$(
-  xcodebuild -project "$APPLE_ROOT/made.xcodeproj" \
-    -scheme Pilot \
-    -configuration Chromium \
-    -destination 'platform=macOS' \
-    -showBuildSettings 2>/dev/null \
-    | awk -F' = ' '/ BUILT_PRODUCTS_DIR = /{print $2; exit}'
-)"
-[[ -n "$BUILT_PRODUCTS_DIR" ]] || fail "could not resolve BUILT_PRODUCTS_DIR"
-
-SOURCE_APP="$BUILT_PRODUCTS_DIR/made.app"
+# The local build uses an explicit DerivedData directory. Avoid a second Xcode
+# invocation (and package-graph evaluation) just to rediscover this path.
+BUILT_PRODUCTS_DIR="$BLAU_PILOT_DERIVED_DATA/Build/Products/Chromium"
+SOURCE_APP="$BUILT_PRODUCTS_DIR/Cockpit.app"
 [[ -d "$SOURCE_APP" ]] || fail "no built app at $SOURCE_APP (run without --skip-build)"
 
 # Refuse to install something that would not actually run Chromium: the whole
@@ -159,7 +151,12 @@ cleanup() {
 trap cleanup EXIT
 
 rm -rf "$staging"
-ditto "$SOURCE_APP" "$staging" || fail "copy to $staging failed"
+# APFS clones share unchanged blocks, including the large CEF binary. Fall back
+# to ditto for destinations on filesystems that do not support cloning.
+if ! cp -cRp "$SOURCE_APP" "$staging" 2>/dev/null; then
+  rm -rf "$staging"
+  ditto "$SOURCE_APP" "$staging" || fail "copy to $staging failed"
+fi
 # ditto preserves directory dates. macOS can then keep an old cached app
 # Info.plist, rejecting newly declared Bonjour services even after LSRegisterURL.
 # Refresh both bundle directories so an existing installation's metadata expires.

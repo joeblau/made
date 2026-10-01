@@ -7,9 +7,17 @@ struct WorkspaceGroup: Codable, Equatable, Identifiable {
     var isExpanded = true
 }
 
-enum WorkspaceSidebarItem: Codable, Hashable, Identifiable {
+enum WorkspaceSidebarItem: Codable, Hashable, Identifiable, Sendable {
     case workspace(UUID)
     case group(UUID)
+
+    var id: Self { self }
+}
+
+enum WorkspaceSidebarRowItem: Hashable, Identifiable, Sendable {
+    case workspace(UUID, groupID: UUID?)
+    case group(UUID)
+    case emptyGroup(UUID)
 
     var id: Self { self }
 }
@@ -57,6 +65,21 @@ final class WorkspaceGroups {
         }
     }
 
+    func visibleRows(workspaceIDs: [UUID]) -> [WorkspaceSidebarRowItem] {
+        let available = Set(workspaceIDs)
+        return items(workspaceIDs: workspaceIDs).flatMap { item -> [WorkspaceSidebarRowItem] in
+            switch item {
+            case .workspace(let id): return [.workspace(id, groupID: nil)]
+            case .group(let id):
+                guard let group = group(id) else { return [] }
+                guard group.isExpanded else { return [.group(id)] }
+                let members = group.workspaceIDs.filter { available.contains($0) }
+                return [.group(id)] + (members.isEmpty ? [.emptyGroup(id)]
+                    : members.map { .workspace($0, groupID: id) })
+            }
+        }
+    }
+
     func group(_ id: UUID) -> WorkspaceGroup? { groups.first { $0.id == id } }
 
     @discardableResult
@@ -89,6 +112,21 @@ final class WorkspaceGroups {
         save()
     }
 
+    func placeAtTopLevel(_ item: WorkspaceSidebarItem, before target: WorkspaceSidebarItem?, workspaceIDs: [UUID]) {
+        guard item != target else { return }
+        switch item {
+        case .workspace(let id):
+            guard workspaceIDs.contains(id) else { return }
+            for index in groups.indices { groups[index].workspaceIDs.removeAll { $0 == id } }
+        case .group(let id):
+            guard group(id) != nil else { return }
+        }
+        order = items(workspaceIDs: workspaceIDs).filter { $0 != item }
+        let destination = target.flatMap { order.firstIndex(of: $0) } ?? order.count
+        order.insert(item, at: destination)
+        save()
+    }
+
     func moveMembers(_ id: UUID, workspaceIDs: [UUID], fromOffsets: IndexSet, toOffset: Int) {
         guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
         let available = Set(workspaceIDs)
@@ -98,14 +136,24 @@ final class WorkspaceGroups {
         save()
     }
 
-    func place(_ workspaceID: UUID, in groupID: UUID?, workspaceIDs: [UUID], atTop: Bool = false) {
+    func place(
+        _ workspaceID: UUID, in groupID: UUID?, workspaceIDs: [UUID],
+        atTop: Bool = false, memberOffset: Int? = nil
+    ) {
         guard groupID == nil || groupID.flatMap(group) != nil else { return }
+        let members = groupID.flatMap(group)?.workspaceIDs.filter { workspaceIDs.contains($0) } ?? []
+        // Drop offsets refer to the visible list before removing the source.
+        let insertionIndex = memberOffset.map { offset in
+            members.prefix(max(0, offset)).filter { $0 != workspaceID }.count
+        }
         order = items(workspaceIDs: workspaceIDs).filter { $0 != .workspace(workspaceID) }
         for index in groups.indices {
             groups[index].workspaceIDs.removeAll { $0 == workspaceID }
         }
         if let index = groups.firstIndex(where: { $0.id == groupID }) {
-            groups[index].workspaceIDs.append(workspaceID)
+            groups[index].workspaceIDs = members.filter { $0 != workspaceID }
+            let destination = min(insertionIndex ?? groups[index].workspaceIDs.count, groups[index].workspaceIDs.count)
+            groups[index].workspaceIDs.insert(workspaceID, at: destination)
             groups[index].isExpanded = true
         } else {
             order.insert(.workspace(workspaceID), at: atTop ? 0 : order.count)

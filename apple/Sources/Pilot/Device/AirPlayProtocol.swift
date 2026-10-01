@@ -61,9 +61,9 @@ enum AirPlayDiscoveryFailure {
         let code = Int32(bitPattern: payload.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) })
         switch code {
         case -65570:
-            return "macOS blocked wireless discovery. Allow made in System Settings > Privacy & Security > Local Network, then try again."
+            return "macOS blocked wireless discovery. Allow Cockpit in System Settings > Privacy & Security > Local Network, then try again."
         case -65571, -65555:
-            return "macOS rejected made’s wireless service registration. Quit and reopen the latest made app, then try again. (Bonjour \(code))"
+            return "macOS rejected Cockpit’s wireless service registration. Quit and reopen the latest Cockpit app, then try again. (Bonjour \(code))"
         default:
             return "Wireless discovery could not start (Bonjour \(code)). Try again."
         }

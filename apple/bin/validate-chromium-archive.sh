@@ -31,20 +31,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ $# == 1 ]] ||
-  fail "usage: validate-chromium-archive.sh [--require-notarization] [--allow-ad-hoc] <made.app|xcarchive>"
+  fail "usage: validate-chromium-archive.sh [--require-notarization] [--allow-ad-hoc] <Cockpit.app|xcarchive>"
 [[ "$REQUIRE_NOTARIZATION" == 0 || "$ALLOW_AD_HOC" == 0 ]] ||
   fail "--require-notarization cannot be combined with --allow-ad-hoc"
 
 input="$1"
 if [[ "$input" == *.xcarchive ]]; then
-  APP="$input/Products/Applications/made.app"
+  APP="$input/Products/Applications/Cockpit.app"
 else
   APP="$input"
 fi
 [[ -d "$APP/Contents" ]] || fail "Pilot application was not found"
 
 # Installer launchd calls can hang indefinitely. Never ship a configuration
-# that runs Sparkle's installer launcher on made's main thread.
+# that runs Sparkle's installer launcher on Cockpit's main thread.
 [[ "$(plutil -extract SUEnableInstallerLauncherService raw \
   "$APP/Contents/Info.plist" 2>/dev/null)" == "true" ]] ||
   fail "Sparkle installer launcher must run in its XPC service"

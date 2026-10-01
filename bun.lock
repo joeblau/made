@@ -23,7 +23,7 @@
       },
     },
     "workers/web": {
-      "name": "web-made",
+      "name": "blau-made",
       "version": "0.0.1",
       "dependencies": {
         "@fontsource-variable/nunito": "5.3.0",
@@ -796,7 +796,7 @@
 
     "lru-cache": ["lru-cache@11.5.1", "", {}, "sha512-RPimw/7aMdv2oqRrxKwvZXcPfwBrn/JZ2xYcY9Hus/6LaS3VOAKVWKWgNLCFSiOm1ESXinjsDlidVU7JlnCN2A=="],
 
-    "web-made": ["web-made@workspace:workers/web"],
+    "blau-made": ["blau-made@workspace:workers/web"],
 
     "magic-string": ["magic-string@1.1.0", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.5" } }, "sha512-kS3VHe0nEPST2saQV4Rbkchcd3UBRkVTQHo1D3h/ZTwFDhai/mfKkmtPAtD129EOI7K3HlHIsFOt0WrI2/oU9g=="],
 

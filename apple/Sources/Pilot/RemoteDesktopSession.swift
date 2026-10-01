@@ -66,9 +66,12 @@ enum RemoteDesktopCredentialPolicy {
 @MainActor
 @Observable
 final class RemoteDesktopSession {
-    /// Bounds the entire TCP connection and authentication handshake, including
-    /// servers that accept a socket but never finish speaking RFB.
+    /// Bounds TCP connection and negotiation with an unresponsive RFB server.
     static let connectionTimeout: Duration = .seconds(20)
+    /// Apple Screen Sharing uses 4096-bit DH keys. RoyalVNCKit's unoptimized
+    /// crypto can take more than 20 seconds locally before sending credentials.
+    /// Give authentication its own bounded deadline once negotiation succeeds.
+    static let authenticationTimeout: Duration = .seconds(90)
 
     let connectionID: UUID
 
@@ -90,14 +93,20 @@ final class RemoteDesktopSession {
     @ObservationIgnored private var connectionTimeoutTask: Task<Void, Never>?
     @ObservationIgnored private var keyboardInput = RemoteDesktopKeyboardInput()
     private let timeout: Duration
+    private let authenticationTimeout: Duration
     /// Incremented per connect attempt. Late delegate callbacks from a torn-down
     /// attempt carry a stale token and are ignored, so a dying connection can't
     /// stamp `.failed` over a newer one.
     @ObservationIgnored private var attempt = 0
 
-    init(connectionID: UUID, timeout: Duration = RemoteDesktopSession.connectionTimeout) {
+    init(
+        connectionID: UUID,
+        timeout: Duration = RemoteDesktopSession.connectionTimeout,
+        authenticationTimeout: Duration = RemoteDesktopSession.authenticationTimeout
+    ) {
         self.connectionID = connectionID
         self.timeout = timeout
+        self.authenticationTimeout = authenticationTimeout
     }
 
     /// True while the socket is worth keeping — used by the idle sweep.
@@ -175,8 +184,23 @@ final class RemoteDesktopSession {
         backgroundedAt = nil
         status = .connecting
         framebufferGeneration += 1
+        startDeadline(timeout, message:
+            "The connection timed out. Check that the computer is awake, reachable, and has Screen Sharing enabled, then try again."
+        )
+        connection.connect()
+    }
+
+    fileprivate func beginAuthentication(attempt token: Int) -> Bool {
+        guard token == attempt, status == .connecting else { return false }
+        startDeadline(authenticationTimeout, message:
+            "Screen Sharing was reached, but authentication timed out. Try again."
+        )
+        return true
+    }
+
+    private func startDeadline(_ timeout: Duration, message: String) {
+        connectionTimeoutTask?.cancel()
         let token = attempt
-        let timeout = timeout
         connectionTimeoutTask = Task { @MainActor [weak self] in
             do {
                 try await Task.sleep(for: timeout)
@@ -184,11 +208,8 @@ final class RemoteDesktopSession {
                 return
             }
             guard let self, self.attempt == token, self.status == .connecting else { return }
-            self.teardown(resettingStatusTo: .failed(
-                "The connection timed out. Check that the computer is awake, reachable, and has Screen Sharing enabled, then try again."
-            ))
+            self.teardown(resettingStatusTo: .failed(message))
         }
-        connection.connect()
     }
 
     /// Drop the socket but keep the session object, so the tab stays and the
@@ -296,6 +317,17 @@ final class RemoteDesktopSession {
 /// not actor-isolated: this object absorbs the `@unchecked Sendable` compromise
 /// so the session itself stays a plain main-actor type.
 private final class StatusRelay: NSObject, VNCConnectionDelegate, @unchecked Sendable {
+    /// RoyalVNCKit's completion predates Sendable. Transfer this immutable reply
+    /// to the main actor and invoke it exactly once, after checking the attempt.
+    private struct CredentialReply: @unchecked Sendable {
+        let credential: VNCCredential?
+        let completion: (VNCCredential?) -> Void
+
+        func send(accepted: Bool) {
+            completion(accepted ? credential : nil)
+        }
+    }
+
     private weak var session: RemoteDesktopSession?
     private let attempt: Int
     private let username: String
@@ -357,7 +389,13 @@ private final class StatusRelay: NSObject, VNCConnectionDelegate, @unchecked Sen
         } else {
             credential = nil
         }
-        completion(credential)
+        // Arm the authentication deadline before resuming the library's key
+        // exchange. A callback from a cancelled attempt must not restart it.
+        let reply = CredentialReply(credential: credential, completion: completion)
+        Task { @MainActor [weak self] in
+            let accepted = self.map { $0.session?.beginAuthentication(attempt: $0.attempt) == true } ?? false
+            reply.send(accepted: accepted)
+        }
     }
 
     func connection(_ connection: VNCConnection, didCreateFramebuffer framebuffer: VNCFramebuffer) {

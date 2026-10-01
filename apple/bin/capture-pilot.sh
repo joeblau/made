@@ -110,17 +110,17 @@ xcodebuild \
   -derivedDataPath "$DERIVED" \
   build | tail -5
 
-APP_PATH="$(/usr/bin/find "$DERIVED/Build/Products" -name 'made.app' -maxdepth 3 | head -1)"
+APP_PATH="$(/usr/bin/find "$DERIVED/Build/Products" -name 'Cockpit.app' -maxdepth 3 | head -1)"
 if [ -z "$APP_PATH" ]; then
-  echo "ERROR: built made.app not found under $DERIVED" >&2
+  echo "ERROR: built Cockpit.app not found under $DERIVED" >&2
   exit 1
 fi
 echo "    App: $APP_PATH"
 
 echo "==> Launching Pilot in demo mode"
 # Launch the built executable directly so cleanup can terminate exactly the
-# process created by this script rather than every app named made.
-"$APP_PATH/Contents/MacOS/made" -demoMode YES >/dev/null 2>&1 &
+# process created by this script rather than every app named Cockpit.
+"$APP_PATH/Contents/MacOS/Cockpit" -demoMode YES >/dev/null 2>&1 &
 PILOT_PID=$!
 
 echo "==> Waiting ${CAPTURE_DELAY}s for the window to appear"
@@ -135,10 +135,10 @@ fi
 echo "==> Locating Pilot window"
 WINDOW_ID="$(osascript <<'OSA' 2>/dev/null || true
 tell application "System Events"
-  set procs to (every process whose name is "made")
+  set procs to (every process whose name is "Cockpit")
   if (count of procs) is 0 then return ""
 end tell
-tell application "made" to activate
+tell application "Cockpit" to activate
 OSA
 )"
 
@@ -153,7 +153,7 @@ wins = Quartz.CGWindowListCopyWindowInfo(
     Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
     Quartz.kCGNullWindowID)
 for w in wins:
-    if w.get('kCGWindowOwnerName') == 'made' and w.get('kCGWindowLayer', 0) == 0:
+    if w.get('kCGWindowOwnerName') == 'Cockpit' and w.get('kCGWindowLayer', 0) == 0:
         print(w.get('kCGWindowNumber'))
         break
 PY

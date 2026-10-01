@@ -81,6 +81,60 @@ struct WorkspaceGroupsTests {
         }
     }
 
+    @Test("Drops insert at the visible member position and expand collapsed groups")
+    func dropInsertion() throws {
+        try withGroups { groups, defaults in
+            let ids = [UUID(), UUID(), UUID()]
+            let group = groups.add(name: "Project", workspaceIDs: ids)
+            groups.place(ids[0], in: group, workspaceIDs: ids)
+            groups.place(ids[2], in: group, workspaceIDs: ids)
+            groups.setExpanded(group, false)
+
+            groups.place(ids[1], in: group, workspaceIDs: ids, memberOffset: 1)
+
+            #expect(groups.group(group)?.workspaceIDs == ids)
+            #expect(groups.group(group)?.isExpanded == true)
+            #expect(groups.items(workspaceIDs: ids) == [.group(group)])
+            #expect(WorkspaceGroups(defaults: defaults).group(group)?.workspaceIDs == ids)
+        }
+    }
+
+    @Test("Member drops use offsets from before removal and ignore unavailable members")
+    func memberDropOffsets() throws {
+        try withGroups { groups, _ in
+            let ids = [UUID(), UUID(), UUID()]
+            let group = groups.add(name: "Project", workspaceIDs: ids)
+            for id in ids { groups.place(id, in: group, workspaceIDs: ids) }
+
+            groups.place(ids[0], in: group, workspaceIDs: ids, memberOffset: 3)
+            #expect(groups.group(group)?.workspaceIDs == [ids[1], ids[2], ids[0]])
+            groups.place(ids[0], in: group, workspaceIDs: ids, memberOffset: 0)
+            #expect(groups.group(group)?.workspaceIDs == ids)
+
+            let visible = [ids[0], ids[2]]
+            groups.place(ids[0], in: group, workspaceIDs: visible, memberOffset: 2)
+            #expect(groups.group(group)?.workspaceIDs == [ids[2], ids[0]])
+        }
+    }
+
+    @Test("Visible rows keep members draggable and only hide them when their group is collapsed")
+    func visibleRows() throws {
+        try withGroups { groups, _ in
+            let ids = [UUID(), UUID()]
+            let group = groups.add(name: "Project", workspaceIDs: ids)
+            #expect(groups.visibleRows(workspaceIDs: ids) == [
+                .workspace(ids[0], groupID: nil), .workspace(ids[1], groupID: nil), .group(group), .emptyGroup(group),
+            ])
+            groups.place(ids[0], in: group, workspaceIDs: ids)
+            #expect(groups.visibleRows(workspaceIDs: ids) == [
+                .workspace(ids[1], groupID: nil), .group(group), .workspace(ids[0], groupID: group),
+            ])
+            groups.setExpanded(group, false)
+            #expect(groups.visibleRows(workspaceIDs: ids) == [.workspace(ids[1], groupID: nil), .group(group)])
+            #expect(groups.group(group)?.workspaceIDs == [ids[0]])
+        }
+    }
+
     private func withGroups(_ body: (WorkspaceGroups, UserDefaults) throws -> Void) throws {
         let suite = "WorkspaceGroupsTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

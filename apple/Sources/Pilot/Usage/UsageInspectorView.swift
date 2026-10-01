@@ -168,7 +168,7 @@ private struct ProviderCard: View {
         switch state {
         case .disabled:
             VStack(alignment: .leading, spacing: 8) {
-                Text("Allow made to read this CLI's credentials and request plan usage.")
+                Text("Allow Cockpit to read this CLI's credentials and request plan usage.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

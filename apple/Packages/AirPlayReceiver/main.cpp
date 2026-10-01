@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Standalone adapter for UxPlay's libairplay. Never link this into made.
+// Standalone adapter for UxPlay's libairplay. Never link this into Cockpit.
 #include "raop.h"
 #include <arpa/inet.h>
 #include <atomic>

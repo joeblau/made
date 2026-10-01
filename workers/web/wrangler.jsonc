@@ -2,7 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   // Astro emits /made URLs; the build stages files under .worker-assets/made
   // so the asset server handles the unchanged incoming URL, including redirects.
-  "name": "web-made",
+  "name": "blau-made",
   "compatibility_date": "2026-06-02",
   "workers_dev": false,
   "preview_urls": false,

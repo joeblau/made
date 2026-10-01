@@ -31,7 +31,7 @@ The URLs are versioned HTTPS assets. Floating branches, `latest` aliases, and
 unverified mirrors are not accepted.
 
 The app assembly copies the artifact's exact `LICENSE.txt` and `CREDITS.html`
-to `made.app/Contents/Resources/Chromium/CEF`. Archive validation rejects a
+to `Cockpit.app/Contents/Resources/Chromium/CEF`. Archive validation rejects a
 missing or modified legal-notice copy.
 
 ## Validate without downloading
@@ -120,9 +120,12 @@ It selects an installed Xcode 26 when `xcode-select` points elsewhere, refuses
 to install a bundle without the embedded framework, helper bundles, or a valid
 signature, and swaps the destination atomically so an interrupted copy cannot
 replace a working app with a partial one. The destination defaults to
-`/Applications/made.app` and is overridable with `--destination` or
-`BLAU_PILOT_INSTALL_PATH`. Pass `--skip-build` to install the current build as
-is, or `--quit-running` to ask a copy already running from the destination to
+`/Applications/Cockpit.app` and is overridable with `--destination` or
+`BLAU_PILOT_INSTALL_PATH`. Local installation uses host-only, incremental
+development builds cached in `apple/.build/cockpit` (override with
+`BLAU_PILOT_DERIVED_DATA`), and reuses the runtime after verifying its receipt
+and hashes. Pass `--skip-build` to install that cached local build as is,
+or `--quit-running` to ask a copy already running from the destination to
 quit and wait up to 30 seconds for it, rather than refusing the install. The
 quit is a request, never a forced kill, so the running app keeps ownership of
 its unsaved editor and SwiftData state; `bun cockpit` passes the flag. This
@@ -213,7 +216,7 @@ After notarization and stapling, require Gatekeeper and stapler validation:
 ```sh
 apple/bin/validate-chromium-archive.sh \
   --require-notarization \
-  path/to/made.app
+  path/to/Cockpit.app
 ```
 
 Nested code is signed inside-out: framework Mach-O files and dylibs, the

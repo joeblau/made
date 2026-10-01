@@ -199,7 +199,7 @@ def check(app, *, use_loopback=False):
         if directory.stat().st_mtime_ns < max(helper.stat().st_mtime_ns,
                                             (contents / "Info.plist").stat().st_mtime_ns):
             raise RuntimeError("Bundle dates are stale; macOS may cache obsolete Bonjour declarations")
-    name = "made-Check-" + uuid.uuid4().hex[:8]
+    name = "Cockpit-Check-" + uuid.uuid4().hex[:8]
     with tempfile.TemporaryDirectory(prefix="cockpit-airplay-check-") as directory, contextlib.ExitStack() as stack:
         key = Path(directory) / "pairing.pem"
         process = subprocess.Popen([str(helper), "--receive", name, str(key)],
@@ -251,7 +251,7 @@ def check(app, *, use_loopback=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("app", type=Path, nargs="?", default=Path("/Applications/made.app"))
+    parser.add_argument("app", type=Path, nargs="?", default=Path("/Applications/Cockpit.app"))
     parser.add_argument("--loopback", action="store_true",
                         help="Test PIN/SRP over the local listener without multicast discovery")
     options = parser.parse_args()

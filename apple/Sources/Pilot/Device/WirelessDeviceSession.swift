@@ -12,7 +12,7 @@ final class WirelessDeviceSession {
 
     init(paneID: UUID) {
         // Unique Bonjour name for simultaneous Device panes, under 63 UTF-8 bytes.
-        receiverName = "made \(paneID.uuidString.prefix(4))"
+        receiverName = "Cockpit \(paneID.uuidString.prefix(4))"
     }
 
     func start() {
@@ -20,7 +20,7 @@ final class WirelessDeviceSession {
         isEnabled = true
         guard let executable = Bundle.main.url(forAuxiliaryExecutable: "CockpitAirPlayReceiver"),
               FileManager.default.isExecutableFile(atPath: executable.path) else {
-            status = .failed("This build is missing the wireless receiver. Rebuild or update made.")
+            status = .failed("This build is missing the wireless receiver. Rebuild or update Cockpit.")
             return
         }
         let renderer = AirPlayVideoRenderer()

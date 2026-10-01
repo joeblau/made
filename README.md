@@ -4,12 +4,12 @@
 development environment: four companion apps, a public website, and an optional
 rendezvous relay.
 
-- **made** (macOS, internal target `Pilot`) combines terminals, editing, browser previews, GitHub work,
+- **Cockpit** (macOS, internal target `Pilot`) combines terminals, editing, browser previews, GitHub work,
   device capture, simulators, remote screens, and local container control (see
   [the Docker section](docs/docker-section.md)).
 - **Walkie** (iOS, internal target `Copilot`) supplies a trackpad, voice transcription, settings, and
   secure peer messaging.
-- **Kneeboard** (iPadOS, internal target `Plotter`) mirrors a made window with low-latency HEVC and sends
+- **Kneeboard** (iPadOS, internal target `Plotter`) mirrors a Cockpit window with low-latency HEVC and sends
   normalized PencilKit annotations. It supports rotation, Split View, and
   Stage Manager; see [the display policy](docs/plotter-display-policy.md).
 - **Trigger** (watchOS, internal target `Wingman`) sends live, short-lived terminal control gestures
@@ -26,10 +26,10 @@ and [secure messaging](docs/p2p-secure-messaging.md).
 
 ## Project identity
 
-The project and macOS app are published as **made** — **Multimodal Agentic
+The project is published as **made** — **Multimodal Agentic
 Development Environment** — from [joeblau/made](https://github.com/joeblau/made).
-The macOS bundle is `made.app`, and `bun made` builds and installs it.
-`bun cockpit` remains a compatibility alias.
+The main macOS app is **Cockpit**, packaged as `Cockpit.app`.
+`bun cockpit` builds and installs it; `bun made` remains a compatibility alias.
 
 The internal Apple target names, `app.blau.*` bundle identifiers, stored-data
 keys, and peer protocol identifiers remain stable for existing installations.
@@ -110,7 +110,7 @@ at the narrowest declaration and explain why; do not grow the baseline.
 
 ```bash
 # Build, install, and launch the desktop, phone, and tablet apps
-bun made
+bun cockpit
 bun walkie
 bun kneeboard
 
@@ -127,6 +127,16 @@ fastlane snapshotAll
 ./bin/capture-pilot.sh
 ./bin/capture-wingman.sh
 ```
+
+`bun cockpit` uses a persistent `apple/.build/cockpit` cache, builds only the
+host architecture, and uses unoptimized, incremental Swift compilation for
+fast local iteration. It verifies and reuses the pinned Chromium runtime,
+caches Xcode project generation, and clones the installed app on APFS. The first
+build populates the cache; later builds reuse it. Set `BLAU_PILOT_DERIVED_DATA`
+to relocate it. `install-pilot-chromium.sh --skip-build` installs that local
+product. The standalone `apple/bin/build-pilot-chromium.sh` command retains
+optimized universal build settings; add `--local` for the development settings.
+Release archives retain their timestamped signing policy.
 
 `bun walkie` selects an available physical iPhone, and `bun kneeboard` selects
 an available physical iPad. Connect and unlock the device, enable Developer
@@ -163,7 +173,7 @@ developer account, not checked-in certificates.
 
 ## Security
 
-made Notes is a local plaintext scratchpad. Its value masking is only a visual
+Cockpit Notes is a local plaintext scratchpad. Its value masking is only a visual
 shoulder-surfing aid; it is not encryption or a password manager.
 
 Please report vulnerabilities privately using the process in
@@ -180,4 +190,4 @@ source line references to [TODOS.md](TODOS.md).
 
 ## Optional Chromium browser
 
-made's Chromium-backed browser panel is opt-in; clean Debug and Release builds continue to use WebKit without downloading CEF. Validate the immutable artifact lock with `bash apple/bin/package-chromiumkit.sh manifest`, then follow the [Chromium browser guide](docs/chromium-browser.md) and [ChromiumKit setup](apple/Packages/ChromiumKit/README.md) to install, build, run `apple/bin/test-chromium-runtime.sh`, sign, and validate the Chromium configuration.
+Cockpit's Chromium-backed browser panel is opt-in; clean Debug and Release builds continue to use WebKit without downloading CEF. Validate the immutable artifact lock with `bash apple/bin/package-chromiumkit.sh manifest`, then follow the [Chromium browser guide](docs/chromium-browser.md) and [ChromiumKit setup](apple/Packages/ChromiumKit/README.md) to install, build, run `apple/bin/test-chromium-runtime.sh`, sign, and validate the Chromium configuration.

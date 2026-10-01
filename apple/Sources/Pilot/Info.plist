@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>made</string>
+	<string>Cockpit</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>CFBundleName</key>
-	<string>made</string>
+	<string>Cockpit</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -22,8 +22,8 @@
 	<string>PilotApplication</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
-	<!-- Isolate installer launchd calls from made's main thread. This is
-	     intentional even though made is not sandboxed: SMJobRemove can
+	<!-- Isolate installer launchd calls from Cockpit's main thread. This is
+	     intentional even though Cockpit is not sandboxed: SMJobRemove can
 	     wait indefinitely inside Sparkle's in-process installer launcher. -->
 	<key>SUEnableInstallerLauncherService</key>
 	<true/>
@@ -40,11 +40,11 @@
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>made listens for push-to-talk dictation from the Walkie app.</string>
+	<string>Cockpit listens for push-to-talk dictation from the Walkie app.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>made accesses an attached iPhone camera feed so its Device pane can preview, capture, and record the device screen.</string>
+	<string>Cockpit accesses an attached iPhone camera feed so its Device pane can preview, capture, and record the device screen.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>made receives wireless iPhone and iPad screen sharing, connects to Walkie and Kneeboard, and discovers Macs over the local network.</string>
+	<string>Cockpit receives wireless iPhone and iPad screen sharing, connects to Walkie and Kneeboard, and discovers Macs over the local network.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_blau-frames._tcp</string>
@@ -63,7 +63,17 @@
 				<string>public.data</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>made Workspace Pane</string>
+			<string>Cockpit Workspace</string>
+			<key>UTTypeIdentifier</key>
+			<string>app.blau.pilot.workspace</string>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Cockpit Workspace Pane</string>
 			<key>UTTypeIdentifier</key>
 			<string>app.blau.pilot.pane</string>
 		</dict>
@@ -73,7 +83,7 @@
 				<string>public.data</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>made Note Tab</string>
+			<string>Cockpit Note Tab</string>
 			<key>UTTypeIdentifier</key>
 			<string>app.blau.pilot.note-tab</string>
 		</dict>
