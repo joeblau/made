@@ -302,65 +302,23 @@ final class AndroidScreenStream: @unchecked Sendable {
     private func makeSampleBuffer(data: Data, isIDR: Bool, format: CMVideoFormatDescription) -> CMSampleBuffer? {
         guard let epoch else { return nil }
 
-        var blockBuffer: CMBlockBuffer?
-        let blockStatus = CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault,
-            memoryBlock: nil,
-            blockLength: data.count,
-            blockAllocator: kCFAllocatorDefault,
-            customBlockSource: nil,
-            offsetToData: 0,
-            dataLength: data.count,
-            flags: 0,
-            blockBufferOut: &blockBuffer
-        )
-        guard blockStatus == kCMBlockBufferNoErr, let blockBuffer else { return nil }
-
-        let copyStatus = data.withUnsafeBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.baseAddress else { return kCMBlockBufferNoErr }
-            return CMBlockBufferReplaceDataBytes(
-                with: baseAddress,
-                blockBuffer: blockBuffer,
-                offsetIntoDestination: 0,
-                dataLength: data.count
-            )
-        }
-        guard copyStatus == kCMBlockBufferNoErr else { return nil }
-
         // PTS = host arrival time against the per-connection epoch: monotonic
         // across restarts (recorder continuity), and screenrecord emits no
         // B-frames so decode order == display order.
         let elapsed = epoch.duration(to: .now)
         let nanoseconds = elapsed.components.seconds * 1_000_000_000
             + elapsed.components.attoseconds / 1_000_000_000
-        var timing = CMSampleTimingInfo(
+        let timing = CMSampleTimingInfo(
             duration: .invalid,
             presentationTimeStamp: CMTime(value: nanoseconds, timescale: 1_000_000_000),
             decodeTimeStamp: .invalid
         )
-        var sampleSize = data.count
-        var sampleBuffer: CMSampleBuffer?
-        let sampleStatus = CMSampleBufferCreateReady(
-            allocator: kCFAllocatorDefault,
-            dataBuffer: blockBuffer,
-            formatDescription: format,
-            sampleCount: 1,
-            sampleTimingEntryCount: 1,
-            sampleTimingArray: &timing,
-            sampleSizeEntryCount: 1,
-            sampleSizeArray: &sampleSize,
-            sampleBufferOut: &sampleBuffer
+        return try? EncodedVideoSample.make(
+            payload: data,
+            format: format,
+            timing: timing,
+            attachments: .displayImmediately(isSync: isIDR)
         )
-        guard sampleStatus == noErr, let sampleBuffer else { return nil }
-
-        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true)
-            as? [NSMutableDictionary], let first = attachments.first {
-            first[kCMSampleAttachmentKey_DisplayImmediately as NSString] = true
-            if !isIDR {
-                first[kCMSampleAttachmentKey_NotSync as NSString] = true
-            }
-        }
-        return sampleBuffer
     }
 
     private static func makeFormatDescription(sps: Data, pps: Data) -> CMVideoFormatDescription? {

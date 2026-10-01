@@ -255,4 +255,233 @@ struct H264AnnexBAssemblerTests {
         let accessUnits = events.filter { if case .accessUnit = $0 { true } else { false } }
         #expect(accessUnits.count == 1)
     }
+
+    // MARK: - Incremental scan parity (#265)
+
+    /// A stream that exercises every event path: leading garbage, 3- and
+    /// 4-byte start codes, trailing zero bytes, dropped non-VCL units, a
+    /// zero-length NALU, multi-slice IDR and P frames, an SPS change, and an
+    /// unterminated final slice that only EOF completes.
+    private var richStream: Data {
+        var data = Data([0xAB, 0x00, 0x00, 0x02, 0x00])
+        let units: [(code: Data, nalu: Data)] = [
+            (startCode4, sps), (startCode3, pps), (startCode4, Data([0x09, 0x10])),
+            (startCode3, Data([0x06, 0x05, 0x01, 0x00])),
+            (startCode4, Data([0x65, 0xB8, 0x00, 0x00, 0x02])), (startCode3, Data([0x65, 0x24, 0x00])),
+            (startCode4, Data()), (startCode4, pSlice), (startCode3, Data([0x41, 0x24, 0x00, 0x00])),
+            (startCode4, Data([0x67, 0x42, 0xC0, 0x33, 0x8D])), (startCode4, pps), (startCode4, idrSlice),
+            (startCode3, pSlice),
+        ]
+        for unit in units {
+            data.append(unit.code)
+            data.append(unit.nalu)
+        }
+        return data
+    }
+
+    @Test
+    func matchesReferenceParserForEveryTwoChunkSplit() {
+        let stream = richStream
+        for split in 0...stream.count {
+            let chunks = [stream.prefix(split), stream.suffix(from: split)].map { Data($0) }
+            let actual = Self.run(H264AnnexBAssembler.self, chunks: chunks)
+            let expected = Self.run(ReferenceH264AnnexBAssembler.self, chunks: chunks)
+            #expect(actual == expected, "split at \(split)")
+        }
+    }
+
+    @Test
+    func matchesReferenceParserForOneByteFeeds() {
+        let chunks = richStream.map { Data([$0]) }
+        let actual = Self.run(H264AnnexBAssembler.self, chunks: chunks)
+        #expect(actual == Self.run(ReferenceH264AnnexBAssembler.self, chunks: chunks))
+        // Sanity: the stream really produces parameter-set changes and IDR flags.
+        let events = actual.flatMap { step -> [H264AnnexBAssembler.Event] in
+            if case .events(let events) = step { return events }
+            return []
+        }
+        #expect(events.filter { if case .parameterSets = $0 { true } else { false } }.count == 2)
+        #expect(events.contains { if case .accessUnit(_, true) = $0 { true } else { false } })
+    }
+
+    @Test
+    func matchesReferenceParserForRandomStreamsAndChunkings() {
+        var random = SplitMix64(seed: 0x265)
+        for iteration in 0..<300 {
+            let stream = Self.randomStream(using: &random)
+            let chunks = Self.randomChunks(of: stream, using: &random)
+            let actual = Self.run(H264AnnexBAssembler.self, chunks: chunks)
+            let expected = Self.run(ReferenceH264AnnexBAssembler.self, chunks: chunks)
+            #expect(actual == expected, "iteration \(iteration)")
+        }
+    }
+
+    @Test
+    func matchesReferenceParserOnBoundsViolations() {
+        let maxNALU = H264AnnexBAssembler.maxNALUSize
+        var oversizedNALU = Data([0, 0, 0, 1, 0x65])
+        oversizedNALU.append(Data(repeating: 0x42, count: maxNALU + 8))
+        var oversizedParameterSet = Data([0, 0, 0, 1, 0x67])
+        oversizedParameterSet.append(Data(repeating: 0x11, count: H264AnnexBAssembler.maxParameterSetSize + 8))
+        oversizedParameterSet.append(Data([0, 0, 0, 1, 0x68, 0xCE]))
+        // Leading garbage whose start code arrives one byte past the limit.
+        var lateStartCode = Data(repeating: 0xAB, count: H264AnnexBAssembler.maxLeadingGarbage + 1)
+        lateStartCode.append(stream([sps, pps, idrSlice]))
+        // A NALU exactly at the limit is accepted; one byte more is not.
+        var limitNALU = Data([0, 0, 0, 1, 0x65, 0x80])
+        limitNALU.append(Data(repeating: 0x42, count: maxNALU - 2))
+
+        let cases: [(Data, Int)] = [
+            (Data(repeating: 0xAB, count: H264AnnexBAssembler.maxLeadingGarbage + 1), 4_096),
+            (lateStartCode, 1_000),
+            (oversizedNALU, 256 * 1_024),
+            (oversizedParameterSet, 7),
+            (limitNALU, 512 * 1_024),
+            (limitNALU + Data([0x42]), 512 * 1_024),
+            (Data(repeating: 0x42, count: H264AnnexBAssembler.maxBufferSize + 1), H264AnnexBAssembler.maxBufferSize + 1),
+        ]
+        for (index, (input, chunkSize)) in cases.enumerated() {
+            let chunks = stride(from: 0, to: input.count, by: chunkSize).map {
+                input.subdata(in: $0..<min($0 + chunkSize, input.count))
+            }
+            let actual = Self.run(H264AnnexBAssembler.self, chunks: chunks)
+            let expected = Self.run(ReferenceH264AnnexBAssembler.self, chunks: chunks)
+            #expect(actual == expected, "case \(index)")
+            let failed = actual.contains { step in
+                if case .failed = step { return true }
+                return false
+            }
+            #expect(failed == (index != 4), "case \(index)")
+        }
+    }
+
+    #if DEBUG
+    @Test
+    func scansFragmentedInputApproximatelyOnce() throws {
+        // One 256 KiB NALU delivered in 1 KiB reads, each read ending in the
+        // first bytes of a would-be start code so the scanner must hold back
+        // its overlap at every boundary.
+        var assembler = H264AnnexBAssembler()
+        // Payload byte i sits at stream offset i + 4, so each `00 00` lands on
+        // the last two bytes of a 1 KiB read and its `03` opens the next.
+        var payload = Data([0x65, 0x80])
+        payload.append(Data(repeating: 0x55, count: 1_016))
+        payload.append(contentsOf: [0x00, 0x00, 0x03])
+        for _ in 0..<255 {
+            payload.append(Data(repeating: 0x55, count: 1_021))
+            payload.append(contentsOf: [0x00, 0x00, 0x03])
+        }
+        let stream = startCode4 + payload + startCode4 + pSlice
+        var events: [H264AnnexBAssembler.Event] = []
+        var feeds = 0
+        for offset in stride(from: 0, to: stream.count, by: 1_024) {
+            events += try assembler.feed(stream.subdata(in: offset..<min(offset + 1_024, stream.count)))
+            feeds += 1
+        }
+        events += try assembler.flushTrailing()
+
+        #expect(assembler.scannedPositionCount <= stream.count + 3 * feeds)
+        let accessUnits = events.compactMap { event -> Data? in
+            if case .accessUnit(let data, _) = event { return data }
+            return nil
+        }
+        #expect(accessUnits.count == 2)
+        #expect(accessUnits.first?.dropFirst(4) == payload)
+    }
+    #endif
+
+    // MARK: - Parity helpers
+
+    private enum Step: Equatable {
+        case events([H264AnnexBAssembler.Event])
+        case failed(H264AnnexBAssembler.ParseError?)
+    }
+
+    /// Feed every chunk, then flush at EOF, recording each call's outcome. A
+    /// throw poisons the stream, so recording stops at the first failure.
+    private static func run<Parser: AnnexBParsing>(_: Parser.Type, chunks: [Data]) -> [Step] {
+        var parser = Parser()
+        var steps: [Step] = []
+        for chunk in chunks {
+            do {
+                steps.append(.events(try parser.feed(chunk)))
+            } catch {
+                steps.append(.failed(error as? H264AnnexBAssembler.ParseError))
+                return steps
+            }
+        }
+        do {
+            steps.append(.events(try parser.flushTrailing()))
+        } catch {
+            steps.append(.failed(error as? H264AnnexBAssembler.ParseError))
+        }
+        return steps
+    }
+
+    /// Random NALU sequences biased toward 0x00/0x01 payload bytes so start
+    /// codes, near-misses, and trailing zeros land everywhere.
+    private static func randomStream(using random: inout SplitMix64) -> Data {
+        let headers: [UInt8] = [0x67, 0x68, 0x65, 0x41, 0x01, 0x06, 0x09, 0x0C]
+        var data = Data()
+        if Bool.random(using: &random) {
+            data.append(randomBytes(count: Int.random(in: 0...12, using: &random), using: &random))
+        }
+        for _ in 0..<Int.random(in: 1...24, using: &random) {
+            data.append(Bool.random(using: &random) ? Data([0, 0, 0, 1]) : Data([0, 0, 1]))
+            guard Int.random(in: 0..<12, using: &random) != 0 else { continue }  // zero-length NALU
+            data.append(headers.randomElement(using: &random)!)
+            data.append(randomBytes(count: Int.random(in: 0...40, using: &random), using: &random))
+            if Int.random(in: 0..<4, using: &random) == 0 {
+                data.append(Data(repeating: 0, count: Int.random(in: 1...3, using: &random)))
+            }
+        }
+        return data
+    }
+
+    private static func randomBytes(count: Int, using random: inout SplitMix64) -> Data {
+        Data((0..<count).map { _ -> UInt8 in
+            switch Int.random(in: 0..<10, using: &random) {
+            case 0..<4: 0x00
+            case 4: 0x01
+            case 5: 0x80
+            default: UInt8.random(in: 0...255, using: &random)
+            }
+        })
+    }
+
+    private static func randomChunks(of stream: Data, using random: inout SplitMix64) -> [Data] {
+        let maxChunk = [1, 3, 8, 64, 4_096].randomElement(using: &random)!
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < stream.count {
+            let size = Int.random(in: 1...maxChunk, using: &random)
+            chunks.append(stream.subdata(in: offset..<min(offset + size, stream.count)))
+            offset += size
+        }
+        return chunks
+    }
+}
+
+private protocol AnnexBParsing {
+    init()
+    mutating func feed(_ chunk: Data) throws -> [H264AnnexBAssembler.Event]
+    mutating func flushTrailing() throws -> [H264AnnexBAssembler.Event]
+}
+
+extension H264AnnexBAssembler: AnnexBParsing {}
+extension ReferenceH264AnnexBAssembler: AnnexBParsing {}
+
+/// Deterministic generator so parity failures reproduce from the seed.
+private struct SplitMix64: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) { state = seed }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var value = state
+        value = (value ^ (value >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        value = (value ^ (value >> 27)) &* 0x94D0_49BB_1331_11EB
+        return value ^ (value >> 31)
+    }
 }

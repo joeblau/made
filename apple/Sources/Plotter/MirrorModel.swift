@@ -428,53 +428,21 @@ private final class HEVCMirrorRenderer {
     private func makeSampleBuffer(from sample: FrameLink.VideoSample) -> CMSampleBuffer? {
         guard let formatDescription else { return nil }
 
-        var blockBuffer: CMBlockBuffer?
-        let blockStatus = CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault,
-            memoryBlock: nil,
-            blockLength: sample.data.count,
-            blockAllocator: kCFAllocatorDefault,
-            customBlockSource: nil,
-            offsetToData: 0,
-            dataLength: sample.data.count,
-            flags: 0,
-            blockBufferOut: &blockBuffer
-        )
-        guard blockStatus == kCMBlockBufferNoErr, let blockBuffer else { return nil }
-
-        let copyStatus = sample.data.withUnsafeBytes { rawBuffer in
-            guard let baseAddress = rawBuffer.baseAddress else { return kCMBlockBufferNoErr }
-            return CMBlockBufferReplaceDataBytes(
-                with: baseAddress,
-                blockBuffer: blockBuffer,
-                offsetIntoDestination: 0,
-                dataLength: sample.data.count
-            )
-        }
-        guard copyStatus == kCMBlockBufferNoErr else { return nil }
-
-        var timing = CMSampleTimingInfo(
+        // HEVC timing is the decoded-sample index at a nominal 60 fps; the
+        // index advances only when a sample is actually built.
+        let timing = CMSampleTimingInfo(
             duration: CMTime(value: 1, timescale: 60),
             presentationTimeStamp: CMTime(value: sampleIndex, timescale: 60),
             decodeTimeStamp: .invalid
         )
-        var sampleSize = sample.data.count
-        var sampleBuffer: CMSampleBuffer?
-        let sampleStatus = CMSampleBufferCreateReady(
-            allocator: kCFAllocatorDefault,
-            dataBuffer: blockBuffer,
-            formatDescription: formatDescription,
-            sampleCount: 1,
-            sampleTimingEntryCount: 1,
-            sampleTimingArray: &timing,
-            sampleSizeEntryCount: 1,
-            sampleSizeArray: &sampleSize,
-            sampleBufferOut: &sampleBuffer
-        )
-        guard sampleStatus == noErr, let sampleBuffer else { return nil }
+        guard let sampleBuffer = try? EncodedVideoSample.make(
+            payload: sample.data,
+            format: formatDescription,
+            timing: timing,
+            attachments: .displayImmediately(isSync: sample.isKeyFrame)
+        ) else { return nil }
 
         sampleIndex += 1
-        Self.setDisplayImmediatelyAttachment(on: sampleBuffer, isKeyFrame: sample.isKeyFrame)
         return sampleBuffer
     }
 
@@ -504,31 +472,6 @@ private final class HEVCMirrorRenderer {
                     return status == noErr ? formatDescription : nil
                 }
             }
-        }
-    }
-
-    private static func setDisplayImmediatelyAttachment(on sampleBuffer: CMSampleBuffer, isKeyFrame: Bool) {
-        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(
-            sampleBuffer,
-            createIfNecessary: true
-        ) else { return }
-
-        let attachment = unsafeBitCast(
-            CFArrayGetValueAtIndex(attachments, 0),
-            to: CFMutableDictionary.self
-        )
-        CFDictionarySetValue(
-            attachment,
-            Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
-            Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
-        )
-
-        if !isKeyFrame {
-            CFDictionarySetValue(
-                attachment,
-                Unmanaged.passUnretained(kCMSampleAttachmentKey_NotSync).toOpaque(),
-                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
-            )
         }
     }
 }
