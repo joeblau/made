@@ -201,6 +201,9 @@ enum EditorLoadOutcome: Equatable, Sendable {
     case tooLarge
     case binary
     case failed(String)
+    /// The buffer kept changing while the outgoing save and the read ran, so
+    /// the switch gave up rather than replace unsaved edits.
+    case blockedByEdits
     /// A newer open request or `close()` replaced this one; nothing was published.
     case superseded
 
@@ -213,11 +216,14 @@ enum EditorLoadOutcome: Equatable, Sendable {
 /// Ownership and ordering:
 /// - Every open takes a new generation; a read that finishes after a newer open
 ///   or `close()` is discarded, so completion order never decides the selection.
-/// - Saves are serialized through `saveTask` and run to completion even when
-///   the pane closes. Each snapshots `revision`, and success marks only that
-///   revision clean, so edits made while a write is in flight stay dirty.
-/// - An open that would replace a dirty buffer awaits its save first and is
-///   blocked (keeping the buffer) when that save does not succeed.
+/// - Saves are serialized through `saveTask` and hold the session strongly, so
+///   a queued flush still runs after the pane releases it. Each snapshots
+///   `revision`, and success marks only that revision clean, so edits made
+///   while a write is in flight stay dirty.
+/// - An open that would replace a dirty buffer saves it first and is blocked
+///   (keeping the buffer) when that save does not succeed. The buffer is only
+///   replaced after a check, with no suspension before the replacement, that
+///   nothing was typed during the save or the read.
 @MainActor
 @Observable
 final class EditorDocumentSession {
@@ -299,8 +305,9 @@ final class EditorDocumentSession {
         requestOpen(url, discardingChanges: true, completion: completion)
     }
 
-    /// Invalidate pending opens and flush a dirty buffer. The flush runs to
-    /// completion; nothing that was loading is published afterwards.
+    /// Invalidate pending opens and flush a dirty buffer. The flush keeps the
+    /// session alive until it finishes, even if the caller drops it right away;
+    /// nothing that was loading is published afterwards.
     func close() {
         _ = beginLoad()
         loadTask = nil
@@ -313,32 +320,56 @@ final class EditorDocumentSession {
         return loadGeneration
     }
 
+    /// How many times an open re-saves and re-reads because the buffer changed
+    /// underneath it before it gives up with `.blockedByEdits`.
+    static let maxOpenAttempts = 3
+
     private func performOpen(_ url: URL, generation: UInt64, discardingChanges: Bool) async -> EditorLoadOutcome {
-        if !discardingChanges, isDirty {
-            let saveOutcome = await save(.automatic)
-            guard generation == loadGeneration else { return .superseded }
-            switch saveOutcome {
-            case .saved, .clean, .noDocument:
-                break
-            case .conflict, .failed:
-                return .blockedBySave(saveOutcome)
+        var attempts = 0
+        while true {
+            attempts += 1
+            if !discardingChanges, isDirty {
+                let saveOutcome = await save(.automatic)
+                guard generation == loadGeneration else { return .superseded }
+                switch saveOutcome {
+                case .saved, .clean, .noDocument:
+                    break
+                case .conflict, .failed:
+                    return .blockedBySave(saveOutcome)
+                }
             }
+            guard generation == loadGeneration else { return .superseded }
+
+            let io = io
+            let result = await Task.detached(priority: .userInitiated) {
+                await EditorDocumentIO.load(url, io: io)
+            }.value
+            guard generation == loadGeneration, !Task.isCancelled else { return .superseded }
+
+            // Edits typed during the outgoing save or the read must not be
+            // replaced. Save them and read again (the read may be of the file
+            // just saved); there is no suspension between this check and
+            // `apply`, so nothing typed afterwards can be lost.
+            if !discardingChanges, isDirty, case .loaded = result {
+                if attempts >= Self.maxOpenAttempts {
+                    errorMessage = "“\(url.lastPathComponent)” was not opened because this file was still being edited."
+                    return .blockedByEdits
+                }
+                continue
+            }
+            return publish(result, from: url)
         }
-        guard generation == loadGeneration else { return .superseded }
+    }
 
-        let io = io
-        let result = await Task.detached(priority: .userInitiated) {
-            await EditorDocumentIO.load(url, io: io)
-        }.value
-        guard generation == loadGeneration, !Task.isCancelled else { return .superseded }
-
+    private func publish(_ result: EditorDocumentIO.LoadResult, from url: URL) -> EditorLoadOutcome {
         let name = url.lastPathComponent
         switch result {
         case .loaded(let file):
             apply(file, from: url)
             return .loaded(url)
         case .tooLarge:
-            errorMessage = "“\(name)” is too large to edit (over 10 MB)."
+            let limit = EditorDocumentIO.maxEditableBytes / 1_000_000
+            errorMessage = "“\(name)” is too large to edit (over \(limit) MB)."
             return .tooLarge
         case .binary:
             errorMessage = "“\(name)” looks like a binary file."
@@ -397,9 +428,11 @@ final class EditorDocumentSession {
     @discardableResult
     private func startSave(_ mode: EditorSaveMode) -> Task<EditorSaveOutcome, Never> {
         let previous = saveTask
-        let task = Task { [weak self] () -> EditorSaveOutcome in
+        // Strong capture: a flush from `close()` must still write after the pane
+        // drops the session. The task is bounded by one write and releases the
+        // session when it ends.
+        let task = Task { () -> EditorSaveOutcome in
             _ = await previous?.value
-            guard let self else { return .noDocument }
             return await self.performSave(mode)
         }
         saveTask = task

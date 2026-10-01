@@ -510,8 +510,9 @@ struct EditorPaneView: View {
             // Opening a file is an interaction with this pane; claim selection so
             // the gated ⌘S/⌘P/⌘O shortcuts target it.
             onSelect()
-        case .blockedBySave:
-            // Return to the unsaved buffer; the banner explains why it stayed.
+        case .blockedBySave, .blockedByEdits:
+            // Return to the unsaved buffer; for a failed save the banner explains
+            // why it stayed.
             showFinder = false
         case .tooLarge, .binary, .failed:
             presentFinder()

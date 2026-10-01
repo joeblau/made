@@ -41,6 +41,7 @@ private actor ControlledEditorFileIO: EditorFileIO {
     private var readGates: [URL: Gate] = [:]
     private var writeGate: Gate?
     private var failWrites = false
+    private var beforeRead: (@Sendable (URL) async -> Void)?
     private(set) var reads: [URL] = []
     private(set) var writes: [(url: URL, data: Data)] = []
     private var clock = Date(timeIntervalSince1970: 1_000_000)
@@ -70,12 +71,24 @@ private actor ControlledEditorFileIO: EditorFileIO {
 
     func setFailWrites(_ fail: Bool) { failWrites = fail }
 
+    func setBeforeRead(_ hook: @escaping @Sendable (URL) async -> Void) { beforeRead = hook }
+
+    /// Poll until at least `count` writes landed; false after about two seconds.
+    func waitForWrites(_ count: Int) async -> Bool {
+        for _ in 0..<400 {
+            if writes.count >= count { return true }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return writes.count >= count
+    }
+
     func contents(of url: URL) -> String? {
         files[url].map { String(decoding: $0.data, as: UTF8.self) }
     }
 
     func read(_ url: URL, maxBytes: Int) async throws -> EditorFileContents {
         reads.append(url)
+        if let beforeRead { await beforeRead(url) }
         if let gate = readGates[url] { await gate.pass() }
         guard let file = files[url] else { throw CocoaError(.fileNoSuchFile) }
         guard file.data.count <= maxBytes else { throw EditorFileReadError.tooLarge }
@@ -107,6 +120,11 @@ private final class PathStore: EditorFilePathStore {
         persistedFileURL = url
         persistCount += 1
     }
+}
+
+@MainActor
+private final class TickerFlag {
+    var running = true
 }
 
 @MainActor
@@ -327,6 +345,126 @@ struct EditorDocumentSessionTests {
         #expect(!session.isDirty)
     }
 
+    @Test("A close-time flush still writes after the pane releases the session")
+    func closeFlushSurvivesRelease() async {
+        let io = ControlledEditorFileIO()
+        await io.put("alpha", at: fileA)
+        weak var released: EditorDocumentSession?
+        do {
+            let session = EditorDocumentSession(io: io)
+            await session.open(fileA)
+            session.updateText("flushed")
+            session.close()
+            released = session
+        }
+
+        #expect(await io.waitForWrites(1))
+        #expect(await io.contents(of: fileA) == "flushed")
+        // The save task lets go of the session once the write is done.
+        for _ in 0..<200 where released != nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(released == nil)
+    }
+
+    @Test("A close-time flush queued behind an in-flight ⌘S survives release")
+    func closeFlushBehindInFlightSaveSurvivesRelease() async {
+        let io = ControlledEditorFileIO()
+        await io.put("alpha", at: fileA)
+        let gate = await io.gateWrites()
+        weak var released: EditorDocumentSession?
+        do {
+            let session = EditorDocumentSession(io: io)
+            await session.open(fileA)
+            session.updateText("first")
+            session.requestSave(.interactive)
+            await gate.arrived()
+            session.updateText("second")
+            session.close()
+            released = session
+        }
+        await gate.open()
+
+        #expect(await io.waitForWrites(2))
+        #expect(await io.contents(of: fileA) == "second")
+        for _ in 0..<200 where released != nil {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(released == nil)
+    }
+
+    @Test("Edits typed during the outgoing save survive a file switch")
+    func editsDuringOutgoingSaveSurviveSwitch() async {
+        let io = ControlledEditorFileIO()
+        await io.put("alpha", at: fileA)
+        await io.put("bravo", at: fileB)
+        let session = EditorDocumentSession(io: io)
+        await session.open(fileA)
+        let log = OutcomeLog()
+
+        session.updateText("first")
+        let gate = await io.gateWrites()
+        session.requestOpen(fileB, completion: log.record("b"))
+        await gate.arrived()
+        #expect(session.updateText("second"))
+        await gate.open()
+        await session.waitForPendingWork()
+
+        #expect(await io.contents(of: fileA) == "second")
+        #expect(log.outcomes["b"] == .loaded(fileB))
+        #expect(session.url == fileB)
+        #expect(session.text == "bravo")
+        #expect(!session.isDirty)
+    }
+
+    @Test("Edits typed while the next file is read survive a file switch")
+    func editsDuringIncomingReadSurviveSwitch() async {
+        let io = ControlledEditorFileIO()
+        await io.put("alpha", at: fileA)
+        await io.put("bravo", at: fileB)
+        let session = EditorDocumentSession(io: io)
+        await session.open(fileA)
+        let log = OutcomeLog()
+
+        session.updateText("first")
+        let gateB = await io.gateRead(fileB)
+        session.requestOpen(fileB, completion: log.record("b"))
+        await gateB.arrived()
+        #expect(await io.contents(of: fileA) == "first")
+        #expect(session.updateText("second"))
+        await gateB.open()
+        await session.waitForPendingWork()
+
+        #expect(await io.contents(of: fileA) == "second")
+        #expect(log.outcomes["b"] == .loaded(fileB))
+        #expect(session.text == "bravo")
+        #expect(!session.isDirty)
+    }
+
+    @Test("A switch gives up instead of replacing a buffer that keeps changing")
+    func continuousEditsBlockSwitch() async {
+        let io = ControlledEditorFileIO()
+        await io.put("alpha", at: fileA)
+        await io.put("bravo", at: fileB)
+        let session = EditorDocumentSession(io: io)
+        await session.open(fileA)
+        let fileB = fileB
+        await io.setBeforeRead { url in
+            guard url == fileB else { return }
+            await MainActor.run { _ = session.updateText(session.text + "!") }
+        }
+
+        session.updateText("typing")
+        let outcome = await session.open(fileB)
+
+        #expect(outcome == .blockedByEdits)
+        #expect(session.url == fileA)
+        #expect(session.text == "typing" + String(repeating: "!", count: EditorDocumentSession.maxOpenAttempts))
+        #expect(session.isDirty)
+        #expect(await io.reads.filter { $0 == fileB }.count == EditorDocumentSession.maxOpenAttempts)
+        #expect(await io.contents(of: fileA) == "typing!!")
+    }
+
     @Test("Binary sniffing and encoding fallback")
     func binaryAndEncodingHeuristics() {
         #expect(EditorDocumentIO.looksBinary(Data([0x41, 0x00, 0x42])))
@@ -496,11 +634,11 @@ struct EditorDocumentSessionDiskTests {
     /// runs; approximates how long the UI could not process events.
     private func maxMainActorStall(_ work: @MainActor () async -> Void) async -> Duration {
         let clock = ContinuousClock()
-        var running = true
+        let flag = TickerFlag()
         let ticker = Task { @MainActor () -> Duration in
             var worst = Duration.zero
             var last = clock.now
-            while running {
+            while flag.running {
                 try? await Task.sleep(for: .milliseconds(1))
                 let now = clock.now
                 worst = max(worst, now - last - .milliseconds(1))
@@ -510,7 +648,7 @@ struct EditorDocumentSessionDiskTests {
         }
         await Task.yield()
         await work()
-        running = false
+        flag.running = false
         return await ticker.value
     }
 }
