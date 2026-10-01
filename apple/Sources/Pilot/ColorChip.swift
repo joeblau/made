@@ -16,11 +16,17 @@ enum ColorChip {
 
     private static let inlineCode = try! NSRegularExpression(pattern: #"`([^`\n]+)`"#)
 
-    /// Every inline-code span whose sole content is a recognized color.
-    static func matches(in string: String) -> [Match] {
+    /// Every inline-code span whose sole content is a recognized color, or
+    /// only those within `range` (which should start and end on line
+    /// boundaries) when one is given.
+    static func matches(in string: String, range: NSRange? = nil) -> [Match] {
         let ns = string as NSString
         var result: [Match] = []
-        inlineCode.enumerateMatches(in: string, range: NSRange(location: 0, length: ns.length)) { m, _, _ in
+        inlineCode.enumerateMatches(
+            in: string,
+            options: range == nil ? [] : [.withTransparentBounds, .withoutAnchoringBounds],
+            range: range ?? NSRange(location: 0, length: ns.length)
+        ) { m, _, _ in
             guard let m else { return }
             let trimmed = ns.substring(with: m.range(at: 1)).trimmingCharacters(in: .whitespaces)
             guard let color = parse(trimmed) else { return }

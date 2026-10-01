@@ -12,16 +12,30 @@ enum MarkdownImage {
         let url: URL
     }
 
-    static func matches(in markdown: String) -> [Match] {
+    static func matches(in source: String) -> [Match] {
+        // Every image starts with `![`; skip the code-range scan for the
+        // common note that has none (this runs on every edit).
+        guard source.contains("![") else { return [] }
+        // Text from AppKit is a bridged NSString; walking its characters is
+        // several times slower than walking a native UTF-8 copy.
+        var markdown = source
+        markdown.makeContiguousUTF8()
         var matches: [Match] = []
         var cursor = markdown.startIndex
+        // Sorted and non-overlapping; `cursor` only moves forward, so one
+        // forward-moving position replaces a scan of every range per `!`.
         let codeRanges = codeRanges(in: markdown)
+        var codeRangeIndex = 0
 
         while cursor < markdown.endIndex,
               let imageStart = markdown[cursor...].firstIndex(of: "!") {
             let nextCursor = markdown.index(after: imageStart)
+            while codeRangeIndex < codeRanges.count, codeRanges[codeRangeIndex].upperBound <= imageStart {
+                codeRangeIndex += 1
+            }
+            let inCode = codeRangeIndex < codeRanges.count && codeRanges[codeRangeIndex].contains(imageStart)
 
-            guard !codeRanges.contains(where: { $0.contains(imageStart) }),
+            guard !inCode,
                   !isEscaped(imageStart, in: markdown),
                   nextCursor < markdown.endIndex,
                   markdown[nextCursor] == "[",
@@ -166,9 +180,20 @@ enum MarkdownImage {
     ) -> [Range<String.Index>] {
         var ranges: [Range<String.Index>] = []
         var cursor = markdown.startIndex
+        // `fencedRanges` is sorted and non-overlapping, and both `cursor` and
+        // `search` only move forward, so each keeps a forward-moving position
+        // into it instead of scanning every fence per character.
+        var fenceIndex = 0
+        func fence(containing index: String.Index, from position: inout Int) -> Range<String.Index>? {
+            while position < fencedRanges.count, fencedRanges[position].upperBound <= index {
+                position += 1
+            }
+            guard position < fencedRanges.count, fencedRanges[position].contains(index) else { return nil }
+            return fencedRanges[position]
+        }
 
         while cursor < markdown.endIndex {
-            if let fence = fencedRanges.first(where: { $0.contains(cursor) }) {
+            if let fence = fence(containing: cursor, from: &fenceIndex) {
                 cursor = fence.upperBound
                 continue
             }
@@ -181,10 +206,11 @@ enum MarkdownImage {
             let openingLength = characterRunLength(in: markdown, from: cursor, character: "`")
             cursor = markdown.index(cursor, offsetBy: openingLength)
             var search = cursor
+            var searchFenceIndex = fenceIndex
             var closingEnd: String.Index?
 
             while search < markdown.endIndex {
-                if fencedRanges.contains(where: { $0.contains(search) }) {
+                if fence(containing: search, from: &searchFenceIndex) != nil {
                     // A fenced block interrupts the surrounding paragraph, so
                     // an inline span cannot pair delimiters across that block.
                     break

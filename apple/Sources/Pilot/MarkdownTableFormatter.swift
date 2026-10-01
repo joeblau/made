@@ -10,29 +10,41 @@ enum MarkdownTableFormatter {
     /// changed. Blocks containing any line index in `skipLines` are left as-is
     /// (used to avoid reformatting the table the caret is inside while typing).
     static func reflow(_ text: String, skipLines: Set<Int> = []) -> String? {
-        // Called on every keystroke — a table needs a pipe somewhere, so skip
-        // the full line-split for the common case of a note with none.
-        guard text.contains("|") else { return nil }
+        reflowReportingSkipped(text, skipLines: skipLines).text
+    }
+
+    /// `reflow`, plus whether a block left alone because of `skipLines` still
+    /// needs formatting. The editor keeps such a table pending so it aligns
+    /// on the next edit once the caret has left it.
+    static func reflowReportingSkipped(
+        _ text: String,
+        skipLines: Set<Int> = []
+    ) -> (text: String?, skippedBlockNeedsFormatting: Bool) {
+        // A table needs a pipe somewhere, so skip the full line-split for the
+        // common case of a note with none.
+        guard text.contains("|") else { return (nil, false) }
         var lines = text.components(separatedBy: "\n")
         var changed = false
+        var skippedBlockNeedsFormatting = false
         var i = 0
         while i < lines.count {
             guard let block = tableBlock(in: lines, startingAt: i) else {
                 i += 1
                 continue
             }
-            let protected = block.contains { skipLines.contains($0) }
-            if !protected {
-                let original = Array(lines[block])
-                let formatted = formatBlock(original)
-                if formatted != original {
+            let original = Array(lines[block])
+            let formatted = formatBlock(original)
+            if formatted != original {
+                if block.contains(where: { skipLines.contains($0) }) {
+                    skippedBlockNeedsFormatting = true
+                } else {
                     lines.replaceSubrange(block, with: formatted)
                     changed = true
                 }
             }
             i = block.upperBound
         }
-        return changed ? lines.joined(separator: "\n") : nil
+        return (changed ? lines.joined(separator: "\n") : nil, skippedBlockNeedsFormatting)
     }
 
     // MARK: - Block detection
