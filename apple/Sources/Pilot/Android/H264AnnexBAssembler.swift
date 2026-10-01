@@ -42,10 +42,13 @@ struct H264AnnexBAssembler {
     /// before it is proven not to begin a start code, so fragmented input is
     /// scanned once rather than from the NALU's start on every pipe read.
     private var scanCursor = 0
-    /// Total candidate positions the start-code scan has covered, including
-    /// the few re-examined when a start code may straddle a chunk boundary.
-    /// Lets tests prove fragmented input is scanned approximately once.
+    #if DEBUG
+    /// Test seam (Debug builds only): total candidate positions the
+    /// start-code scan has covered, including the few re-examined when a
+    /// start code may straddle a chunk boundary. Lets tests prove fragmented
+    /// input is scanned approximately once; Release builds carry no counter.
     private(set) var scannedPositionCount = 0
+    #endif
     private var sawFirstStartCode = false
     private var currentSPS: Data?
     private var currentPPS: Data?
@@ -257,10 +260,10 @@ struct H264AnnexBAssembler {
             }
             return nil
         }
-        if let found {
-            scannedPositionCount += found.index + 1 - start
-        } else {
-            scannedPositionCount += max(0, end - start)
+        #if DEBUG
+        scannedPositionCount += found.map { $0.index + 1 - start } ?? max(0, end - start)
+        #endif
+        if found == nil {
             scanCursor = max(scanCursor, count - 3)
         }
         return found

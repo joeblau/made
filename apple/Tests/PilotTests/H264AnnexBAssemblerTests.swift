@@ -355,6 +355,7 @@ struct H264AnnexBAssemblerTests {
         }
     }
 
+    #if DEBUG
     @Test
     func scansFragmentedInputApproximatelyOnce() throws {
         // One 256 KiB NALU delivered in 1 KiB reads, each read ending in the
@@ -387,6 +388,7 @@ struct H264AnnexBAssemblerTests {
         #expect(accessUnits.count == 2)
         #expect(accessUnits.first?.dropFirst(4) == payload)
     }
+    #endif
 
     // MARK: - Parity helpers
 
