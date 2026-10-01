@@ -4,15 +4,59 @@
  * because light intensities and color management changed in later majors.
  * Sound, hints, and CDN loading from the original were dropped: the CSP only
  * allows same-origin bundles and the background never receives pointer events.
+ * Scheduling, motion preference, and lifecycle live in cockpit-controller.js.
  */
 import * as THREE from 'three';
+import { createSceneController } from './cockpit-controller.js';
 
-export function initCockpit() {
-  const sceneCanvas = document.querySelector('[data-cockpit-scene]');
-  const hudCanvas = document.querySelector('[data-cockpit-hud]');
-  if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return;
+/* Decorative cadence cap (#270). Measured in headless Chrome, 30 FPS roughly
+   halves main-thread and GPU-process time versus 60 FPS with steady ~33 ms
+   frame gaps; the slow flight motion and time-based head look stay smooth.
+   Instrument pages repaint at 12 Hz underneath it. */
+const MAX_FPS = 30;
+const MFD_INTERVAL = 1 / 12;
 
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+/** One live scene per scene canvas; repeated init returns the same handle. */
+const active = new WeakMap();
+
+/**
+ * Builds the scene inside `root`, draws its first frame, and returns its
+ * controller ({ state, pause, resume, dispose, memory }). Returns null when
+ * the canvases are missing or WebGL is unavailable. A scene that fails to
+ * build releases its WebGL context and listeners before rethrowing.
+ */
+export function initCockpit(root = document) {
+  const sceneCanvas = root.querySelector('[data-cockpit-scene]');
+  const hudCanvas = root.querySelector('[data-cockpit-hud]');
+  if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return null;
+  const existing = active.get(sceneCanvas);
+  if (existing) return existing;
+
+  let renderer;
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
+  } catch {
+    return null; // WebGL unavailable; the loader keeps the static fallback.
+  }
+  const built = {};
+  try {
+    const handle = buildScene(root, sceneCanvas, hudCanvas, renderer, built);
+    if (root instanceof HTMLElement) root.dataset.cockpitState = 'ready';
+    return handle;
+  } catch (error) {
+    try {
+      built.controller?.dispose(); // aborts listeners even if teardown throws
+    } catch {
+      /* partially built scene; the renderer below is what holds the context */
+    }
+    active.delete(sceneCanvas);
+    renderer.dispose();
+    renderer.forceContextLoss();
+    throw error;
+  }
+}
+
+function buildScene(root, sceneCanvas, hudCanvas, renderer, built) {
 
   /* ============================== helpers ============================== */
   const cnv = (w, h) => {
@@ -27,12 +71,12 @@ export function initCockpit() {
   const D2R = Math.PI / 180;
 
   /* ============================== renderer ============================== */
-  let renderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
-  } catch {
-    return; // WebGL unavailable; the static --background color stays.
-  }
+  // Function declarations below are hoisted; nothing runs until start().
+  const controller = createSceneController({
+    win: window, maxFps: MAX_FPS, step, draw, resize, dispose: disposeScene,
+  });
+  built.controller = controller;
+  const { signal } = controller;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0xcfe0ee, 9000, 42000);
@@ -884,8 +928,6 @@ export function initCockpit() {
     hudCanvas.width = W * DPR;
     hudCanvas.height = H * DPR;
   }
-  addEventListener('resize', resize);
-  resize();
 
   const _v = new THREE.Vector3();
   function toScreen(dir) {
@@ -1043,7 +1085,7 @@ export function initCockpit() {
     addEventListener('mousemove', (e) => {
       tgtX = clamp((e.clientX / W - 0.5) * 2, -1, 1);
       tgtY = clamp((e.clientY / H - 0.5) * 2, -1, 1);
-    });
+    }, { signal });
   }
   // Touch: dragging pans the cockpit view while the page content stays
   // pinned — deltas accumulate, so lifting the finger keeps the view put.
@@ -1053,7 +1095,7 @@ export function initCockpit() {
       lastTX = e.touches[0].clientX;
       lastTY = e.touches[0].clientY;
     }
-  }, { passive: true });
+  }, { passive: true, signal });
   addEventListener('touchmove', (e) => {
     const t = e.touches[0];
     if (!t || lastTX === null) return;
@@ -1061,21 +1103,18 @@ export function initCockpit() {
     tgtY = clamp(tgtY - (t.clientY - lastTY) * 2.2 / H, -1, 1);
     lastTX = t.clientX;
     lastTY = t.clientY;
-  }, { passive: true });
+  }, { passive: true, signal });
   addEventListener('touchend', () => {
     lastTX = null;
     lastTY = null;
-  }, { passive: true });
+  }, { passive: true, signal });
   addEventListener('keydown', (e) => {
     if (e.key === 'h' || e.key === 'H') S.hmd = !S.hmd;
-  });
+  }, { signal });
 
   /* ============================== main loop ============================== */
-  const clock = new THREE.Clock();
-  let mfdAcc = 1;
-  function frame() {
-    if (!reducedMotion) requestAnimationFrame(frame);
-    const dt = Math.min(clock.getDelta(), 0.05);
+  let mfdAcc = 1; // paint the instruments on the very first step
+  function step(dt) {
     const t = (S.t += dt);
 
     /* attitude: slow wandering bank + pitch + turbulence */
@@ -1123,17 +1162,53 @@ export function initCockpit() {
     /* terrain scroll */
     groundTex.offset.y += CLOUD.speed * dt * (7 / 95000);
 
-    /* MFD repaint ~12 Hz */
+    /* MFD repaint at 12 Hz; the remainder carries so the rate holds at any
+       render cadence at or above it. */
     mfdAcc += dt;
-    if (mfdAcc > 0.085) {
-      mfdAcc = 0;
+    if (mfdAcc >= MFD_INTERVAL) {
+      mfdAcc %= MFD_INTERVAL;
       paintLeft();
       paintRight();
       paintStandby();
     }
+  }
 
+  function draw() {
     renderer.render(scene, camera);
     drawHMD();
   }
-  frame();
+
+  /* ============================== teardown ============================== */
+  function disposeScene() {
+    const textures = new Set([cloudTexs, groundTex, leftT, rightT, standT, stripT].flat());
+    scene.traverse((object) => {
+      object.geometry?.dispose();
+      for (const material of [object.material ?? []].flat()) {
+        if (material.map) textures.add(material.map);
+        material.dispose();
+      }
+    });
+    for (const texture of textures) texture.dispose();
+    renderer.renderLists.dispose();
+    renderer.dispose();
+    hg.setTransform(1, 0, 0, 1, 0, 0);
+    hg.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+    clouds.length = 0;
+    active.delete(sceneCanvas);
+    if (root instanceof HTMLElement) root.dataset.cockpitState = 'static';
+  }
+
+  const handle = {
+    get state() {
+      return controller.state;
+    },
+    pause: controller.pause,
+    resume: controller.resume,
+    dispose: controller.dispose,
+    /** GPU-side resource counts, for lifecycle checks. */
+    memory: () => ({ ...renderer.info.memory, programs: renderer.info.programs?.length ?? 0 }),
+  };
+  active.set(sceneCanvas, handle);
+  controller.start();
+  return handle;
 }

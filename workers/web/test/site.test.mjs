@@ -59,3 +59,20 @@ test('the stylesheet serves both color schemes without decorative strokes', asyn
   assert.match(html, /<meta name="theme-color" media="\(prefers-color-scheme: light\)"/);
   assert.match(html, /<meta name="theme-color" media="\(prefers-color-scheme: dark\)"/);
 });
+
+test('Three.js stays out of the critical script graph and loads as a deferred chunk', async () => {
+  const { analyzeScripts } = await import('../scripts/script-graph.mjs');
+  const graph = await analyzeScripts(dist, '/made', { compress: false });
+  assert.ok(graph.initial.files.length >= 2, 'the loader and QR dialog scripts are initial');
+  for (const { url } of graph.initial.files) {
+    assert.match(url, /^\/made\/_astro\//);
+    assert.doesNotMatch(graph.sourceOf(url), /THREE\.WebGLRenderer/, `${url} must not bundle Three.js`);
+  }
+  const scene = graph.deferred.files.filter(({ url }) => /THREE\.WebGLRenderer/.test(graph.sourceOf(url)));
+  assert.equal(scene.length, 1, 'exactly one deferred chunk carries the cockpit scene');
+  assert.match(scene[0].url, /^\/made\/_astro\/f35-cockpit\.[\w-]+\.js$/);
+  for (const page of ['index.html', 'made/index.html']) {
+    const html = await readFile(`${dist}${page}`, 'utf8');
+    assert.ok(!html.includes(scene[0].url), `${page} never preloads the scene`);
+  }
+});
