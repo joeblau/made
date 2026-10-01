@@ -11,7 +11,7 @@ function environment(overrides = {}) {
     whenReady: async () => {},
     load: async () => {
       calls.load++;
-      return { initCockpit: async () => { calls.init++; return true; } };
+      return { initCockpit: () => { calls.init++; return { state: 'running' }; } };
     },
     ...overrides,
   };
@@ -59,7 +59,7 @@ test('a failed chunk or initializer leaves the static fallback in place', async 
   assert.equal(root.dataset.cockpitState, 'static');
   assert.equal(errors.length, 1);
 
-  const noContext = environment({ load: async () => ({ initCockpit: () => false }) });
+  const noContext = environment({ load: async () => ({ initCockpit: () => null }) });
   const second = { dataset: {} };
   assert.equal(await startCockpit(second, noContext), 'no-webgl');
   assert.equal(second.dataset.cockpitState, 'static');

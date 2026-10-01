@@ -56,9 +56,9 @@ export function afterLoadAndIdle(win = window) {
 
 /**
  * Loads and starts the scene unless the device gets the static fallback.
- * `load` returns the scene module; its `initCockpit(root)` resolves to a
- * truthy handle once the first frame is drawn, or a falsy value when WebGL
- * turned out to be unavailable.
+ * `load` returns the scene module; its `initCockpit(root)` returns the scene
+ * controller once the first frame is drawn, or null when WebGL turned out to
+ * be unavailable.
  */
 export async function startCockpit(root, env) {
   const reason = staticReason(env);
