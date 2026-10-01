@@ -57,6 +57,11 @@ struct AgenticUsageRecord: Sendable, Equatable {
     /// When present it wins over the pricing table.
     let nativeCostUSD: Double?
 
+    /// Logged processing tier and geography; absent metadata uses standard
+    /// global API-equivalent rates.
+    var serviceTier: String? = nil
+    var inferenceGeo: String? = nil
+
     /// Every token the API processed for this call.
     var totalTokens: Int {
         inputTokens + cacheWriteTokens + cacheReadTokens + outputTokens
@@ -89,6 +94,15 @@ enum AgenticModel {
 
     /// "claude-haiku-4-5-20251001" -> "claude-haiku-4-5".
     private static func strippingDateSuffix(_ model: String) -> String {
+        // OpenAI snapshots use a hyphenated ISO date; Claude uses YYYYMMDD.
+        if model.count > 11 {
+            let suffix = model.suffix(11)
+            let parts = suffix.dropFirst().split(separator: "-")
+            if suffix.first == "-", parts.map(\.count) == [4, 2, 2],
+               parts.allSatisfy({ $0.allSatisfy(\.isNumber) }) {
+                return String(model.dropLast(11))
+            }
+        }
         guard model.count > 9 else { return model }
         let suffix = model.suffix(9)
         guard suffix.first == "-", suffix.dropFirst().allSatisfy(\.isNumber) else { return model }
@@ -112,8 +126,10 @@ enum AgenticModel {
     /// Fixed presentation order, grouped by provider. The chart color scale,
     /// legend, stacking order, and hero list all follow this so a model keeps
     /// its identity as range filters change the set of visible series. Models
-    /// not listed here sort after all known ones (they also render unpriced).
+    /// not listed here sort after all known ones; pricing is resolved separately.
     static let presentationOrder: [String] = [
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
         "claude-opus-5",
         "claude-fable-5-1",
         "claude-fable-5",
@@ -127,6 +143,10 @@ enum AgenticModel {
         "claude-haiku-4-5",
         "claude-mythos-5-1",
         "claude-mythos-5",
+        "gpt-6-astra",
+        "gpt-6.1-sol",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6-sol",
         "gpt-5.5",
         "gpt-5.4",
@@ -136,6 +156,8 @@ enum AgenticModel {
         "gpt-5.1-codex-mini",
         "gpt-5-codex",
         "gpt-5",
+        "grok-4.7-build",
+        "grok-4.7",
         "grok-4.6-build",
         "grok-4.6",
         "grok-4.5-build",
@@ -143,8 +165,10 @@ enum AgenticModel {
         "k3",
         "k3-256k",
         "k3-max",
+        "kimi-k3",
         "moonshot-ai/kimi-k3",
         "kimi-for-coding",
+        "kimi-for-coding-highspeed",
     ]
 
     /// Sort key into `presentationOrder`; unknown models share the tail slot.

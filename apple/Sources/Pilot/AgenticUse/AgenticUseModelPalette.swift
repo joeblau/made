@@ -15,7 +15,9 @@ enum AgenticUseModelPalette {
     static func color(for canonicalModel: String) -> Color {
         guard let provider = provider(for: canonicalModel) else { return .gray }
         let family = familyOrder(for: provider)
-        guard let index = family.firstIndex(of: canonicalModel) else { return .gray }
+        // Newly discovered priced models also get a stable provider color.
+        let index = family.firstIndex(of: canonicalModel)
+            ?? (canonicalModel.utf8.reduce(0) { ($0 * 31 + Int($1)) % 16 } + family.count)
         return shade(hue: hue(for: provider), step: index)
     }
 

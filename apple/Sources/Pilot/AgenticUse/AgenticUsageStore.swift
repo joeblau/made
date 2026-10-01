@@ -153,6 +153,7 @@ struct AgenticUseSnapshot: Sendable, Equatable {
     let stats: AgenticUseStats
     /// True when any model in range is missing from the pricing table.
     let hasUnpricedModels: Bool
+    var unpricedTokens: Int = 0
 
     /// No records landed inside the selected range (the corpus itself may
     /// still have data — offer a wider range).
@@ -206,6 +207,17 @@ final class AgenticUsageStore {
     }
 
     private let loader: AgenticUsageLoader
+    private let pricingCatalog: AgenticPricingCatalog
+    private var pricingRates = AgenticUsagePricing.rates
+    private(set) var pricingFetchedAt: Date?
+    private var refreshTask: Task<Void, Never>?
+
+    var pricingStatus: String {
+        if let pricingFetchedAt {
+            return "Pricing updated " + pricingFetchedAt.formatted(date: .abbreviated, time: .shortened)
+        }
+        return "Bundled pricing · " + AgenticUsagePricing.reviewedDate
+    }
     private let defaults: UserDefaults
     private var records: [AgenticUsageRecord] = []
     private var loadTask: Task<Void, Never>?
@@ -215,8 +227,13 @@ final class AgenticUsageStore {
 
     private static let rangeKey = "agenticUse.range"
 
-    init(defaults: UserDefaults = .standard, sources: [AgenticUsageLoader.Source]? = nil) {
+    init(
+        defaults: UserDefaults = .standard,
+        sources: [AgenticUsageLoader.Source]? = nil,
+        pricingCatalog: AgenticPricingCatalog = AgenticPricingCatalog()
+    ) {
         self.defaults = defaults
+        self.pricingCatalog = pricingCatalog
         self.loader = AgenticUsageLoader(
             sources: sources ?? AgenticUsageLoader.defaultSources()
         )
@@ -233,6 +250,13 @@ final class AgenticUsageStore {
         guard !isRunning else { return }
         isRunning = true
         load(initial: !hasLoadedOnce)
+        refreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                guard let self, isRunning else { return }
+                if !isRefreshing, phase != .idle, hasLoadedOnce { load(initial: false) }
+            }
+        }
     }
 
     /// Cancel all work. Leaving the section leaves nothing running.
@@ -242,6 +266,8 @@ final class AgenticUsageStore {
         loadTask = nil
         aggregateTask?.cancel()
         aggregateTask = nil
+        refreshTask?.cancel()
+        refreshTask = nil
         isRefreshing = false
         if case .scanning = phase, !hasLoadedOnce {
             phase = .idle
@@ -250,8 +276,8 @@ final class AgenticUsageStore {
 
     /// Manual refresh / the Retry and Rescan buttons.
     func rescan() {
-        isRunning = true
-        load(initial: !hasLoadedOnce)
+        if !isRunning { start() }
+        load(initial: !hasLoadedOnce, forcePricing: true)
     }
 
     func dismissScanWarning() {
@@ -260,23 +286,27 @@ final class AgenticUsageStore {
 
     // MARK: Loading
 
-    private func load(initial: Bool) {
+    private func load(initial: Bool, forcePricing: Bool = false) {
         loadTask?.cancel()
         if initial {
             phase = .scanning(scanned: 0, total: 0)
         } else {
             isRefreshing = true
         }
-        loadTask = Task { [weak self, loader] in
+        loadTask = Task { [weak self, loader, pricingCatalog] in
             do {
+                async let pricing = pricingCatalog.load(force: forcePricing)
                 let result = try await loader.load { [weak self] scanned, total in
                     guard initial, let store = self else { return }
                     Task { @MainActor in
                         store.noteScanProgress(scanned: scanned, total: total)
                     }
                 }
+                let refreshedPricing = await pricing
                 guard let self, !Task.isCancelled else { return }
-                apply(result)
+                pricingRates = refreshedPricing.rates
+                pricingFetchedAt = refreshedPricing.fetchedAt
+                apply(result, pricingWarning: refreshedPricing.warning)
             } catch is CancellationError {
                 // Whoever cancelled owns the state transition.
             } catch {
@@ -299,16 +329,20 @@ final class AgenticUsageStore {
         phase = .scanning(scanned: scanned, total: total)
     }
 
-    private func apply(_ result: AgenticUsageLoader.LoadResult) {
+    private func apply(_ result: AgenticUsageLoader.LoadResult, pricingWarning: String?) {
         hasLoadedOnce = true
         isRefreshing = false
         records = result.records
+        var warnings: [String] = []
         if result.unreadableFileCount > 0 {
             let plural = result.unreadableFileCount == 1 ? "" : "s"
-            scanWarning = "Skipped \(result.unreadableFileCount) unreadable log file\(plural)."
-        } else {
-            scanWarning = nil
+            warnings.append("Skipped \(result.unreadableFileCount) unreadable log file\(plural).")
         }
+        if result.skippedLineCount > 0 {
+            warnings.append("Skipped \(result.skippedLineCount) oversized log lines; usage may be incomplete.")
+        }
+        if let pricingWarning { warnings.append(pricingWarning) }
+        scanWarning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
         if records.isEmpty {
             snapshot = nil
             phase = .empty
@@ -328,12 +362,14 @@ final class AgenticUsageStore {
         guard !records.isEmpty else { return }
         let records = records
         let range = range
-        aggregateTask = Task.detached(priority: .userInitiated) { [records, range, weak self] in
+        let rates = pricingRates
+        aggregateTask = Task.detached(priority: .userInitiated) { [records, range, rates, weak self] in
             let snapshot = AgenticUsageStore.makeSnapshot(
                 records: records,
                 range: range,
                 now: Date(),
-                calendar: Calendar.current
+                calendar: Calendar.current,
+                rates: rates
             )
             guard !Task.isCancelled else { return }
             await self?.publish(snapshot)
@@ -352,7 +388,8 @@ final class AgenticUsageStore {
         records: [AgenticUsageRecord],
         range: AgenticUseRange,
         now: Date,
-        calendar: Calendar
+        calendar: Calendar,
+        rates: [String: AgenticModelRate] = AgenticUsagePricing.rates
     ) -> AgenticUseSnapshot {
         var interval = range.interval(endingAt: now, calendar: calendar)
         let filtered = records.filter {
@@ -383,18 +420,24 @@ final class AgenticUsageStore {
         var hasReasoning = false
         var totalCost = 0.0
         var fullRateCost = 0.0
+        var baselineCost = 0.0
+        var unpricedTokens = 0
 
         for record in filtered {
-            let cost = AgenticUsagePricing.cost(of: record)
+            let cost = AgenticUsagePricing.cost(of: record, rates: rates)
             let tokens = record.totalTokens
 
             var model = byModel[record.model, default: ModelBucket()]
             if let cost {
                 model.cost += cost
                 totalCost += cost
-                fullRateCost += AgenticUsagePricing.fullRateCost(of: record) ?? 0
+                if let baseline = AgenticUsagePricing.fullRateCost(of: record, rates: rates) {
+                    fullRateCost += baseline
+                    baselineCost += cost
+                }
             } else {
                 model.isUnpriced = true
+                unpricedTokens += tokens
             }
             model.tokens += tokens
             byModel[record.model] = model
@@ -499,7 +542,7 @@ final class AgenticUsageStore {
 
         let processed = inputTokens + cacheWriteTokens + cacheReadTokens + outputTokens
         let observedInput = inputTokens + cacheWriteTokens + cacheReadTokens
-        let savings = max(0, fullRateCost - totalCost)
+        let savings = max(0, fullRateCost - baselineCost)
         let stats = AgenticUseStats(
             processedTokens: processed,
             activeDays: activeDays.count,
@@ -511,7 +554,7 @@ final class AgenticUsageStore {
             outputTokens: outputTokens,
             reasoningTokens: hasReasoning ? reasoningTokens : nil,
             cacheSavingsUSD: savings,
-            cacheSavingsMultiple: totalCost > 0 ? savings / totalCost : nil
+            cacheSavingsMultiple: baselineCost > 0 ? savings / baselineCost : nil
         )
 
         return AgenticUseSnapshot(
@@ -524,7 +567,8 @@ final class AgenticUsageStore {
             dailySeries: series,
             dayTotals: dayTotals,
             stats: stats,
-            hasUnpricedModels: modelTotals.contains(where: \.isUnpriced)
+            hasUnpricedModels: modelTotals.contains(where: \.isUnpriced),
+            unpricedTokens: unpricedTokens
         )
     }
 }

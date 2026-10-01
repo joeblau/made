@@ -83,6 +83,6 @@ struct AgenticUseStatRow: View {
 
     private var savingsCaption: String {
         guard let multiple = stats.cacheSavingsMultiple else { return "vs. full API rate" }
-        return "\(AgenticUseFormat.multiple(multiple)) the raw token cost"
+        return "\(AgenticUseFormat.multiple(multiple)) the priced token cost"
     }
 }

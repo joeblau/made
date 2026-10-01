@@ -13,8 +13,8 @@ import Foundation
 /// The corpus is large (thousands of files, gigabytes of append-only logs),
 /// so files parse in parallel off the main actor and an in-memory
 /// `(path, size, mtime)` cache makes every load after the first near-instant
-/// — unchanged files never re-parse. The logs are untrusted input: oversized
-/// files and lines are skipped, malformed lines are skipped silently, and no
+/// — unchanged files never re-parse. The logs are untrusted input: files
+/// stream with bounded lines, malformed lines are skipped, and no
 /// single bad file fails a load.
 actor AgenticUsageLoader {
     /// One scan root and the parser its files get.
@@ -37,8 +37,9 @@ actor AgenticUsageLoader {
         let records: [AgenticUsageRecord]
         /// Log files discovered across all sources.
         let fileCount: Int
-        /// Files that could not be read (or exceeded the size bound).
+        /// Files that could not be read.
         let unreadableFileCount: Int
+        var skippedLineCount: Int = 0
     }
 
     enum LoadError: Error, LocalizedError {
@@ -64,17 +65,17 @@ actor AgenticUsageLoader {
         let job: FileJob
         /// `nil` means the file was unreadable.
         let records: [AgenticUsageRecord]?
+        var skippedLineCount: Int = 0
     }
 
     private struct CacheEntry {
         let size: Int
         let modificationDate: Date
         let records: [AgenticUsageRecord]
+        let skippedLineCount: Int
     }
 
-    /// Bounds on untrusted input. A log file bigger than this, or a single
-    /// line bigger than the line bound, is skipped rather than parsed.
-    private static let maxFileBytes = 512 * 1024 * 1024
+    /// Bound individual lines while streaming files of any size.
     private static let maxLineBytes = 16 * 1024 * 1024
     /// Shortest possible line worth decoding.
     private static let minLineBytes = 24
@@ -170,7 +171,8 @@ actor AgenticUsageLoader {
                 cache[outcome.job.path] = CacheEntry(
                     size: outcome.job.size,
                     modificationDate: outcome.job.modificationDate,
-                    records: records
+                    records: records,
+                    skippedLineCount: outcome.skippedLineCount
                 )
             } else {
                 cache[outcome.job.path] = nil
@@ -195,7 +197,8 @@ actor AgenticUsageLoader {
         return LoadResult(
             records: records,
             fileCount: files.count,
-            unreadableFileCount: unreadableCount
+            unreadableFileCount: unreadableCount,
+            skippedLineCount: cache.values.reduce(0) { $0 + $1.skippedLineCount }
         )
     }
 
@@ -206,6 +209,9 @@ actor AgenticUsageLoader {
         for source in sources {
             try discoverFiles(in: source, into: &jobs)
         }
+        // Overrides and default roots can overlap; never scan a file twice.
+        var seen: Set<String> = []
+        jobs = jobs.filter { seen.insert($0.url.resolvingSymlinksInPath().path).inserted }
         jobs.sort { $0.path < $1.path }
         return jobs
     }
@@ -271,7 +277,7 @@ actor AgenticUsageLoader {
             for _ in 0..<width {
                 guard let job = iterator.next() else { break }
                 group.addTask {
-                    ParseOutcome(job: job, records: Self.parseFile(at: job.url, provider: job.provider))
+                    Self.parseJob(job)
                 }
             }
             while let outcome = try await group.next() {
@@ -285,7 +291,7 @@ actor AgenticUsageLoader {
                 }
                 if let job = iterator.next() {
                     group.addTask {
-                        ParseOutcome(job: job, records: Self.parseFile(at: job.url, provider: job.provider))
+                        Self.parseJob(job)
                     }
                 }
             }
@@ -295,84 +301,141 @@ actor AgenticUsageLoader {
 
     // MARK: - Single-file parsing
 
-    /// Parses one log file. Returns `nil` only when the file itself can't be
-    /// read; malformed content inside a readable file yields whatever records
-    /// could be salvaged.
-    nonisolated static func parseFile(at url: URL, provider: AgenticProvider) -> [AgenticUsageRecord]? {
-        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
-        guard data.count <= maxFileBytes else { return nil }
-        return parse(data: data, provider: provider)
+    private struct ParseState {
+        var records: [AgenticUsageRecord] = []
+        var codex = CodexState()
+        var line = Data()
+        var oversizedLine = false
+        var oversizedLineNeedsWarning = true
+        var skippedLineCount = 0
+        let decoder = JSONDecoder()
     }
 
-    /// Splits on newlines, pre-filters with a cheap byte scan for the
-    /// provider's usage-record marker (well under half the lines carry
-    /// usage), then decodes each candidate in file order. Lines that fail to
-    /// parse skip silently: these are append-in-progress logs and a partial
-    /// trailing line is normal.
+    private struct CodexState {
+        var model: String?
+        var totals: RawCodexTokenUsage?
+        var sessionID: String?
+        var serviceTier: String?
+        var lastResponseUsage: RawCodexTokenUsage?
+    }
+
+    private nonisolated static func parseJob(_ job: FileJob) -> ParseOutcome {
+        guard let state = parseFileState(at: job.url, provider: job.provider) else {
+            return ParseOutcome(job: job, records: nil)
+        }
+        return ParseOutcome(job: job, records: state.records, skippedLineCount: state.skippedLineCount)
+    }
+
+    /// Streams large rollouts instead of dropping them at an arbitrary file
+    /// size. Only one chunk and a bounded pending line reside in memory.
+    nonisolated static func parseFile(at url: URL, provider: AgenticProvider) -> [AgenticUsageRecord]? {
+        parseFileState(at: url, provider: provider)?.records
+    }
+
+    private nonisolated static func parseFileState(at url: URL, provider: AgenticProvider) -> ParseState? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var state = ParseState()
+        do {
+            while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+                try Task.checkCancellation()
+                consume(chunk, provider: provider, state: &state)
+            }
+            finishLine(provider: provider, state: &state)
+            return state
+        } catch {
+            return nil
+        }
+    }
+
     nonisolated static func parse(data: Data, provider: AgenticProvider) -> [AgenticUsageRecord] {
-        let needles = lineNeedles(for: provider)
-        var candidates: [Range<Int>] = []
+        var state = ParseState()
+        consume(data, provider: provider, state: &state)
+        finishLine(provider: provider, state: &state)
+        return state.records
+    }
+
+    private nonisolated static func consume(_ data: Data, provider: AgenticProvider, state: inout ParseState) {
         data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            let count = raw.count
-            var lineStart = 0
+            var start = 0
             var index = 0
-            while index <= count {
-                if index == count || base[index] == 0x0A {
-                    let length = index - lineStart
-                    if length >= minLineBytes, length <= maxLineBytes,
-                       matchesAnyNeedle(base: base, range: lineStart..<index, needles: needles) {
-                        candidates.append(lineStart..<index)
-                    }
-                    lineStart = index + 1
+            while index < raw.count {
+                if base[index] == 0x0A {
+                    appendLineBytes(data[(data.startIndex + start)..<(data.startIndex + index)], provider: provider, state: &state)
+                    finishLine(provider: provider, state: &state)
+                    start = index + 1
                 }
                 index += 1
             }
+            appendLineBytes(data[(data.startIndex + start)..<data.endIndex], provider: provider, state: &state)
         }
-        guard !candidates.isEmpty else { return [] }
+    }
 
-        let decoder = JSONDecoder()
-        var records: [AgenticUsageRecord] = []
-        records.reserveCapacity(candidates.count)
-        // Codex attributes token counts to the most recent turn's model and
-        // reports cumulative totals that tell repeats from new calls.
-        var codexModel: String?
-        var codexTotals: RawCodexTokenUsage?
-        for range in candidates {
-            let line = data.subdata(in: range.lowerBound..<range.upperBound)
-            switch provider {
-            case .claude:
-                if let record = decodeClaudeRecord(from: line, decoder: decoder) {
-                    records.append(record)
-                }
-            case .codex:
-                decodeCodexLine(
-                    from: line,
-                    decoder: decoder,
-                    currentModel: &codexModel,
-                    previousTotals: &codexTotals,
-                    into: &records
-                )
-            case .grok:
-                decodeGrokRecords(from: line, decoder: decoder, into: &records)
-            case .kimi:
-                if let record = decodeKimiRecord(from: line, decoder: decoder) {
-                    records.append(record)
-                }
-            }
+    private nonisolated static func appendLineBytes(
+        _ bytes: Data.SubSequence, provider: AgenticProvider, state: inout ParseState
+    ) {
+        guard !state.oversizedLine else { return }
+        guard state.line.count + bytes.count <= maxLineBytes else {
+            let prefix = state.line.isEmpty ? Data(bytes.prefix(4096)) : Data(state.line.prefix(4096))
+            state.oversizedLineNeedsWarning = !isNonUsageCodexLine(prefix, provider: provider)
+            state.line.removeAll(keepingCapacity: true)
+            state.oversizedLine = true
+            return
         }
-        return records
+        state.line.append(contentsOf: bytes)
+    }
+
+    /// Large compaction histories and transcript messages carry no billable
+    /// usage. Decode only the complete envelope preceding their payload to
+    /// distinguish them from oversized usage or model-context records.
+    private nonisolated static func isNonUsageCodexLine(_ prefix: Data, provider: AgenticProvider) -> Bool {
+        guard provider == .codex,
+              let payload = prefix.range(of: Data("\"payload\"".utf8)) else { return false }
+        var header = Data(prefix[..<payload.lowerBound])
+        header.append(contentsOf: "\"payload\":null}".utf8)
+        guard let raw = try? JSONDecoder().decode(RawCodexLine.self, from: header) else { return false }
+        return raw.type == "compacted" || raw.type == "response_item"
+    }
+
+    private nonisolated static func finishLine(provider: AgenticProvider, state: inout ParseState) {
+        defer {
+            state.line.removeAll(keepingCapacity: true)
+            state.oversizedLine = false
+            state.oversizedLineNeedsWarning = true
+        }
+        if state.oversizedLine {
+            if state.oversizedLineNeedsWarning { state.skippedLineCount += 1 }
+            return
+        }
+        let line = state.line
+        guard line.count >= minLineBytes else { return }
+        let candidate = line.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return false }
+            return matchesAnyNeedle(base: base, range: 0..<raw.count, needles: lineNeedles(for: provider))
+        }
+        guard candidate else { return }
+        switch provider {
+        case .claude:
+            if let record = decodeClaudeRecord(from: line, decoder: state.decoder) { state.records.append(record) }
+        case .codex:
+            decodeCodexLine(from: line, decoder: state.decoder, state: &state.codex, into: &state.records)
+        case .grok:
+            decodeGrokRecords(from: line, decoder: state.decoder, into: &state.records)
+        case .kimi:
+            if let record = decodeKimiRecord(from: line, decoder: state.decoder) { state.records.append(record) }
+        }
     }
 
     // MARK: - Line prefilter
 
-    private nonisolated static let claudeNeedles: [[UInt8]] = [
-        Array("\"type\":\"assistant\"".utf8),
-        Array("\"type\": \"assistant\"".utf8),
-    ]
+    private nonisolated static let claudeNeedles: [[UInt8]] = [Array("\"usage\"".utf8)]
     /// Codex needs the model-bearing context lines as well as token counts.
     private nonisolated static let codexNeedles: [[UInt8]] = [
         Array("\"token_count\"".utf8),
+        Array("\"token_usage_record\"".utf8),
+        Array("\"session_meta\"".utf8),
+        Array("\"world_state\"".utf8),
         Array("\"turn_context\"".utf8),
         Array("\"collaboration_mode\"".utf8),
     ]
@@ -441,13 +504,14 @@ actor AgenticUsageLoader {
               let timestamp = parseISOTimestamp(timestampString)
         else { return nil }
 
-        let cacheWrite = max(0, usage.cacheCreationInputTokens ?? 0)
+        let cacheWrite = max(0, usage.cacheCreationInputTokens
+            ?? ((usage.cacheCreation?.ephemeral5mInputTokens ?? 0) + (usage.cacheCreation?.ephemeral1hInputTokens ?? 0)))
         let cache1h = min(cacheWrite, max(0, usage.cacheCreation?.ephemeral1hInputTokens ?? 0))
         var dedupKey: String?
         if let messageId = message.id, let requestId = raw.requestId {
             dedupKey = "c\u{1F}" + messageId + "\u{1F}" + requestId
         }
-        return AgenticUsageRecord(
+        var record = AgenticUsageRecord(
             provider: .claude,
             dedupKey: dedupKey,
             model: model,
@@ -461,86 +525,91 @@ actor AgenticUsageLoader {
             isFast: usage.speed == "fast",
             nativeCostUSD: nil
         )
+        record.serviceTier = usage.serviceTier
+        record.inferenceGeo = usage.inferenceGeo
+        return record
     }
 
     // MARK: - Codex
 
-    /// Codex logs a `token_count` event after each API call, attributed to
-    /// the model named by the most recent `turn_context` (or `world_state`)
-    /// line. `last_token_usage.input_tokens` includes the cached portion, so
-    /// uncached input is `input - cached`.
-    ///
-    /// Codex also re-emits `token_count` on events that made no API call
-    /// (turn boundaries, settings changes); those carry the previous call's
-    /// `last_token_usage` again but leave `total_token_usage` unchanged, so an
-    /// event whose cumulative totals did not advance is a repeat, not a new
-    /// call (matching ccusage). An event with totals but no last usage bills
-    /// the delta of the totals. Resumed sessions replay their history — with
-    /// rewritten timestamps — into new rollout files, so the dedup key
-    /// fingerprints `(ordinal, last usage, cumulative usage)`, which replays
-    /// copy verbatim. Sessions predating per-turn model context fall back to
-    /// "gpt-5", matching ccusage.
+    /// Current Codex emits per-response `token_usage_record` and a legacy
+    /// `token_count` notification for the same call. Consume response usage
+    /// first, advancing the cumulative cursor so notifications cannot bill
+    /// it again. Older logs still use last usage or cumulative deltas.
     private nonisolated static func decodeCodexLine(
         from line: Data,
         decoder: JSONDecoder,
-        currentModel: inout String?,
-        previousTotals: inout RawCodexTokenUsage?,
+        state: inout CodexState,
         into records: inout [AgenticUsageRecord]
     ) {
-        guard let raw = try? decoder.decode(RawCodexLine.self, from: line) else { return }
-        if let model = raw.payload?.model ?? raw.payload?.collaborationMode?.model,
-           !model.isEmpty {
-            currentModel = model
+        guard let raw = try? decoder.decode(RawCodexLine.self, from: line), let payload = raw.payload else { return }
+        if raw.type == "session_meta" { state.sessionID = payload.id ?? payload.sessionID }
+        if let id = payload.threadID ?? payload.sessionID { state.sessionID = id }
+        if let model = payload.model ?? payload.collaborationMode?.resolvedModel
+            ?? payload.state?.collaborationMode?.resolvedModel, !model.isEmpty {
+            state.model = AgenticModel.canonicalize(model) ?? model
         }
-        // world_state nests collaboration_mode one level deeper.
-        if let model = raw.payload?.state?.collaborationMode?.model, !model.isEmpty {
-            currentModel = model
-        }
-        guard raw.payload?.type == "token_count",
-              let info = raw.payload?.info,
-              let timestamp = raw.timestamp.flatMap(parseFlexibleTimestamp)
-        else { return }
+        if raw.type == "turn_context" { state.serviceTier = payload.serviceTier }
+        if let tier = payload.serviceTier { state.serviceTier = tier }
+        let isResponse = raw.type == "token_usage_record"
+        guard isResponse || payload.type == "token_count",
+              let timestamp = raw.timestamp.flatMap(parseFlexibleTimestamp) else { return }
 
-        let total = info.totalTokenUsage
-        let advanced = total == nil || previousTotals != total
-        let usage: RawCodexTokenUsage?
-        if let last = info.lastTokenUsage, advanced {
-            usage = last
-        } else if let total {
-            usage = total.subtracting(previousTotals)
+        let total = isResponse ? payload.threadTokenUsage : payload.info?.totalTokenUsage
+        let previous = state.totals
+        if let total { state.totals = total }
+        let usage: RawCodexTokenUsage
+        if isResponse {
+            guard let responseUsage = payload.usage else { return }
+            usage = responseUsage
+            state.lastResponseUsage = usage
         } else {
-            usage = nil
+            // Metadata-only repeats carry the previous call's last usage.
+            if let total, total == previous { return }
+            if let last = payload.info?.lastTokenUsage {
+                if last == state.lastResponseUsage {
+                    state.lastResponseUsage = nil
+                    return
+                }
+                usage = last
+            } else if let total {
+                usage = total.subtracting(previous)
+            } else { return }
+            state.lastResponseUsage = nil
         }
-        if let total { previousTotals = total }
-        guard let usage else { return }
 
         let input = max(0, usage.inputTokens ?? 0)
         let cached = min(input, max(0, usage.cachedInputTokens ?? 0))
-        let cacheWrite = max(0, usage.cacheWriteInputTokens ?? 0)
+        // Codex input includes both cache reads and writes; keep categories
+        // disjoint so writes aren't also billed as plain input.
+        let cacheWrite = min(input - cached, max(0, usage.cacheWriteInputTokens ?? 0))
         let output = max(0, usage.outputTokens ?? 0)
-        let reasoning = usage.reasoningOutputTokens
-        guard input > 0 || cacheWrite > 0 || output > 0 || (reasoning ?? 0) > 0 else { return }
+        let reasoning = usage.reasoningOutputTokens.map { max(0, $0) }
+        guard input > 0 || output > 0 else { return }
 
-        let dedupKey = "x\u{1F}\(raw.ordinal.map(String.init) ?? "null")"
-            + "\u{1F}\(input)\u{1F}\(cached)\u{1F}\(output)\u{1F}\(reasoning ?? -1)"
+        let identity = payload.responseID ?? (total == nil
+            ? (raw.ordinal.map(String.init) ?? timestamp.description)
+            : "cumulative")
+        let dedupKey = "x\u{1F}\(state.sessionID ?? "legacy")\u{1F}\(identity)"
+            + "\u{1F}\(input)\u{1F}\(cached)\u{1F}\(cacheWrite)\u{1F}\(output)\u{1F}\(reasoning ?? -1)"
             + "\u{1F}\(total?.inputTokens ?? -1)\u{1F}\(total?.cachedInputTokens ?? -1)"
-            + "\u{1F}\(total?.outputTokens ?? -1)"
-        records.append(
-            AgenticUsageRecord(
-                provider: .codex,
-                dedupKey: dedupKey,
-                model: currentModel ?? "gpt-5",
-                timestamp: timestamp,
-                inputTokens: input - cached,
-                cacheWriteTokens: cacheWrite,
-                cacheWrite1hTokens: 0,
-                cacheReadTokens: cached,
-                outputTokens: output,
-                thinkingTokens: reasoning,
-                isFast: false,
-                nativeCostUSD: nil
-            )
+            + "\u{1F}\(total?.cacheWriteInputTokens ?? -1)\u{1F}\(total?.outputTokens ?? -1)"
+        var record = AgenticUsageRecord(
+            provider: .codex,
+            dedupKey: dedupKey,
+            model: state.model ?? "gpt-unknown",
+            timestamp: timestamp,
+            inputTokens: input - cached - cacheWrite,
+            cacheWriteTokens: cacheWrite,
+            cacheWrite1hTokens: 0,
+            cacheReadTokens: cached,
+            outputTokens: output,
+            thinkingTokens: reasoning,
+            isFast: ["fast", "priority"].contains(state.serviceTier ?? ""),
+            nativeCostUSD: nil
         )
+        record.serviceTier = state.serviceTier
+        records.append(record)
     }
 
     // MARK: - Grok
@@ -561,9 +630,11 @@ actor AgenticUsageLoader {
         else { return }
         let timestamp = Date(timeIntervalSince1970: TimeInterval(epochSeconds))
 
-        let perModel = usage.modelUsage?.filter { _, use in (use.totalTokens ?? 0) > 0 } ?? [:]
+        let perModel = usage.modelUsage?.filter { _, use in
+            (use.inputTokens ?? 0) > 0 || (use.outputTokens ?? 0) > 0 || (use.totalTokens ?? 0) > 0
+        } ?? [:]
         if perModel.isEmpty {
-            append(grokUsage: usage, model: "grok-4.5-build", timestamp: timestamp, into: &records)
+            append(grokUsage: usage, model: "grok-unknown", timestamp: timestamp, into: &records)
         } else {
             for (model, use) in perModel.sorted(by: { $0.key < $1.key }) {
                 append(grokUsage: use, model: model, timestamp: timestamp, into: &records)
@@ -592,7 +663,7 @@ actor AgenticUsageLoader {
                 outputTokens: max(0, usage.outputTokens ?? 0),
                 thinkingTokens: usage.reasoningTokens,
                 isFast: false,
-                nativeCostUSD: usage.costUsdTicks.map { Double($0) / 1e10 }
+                nativeCostUSD: usage.costUsdTicks.flatMap { $0 >= 0 ? Double($0) / 1e10 : nil }
             )
         )
     }
@@ -730,6 +801,8 @@ private struct RawClaudeUsage: Decodable {
     let cacheReadInputTokens: Int?
     let outputTokens: Int?
     let speed: String?
+    let serviceTier: String?
+    let inferenceGeo: String?
     let cacheCreation: RawClaudeCacheCreation?
     let outputTokensDetails: RawClaudeOutputTokensDetails?
 
@@ -739,6 +812,8 @@ private struct RawClaudeUsage: Decodable {
         case cacheReadInputTokens = "cache_read_input_tokens"
         case outputTokens = "output_tokens"
         case speed
+        case serviceTier = "service_tier"
+        case inferenceGeo = "inference_geo"
         case cacheCreation = "cache_creation"
         case outputTokensDetails = "output_tokens_details"
     }
@@ -765,12 +840,20 @@ private struct RawClaudeOutputTokensDetails: Decodable {
 // Codex rollout lines.
 
 private struct RawCodexLine: Decodable {
+    let type: String?
     let timestamp: RawFlexibleTimestamp?
     let ordinal: Int?
     let payload: RawCodexPayload?
 }
 
 private struct RawCodexPayload: Decodable {
+    let id: String?
+    let threadID: String?
+    let sessionID: String?
+    let responseID: String?
+    let serviceTier: String?
+    let usage: RawCodexTokenUsage?
+    let threadTokenUsage: RawCodexTokenUsage?
     let type: String?
     let model: String?
     let collaborationMode: RawCodexCollaborationMode?
@@ -778,6 +861,13 @@ private struct RawCodexPayload: Decodable {
     let info: RawCodexTokenInfo?
 
     enum CodingKeys: String, CodingKey {
+        case id
+        case threadID = "thread_id"
+        case sessionID = "session_id"
+        case responseID = "response_id"
+        case serviceTier = "service_tier"
+        case usage
+        case threadTokenUsage = "thread_token_usage"
         case type
         case model
         case collaborationMode = "collaboration_mode"
@@ -795,6 +885,13 @@ private struct RawCodexWorldState: Decodable {
 }
 
 private struct RawCodexCollaborationMode: Decodable {
+    let model: String?
+    let settings: RawCodexCollaborationSettings?
+
+    var resolvedModel: String? { model ?? settings?.model }
+}
+
+private struct RawCodexCollaborationSettings: Decodable {
     let model: String?
 }
 

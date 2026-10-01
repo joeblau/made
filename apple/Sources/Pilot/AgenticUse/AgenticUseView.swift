@@ -60,7 +60,7 @@ struct AgenticUseView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
-            .help("Rescan usage logs")
+            .help("Refresh usage and pricing")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -123,7 +123,9 @@ struct AgenticUseView: View {
                     AgenticUseHeroPanel(
                         totalCost: snapshot.totalCostUSD,
                         modelTotals: snapshot.modelTotals,
-                        hasUnpricedModels: snapshot.hasUnpricedModels
+                        hasUnpricedModels: snapshot.hasUnpricedModels,
+                        unpricedTokens: snapshot.unpricedTokens,
+                        pricingStatus: store.pricingStatus
                     )
                     .frame(width: 300)
 
