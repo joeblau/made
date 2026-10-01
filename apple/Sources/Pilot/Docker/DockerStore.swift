@@ -111,11 +111,6 @@ final class DockerStore {
     @ObservationIgnored private var eventDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var listTask: Task<Void, Never>?
     @ObservationIgnored private var refreshGate = DockerRefreshGate()
-    /// Lifecycle requests in flight, by container ID. Leaving the section or
-    /// reconnecting does not cancel these: cancelling closes the socket, and a
-    /// stop or remove the daemon is partway through should finish rather than
-    /// be abandoned. Their results are simply no longer shown.
-    @ObservationIgnored private var actionTasks: [String: Task<Void, Never>] = [:]
 
     private static let showsStoppedKey = "docker.showsStopped"
     /// Events arrive in bursts — a compose stack coming up fires one per
@@ -212,11 +207,13 @@ final class DockerStore {
                 version = try await client.version()
             } catch {
                 guard let self, isCurrent(generation) else { return }
+                connectTask = nil
                 containers = []
                 engine = .unavailable(reason: Self.describe(error))
                 return
             }
             guard let self, isCurrent(generation) else { return }
+            connectTask = nil
             engine = .connected(version: version, socketPath: socketPath)
             requestRefresh(.handshake)
             watchEvents(from: client, generation: generation)
@@ -226,7 +223,7 @@ final class DockerStore {
     // MARK: - Refreshing
 
     /// Event-driven refresh, debounced so a burst of events costs one read.
-    func scheduleRefresh() {
+    private func scheduleRefresh() {
         guard isRunning, engine.isConnected else { return }
         eventDebounceTask?.cancel()
         let generation = generation
@@ -340,11 +337,16 @@ final class DockerStore {
 
     // MARK: - Actions
 
+    /// Starts a lifecycle request. The task is deliberately not retained or
+    /// cancelled on stop or reconnect: cancelling closes the socket, and a stop
+    /// or remove the daemon is partway through should finish rather than be
+    /// abandoned. `busyContainerIDs` guards the row until it ends, and the
+    /// generation check keeps a retired client's outcome off the UI.
     func perform(_ action: DockerContainerAction, on container: DockerContainerSummary) {
         guard isRunning, let client, !busyContainerIDs.contains(container.id) else { return }
         busyContainerIDs.insert(container.id)
         let generation = generation
-        actionTasks[container.id] = Task { [weak self] in
+        Task { [weak self] in
             let failure: (any Error)?
             do {
                 try await client.perform(action, containerID: container.id)
@@ -363,7 +365,6 @@ final class DockerStore {
         failure: (any Error)?
     ) {
         // The request is over whichever client sent it, so the row is free.
-        actionTasks[container.id] = nil
         busyContainerIDs.remove(container.id)
 
         if let failure {

@@ -221,6 +221,33 @@ struct DockerStoreRefreshTests {
         store.stop()
     }
 
+    @Test("An old client's successful action refreshes once through the current client")
+    func staleActionSuccessRefreshesCurrentClient() async throws {
+        let harness = try Harness()
+        let old = harness.nextEngine(name: "old", holdsActions: true)
+        let current = harness.nextEngine(name: "current")
+        let store = harness.store
+        store.start()
+        #expect(await eventually { old.listCalls == 1 && !store.isRefreshing })
+
+        store.perform(.stop, on: try Fixture.container(id: "c1", name: "api"))
+        #expect(await eventually { old.performCalls == 1 })
+
+        store.reconnect()
+        #expect(await eventually { current.listCalls == 1 && !store.isRefreshing })
+
+        old.releaseActions()
+        #expect(await eventually { store.busyContainerIDs.isEmpty })
+        // The daemon changed state, so the list is re-read, but only through
+        // the client the section is showing now.
+        #expect(await eventually { current.listCalls == 2 && !store.isRefreshing })
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(current.listCalls == 2)
+        #expect(old.listCalls == 1)
+        #expect(store.actionError == nil)
+        store.stop()
+    }
+
     @Test("An action that completes after stop starts no refresh")
     func actionAfterStopDoesNotRefresh() async throws {
         let harness = try Harness()
