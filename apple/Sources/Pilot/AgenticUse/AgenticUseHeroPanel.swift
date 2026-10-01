@@ -8,6 +8,8 @@ struct AgenticUseHeroPanel: View {
     let totalCost: Double
     let modelTotals: [AgenticModelTotal]
     let hasUnpricedModels: Bool
+    let unpricedTokens: Int
+    let pricingStatus: String
 
     /// Model totals grouped by provider, ordered by provider cost
     /// descending; models inside keep the incoming (cost descending) order.
@@ -34,11 +36,11 @@ struct AgenticUseHeroPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("RAW TOKEN COST")
+                Text("ESTIMATED API COST")
                     .scaledFont(size: 10, weight: .semibold)
                     .kerning(0.8)
                     .foregroundStyle(.secondary)
-                Text(AgenticUseFormat.cost(totalCost) + "*")
+                Text(AgenticUseFormat.cost(totalCost) + (hasUnpricedModels ? "*" : ""))
                     .scaledFont(size: 34, weight: .bold, design: .rounded)
                     .monospacedDigit()
                     .contentTransition(.numericText())
@@ -46,11 +48,14 @@ struct AgenticUseHeroPanel: View {
                         .interactiveSpring(response: 0.35, dampingFraction: 0.7),
                         value: totalCost
                     )
-                Text("* if billed at full API rate")
+                Text("API-equivalent token cost")
+                    .scaledFont(size: 10)
+                    .foregroundStyle(.tertiary)
+                Text(pricingStatus)
                     .scaledFont(size: 10)
                     .foregroundStyle(.tertiary)
                 if hasUnpricedModels {
-                    Text("Some models have no pricing entry and are excluded from the total.")
+                    Text("* Partial total: \(AgenticUseFormat.tokens(unpricedTokens)) tokens have no published rate.")
                         .scaledFont(size: 10)
                         .foregroundStyle(.orange)
                 }

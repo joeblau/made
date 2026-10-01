@@ -61,10 +61,11 @@ struct AgenticUsageProviderTests {
         #expect(record.thinkingTokens == 71)
     }
 
-    @Test("Codex sessions without model context fall back to gpt-5")
+    @Test("Codex sessions without model context preserve usage as unattributed")
     func codexFallbackModel() {
         let records = parse([codexTokenCount], provider: .codex)
-        #expect(records.first?.model == "gpt-5")
+        #expect(records.first?.model == "gpt-unknown")
+        #expect(records.first.flatMap { AgenticUsagePricing.cost(of: $0) } == nil)
     }
 
     @Test("Codex token counts whose cumulative totals did not advance are repeats")
@@ -188,24 +189,18 @@ struct AgenticUsageProviderTests {
         )
     }
 
-    /// Codex models bill flat regardless of context size — the tiered
-    /// long-context sheets belong to hosted variants, not the CLI's models.
-    /// Verified against ccusage, which reproduces these rates to the cent.
-    @Test("gpt-5.6-sol bills flat rates at any context size")
-    func codexFlatPricing() throws {
-        let small = record(model: "gpt-5.6-sol", input: 100_000, output: 1_000_000)
-        let smallCost = try #require(AgenticUsagePricing.cost(of: small))
-        #expect(abs(smallCost - (0.1 * 4.00 + 1.0 * 20.00)) < 1e-9)
-
-        let large = record(model: "gpt-5.6-sol", input: 50_000, cacheRead: 250_000, output: 1_000_000)
-        let largeCost = try #require(AgenticUsagePricing.cost(of: large))
-        #expect(abs(largeCost - (0.05 * 4.00 + 0.25 * 0.40 + 1.0 * 20.00)) < 1e-9)
+    @Test("OpenAI long-context pricing starts strictly above 272K prompt tokens")
+    func codexContextPricing() throws {
+        let small = record(model: "gpt-5.6-sol", input: 22_000, cacheRead: 250_000, output: 1000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: small)) - 0.208) < 1e-9)
+        let large = record(model: "gpt-5.6-sol", input: 22_001, cacheRead: 250_000, output: 1000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: large)) - 0.406008) < 1e-9)
     }
 
     @Test("Cache reads default to 0.1x input unless overridden")
     func cacheReadRates() throws {
         let k3 = record(model: "k3", cacheRead: 1_000_000)
-        #expect(try abs(#require(AgenticUsagePricing.cost(of: k3)) - 0.45) < 1e-9)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: k3)) - 0.30) < 1e-9)
         let gpt5 = record(model: "gpt-5", cacheRead: 1_000_000)
         #expect(try abs(#require(AgenticUsagePricing.cost(of: gpt5)) - 0.125) < 1e-9)
         // Fable 5.1 bills cache reads at 0.025x input, not the usual 0.1x.
@@ -242,4 +237,199 @@ struct AgenticUsageProviderTests {
         #expect(snapshot.interval.end == now)
         #expect(snapshot.modelTotals.count == 1)
     }
+    @Test("Screenshot models all have published rates and reconcile across the dashboard")
+    func screenshotModelCoverage() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let models = ["claude-opus-5-5", "gpt-6-astra", "gpt-6.1-sol", "grok-4.7-build", "k3"]
+        let records = models.map { record(model: $0, input: 100, cacheRead: 1000, output: 10) }
+        let snapshot = AgenticUsageStore.makeSnapshot(
+            records: records, range: .all, now: records[0].timestamp.addingTimeInterval(3600), calendar: calendar
+        )
+        #expect(!snapshot.hasUnpricedModels)
+        #expect(snapshot.unpricedTokens == 0)
+        #expect(snapshot.stats.processedTokens == 5550)
+        #expect(abs(snapshot.modelTotals.reduce(0) { $0 + $1.cost } - snapshot.totalCostUSD) < 1e-9)
+        #expect(abs(snapshot.dailySeries.reduce(0) { $0 + $1.cost } - snapshot.totalCostUSD) < 1e-9)
+        #expect(snapshot.dailySeries.reduce(0) { $0 + $1.tokens } == snapshot.stats.processedTokens)
+        #expect(abs(snapshot.dayTotals.reduce(0) { $0 + $1.cost } - snapshot.totalCostUSD) < 1e-9)
+    }
+
+    @Test("Opus 5.5 fast calls preserve its five-percent cache-read rate")
+    func opusFastCachePricing() throws {
+        var fast = record(model: "claude-opus-5-5", cacheRead: 1_000_000)
+        fast.serviceTier = "fast"
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: fast)) - 0.4) < 1e-9)
+        fast.inferenceGeo = "us"
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: fast)) - 0.44) < 1e-9)
+    }
+
+    @Test("K3 cache writes use their published rate rather than Claude's multiplier")
+    func kimiCacheWrites() throws {
+        let records = parse([
+            """
+            {"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":0,"output":0,"inputCacheRead":0,"inputCacheCreation":1000000},"usageScope":"turn","time":1786115071956}
+            """
+        ], provider: .kimi)
+        let record = try #require(records.first)
+        let cost = try #require(AgenticUsagePricing.cost(of: record))
+        #expect(abs(cost - 3) < 1e-9)
+    }
+
+    @Test("Native-cost models without baselines do not subtract from cache savings")
+    func savingsOnlyCompareMatchingRecords() {
+        var native = record(model: "unlisted-grok-model", input: 100)
+        native = AgenticUsageRecord(
+            provider: .grok, dedupKey: nil, model: native.model, timestamp: native.timestamp,
+            inputTokens: 100, cacheWriteTokens: 0, cacheWrite1hTokens: 0, cacheReadTokens: 0,
+            outputTokens: 0, thinkingTokens: nil, isFast: false, nativeCostUSD: 100
+        )
+        let cached = record(model: "gpt-6.1-sol", cacheRead: 1000)
+        let snapshot = AgenticUsageStore.makeSnapshot(
+            records: [cached, native], range: .all,
+            now: cached.timestamp.addingTimeInterval(1), calendar: Calendar(identifier: .gregorian)
+        )
+        #expect(abs(snapshot.stats.cacheSavingsUSD - 0.0019) < 1e-9)
+        #expect(snapshot.totalCostUSD > 100)
+    }
+
+    @Test("Current Codex response records and legacy notifications count each call once")
+    func codexResponseUsage() throws {
+        let response = """
+        {"type":"token_usage_record","timestamp":"2026-08-14T02:34:35.653Z","payload":{"thread_id":"thread-a","response_id":"response-a","usage":{"input_tokens":16433,"cached_input_tokens":11008,"cache_write_input_tokens":1000,"output_tokens":219,"reasoning_output_tokens":71},"thread_token_usage":{"input_tokens":16433,"cached_input_tokens":11008,"cache_write_input_tokens":1000,"output_tokens":219,"reasoning_output_tokens":71}}}
+        """
+        let notification = codexTokenCount.replacingOccurrences(of: "\"cache_write_input_tokens\":0", with: "\"cache_write_input_tokens\":1000")
+        let records = parse([codexTurnContext, response, notification], provider: .codex)
+        let first = try #require(records.first)
+        #expect(records.count == 1)
+        #expect(first.inputTokens == 4425)
+        #expect(first.cacheWriteTokens == 1000)
+        #expect(first.totalTokens == 16652)
+        let other = parse([codexTurnContext, response.replacingOccurrences(of: "thread-a", with: "thread-b")], provider: .codex)
+        #expect(AgenticUsageLoader.deduplicate(records + records + other).count == 2)
+    }
+
+    @Test("Response-only Codex logs remain billable without notifications")
+    func codexResponseOnly() {
+        let line = """
+        {"type":"token_usage_record","timestamp":"2026-08-14T02:34:35.653Z","payload":{"model":"gpt-6.1-sol","response_id":"r1","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}}
+        """
+        let records = parse([line], provider: .codex)
+        #expect(records.count == 1)
+        #expect(records.first?.model == "gpt-6.1-sol")
+        #expect(records.first?.inputTokens == 80)
+    }
+
+    @Test("Overlapping scan roots do not duplicate append-only Kimi logs")
+    func overlappingSources() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let line = """
+        {"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":1,"output":2},"usageScope":"turn","time":1786115071956}
+        """
+        try Data(line.utf8).write(to: root.appendingPathComponent("wire.jsonl"))
+        let source = AgenticUsageLoader.Source(provider: .kimi, rootDirectory: root, fileName: "wire.jsonl")
+        let result = try await AgenticUsageLoader(sources: [source, source]).load()
+        #expect(result.fileCount == 1)
+        #expect(result.records.count == 1)
+    }
+
+    @Test("Catalog imports future models with their explicit context thresholds")
+    func catalogThresholdsAndValidation() throws {
+        let data = Data("""
+        {"openai":{"models":{
+          "gpt-future":{"cost":{"input":2,"output":10,"cache_read":0.1,"tiers":[{"input":4,"output":15,"cache_read":0.2,"tier":{"type":"context","size":272000}}],"context_over_200k":{"input":99,"output":99}}},
+          "gpt-6.1-sol":{"last_updated":"2026-09-29","cost":{"input":99,"output":99}},
+          "gpt-bad":{"cost":{"input":true,"output":10}},
+          "gpt-free":{"cost":{"input":0,"output":0}}
+        }}}
+        """.utf8)
+        let rates = try AgenticPricingCatalog.decode(data)
+        #expect(rates["gpt-bad"] == nil)
+        #expect(rates["gpt-free"] == nil)
+        #expect(rates["gpt-6.1-sol"] == nil)
+        #expect(rates["gpt-future"]?.contextTiers.first?.threshold == 272_000)
+        let small = record(model: "gpt-future", input: 210_000, output: 1000)
+        let large = record(model: "gpt-future", input: 300_000, output: 1000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: small, rates: rates)) - 0.43) < 1e-9)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: large, rates: rates)) - 1.215) < 1e-9)
+    }
+
+    @Test("A saved pricing catalog remains usable when the network fails")
+    func catalogOfflineCache() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let catalog = AgenticPricingCatalog(cacheURL: url, fetch: {
+            Data("""
+            {"openai":{"models":{"gpt-future":{"cost":{"input":2,"output":10,"cache_read":0.1}}}}}
+            """.utf8)
+        })
+        let first = await catalog.load(now: Date(timeIntervalSince1970: 1000))
+        #expect(first.warning == nil)
+        #expect(first.rates["gpt-future"] != nil)
+        let offline = AgenticPricingCatalog(cacheURL: url, fetch: { throw URLError(.notConnectedToInternet) })
+        let result = await offline.load(force: true, now: Date(timeIntervalSince1970: 100_000))
+        #expect(result.warning != nil)
+        #expect(result.rates["gpt-future"] == first.rates["gpt-future"])
+        #expect(result.rates["claude-opus-5-5"] != nil)
+    }
+
+    @Test("Files beyond the former 512MB limit retain usage after oversized lines")
+    func streamsLargeFiles() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("large.jsonl")
+        #expect(FileManager.default.createFile(atPath: url.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: url)
+        let prefixSize: UInt64 = 513 * 1024 * 1024
+        // A sparse oversized non-usage line avoids allocating a huge fixture.
+        try handle.truncate(atOffset: prefixSize)
+        try handle.seek(toOffset: prefixSize)
+        try handle.write(contentsOf: Data(("\n" + codexTurnContext + "\n" + codexTokenCount).utf8))
+        try handle.close()
+        let source = AgenticUsageLoader.Source(provider: .codex, rootDirectory: root)
+        let loader = AgenticUsageLoader(sources: [source])
+        let result = try await loader.load()
+        #expect(result.unreadableFileCount == 0)
+        #expect(result.skippedLineCount == 1)
+        #expect(result.records.count == 1)
+        #expect(result.records.first?.outputTokens == 219)
+        let cached = try await loader.load()
+        #expect(cached.skippedLineCount == 1)
+        #expect(cached.records == result.records)
+    }
+
+    @Test("Grok context pricing includes the 200K boundary and preserves older cache rates")
+    func grokContextBoundary() throws {
+        let small = record(model: "grok-4.7", input: 199_999, output: 1000)
+        let boundary = record(model: "grok-4.7", input: 200_000, output: 1000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: small)) - 0.405998) < 1e-9)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: boundary)) - 0.812) < 1e-9)
+        let older = record(model: "grok-4.5", cacheRead: 100_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: older)) - 0.03) < 1e-9)
+    }
+
+    @Test("Oversized compaction histories do not produce false usage-gap warnings")
+    func oversizedHistory() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("history.jsonl")
+        var data = Data("{\"type\":\"compacted\",\"payload\":{\"history\":\"".utf8)
+        data.append(Data(repeating: 0x61, count: 17 * 1024 * 1024))
+        data.append(Data(("\"}}\n" + codexTurnContext + "\n" + codexTokenCount).utf8))
+        try data.write(to: url)
+        let result = try await AgenticUsageLoader(sources: [.init(provider: .codex, rootDirectory: root)]).load()
+        #expect(result.skippedLineCount == 0)
+        #expect(result.records.count == 1)
+    }
+
+    @Test("Provider date-stamped model identifiers resolve to the same published rate")
+    func datedModelIdentifiers() {
+        #expect(AgenticModel.canonicalize("gpt-6.1-sol-2026-09-29") == "gpt-6.1-sol")
+        #expect(AgenticModel.canonicalize("claude-haiku-4-5-20251001") == "claude-haiku-4-5")
+    }
+
 }
