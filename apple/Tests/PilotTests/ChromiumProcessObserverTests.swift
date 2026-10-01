@@ -37,14 +37,16 @@ struct ChromiumProcessObserverTests {
 
     private static func result(
         _ output: String = "",
-        termination: ProcessRunResult.Termination = .exit(0)
+        termination: ProcessRunResult.Termination = .exit(0),
+        standardOutputTruncated: Bool = false,
+        standardErrorTruncated: Bool = false
     ) -> ProcessRunResult {
         ProcessRunResult(
             termination: termination,
             standardOutput: Data(output.utf8),
             standardError: Data(),
-            standardOutputTruncated: false,
-            standardErrorTruncated: false,
+            standardOutputTruncated: standardOutputTruncated,
+            standardErrorTruncated: standardErrorTruncated,
             elapsed: .milliseconds(5),
             redactedCommand: "/bin/ps"
         )
@@ -284,6 +286,7 @@ struct ChromiumProcessObserverTests {
         #expect(invocation.timeout == .seconds(3))
         #expect(invocation.standardOutputLimit == 1_024)
         #expect(invocation.qualityOfService == .userInitiated)
+        #expect(invocation.standardErrorLimit == ChromiumProcessObserver.standardErrorLimit)
         #expect(snapshot.helperCommands == [Self.renderer])
         #expect(snapshot.startedAt <= snapshot.finishedAt)
     }
@@ -309,7 +312,18 @@ struct ChromiumProcessObserverTests {
             try await observer(.nonZeroExit(Self.result(termination: .signal(9)))).snapshot()
         }
         await #expect(throws: ChromiumProcessObservationError.outputExceeded(limit: 4_096)) {
-            try await observer(.outputTruncated(Self.result())).snapshot()
+            try await observer(.outputTruncated(Self.result(standardOutputTruncated: true))).snapshot()
+        }
+        await #expect(throws: ChromiumProcessObservationError.outputExceeded(limit: 4_096)) {
+            try await observer(.outputTruncated(Self.result(
+                standardOutputTruncated: true,
+                standardErrorTruncated: true
+            ))).snapshot()
+        }
+        await #expect(throws: ChromiumProcessObservationError.errorOutputExceeded(
+            limit: ChromiumProcessObserver.standardErrorLimit
+        )) {
+            try await observer(.outputTruncated(Self.result(standardErrorTruncated: true))).snapshot()
         }
         await #expect(throws: ChromiumProcessObservationError.launchFailed("denied")) {
             try await observer(.launch(command: "/bin/ps", message: "denied")).snapshot()

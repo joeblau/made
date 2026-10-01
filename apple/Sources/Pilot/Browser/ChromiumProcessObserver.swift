@@ -258,7 +258,10 @@ enum ChromiumIdleResourceError: LocalizedError, Equatable {
 enum ChromiumIdleResources {
     /// CPU is the summed per-process CPU delta over the interval between the
     /// two observations' midpoints, so time spent launching and reading `ps`
-    /// is neither added to nor hidden from the denominator. Only processes
+    /// is neither added to nor hidden from the denominator. The app's own
+    /// ProcessRunner thread that drains `ps` output still runs inside about
+    /// half of each `ps` call and is counted in the app process's CPU; that
+    /// cost is small but not zero. Only processes
     /// present in both observations with an unchanged command line are
     /// compared: helpers that exit, or PIDs reused by another process, are
     /// excluded rather than counted as negative or foreign work. Resident
@@ -311,6 +314,7 @@ enum ChromiumProcessObservationError: LocalizedError, Equatable {
     case timedOut(Duration)
     case exited(ProcessRunResult.Termination)
     case outputExceeded(limit: Int)
+    case errorOutputExceeded(limit: Int)
     case unreadableOutput(rows: Int)
 
     var errorDescription: String? {
@@ -325,6 +329,8 @@ enum ChromiumProcessObservationError: LocalizedError, Equatable {
             "/bin/ps was terminated by signal \(signal)."
         case let .outputExceeded(limit):
             "/bin/ps produced more than \(limit) bytes of output."
+        case let .errorOutputExceeded(limit):
+            "/bin/ps wrote more than \(limit) bytes of error output."
         case let .unreadableOutput(rows):
             "/bin/ps produced \(rows) rows and none had the expected format."
         }
@@ -336,6 +342,9 @@ enum ChromiumProcessObservationError: LocalizedError, Equatable {
 /// output limit, and is terminated when the observing task is cancelled.
 struct ChromiumProcessObserver: Sendable {
     typealias Runner = @Sendable (ProcessInvocation) async throws -> ProcessRunResult
+
+    /// ps writes diagnostics only on failure; anything larger is not ps.
+    static let standardErrorLimit = 64 * 1_024
 
     let scope: ChromiumProcessScope
     let timeout: Duration
@@ -362,7 +371,7 @@ struct ChromiumProcessObserver: Sendable {
             timeout: timeout,
             terminationGracePeriod: .milliseconds(250),
             standardOutputLimit: standardOutputLimit,
-            standardErrorLimit: 64 * 1_024,
+            standardErrorLimit: Self.standardErrorLimit,
             // Probe durations include this command's latency; a utility-class
             // ps measurably lags on a loaded machine.
             qualityOfService: .userInitiated
@@ -403,8 +412,16 @@ struct ChromiumProcessObserver: Sendable {
             CancellationError()
         case let .nonZeroExit(result):
             ChromiumProcessObservationError.exited(result.termination)
-        case .outputTruncated:
-            ChromiumProcessObservationError.outputExceeded(limit: standardOutputLimit)
+        case let .outputTruncated(result):
+            // ProcessRunner reports either stream overflowing the same way;
+            // name the limit that was actually exceeded.
+            if result.standardOutputTruncated || !result.standardErrorTruncated {
+                ChromiumProcessObservationError.outputExceeded(limit: standardOutputLimit)
+            } else {
+                ChromiumProcessObservationError.errorOutputExceeded(
+                    limit: Self.standardErrorLimit
+                )
+            }
         }
     }
 }

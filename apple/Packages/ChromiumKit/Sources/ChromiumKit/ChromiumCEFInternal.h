@@ -45,7 +45,11 @@
 #include "include/wrapper/cef_helpers.h"
 #include "include/wrapper/cef_library_loader.h"
 
-namespace chromiumkit {
+// These classes were file-local before the bridge was split; the named
+// namespace gives them external linkage only so the implementation units can
+// share them. They are package-private: nothing outside ChromiumKit's sources
+// may name them, and the namespace is hidden from the linked image's exports.
+namespace chromiumkit __attribute__((visibility("hidden"))) {
 
 class BrowserClient;
 class EngineCore;

@@ -10,13 +10,19 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-FOUNDATION_EXTERN NSError *ChromiumKitError(ChromiumKitErrorCode code,
-                                            NSString *description,
-                                            NSDictionary *_Nullable extra);
+// These helpers have external linkage only so the implementation units can
+// share them; hidden visibility keeps them out of the linked image's exported
+// symbols. They are not API and must not be declared outside this package.
+#define CHROMIUMKIT_INTERNAL __attribute__((visibility("hidden")))
+
+FOUNDATION_EXTERN CHROMIUMKIT_INTERNAL NSError *ChromiumKitError(
+    ChromiumKitErrorCode code,
+    NSString *description,
+    NSDictionary *_Nullable extra);
 
 /// Error returned by the artifact-free implementation for every operation
 /// that would require the CEF runtime.
-FOUNDATION_EXTERN NSError *ChromiumKitUnavailableError(void);
+FOUNDATION_EXTERN CHROMIUMKIT_INTERNAL NSError *ChromiumKitUnavailableError(void);
 
 @interface ChromiumEngine ()
 @property (nonatomic, readwrite) ChromiumEngineState state;

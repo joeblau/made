@@ -13,10 +13,12 @@ struct ProcessInvocation: Sendable {
     var standardOutputLimit = 2 * 1_024 * 1_024
     var standardErrorLimit = 256 * 1_024
     var redactedArgumentIndexes: Set<Int> = []
-    /// Scheduling class for the child and its output-draining worker. Keep
-    /// `.utility` for background tooling; raise it only when the command's
-    /// latency is itself being measured or awaited by a user.
-    var qualityOfService: QualityOfService = .utility
+    /// Optional scheduling class for the child and its output-draining worker.
+    /// `nil` (the default) leaves `Process.qualityOfService` unset, so the
+    /// child keeps Foundation's default class, and drains on a `.utility`
+    /// queue, which is the runner's long-standing behavior. Set it only when
+    /// the command's latency is itself measured or awaited by a user.
+    var qualityOfService: QualityOfService?
 
     init(
         executableURL: URL,
@@ -28,7 +30,7 @@ struct ProcessInvocation: Sendable {
         standardOutputLimit: Int = 2 * 1_024 * 1_024,
         standardErrorLimit: Int = 256 * 1_024,
         redactedArgumentIndexes: Set<Int> = [],
-        qualityOfService: QualityOfService = .utility
+        qualityOfService: QualityOfService? = nil
     ) {
         self.executableURL = executableURL
         self.arguments = arguments
@@ -66,7 +68,8 @@ struct ProcessInvocation: Sendable {
     }
 
     fileprivate var dispatchQoS: DispatchQoS.QoSClass {
-        switch qualityOfService {
+        guard let qualityOfService else { return .utility }
+        return switch qualityOfService {
         case .userInteractive: .userInteractive
         case .userInitiated: .userInitiated
         case .default: .default
@@ -186,22 +189,33 @@ enum ProcessRunner {
         )
     }
 
+    /// Builds the child without launching it. Internal so tests can confirm
+    /// the scheduling class a caller gets when it does not opt in.
+    static func makeProcess(for invocation: ProcessInvocation) -> Process {
+        let process = Process()
+        process.executableURL = invocation.executableURL
+        process.arguments = invocation.arguments
+        process.currentDirectoryURL = invocation.currentDirectoryURL
+        if let environment = invocation.environment { process.environment = environment }
+        // Leave the child at Foundation's default unless a caller opts in:
+        // assigning `.utility` here would demote every background command.
+        if let qualityOfService = invocation.qualityOfService {
+            process.qualityOfService = qualityOfService
+        }
+        return process
+    }
+
     private static func execute(
         _ invocation: ProcessInvocation,
         control: ProcessControl,
         cancellationProbe: (() -> Bool)? = nil
     ) throws -> ProcessRunResult {
-        let process = Process()
+        let process = makeProcess(for: invocation)
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.executableURL = invocation.executableURL
-        process.arguments = invocation.arguments
-        process.currentDirectoryURL = invocation.currentDirectoryURL
-        if let environment = invocation.environment { process.environment = environment }
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         process.standardInput = FileHandle.nullDevice
-        process.qualityOfService = invocation.qualityOfService
 
         let stdout = OutputCapture(limit: invocation.standardOutputLimit)
         let stderr = OutputCapture(limit: invocation.standardErrorLimit)
