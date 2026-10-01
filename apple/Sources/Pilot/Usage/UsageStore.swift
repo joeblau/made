@@ -46,8 +46,10 @@ final class UsageStore {
             claude: { await ClaudeUsageAdapter.fetch(session: UsageSessions.ClaudeSession.load()) },
             codex: { await CodexUsageAdapter.fetch(session: UsageSessions.CodexSession.load()) },
             grok: {
-                await GrokUsageAdapter.fetch(
-                    session: UsageSessions.GrokSession.load(),
+                // Read the installed version only once a session exists.
+                guard let session = UsageSessions.GrokSession.load() else { return .notSignedIn }
+                return await GrokUsageAdapter.fetch(
+                    session: session,
                     clientVersion: UsageSessions.GrokSession.installedVersion()
                 )
             },
@@ -66,6 +68,8 @@ final class UsageStore {
     private var activeProviders: Set<Provider> = []
     private let defaults: UserDefaults
     private let fetchers: Fetchers
+    /// Wall clock for spacing and backoff; injectable for tests.
+    private let now: () -> Date
 
     /// These are undocumented, aggressively rate-limited endpoints. Poll rarely —
     /// reset countdowns tick client-side, so the network data only needs to be
@@ -87,9 +91,10 @@ final class UsageStore {
     /// Consecutive 429 count per provider (drives the exponential backoff).
     private var rateLimitStrikes: [Provider: Int] = [:]
 
-    init(defaults: UserDefaults = .standard, fetchers: Fetchers = .live) {
+    init(defaults: UserDefaults = .standard, fetchers: Fetchers = .live, now: @escaping () -> Date = Date.init) {
         self.defaults = defaults
         self.fetchers = fetchers
+        self.now = now
     }
 
     /// Begin (or restart) periodic refresh. Safe to call repeatedly.
@@ -126,7 +131,7 @@ final class UsageStore {
 
     /// Detect sessions and fetch providers that aren't spaced-out or backed-off.
     func reload() {
-        let now = Date()
+        let now = self.now()
         let claudeEnabled = UsageConsent.isClaudeEnabled(defaults: defaults)
         let codexEnabled = UsageConsent.isCodexEnabled(defaults: defaults)
         let grokEnabled = UsageConsent.isGrokEnabled(defaults: defaults)
@@ -239,7 +244,7 @@ final class UsageStore {
             let strikes = (rateLimitStrikes[provider] ?? 0) + 1
             rateLimitStrikes[provider] = strikes
             let delay = Self.backoffDelay(strikes: strikes, retryAfter: retryAfter)
-            blockedUntil[provider] = Date().addingTimeInterval(delay)
+            blockedUntil[provider] = now().addingTimeInterval(delay)
             if case .usage = previous { return previous } // keep showing last data
             return .error("Rate limited — backing off ~\(Int((delay / 60).rounded()))m.")
 
@@ -250,8 +255,9 @@ final class UsageStore {
         case .skipped:
             // Spaced-out or backed-off this tick; keep whatever we last showed.
             if case .usage = previous { return previous }
-            if let until = blockedUntil[provider], Date() < until {
-                let remaining = Int((until.timeIntervalSinceNow / 60).rounded(.up))
+            let current = now()
+            if let until = blockedUntil[provider], current < until {
+                let remaining = Int((until.timeIntervalSince(current) / 60).rounded(.up))
                 return .error("Rate limited — retrying in ~\(max(1, remaining))m.")
             }
             return previous
