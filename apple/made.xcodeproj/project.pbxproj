@@ -156,6 +156,7 @@
 		797D0930B714141F808BBDA9 /* WingmanDeliveryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD24581F338C2987036C440 /* WingmanDeliveryState.swift */; };
 		79F6A511540B0DFC09D22963 /* SecureChannelResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F2FAA91CD094C780B3CF6F0 /* SecureChannelResponder.swift */; };
 		7AFC340E1B7A5ABB82BD36E8 /* BrowserStartPageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3DF31ED6D732374F745AE8E /* BrowserStartPageView.swift */; };
+		7B03637FAEDD680B94757A6E /* MarkdownStylerIncrementalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE24BD01E50882A66E53190A /* MarkdownStylerIncrementalTests.swift */; };
 		7C23307F8CE9E725A9FD48B7 /* TerminalRuntimeCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8BBD45248A0E9BB55D36174 /* TerminalRuntimeCacheTests.swift */; };
 		7D67FEA191C1BE7B6A1B71C6 /* AgenticUsageProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA8B2C4A55B63DED9DB4AE47 /* AgenticUsageProviderTests.swift */; };
 		7DB692B5A779B84128DA84B5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54CE720A16BE9E6193C72CDD /* ContentView.swift */; };
@@ -687,6 +688,7 @@
 		DB13DCB657B0C6955CA55F8F /* FuzzyMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatcher.swift; sourceTree = "<group>"; };
 		DB65BD6645ABED2F3C334A40 /* TerminalToolbarControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalToolbarControls.swift; sourceTree = "<group>"; };
 		DBB5EF8CB13C5B1AED66F1D1 /* PlotterLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterLiveActivity.swift; sourceTree = "<group>"; };
+		DE24BD01E50882A66E53190A /* MarkdownStylerIncrementalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownStylerIncrementalTests.swift; sourceTree = "<group>"; };
 		DE7557B5A46C13F0FB040D19 /* GPU.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GPU.entitlements; sourceTree = "<group>"; };
 		DF2CE47E300C860F3A949839 /* ReplayWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayWindow.swift; sourceTree = "<group>"; };
 		E049F62849A8FF8619A7E61E /* CopilotUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CopilotUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -817,6 +819,7 @@
 				99FBD4FF911ED668812EFC61 /* H264AnnexBAssemblerTests.swift */,
 				18553CE7573D81D708F4F79F /* LocalServerScannerTests.swift */,
 				BC7502053C980F1473B1F9C2 /* MarkdownImageTests.swift */,
+				DE24BD01E50882A66E53190A /* MarkdownStylerIncrementalTests.swift */,
 				5FE86C14933B542E638E5257 /* MarkdownTableFormatterTests.swift */,
 				DAE3BC2659B3EFE952940D66 /* NotesEditingSmokeTests.swift */,
 				7E9CE6A40937B1C93B916C57 /* NotesSecurityBoundaryTests.swift */,
@@ -2026,6 +2029,7 @@
 				5C17D3C9E677B3F2BC7C0CFE /* H264AnnexBAssemblerTests.swift in Sources */,
 				E09EBC388A78CCFCAB913527 /* LocalServerScannerTests.swift in Sources */,
 				75341211412B23C472525A50 /* MarkdownImageTests.swift in Sources */,
+				7B03637FAEDD680B94757A6E /* MarkdownStylerIncrementalTests.swift in Sources */,
 				124ABC7B7D664D485CC8F60E /* MarkdownTableFormatterTests.swift in Sources */,
 				C70305A56C7D8B42203F8037 /* NotesEditingSmokeTests.swift in Sources */,
 				FAB5C1140E3E572463F3B254 /* NotesSecurityBoundaryTests.swift in Sources */,

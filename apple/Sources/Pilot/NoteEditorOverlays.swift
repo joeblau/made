@@ -16,7 +16,10 @@ final class NoteEditorOverlays {
     private weak var textView: MultiCursorTextView?
     private let iconSize: CGFloat = 16
 
-    private var gutterButtons: [NSButton] = []
+    /// Installed gutter buttons by spec key plus occurrence, so a change to
+    /// one affordance (e.g. typing inside one code block) replaces only that
+    /// button rather than every button in the gutter.
+    private var gutterButtons: [String: GutterButton] = [:]
     private var gutterSignature = ""
     private var colorChips: [NSButton] = []
     private var colorChipSignature = ""
@@ -285,14 +288,27 @@ final class NoteEditorOverlays {
         guard signature != gutterSignature else { return }
         gutterSignature = signature
 
-        gutterButtons.forEach { $0.removeFromSuperview() }
-        gutterButtons.removeAll()
+        // A key fixes the symbol, tint, and help text, so a button with the
+        // same key only needs its frame and action refreshed.
+        var occurrences: [String: Int] = [:]
+        var installed: [String: GutterButton] = [:]
         for spec in specs {
-            let button = GutterButton(symbol: spec.symbol, tint: spec.tint, frame: spec.frame, help: spec.help)
+            let occurrence = occurrences[spec.key, default: 0]
+            occurrences[spec.key] = occurrence + 1
+            let id = "\(spec.key)#\(occurrence)"
+            let button: GutterButton
+            if let existing = gutterButtons.removeValue(forKey: id) {
+                button = existing
+                if button.frame != spec.frame { button.frame = spec.frame }
+            } else {
+                button = GutterButton(symbol: spec.symbol, tint: spec.tint, frame: spec.frame, help: spec.help)
+                textView.addSubview(button)
+            }
             button.onClick = spec.action
-            textView.addSubview(button)
-            gutterButtons.append(button)
+            installed[id] = button
         }
+        gutterButtons.values.forEach { $0.removeFromSuperview() }
+        gutterButtons = installed
     }
 
     // MARK: - Geometry

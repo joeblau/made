@@ -23,12 +23,18 @@ enum EnvSecret {
         let value: String
     }
 
-    static func matches(in string: String) -> [Match] {
+    /// Assignments in `string`, or only those within `range` (which should
+    /// start and end on line boundaries) when one is given.
+    static func matches(in string: String, range: NSRange? = nil) -> [Match] {
         let ns = string as NSString
         let full = NSRange(location: 0, length: ns.length)
         var result: [Match] = []
 
-        line.enumerateMatches(in: string, range: full) { match, _, _ in
+        line.enumerateMatches(
+            in: string,
+            options: range == nil ? [] : [.withTransparentBounds, .withoutAnchoringBounds],
+            range: range ?? full
+        ) { match, _, _ in
             guard let match else { return }
             let keyRange = match.range(at: 1)
             var valueRange = match.range(at: 2)
@@ -69,8 +75,15 @@ enum EnvSecret {
 /// caret never reveals them.
 @MainActor
 final class EnvMaskController: NSObject, @preconcurrency NSLayoutManagerDelegate {
-    weak var textView: MultiCursorTextView?
+    weak var textView: MultiCursorTextView? {
+        didSet { observeTextStorage(of: textView) }
+    }
+    /// Character ranges whose glyphs are bullets. Kept in step with every
+    /// character edit (see `maskedTextWillProcessEditing`) so the set always
+    /// describes the glyphs the layout manager holds; `refresh()` then only
+    /// invalidates ranges whose masking actually changed.
     private(set) var maskedRanges: [NSRange] = []
+    private weak var observedStorage: NSTextStorage?
     /// All secrets currently in the document (for hover/lock hit-testing).
     private(set) var secrets: [EnvSecret.Match] = []
     /// Keys the user has explicitly unlocked via the per-line lock toggle.
@@ -103,8 +116,64 @@ final class EnvMaskController: NSObject, @preconcurrency NSLayoutManagerDelegate
         return secrets.first { NSIntersectionRange(line, $0.valueRange).length > 0 || NSLocationInRange($0.keyRange.location, line) }
     }
 
-    /// Recompute which secret values should be masked and re-lay-out if that
-    /// set changed. Cheap no-op when nothing moved.
+    private func observeTextStorage(of textView: MultiCursorTextView?) {
+        let storage = textView?.textStorage
+        guard storage !== observedStorage else { return }
+        if let observedStorage {
+            NotificationCenter.default.removeObserver(
+                self, name: NSTextStorage.willProcessEditingNotification, object: observedStorage
+            )
+        }
+        observedStorage = storage
+        if let storage {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(maskedTextWillProcessEditing(_:)),
+                name: NSTextStorage.willProcessEditingNotification,
+                object: storage
+            )
+        }
+    }
+
+    /// Shift masked ranges with the text before any glyphs are generated for
+    /// the edit. A range the edit overlaps is stretched over the edited span,
+    /// so typing inside a value stays masked; `refresh()` settles the exact
+    /// extent right after.
+    @objc private func maskedTextWillProcessEditing(_ notification: Notification) {
+        guard let storage = notification.object as? NSTextStorage,
+              storage.editedMask.contains(.editedCharacters),
+              !maskedRanges.isEmpty else { return }
+        maskedRanges = Self.ranges(maskedRanges, mappedThroughEdit: storage.editedRange,
+                                   changeInLength: storage.changeInLength)
+    }
+
+    /// Maps ranges from before an edit into post-edit coordinates.
+    /// `editedRange` is post-edit, as `NSTextStorage` reports it.
+    nonisolated static func ranges(
+        _ ranges: [NSRange],
+        mappedThroughEdit editedRange: NSRange,
+        changeInLength delta: Int
+    ) -> [NSRange] {
+        let editStart = editedRange.location
+        let newEditEnd = NSMaxRange(editedRange)
+        let oldEditEnd = newEditEnd - delta
+        return ranges.compactMap { range in
+            let mapped: NSRange
+            if NSMaxRange(range) <= editStart {
+                mapped = range
+            } else if range.location >= oldEditEnd {
+                mapped = NSRange(location: range.location + delta, length: range.length)
+            } else {
+                let start = min(range.location, editStart)
+                let end = NSMaxRange(range) > oldEditEnd ? NSMaxRange(range) + delta : newEditEnd
+                mapped = NSRange(location: start, length: end - start)
+            }
+            return mapped.length > 0 ? mapped : nil
+        }
+    }
+
+    /// Recompute which secret values should be masked and re-lay-out the
+    /// ranges whose masking changed. Cheap no-op when nothing moved.
     func refresh() {
         guard let textView, let layoutManager = textView.layoutManager else { return }
         let string = textView.string
@@ -124,17 +193,23 @@ final class EnvMaskController: NSObject, @preconcurrency NSLayoutManagerDelegate
         textView.updateSecretAffordances()
 
         guard newMasked != maskedRanges else { return }
+        // Only characters whose masking differs need new glyphs. Ranges are
+        // compared whole, so a moved value invalidates its old and new spans.
+        let length = (string as NSString).length
+        let previous = Set(maskedRanges.map { NSStringFromRange($0) })
+        let current = Set(newMasked.map { NSStringFromRange($0) })
+        let changed = maskedRanges.filter { !current.contains(NSStringFromRange($0)) }
+            + newMasked.filter { !previous.contains(NSStringFromRange($0)) }
         maskedRanges = newMasked
 
-        let full = NSRange(location: 0, length: (string as NSString).length)
-        layoutManager.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
-        layoutManager.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
+        for range in changed {
+            let clamped = NSIntersectionRange(range, NSRange(location: 0, length: length))
+            guard clamped.length > 0 else { continue }
+            layoutManager.invalidateGlyphs(forCharacterRange: clamped, changeInLength: 0, actualCharacterRange: nil)
+            layoutManager.invalidateLayout(forCharacterRange: clamped, actualCharacterRange: nil)
+        }
         textView.needsDisplay = true
         textView.updateSecretAffordances()
-    }
-
-    private func isMasked(_ charIndex: Int) -> Bool {
-        maskedRanges.contains { NSLocationInRange(charIndex, $0) }
     }
 
     func layoutManager(_ layoutManager: NSLayoutManager,
@@ -143,9 +218,23 @@ final class EnvMaskController: NSObject, @preconcurrency NSLayoutManagerDelegate
                        characterIndexes charIndexes: UnsafePointer<Int>,
                        font: NSFont,
                        forGlyphRange glyphRange: NSRange) -> Int {
-        guard !maskedRanges.isEmpty else { return 0 }
-
         let count = glyphRange.length
+        guard count > 0, !maskedRanges.isEmpty else { return 0 }
+
+        // Narrow to the masked ranges this chunk can touch, so per-glyph
+        // checks scan a handful of ranges rather than every secret.
+        var lowest = charIndexes[0]
+        var highest = charIndexes[0]
+        for i in 1..<count {
+            lowest = min(lowest, charIndexes[i])
+            highest = max(highest, charIndexes[i])
+        }
+        let nearby = maskedRanges.filter { NSMaxRange($0) > lowest && $0.location <= highest }
+        func isMasked(_ charIndex: Int) -> Bool {
+            nearby.contains { NSLocationInRange(charIndex, $0) }
+        }
+        guard !nearby.isEmpty else { return 0 }
+
         var anyMasked = false
         for i in 0..<count where isMasked(charIndexes[i]) { anyMasked = true; break }
         guard anyMasked else { return 0 }

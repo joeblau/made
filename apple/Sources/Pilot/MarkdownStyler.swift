@@ -13,13 +13,34 @@ enum MarkdownImagePresentation {
 /// layers visual attributes on top, in place, so `# Hello` renders at H1
 /// size, `**bold**` goes bold, etc., all in a single editable view.
 ///
-/// Hooked in as the text storage's delegate: every character edit triggers a
-/// full re-style of the (note-sized) document. Because we only ever change
-/// *attributes*, the follow-up edit pass carries `.editedAttributes` rather
-/// than `.editedCharacters`, so re-styling never recurses.
+/// Hooked in as the text storage's delegate. A character edit restyles only
+/// the dirty region: the `\n`-delimited lines the edit touched, plus the lines
+/// of any fenced block or image whose extent changed (an opening fence typed
+/// at the top re-pairs every fence below it, so that edit falls back to a
+/// large region or a full pass). Every rule other than fences and images is
+/// confined to one line, so restyling whole lines reproduces exactly what a
+/// full pass would produce. Because we only ever change *attributes*, the
+/// follow-up edit pass carries `.editedAttributes` rather than
+/// `.editedCharacters`, so re-styling never recurses.
 final class MarkdownStyler: NSObject, NSTextStorageDelegate {
+    /// What the most recent pass restyled, for tests and latency profiling.
+    struct PassReport: Equatable {
+        var isFullPass: Bool
+        var styledLength: Int
+        var documentLength: Int
+        var regionCount: Int
+    }
+
     var baseSize: CGFloat
     private var isStyling = false
+    /// Document-wide structure from the last pass, in that pass's coordinates.
+    /// `nil` forces the next edit to take a full pass.
+    private var structure: DocumentStructure?
+    private(set) var lastPass = PassReport(isFullPass: true, styledLength: 0, documentLength: 0, regionCount: 0)
+
+    /// Above this share of the document, one full pass is cheaper than
+    /// several regional ones and produces the same attributes.
+    private static let fullPassFraction = 0.5
 
     init(baseSize: CGFloat) {
         self.baseSize = baseSize
@@ -31,32 +52,168 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
                      changeInLength delta: Int) {
         guard editedMask.contains(.editedCharacters), !isStyling else { return }
         isStyling = true
-        style(textStorage)
+        styleEdit(textStorage, editedRange: editedRange, changeInLength: delta)
         isStyling = false
     }
 
+    /// Full pass over the whole document. Also resets the structure index.
     func style(_ storage: NSTextStorage) {
         let string = storage.string
-        let ns = string as NSString
-        let full = NSRange(location: 0, length: ns.length)
+        let current = DocumentStructure(string)
+        structure = current
+        let full = NSRange(location: 0, length: current.length)
+        lastPass = PassReport(isFullPass: true, styledLength: full.length,
+                              documentLength: full.length, regionCount: 1)
         guard full.length > 0 else { return }
+        storage.beginEditing()
+        style(storage, region: full, string: string, structure: current)
+        storage.endEditing()
+    }
 
-        // Clean slate: body font + label color across the whole document,
-        // dropping any background/underline/strikethrough from the last pass.
+    /// Restyles what a character edit invalidated. `editedRange` is in
+    /// post-edit coordinates and `delta` is the change in length, exactly as
+    /// `NSTextStorage` reports them.
+    func styleEdit(_ storage: NSTextStorage, editedRange: NSRange, changeInLength delta: Int) {
+        let string = storage.string
+        let ns = string as NSString
+        guard let previous = structure,
+              previous.length + delta == ns.length,
+              editedRange.location != NSNotFound,
+              NSMaxRange(editedRange) <= ns.length,
+              NSMaxRange(editedRange) - delta >= editedRange.location else {
+            style(storage)
+            return
+        }
+        let current = DocumentStructure(string)
+
+        var dirty = IndexSet()
+        func markLines(_ range: NSRange) {
+            let lines = ns.newlineDelimitedLines(covering: range)
+            if lines.length > 0 { dirty.insert(integersIn: lines.location..<NSMaxRange(lines)) }
+        }
+        markLines(editedRange)
+        // A fence or image whose extent differs from its pre-edit extent
+        // changes how its every line is styled, wherever those lines are.
+        for range in Self.changedRanges(previous.fences, current.fences, editedRange: editedRange, delta: delta) {
+            markLines(range)
+        }
+        for range in Self.changedRanges(previous.images.map(\.range), current.images.map(\.range),
+                                        editedRange: editedRange, delta: delta) {
+            markLines(range)
+        }
+        // An image is styled as a unit (protection + its line's reserved
+        // preview space), so a region must contain all of any image it touches.
+        var expanded = true
+        while expanded {
+            expanded = false
+            for image in current.images where image.range.length > 0 {
+                let span = image.range.location..<NSMaxRange(image.range)
+                if dirty.intersects(integersIn: span), !dirty.contains(integersIn: span) {
+                    markLines(image.range)
+                    expanded = true
+                }
+            }
+        }
+
+        let styledLength = dirty.count
+        if Double(styledLength) > Double(ns.length) * Self.fullPassFraction {
+            style(storage)
+            return
+        }
+        structure = current
+        let regions = dirty.rangeView.map { NSRange(location: $0.lowerBound, length: $0.count) }
+        lastPass = PassReport(isFullPass: false, styledLength: styledLength,
+                              documentLength: ns.length, regionCount: regions.count)
+        guard !regions.isEmpty else { return }
+        storage.beginEditing()
+        for region in regions {
+            style(storage, region: region, string: string, structure: current)
+        }
+        storage.endEditing()
+    }
+
+    // MARK: - Dirty-region bookkeeping
+
+    /// Ranges present before or after the edit but not both, with pre-edit
+    /// ranges mapped into post-edit coordinates. A range overlapping the edit
+    /// is stretched over the edited span (which is restyled regardless).
+    static func changedRanges(_ old: [NSRange], _ new: [NSRange],
+                              editedRange: NSRange, delta: Int) -> [NSRange] {
+        guard !old.isEmpty || !new.isEmpty else { return [] }
+        let editStart = editedRange.location
+        let newEditEnd = NSMaxRange(editedRange)
+        let oldEditEnd = newEditEnd - delta
+
+        struct Key: Hashable { let location: Int; let length: Int }
+        func key(_ range: NSRange) -> Key { Key(location: range.location, length: range.length) }
+
+        let mapped = old.map { range -> NSRange in
+            if NSMaxRange(range) <= editStart { return range }
+            if range.location >= oldEditEnd {
+                return NSRange(location: range.location + delta, length: range.length)
+            }
+            let start = min(range.location, editStart)
+            let end = NSMaxRange(range) > oldEditEnd ? NSMaxRange(range) + delta : newEditEnd
+            return NSRange(location: start, length: max(0, end - start))
+        }
+        let before = Set(mapped.map(key))
+        let after = Set(new.map(key))
+        return mapped.filter { !after.contains(key($0)) } + new.filter { !before.contains(key($0)) }
+    }
+
+    /// The parts of styling that depend on more than one line. Rebuilt per
+    /// edit (two linear scans) and diffed against the previous pass to find
+    /// what an edit invalidated beyond its own lines.
+    private struct DocumentStructure {
+        let length: Int
+        let fences: [NSRange]
+        let images: [MarkdownImage.Match]
+
+        init(_ string: String) {
+            let ns = string as NSString
+            length = ns.length
+            var fences: [NSRange] = []
+            if ns.range(of: "```", options: .literal).location != NSNotFound {
+                MarkdownStyler.fencedCode.enumerateMatches(
+                    in: string, range: NSRange(location: 0, length: ns.length)
+                ) { match, _, _ in
+                    if let match { fences.append(match.range) }
+                }
+            }
+            self.fences = fences
+            images = MarkdownImage.matches(in: string)
+        }
+    }
+
+    // MARK: - Styling a region
+
+    /// Styles `region`, which must start at a line start and end at a line end
+    /// (after its `\n`, or at the end of the document). Matching runs against
+    /// the whole string with transparent bounds, so lookarounds and anchors
+    /// see the same context they would in a full pass.
+    private func style(_ storage: NSTextStorage, region: NSRange, string: String, structure: DocumentStructure) {
+        let ns = string as NSString
+
+        // Clean slate: body font + label color across the region, dropping
+        // any background/underline/strikethrough/paragraph spacing.
         storage.setAttributes(
             [.font: NSFont.monospacedSystemFont(ofSize: baseSize, weight: .regular),
              .foregroundColor: NSColor.labelColor],
-            range: full
+            range: region
         )
 
         // Code regions are recorded so inline/heading rules don't fire inside
         // them (e.g. a `#` in a fenced block is not a heading).
-        var protectedRanges: [NSRange] = []
+        var protectedIndexes = IndexSet()
         func isProtected(_ range: NSRange) -> Bool {
-            protectedRanges.contains { NSIntersectionRange($0, range).length > 0 }
+            range.length > 0 && protectedIndexes.intersects(integersIn: range.location..<NSMaxRange(range))
+        }
+        func protect(_ range: NSRange) {
+            guard range.length > 0 else { return }
+            protectedIndexes.insert(integersIn: range.location..<NSMaxRange(range))
         }
         func eachMatch(_ regex: NSRegularExpression, _ handle: (NSTextCheckingResult) -> Void) {
-            regex.enumerateMatches(in: string, range: full) { match, _, _ in
+            regex.enumerateMatches(in: string, options: Self.regionMatchingOptions, range: region) { match, _, _ in
                 if let match { handle(match) }
             }
         }
@@ -64,16 +221,18 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
         let codeFont = NSFont.monospacedSystemFont(ofSize: baseSize, weight: .regular)
 
         // --- Code (claim ranges first) ---------------------------------------
-        eachMatch(Self.fencedCode) { match in
-            storage.addAttributes([.font: codeFont, .backgroundColor: Self.codeBackground], range: match.range)
-            protectedRanges.append(match.range)
+        for fence in structure.fences {
+            let visible = NSIntersectionRange(fence, region)
+            guard visible.length > 0 else { continue }
+            storage.addAttributes([.font: codeFont, .backgroundColor: Self.codeBackground], range: visible)
+            protect(fence)
         }
         eachMatch(Self.inlineCode) { match in
             guard !isProtected(match.range) else { return }
             storage.addAttributes([.font: codeFont, .backgroundColor: Self.codeBackground], range: match.range)
             dim(storage, NSRange(location: match.range.location, length: 1))
             dim(storage, NSRange(location: NSMaxRange(match.range) - 1, length: 1))
-            protectedRanges.append(match.range)
+            protect(match.range)
         }
 
         // --- Images ----------------------------------------------------------
@@ -81,10 +240,10 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
         // preview area below its line. MultiCursorTextView renders the image in
         // that space and supplies the gutter copy affordance.
         var imagesByLine: [Int: (range: NSRange, count: Int)] = [:]
-        for image in MarkdownImage.matches(in: string) {
+        for image in structure.images where NSLocationInRange(image.range.location, region) {
             guard !isProtected(image.range) else { continue }
             storage.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: image.range)
-            protectedRanges.append(image.range)
+            protect(image.range)
 
             let lineRange = ns.lineRange(for: NSRange(location: image.range.location, length: 0))
             if var entry = imagesByLine[lineRange.location] {
@@ -106,18 +265,18 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
         // Tint the key and give the value a pill background; protect the value
         // so inline markdown (e.g. `*` in a secret) doesn't restyle it. The
         // bullet masking itself is handled by EnvMaskController at layout time.
-        for secret in EnvSecret.matches(in: string) {
+        for secret in EnvSecret.matches(in: string, range: region) {
             guard !isProtected(secret.valueRange), !isProtected(secret.keyRange) else { continue }
             storage.addAttribute(.foregroundColor, value: NSColor.controlAccentColor, range: secret.keyRange)
             storage.addAttribute(.backgroundColor, value: Self.secretBackground, range: secret.valueRange)
-            protectedRanges.append(secret.valueRange)
+            protect(secret.valueRange)
         }
 
         // --- Block level ------------------------------------------------------
         eachMatch(Self.heading) { match in
             guard !isProtected(match.range) else { return }
             let level = match.range(at: 1).length
-            addAttribute(.font, value: headingFont(level: level), over: match.range, in: storage)
+            storage.addAttribute(.font, value: headingFont(level: level), range: match.range)
             // Dim the leading "#"s and the space(s) before the content.
             let contentStart = match.range(at: 2).location
             dim(storage, NSRange(location: match.range.location, length: contentStart - match.range.location))
@@ -210,15 +369,20 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
                 .link: url,
             ], range: range)
-            protectedRanges.append(range)
+            protect(range)
         }
 
         // A line whose code span is a color gets a little breathing room below,
         // so its swatch isn't cramped against the next line.
-        for match in ColorChip.matches(in: string) {
+        for match in ColorChip.matches(in: string, range: region) {
             let lineRange = ns.lineRange(for: NSRange(location: match.range.location, length: 0))
             addParagraphSpacing(baseSize, to: lineRange, in: storage)
         }
+
+        // Attribute changes made from the storage delegate are not queued for
+        // the storage's lazy fixing, so apply font fallback (e.g. CJK in the
+        // monospaced font) here, matching what a top-level pass produces.
+        storage.fixAttributes(in: region)
     }
 
     // MARK: - Attribute helpers
@@ -234,11 +398,6 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
         default: scale = 1.0
         }
         return NSFont.monospacedSystemFont(ofSize: baseSize * scale, weight: .bold)
-    }
-
-    /// Sets `.font` over the range, replacing whatever is there.
-    private func addAttribute(_ key: NSAttributedString.Key, value: Any, over range: NSRange, in storage: NSTextStorage) {
-        storage.addAttribute(key, value: value, range: range)
     }
 
     /// Adds a symbolic trait (bold/italic) to the *existing* font at each run,
@@ -280,6 +439,12 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
 
     // MARK: - GFM patterns
 
+    /// Transparent, non-anchoring bounds make a regional match behave exactly
+    /// like the same match found during a whole-document enumeration.
+    static let regionMatchingOptions: NSRegularExpression.MatchingOptions = [
+        .withTransparentBounds, .withoutAnchoringBounds,
+    ]
+
     private static func regex(_ pattern: String, _ options: NSRegularExpression.Options = []) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern, options: options)
     }
@@ -298,4 +463,30 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
     private static let strikethrough = regex(#"~~([^\n]+?)~~"#)
     private static let link = regex(#"(?<!!)\[([^\]\n]+)\]\(([^)\n]+)\)"#)
     private static let bareURL = regex(#"(?<![\w@./])((?:https?://|www\.)[^\s<>"')\]]+)"#)
+}
+
+extension NSString {
+    /// The `\n`-delimited lines touching `range`, including the line that holds
+    /// the position just past it (an inserted newline splits that line, and a
+    /// deletion joins it). The result starts at a line start and ends after a
+    /// `\n` or at the end of the string. Only `\n` counts as a line break,
+    /// matching the formatters and the single-line Markdown patterns, which
+    /// do not stop at `\r` or Unicode separators.
+    func newlineDelimitedLines(covering range: NSRange) -> NSRange {
+        let start = min(range.location, length)
+        let end = min(NSMaxRange(range), length)
+        var lineStart = 0
+        if start > 0 {
+            let previous = self.range(of: "\n", options: [.backwards, .literal],
+                                      range: NSRange(location: 0, length: start))
+            if previous.location != NSNotFound { lineStart = previous.location + 1 }
+        }
+        var lineEnd = length
+        if end < length {
+            let next = self.range(of: "\n", options: .literal,
+                                  range: NSRange(location: end, length: length - end))
+            if next.location != NSNotFound { lineEnd = next.location + 1 }
+        }
+        return NSRange(location: lineStart, length: lineEnd - lineStart)
+    }
 }

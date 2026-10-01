@@ -180,4 +180,104 @@ struct NotesEditingSmokeTests {
         #expect(end.lineText == "c")
         #expect(end.location(in: "c\na\nbeta line") == 1)
     }
+
+    @Test("A table left unaligned under the caret aligns on the next edit elsewhere")
+    func deferredTableAlignsLater() throws {
+        let original = "| a | b |\n| - | - |\n\nprose"
+        let harness = try Harness(original)
+
+        // Typing inside the table keeps it as typed.
+        harness.type("z", replacing: NSRange(location: 3, length: 0))
+        #expect(harness.textView.string.hasPrefix("| az | b |\n| - | - |"))
+
+        // The next edit, away from any table, still aligns it.
+        let end = (harness.textView.string as NSString).length
+        harness.type("!", replacing: NSRange(location: end, length: 0))
+        #expect(harness.textView.string == "| az  | b   |\n| --- | --- |\n\nprose!")
+        #expect(harness.caret == (harness.textView.string as NSString).length)
+    }
+
+    @Test("Text replaced from outside the editor is settled by the next edit")
+    func externalTextSettlesOnNextEdit() throws {
+        let harness = try Harness("start")
+        harness.textView.string = "- [x] done\n- [ ] open\n\nprose"
+        let end = (harness.textView.string as NSString).length
+
+        harness.type("!", replacing: NSRange(location: end, length: 0))
+
+        #expect(harness.textView.string == "- [ ] open\n- [x] done\n\nprose!")
+    }
+
+    @Test("Reflow relevance is limited to edits touching or bordering task and table lines")
+    func reflowScope() {
+        let text = "- [ ] task\nplain one\nplain two\nplain three\n| a | b |" as NSString
+        func scope(_ needle: String, _ replacement: String = "x") -> MultiCursorTextView.ReflowScope {
+            let at = text.range(of: needle).location
+            return MultiCursorTextView.reflowScope(
+                of: NSRange(location: at, length: 0), replacement: replacement, in: text
+            )
+        }
+        #expect(scope("two") == [])
+        #expect(scope("one") == [.tasks])
+        #expect(scope("three") == [.tables])
+        #expect(scope("two", "|") == [.tables])
+        #expect(scope("two", "- [ ] new") == [.tasks])
+    }
+
+    @Test("Bullet glyphs cover exactly the secret values as edits move, grow, and break them")
+    func maskGlyphsFollowEdits() throws {
+        let harness = try Harness("intro\nAPI_TOKEN=secret-value\nOTHER=x\ntail")
+        harness.mask.refresh()
+
+        /// Character indexes currently drawn as the bullet glyph.
+        func bulletIndexes() throws -> [Int] {
+            let layoutManager = try #require(harness.textView.layoutManager)
+            let storage = try #require(harness.textView.textStorage)
+            var bullets: [Int] = []
+            for index in 0..<storage.length {
+                let font = try #require(storage.attribute(.font, at: index, effectiveRange: nil) as? NSFont)
+                var character: [UniChar] = Array("•".utf16)
+                var bullet: [CGGlyph] = [0]
+                CTFontGetGlyphsForCharacters(font, &character, &bullet, 1)
+                let glyphIndex = layoutManager.glyphIndexForCharacter(at: index)
+                if layoutManager.cgGlyph(at: glyphIndex) == bullet[0] { bullets.append(index) }
+            }
+            return bullets
+        }
+        func expectedIndexes() -> [Int] {
+            EnvSecret.matches(in: harness.textView.string).flatMap {
+                Array($0.valueRange.location..<NSMaxRange($0.valueRange))
+            }
+        }
+
+        #expect(try bulletIndexes() == expectedIndexes())
+        let edits: [(String, (NSString) -> NSRange, String)] = [
+            ("insert before the secrets", { _ in NSRange(location: 0, length: 0) }, "more "),
+            ("type inside a value", { $0.range(of: "secret-") }, "longer-secret-"),
+            ("append to a value", { NSRange(location: NSMaxRange($0.range(of: "value")), length: 0) }, "!"),
+            ("break a key", { $0.range(of: "API_TOKEN") }, "api_token"),
+            ("restore the key", { $0.range(of: "api_token") }, "API_TOKEN"),
+            ("join two secret lines", { NSRange(location: $0.range(of: "\nOTHER").location, length: 1) }, " "),
+        ]
+        for (name, range, replacement) in edits {
+            harness.type(replacement, replacing: range(harness.textView.string as NSString))
+            #expect(try bulletIndexes() == expectedIndexes(), "\(name)")
+        }
+    }
+
+    @Test("Reflows replace only the differing span, keeping surrogate pairs whole")
+    func changedSpan() {
+        let span = MultiCursorTextView.changedSpan(from: "abcXYZdef", to: "abc12def")
+        #expect(span.old == NSRange(location: 3, length: 3))
+        #expect(span.new == NSRange(location: 3, length: 2))
+
+        // 😀 (D83D DE00) vs 😃 (D83D DE03) share a lead surrogate.
+        let emoji = MultiCursorTextView.changedSpan(from: "a😀b", to: "a😃b")
+        #expect(emoji.old == NSRange(location: 1, length: 2))
+        #expect(emoji.new == NSRange(location: 1, length: 2))
+
+        let same = MultiCursorTextView.changedSpan(from: "same", to: "same")
+        #expect(same.old.length == 0)
+        #expect(same.new.length == 0)
+    }
 }

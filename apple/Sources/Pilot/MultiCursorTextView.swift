@@ -14,6 +14,13 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
     /// cannot start another reflow.
     private var isReflowing = false
     private lazy var overlays = NoteEditorOverlays(textView: self)
+    /// Reflows the edits since the last pass could affect, as recorded by
+    /// `shouldChangeText`. `nil` means no edit was recorded (an edit path that
+    /// bypassed it), so the next pass checks everything.
+    private var pendingReflowScope: ReflowScope?
+    /// Reflows owed wherever the next edit lands: a table left unaligned
+    /// because the caret was inside it, or text replaced wholesale.
+    private var carriedReflowScope: ReflowScope = .all
 
     /// Keep the editable storage plaintext while exposing the controller's
     /// redacted presentation to assistive technologies. Calling
@@ -33,7 +40,24 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
         set {
             super.string = newValue
             overlays.invalidateTextScans()
+            carriedReflowScope = .all
         }
+    }
+
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard super.shouldChangeText(in: affectedCharRange, replacementString: replacementString) else {
+            return false
+        }
+        recordReflowScope(for: [affectedCharRange], replacements: replacementString.map { [$0] })
+        return true
+    }
+
+    override func shouldChangeText(inRanges affectedRanges: [NSValue], replacementStrings: [String]?) -> Bool {
+        guard super.shouldChangeText(inRanges: affectedRanges, replacementStrings: replacementStrings) else {
+            return false
+        }
+        recordReflowScope(for: affectedRanges.map(\.rangeValue), replacements: replacementStrings)
+        return true
     }
 
     override func layout() {
@@ -202,11 +226,80 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
 
     // MARK: - Automatic reflows
 
+    struct ReflowScope: OptionSet, Sendable {
+        let rawValue: Int
+        static let tasks = ReflowScope(rawValue: 1 << 0)
+        static let tables = ReflowScope(rawValue: 1 << 1)
+        static let all: ReflowScope = [.tasks, .tables]
+    }
+
+    /// Which reflows replacing `range` of `text` with `replacement` could
+    /// change. Task groups and table blocks are runs of adjacent lines, so an
+    /// edit can only alter the runs it touches or borders: the edited lines
+    /// plus one neighbor on each side. A task line needs `[` and a table row
+    /// needs `|`; if neither the old context nor the replacement has one,
+    /// neither does the new context.
+    nonisolated static func reflowScope(of range: NSRange, replacement: String, in text: NSString) -> ReflowScope {
+        var context = text.newlineDelimitedLines(covering: range)
+        if context.location > 0 {
+            context = NSUnionRange(
+                context,
+                text.newlineDelimitedLines(covering: NSRange(location: context.location - 1, length: 0))
+            )
+        }
+        if NSMaxRange(context) < text.length {
+            context = NSUnionRange(
+                context,
+                text.newlineDelimitedLines(covering: NSRange(location: NSMaxRange(context), length: 0))
+            )
+        }
+        func mentions(_ marker: String) -> Bool {
+            replacement.contains(marker)
+                || text.range(of: marker, options: .literal, range: context).location != NSNotFound
+        }
+        var scope: ReflowScope = []
+        if mentions("[") { scope.insert(.tasks) }
+        if mentions("|") { scope.insert(.tables) }
+        return scope
+    }
+
+    private func recordReflowScope(for ranges: [NSRange], replacements: [String]?) {
+        guard !isReflowing else { return }
+        let ns = string as NSString
+        var scope = pendingReflowScope ?? []
+        for (index, range) in ranges.enumerated() where scope != .all {
+            guard NSMaxRange(range) <= ns.length else {
+                scope = .all
+                break
+            }
+            let replacement = replacements.flatMap { index < $0.count ? $0[index] : nil } ?? ""
+            scope.formUnion(Self.reflowScope(of: range, replacement: replacement, in: ns))
+        }
+        pendingReflowScope = scope
+    }
+
     /// Runs the per-edit automatic formatting: completed tasks sink, then
-    /// tables align (skipping the table under the caret).
+    /// tables align (skipping the table under the caret). Only the reflows
+    /// the recorded edits could affect run, so ordinary typing away from
+    /// tasks and tables doesn't re-scan the note.
     func applyAutomaticReflows() {
-        reorderCompletedTasks()
-        formatMarkdownTables()
+        guard !isReflowing else { return }
+        // Undo/redo replay, or an IME composition still in progress: rewriting
+        // the text now would land under the replayed edits or break the marked
+        // text. The recorded scope stays pending for the next edit.
+        if let undoManager, undoManager.isUndoing || undoManager.isRedoing { return }
+        if hasMarkedText() { return }
+
+        let scope = (pendingReflowScope ?? .all).union(carriedReflowScope)
+        pendingReflowScope = nil
+        carriedReflowScope = []
+        var tasksChanged = false
+        if scope.contains(.tasks) {
+            tasksChanged = reorderCompletedTasks()
+        }
+        if scope.contains(.tables) || tasksChanged {
+            formatMarkdownTables()
+        }
     }
 
     /// Auto-sort every contiguous task group so incomplete root tasks stay on
@@ -224,18 +317,26 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
     /// a cell.
     @discardableResult
     func formatMarkdownTables(protectingCaret: Bool = true) -> Bool {
-        applyReflow { text in
+        var skippedTableNeedsFormatting = false
+        let changed = applyReflow { text in
             let skip: Set<Int> = protectingCaret ? caretLineIndices() : []
-            return MarkdownTableFormatter.reflow(text, skipLines: skip)
+            let result = MarkdownTableFormatter.reflowReportingSkipped(text, skipLines: skip)
+            skippedTableNeedsFormatting = result.skippedBlockNeedsFormatting
+            return result.text
         }
+        if skippedTableNeedsFormatting { carriedReflowScope.insert(.tables) }
+        // A reformatted row can stop being a task line; re-check tasks next edit.
+        if changed { carriedReflowScope.insert(.tasks) }
+        return changed
     }
 
     /// The one application path for whole-document reflows. `transform` is a
-    /// pure formatter returning `nil` when the text is already settled. A
-    /// change goes through `shouldChangeText`/`didChangeText`, so it is
-    /// registered for undo, restyled, and pushed to the binding like any edit;
-    /// `isReflowing` keeps the resulting `textDidChange` from re-entering, and
-    /// the caret follows its line to the new position.
+    /// pure formatter returning `nil` when the text is already settled. Only
+    /// the span that differs is replaced, through `shouldChangeText` /
+    /// `didChangeText`, so it is registered for undo, restyled, and pushed to
+    /// the binding like any edit while the styler and undo record cover just
+    /// that span. `isReflowing` keeps the resulting `textDidChange` from
+    /// re-entering, and the caret follows its line to the new position.
     ///
     /// Undo and redo replay recorded edits one at a time, each posting
     /// `textDidChange`. Reflowing in between would rewrite the text under the
@@ -249,11 +350,12 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
         guard ns.length > 0, let newText = transform(string) else { return false }
 
         let anchor = NoteCaretAnchor(selection: selectedRange(), in: ns)
-        let full = NSRange(location: 0, length: ns.length)
+        let span = Self.changedSpan(from: ns, to: newText as NSString)
+        let replacement = (newText as NSString).substring(with: span.new)
         isReflowing = true
-        let applied = shouldChangeText(in: full, replacementString: newText)
+        let applied = shouldChangeText(in: span.old, replacementString: replacement)
         if applied {
-            textStorage.replaceCharacters(in: full, with: newText)
+            textStorage.replaceCharacters(in: span.old, with: replacement)
             didChangeText()
         }
         isReflowing = false
@@ -261,6 +363,37 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
 
         setSelectedRange(NSRange(location: anchor.location(in: newText), length: 0))
         return true
+    }
+
+    /// The smallest differing span between two texts: the range to replace
+    /// in `old` and the matching range of `new`, never splitting a UTF-16
+    /// surrogate pair.
+    nonisolated static func changedSpan(from old: NSString, to new: NSString) -> (old: NSRange, new: NSRange) {
+        let oldLength = old.length
+        let newLength = new.length
+        var oldUnits = [unichar](repeating: 0, count: oldLength)
+        var newUnits = [unichar](repeating: 0, count: newLength)
+        old.getCharacters(&oldUnits, range: NSRange(location: 0, length: oldLength))
+        new.getCharacters(&newUnits, range: NSRange(location: 0, length: newLength))
+
+        let limit = min(oldLength, newLength)
+        var prefix = 0
+        while prefix < limit, oldUnits[prefix] == newUnits[prefix] { prefix += 1 }
+        if prefix > 0, UTF16.isLeadSurrogate(oldUnits[prefix - 1]) {
+            prefix -= 1
+        }
+        var suffix = 0
+        while suffix < limit - prefix,
+              oldUnits[oldLength - 1 - suffix] == newUnits[newLength - 1 - suffix] {
+            suffix += 1
+        }
+        if suffix > 0, UTF16.isTrailSurrogate(oldUnits[oldLength - suffix]) {
+            suffix -= 1
+        }
+        return (
+            NSRange(location: prefix, length: oldLength - prefix - suffix),
+            NSRange(location: prefix, length: newLength - prefix - suffix)
+        )
     }
 
     /// 0-based line indices touched by any selection/caret, so the table block
@@ -277,9 +410,19 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
         return indices
     }
 
+    /// Number of `\n` before `location` — the formatter's line numbering.
     private func lineIndex(at location: Int, in ns: NSString) -> Int {
-        guard location > 0 else { return 0 }
-        return ns.substring(to: min(location, ns.length)).reduce(0) { $0 + ($1 == "\n" ? 1 : 0) }
+        let end = min(location, ns.length)
+        var count = 0
+        var searchStart = 0
+        while searchStart < end {
+            let newline = ns.range(of: "\n", options: .literal,
+                                   range: NSRange(location: searchStart, length: end - searchStart))
+            guard newline.location != NSNotFound else { break }
+            count += 1
+            searchStart = newline.location + 1
+        }
+        return count
     }
 
     // MARK: - Multi-cursor
