@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Discovers, parses, and deduplicates local agent-CLI usage logs:
@@ -11,11 +12,12 @@ import Foundation
 ///   (or `$KIMI_DATA_DIR`).
 ///
 /// The corpus is large (thousands of files, gigabytes of append-only logs),
-/// so files parse in parallel off the main actor and an in-memory
-/// `(path, size, mtime)` cache makes every load after the first near-instant
-/// — unchanged files never re-parse. The logs are untrusted input: oversized
-/// files and lines are skipped, malformed lines are skipped silently, and no
-/// single bad file fails a load.
+/// so files parse in parallel off the main actor. Each file keeps a resumable
+/// cursor: unchanged files are not read at all, an append reads and parses
+/// only the new bytes, and truncation, replacement, or a rewritten prefix
+/// falls back to a full rescan of that file. The logs are untrusted input:
+/// oversized files and lines are skipped, malformed lines are skipped
+/// silently, and no single bad file fails a load.
 actor AgenticUsageLoader {
     /// One scan root and the parser its files get.
     struct Source: Sendable {
@@ -63,27 +65,41 @@ actor AgenticUsageLoader {
     private struct ParseOutcome: Sendable {
         let job: FileJob
         /// `nil` means the file was unreadable.
-        let records: [AgenticUsageRecord]?
+        let scan: FileScan?
     }
 
     private struct CacheEntry {
+        /// Discovery metadata; an exact match means the file is unchanged.
         let size: Int
         let modificationDate: Date
-        let records: [AgenticUsageRecord]
+        let cursor: FileCursor
     }
 
     /// Bounds on untrusted input. A log file bigger than this, or a single
     /// line bigger than the line bound, is skipped rather than parsed.
-    private static let maxFileBytes = 512 * 1024 * 1024
-    private static let maxLineBytes = 16 * 1024 * 1024
+    static let maxFileBytes = 512 * 1024 * 1024
+    static let maxLineBytes = 16 * 1024 * 1024
     /// Shortest possible line worth decoding.
-    private static let minLineBytes = 24
+    static let minLineBytes = 24
+    /// Read size for scanning; bounds per-read memory independently of the
+    /// file size and spaces cancellation checks.
+    static let readChunkBytes = 4 * 1024 * 1024
 
     private let sources: [Source]
     private var cache: [String: CacheEntry] = [:]
+    /// The last merged result and the paths it was built from, reused while
+    /// no file's records change.
+    private var merged: (paths: [String], records: [AgenticUsageRecord])?
+    /// Test seam: runs inside `load()` just before the merge's first
+    /// cancellation check, after every file has been scanned.
+    private var willMerge: (@Sendable () -> Void)?
 
     init(sources: [Source] = AgenticUsageLoader.defaultSources()) {
         self.sources = sources
+    }
+
+    func setWillMergeHook(_ hook: (@Sendable () -> Void)?) {
+        willMerge = hook
     }
 
     /// The standard scan roots, honoring each CLI's data-dir override.
@@ -136,23 +152,47 @@ actor AgenticUsageLoader {
     /// Enumerates every source tree and returns the deduplicated record set.
     /// `onProgress` reports (files scanned, total files), throttled, for the
     /// initial determinate progress bar. Cancelling the surrounding task
-    /// aborts between files with `CancellationError`.
+    /// stops discovery, scanning, decoding, and merging promptly with
+    /// `CancellationError` and leaves the cache and the merged result exactly
+    /// as the last completed load left them: both are committed together,
+    /// after the last cancellation point.
     func load(onProgress: (@Sendable (_ scanned: Int, _ total: Int) -> Void)? = nil) async throws -> LoadResult {
         let files = try discoverFiles()
         guard !files.isEmpty else {
+            try Task.checkCancellation()
             cache = [:]
+            merged = nil
             return LoadResult(records: [], fileCount: 0, unreadableFileCount: 0)
         }
 
-        // Serve unchanged files from the cache; parse the rest in parallel.
-        var pending: [FileJob] = []
+        // Serve unchanged files from the cache; scan the rest in parallel,
+        // resuming each from its cursor. A file moved to a new path (Codex
+        // archiving a session) resumes from its old path's cursor when the
+        // identity and content fingerprints still match.
+        let livePaths = Set(files.map(\.path))
+        var orphans: [FileIdentity: FileCursor] = [:]
+        for (path, entry) in cache where !livePaths.contains(path) {
+            orphans[entry.cursor.identity] = entry.cursor
+        }
+        var pending: [(job: FileJob, previous: FileCursor?)] = []
         var cachedCount = 0
         for file in files {
-            if let entry = cache[file.path], entry.size == file.size,
-               entry.modificationDate == file.modificationDate {
-                cachedCount += 1
+            if let entry = cache[file.path] {
+                if entry.size == file.size, entry.modificationDate == file.modificationDate {
+                    cachedCount += 1
+                } else {
+                    pending.append((file, entry.cursor))
+                }
             } else {
-                pending.append(file)
+                pending.append((file, nil))
+            }
+        }
+        if !orphans.isEmpty {
+            for index in pending.indices where pending[index].previous == nil {
+                if let identity = Self.identity(atPath: pending[index].job.path),
+                   let cursor = orphans.removeValue(forKey: identity) {
+                    pending[index].previous = cursor
+                }
             }
         }
         onProgress?(cachedCount, files.count)
@@ -163,35 +203,61 @@ actor AgenticUsageLoader {
             total: files.count,
             onProgress: onProgress
         )
+        try Task.checkCancellation()
 
+        // Build the next cache on a copy. It is committed together with the
+        // merge it produced, so a load cancelled anywhere below leaves the
+        // cache and `merged` describing the same, last completed load. (A
+        // cache committed without its merge would match every file on the
+        // next load and serve the stale merge indefinitely.)
+        var nextCache = cache
         var unreadableCount = 0
+        var recordsChanged = false
         for outcome in outcomes {
-            if let records = outcome.records {
-                cache[outcome.job.path] = CacheEntry(
+            if let scan = outcome.scan {
+                recordsChanged = recordsChanged || scan.recordsChanged
+                nextCache[outcome.job.path] = CacheEntry(
                     size: outcome.job.size,
                     modificationDate: outcome.job.modificationDate,
-                    records: records
+                    cursor: scan.cursor
                 )
             } else {
-                cache[outcome.job.path] = nil
+                if nextCache.removeValue(forKey: outcome.job.path) != nil { recordsChanged = true }
                 unreadableCount += 1
             }
         }
 
         // Drop cache entries for files deleted since the last load.
-        let livePaths = Set(files.map(\.path))
-        cache = cache.filter { livePaths.contains($0.key) }
+        let cachedPaths = nextCache.count
+        nextCache = nextCache.filter { livePaths.contains($0.key) }
+        if nextCache.count != cachedPaths { recordsChanged = true }
 
         // Flatten in stable path order so dedup is deterministic, then dedup
-        // across ALL files before any date filtering happens.
+        // across ALL files before any date filtering happens. When no file's
+        // records changed, the previous merge is still exact.
+        let paths = files.map(\.path).filter { nextCache[$0] != nil }
+        if !recordsChanged, let merged, merged.paths == paths {
+            cache = nextCache
+            return LoadResult(
+                records: merged.records,
+                fileCount: files.count,
+                unreadableFileCount: unreadableCount
+            )
+        }
         var all: [AgenticUsageRecord] = []
-        for file in files {
-            if let entry = cache[file.path] {
-                all.append(contentsOf: entry.records)
+        for path in paths {
+            if let entry = nextCache[path] {
+                all.append(contentsOf: entry.cursor.parser.records)
+                all.append(contentsOf: entry.cursor.tailRecords)
             }
         }
+        willMerge?()
+        try Task.checkCancellation()
         var records = Self.deduplicate(all)
+        try Task.checkCancellation()
         records.sort { $0.timestamp < $1.timestamp }
+        cache = nextCache
+        merged = (paths, records)
         return LoadResult(
             records: records,
             fileCount: files.count,
@@ -231,7 +297,10 @@ actor AgenticUsageLoader {
             throw LoadError.directoryUnreadable(path: root.path)
         }
 
+        var visited = 0
         for case let url as URL in enumerator {
+            visited += 1
+            if visited.isMultiple(of: 256) { try Task.checkCancellation() }
             if let fileName = source.fileName {
                 guard url.lastPathComponent == fileName else { continue }
             } else {
@@ -249,12 +318,13 @@ actor AgenticUsageLoader {
                 )
             )
         }
+        try Task.checkCancellation()
     }
 
     // MARK: - Parallel parsing
 
     private nonisolated static func parseFiles(
-        _ jobs: [FileJob],
+        _ jobs: [(job: FileJob, previous: FileCursor?)],
         alreadyScanned: Int,
         total: Int,
         onProgress: (@Sendable (Int, Int) -> Void)?
@@ -269,10 +339,8 @@ actor AgenticUsageLoader {
             var lastReport = ContinuousClock.now
 
             for _ in 0..<width {
-                guard let job = iterator.next() else { break }
-                group.addTask {
-                    ParseOutcome(job: job, records: Self.parseFile(at: job.url, provider: job.provider))
-                }
+                guard let next = iterator.next() else { break }
+                group.addTask { try Self.parse(next.job, resuming: next.previous) }
             }
             while let outcome = try await group.next() {
                 try Task.checkCancellation()
@@ -283,25 +351,207 @@ actor AgenticUsageLoader {
                     lastReport = now
                     onProgress?(scanned, total)
                 }
-                if let job = iterator.next() {
-                    group.addTask {
-                        ParseOutcome(job: job, records: Self.parseFile(at: job.url, provider: job.provider))
-                    }
+                if let next = iterator.next() {
+                    group.addTask { try Self.parse(next.job, resuming: next.previous) }
                 }
             }
             return outcomes
         }
     }
 
+    private nonisolated static func parse(_ job: FileJob, resuming previous: FileCursor?) throws -> ParseOutcome {
+        ParseOutcome(job: job, scan: try scanFile(at: job.url, provider: job.provider, resuming: previous))
+    }
+
     // MARK: - Single-file parsing
 
-    /// Parses one log file. Returns `nil` only when the file itself can't be
-    /// read; malformed content inside a readable file yields whatever records
-    /// could be salvaged.
-    nonisolated static func parseFile(at url: URL, provider: AgenticProvider) -> [AgenticUsageRecord]? {
-        guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]) else { return nil }
-        guard data.count <= maxFileBytes else { return nil }
-        return parse(data: data, provider: provider)
+    /// Device and inode: a renamed file keeps them, a replaced file does not.
+    struct FileIdentity: Hashable, Sendable {
+        let device: Int64
+        let inode: UInt64
+    }
+
+    /// Everything needed to resume one file after an append, plus the
+    /// fingerprints that prove the already-parsed prefix is still the same.
+    struct FileCursor: Sendable {
+        let identity: FileIdentity
+        let provider: AgenticProvider
+        /// The file's modification time when `parser` last caught up.
+        var modificationTime: FileTime
+        var parser: AgenticUsageLogParser
+        /// FNV-1a of the first `headLength` bytes (at most `headBytes`).
+        var headLength = 0
+        var headHash = Fingerprint.offsetBasis
+        /// The last bytes before `parser.consumedBytes` (at most
+        /// `boundaryBytes`).
+        var boundary = Data()
+        /// Provisional records from an unterminated trailing line. They are
+        /// re-derived on every scan because the line may still be growing.
+        var tailRecords: [AgenticUsageRecord] = []
+
+        static let headBytes = 4096
+        static let boundaryBytes = 256
+
+        var records: [AgenticUsageRecord] {
+            tailRecords.isEmpty ? parser.records : parser.records + tailRecords
+        }
+
+        init(identity: FileIdentity, provider: AgenticProvider, modificationTime: FileTime) {
+            self.identity = identity
+            self.provider = provider
+            self.modificationTime = modificationTime
+            self.parser = AgenticUsageLogParser(provider: provider)
+        }
+    }
+
+    struct FileTime: Equatable, Sendable {
+        let seconds: Int
+        let nanoseconds: Int
+
+        init(_ time: timespec) {
+            seconds = time.tv_sec
+            nanoseconds = time.tv_nsec
+        }
+    }
+
+    struct FileScan: Sendable {
+        let cursor: FileCursor
+        /// False only when a resumed scan produced exactly the records the
+        /// cursor already had.
+        let recordsChanged: Bool
+        /// True when the scan continued an existing cursor instead of
+        /// reparsing the whole file.
+        let resumed: Bool
+        /// Bytes read from the file by this scan, excluding fingerprint
+        /// verification reads.
+        let bytesRead: Int
+    }
+
+    /// 64-bit FNV-1a, enough to notice a rewritten file prefix.
+    enum Fingerprint {
+        static let offsetBasis: UInt64 = 0xcbf2_9ce4_8422_2325
+        static let prime: UInt64 = 0x0000_0100_0000_01b3
+
+        static func hash(_ bytes: UnsafeRawBufferPointer, seed: UInt64) -> UInt64 {
+            var hash = seed
+            for byte in bytes {
+                hash ^= UInt64(byte)
+                hash = hash &* prime
+            }
+            return hash
+        }
+    }
+
+    private nonisolated static func identity(atPath path: String) -> FileIdentity? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino))
+    }
+
+    /// Scans `url`, continuing `previous` when the file only grew since then
+    /// and otherwise parsing from the start. Returns `nil` only when the file
+    /// itself can't be read; malformed content inside a readable file yields
+    /// whatever records could be salvaged. Throws `CancellationError`.
+    nonisolated static func scanFile(
+        at url: URL,
+        provider: AgenticProvider,
+        resuming previous: FileCursor?
+    ) throws -> FileScan? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var info = stat()
+        guard fstat(handle.fileDescriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_size >= 0, info.st_size <= Int64(maxFileBytes)
+        else { return nil }
+        let size = Int(info.st_size)
+        let identity = FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino))
+        let modificationTime = FileTime(info.st_mtimespec)
+
+        var cursor: FileCursor
+        let resumed: Bool
+        if let previous, canResume(previous, identity: identity, provider: provider, size: size,
+                                   modificationTime: modificationTime, handle: handle) {
+            cursor = previous
+            resumed = true
+        } else {
+            cursor = FileCursor(identity: identity, provider: provider, modificationTime: modificationTime)
+            resumed = false
+        }
+        let committedBefore = cursor.parser.records.count
+        let tailBefore = cursor.tailRecords
+
+        var offset = cursor.parser.consumedBytes
+        var bytesRead = 0
+        do {
+            try handle.seek(toOffset: UInt64(offset))
+            while offset < size {
+                try Task.checkCancellation()
+                let want = min(readChunkBytes, size - offset)
+                guard let chunk = try handle.read(upToCount: want), !chunk.isEmpty else { break }
+                bytesRead += chunk.count
+                offset += chunk.count
+                cursor.absorbFingerprints(chunk)
+                try cursor.parser.consume(chunk, checkCancellation: true)
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+        cursor.modificationTime = modificationTime
+        cursor.tailRecords = cursor.parser.provisionalTailRecords()
+
+        let changed = !resumed
+            || cursor.parser.records.count != committedBefore
+            || cursor.tailRecords != tailBefore
+        return FileScan(cursor: cursor, recordsChanged: changed, resumed: resumed, bytesRead: bytesRead)
+    }
+
+    /// A cursor is reusable only for the same file and parser, when nothing
+    /// before its offset can have changed: the file did not shrink, an
+    /// unchanged length also kept its modification time, and both the head
+    /// and the bytes just before the offset still match.
+    ///
+    /// This is a check for append-only logs, not a proof that the prefix is
+    /// unchanged: a same-inode rewrite that keeps the first `headBytes` and
+    /// the `boundaryBytes` before the offset (or that rewrites earlier bytes
+    /// of an unterminated `pending` line) resumes without being noticed.
+    /// Anyone able to write the logs can already forge records, so a full
+    /// prefix hash would cost a full read without adding protection.
+    private nonisolated static func canResume(
+        _ cursor: FileCursor,
+        identity: FileIdentity,
+        provider: AgenticProvider,
+        size: Int,
+        modificationTime: FileTime,
+        handle: FileHandle
+    ) -> Bool {
+        let consumed = cursor.parser.consumedBytes
+        guard cursor.identity == identity,
+              cursor.provider == provider,
+              size >= consumed
+        else { return false }
+        if size == consumed, cursor.modificationTime != modificationTime {
+            return false
+        }
+        do {
+            if cursor.headLength > 0 {
+                try handle.seek(toOffset: 0)
+                guard let head = try handle.read(upToCount: cursor.headLength),
+                      head.count == cursor.headLength else { return false }
+                let hash = head.withUnsafeBytes { Fingerprint.hash($0, seed: Fingerprint.offsetBasis) }
+                guard hash == cursor.headHash else { return false }
+            }
+            if !cursor.boundary.isEmpty {
+                try handle.seek(toOffset: UInt64(consumed - cursor.boundary.count))
+                guard let boundary = try handle.read(upToCount: cursor.boundary.count),
+                      boundary == cursor.boundary else { return false }
+            }
+        } catch {
+            return false
+        }
+        return true
     }
 
     /// Splits on newlines, pre-filters with a cheap byte scan for the
@@ -310,58 +560,10 @@ actor AgenticUsageLoader {
     /// parse skip silently: these are append-in-progress logs and a partial
     /// trailing line is normal.
     nonisolated static func parse(data: Data, provider: AgenticProvider) -> [AgenticUsageRecord] {
-        let needles = lineNeedles(for: provider)
-        var candidates: [Range<Int>] = []
-        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-            guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
-            let count = raw.count
-            var lineStart = 0
-            var index = 0
-            while index <= count {
-                if index == count || base[index] == 0x0A {
-                    let length = index - lineStart
-                    if length >= minLineBytes, length <= maxLineBytes,
-                       matchesAnyNeedle(base: base, range: lineStart..<index, needles: needles) {
-                        candidates.append(lineStart..<index)
-                    }
-                    lineStart = index + 1
-                }
-                index += 1
-            }
-        }
-        guard !candidates.isEmpty else { return [] }
-
-        let decoder = JSONDecoder()
-        var records: [AgenticUsageRecord] = []
-        records.reserveCapacity(candidates.count)
-        // Codex attributes token counts to the most recent turn's model and
-        // reports cumulative totals that tell repeats from new calls.
-        var codexModel: String?
-        var codexTotals: RawCodexTokenUsage?
-        for range in candidates {
-            let line = data.subdata(in: range.lowerBound..<range.upperBound)
-            switch provider {
-            case .claude:
-                if let record = decodeClaudeRecord(from: line, decoder: decoder) {
-                    records.append(record)
-                }
-            case .codex:
-                decodeCodexLine(
-                    from: line,
-                    decoder: decoder,
-                    currentModel: &codexModel,
-                    previousTotals: &codexTotals,
-                    into: &records
-                )
-            case .grok:
-                decodeGrokRecords(from: line, decoder: decoder, into: &records)
-            case .kimi:
-                if let record = decodeKimiRecord(from: line, decoder: decoder) {
-                    records.append(record)
-                }
-            }
-        }
-        return records
+        var parser = AgenticUsageLogParser(provider: provider)
+        // Without cancellation checks `consume` cannot throw.
+        _ = try? parser.consume(data, checkCancellation: false)
+        return parser.records + parser.provisionalTailRecords()
     }
 
     // MARK: - Line prefilter
@@ -383,7 +585,7 @@ actor AgenticUsageLoader {
         Array("\"usage.record\"".utf8),
     ]
 
-    private nonisolated static func lineNeedles(for provider: AgenticProvider) -> [[UInt8]] {
+    fileprivate nonisolated static func lineNeedles(for provider: AgenticProvider) -> [[UInt8]] {
         switch provider {
         case .claude: claudeNeedles
         case .codex: codexNeedles
@@ -392,7 +594,7 @@ actor AgenticUsageLoader {
         }
     }
 
-    private nonisolated static func matchesAnyNeedle(
+    fileprivate nonisolated static func matchesAnyNeedle(
         base: UnsafePointer<UInt8>,
         range: Range<Int>,
         needles: [[UInt8]]
@@ -423,6 +625,40 @@ actor AgenticUsageLoader {
             index += 1
         }
         return false
+    }
+
+    // MARK: - Line decoding
+
+    /// Decodes one prefiltered candidate line, carrying Codex's model and
+    /// cumulative-total context from earlier lines of the same file.
+    fileprivate nonisolated static func decode(
+        line: Data,
+        provider: AgenticProvider,
+        decoder: JSONDecoder,
+        codexModel: inout String?,
+        codexTotals: inout RawCodexTokenUsage?,
+        into records: inout [AgenticUsageRecord]
+    ) {
+        switch provider {
+        case .claude:
+            if let record = decodeClaudeRecord(from: line, decoder: decoder) {
+                records.append(record)
+            }
+        case .codex:
+            decodeCodexLine(
+                from: line,
+                decoder: decoder,
+                currentModel: &codexModel,
+                previousTotals: &codexTotals,
+                into: &records
+            )
+        case .grok:
+            decodeGrokRecords(from: line, decoder: decoder, into: &records)
+        case .kimi:
+            if let record = decodeKimiRecord(from: line, decoder: decoder) {
+                records.append(record)
+            }
+        }
     }
 
     // MARK: - Claude
@@ -692,6 +928,155 @@ actor AgenticUsageLoader {
     }
 }
 
+// MARK: - Incremental line parser
+
+/// Parses one usage log as a stream of byte chunks, so a file can be resumed
+/// after an append. Records come only from newline-terminated lines; the
+/// unterminated tail stays in `pending` until a later chunk finishes it.
+/// Feeding a file in any chunking produces exactly the records of parsing it
+/// in one piece.
+struct AgenticUsageLogParser: Sendable {
+    let provider: AgenticProvider
+    /// Records from newline-terminated lines, in file order.
+    private(set) var records: [AgenticUsageRecord] = []
+    /// Bytes fed so far, including `pending`.
+    private(set) var consumedBytes = 0
+    /// The current unterminated line, bounded by `maxLineBytes`.
+    private(set) var pending = Data()
+    /// The current line already exceeded `maxLineBytes`; skip to its end.
+    private var discardingLine = false
+    // Codex attributes token counts to the most recent turn's model and
+    // reports cumulative totals that tell repeats from new calls.
+    private var codexModel: String?
+    private var codexTotals: RawCodexTokenUsage?
+
+    private static let cancellationStride = 128
+
+    init(provider: AgenticProvider) {
+        self.provider = provider
+    }
+
+    /// Feeds the next bytes of the file. With `checkCancellation`, throws
+    /// `CancellationError` between candidate decodes; the parser must then be
+    /// discarded because the chunk was only partly consumed.
+    mutating func consume(_ chunk: Data, checkCancellation: Bool) throws {
+        guard !chunk.isEmpty else { return }
+        consumedBytes += chunk.count
+        let needles = AgenticUsageLoader.lineNeedles(for: provider)
+        let decoder = JSONDecoder()
+        var decodes = 0
+        try chunk.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            let count = raw.count
+            var lineStart = 0
+            while lineStart < count,
+                  let hit = memchr(base + lineStart, 0x0A, count - lineStart) {
+                let newline = UnsafeRawPointer(base).distance(to: UnsafeRawPointer(hit))
+                if discardingLine {
+                    discardingLine = false
+                } else if !pending.isEmpty {
+                    if pending.count + newline <= AgenticUsageLoader.maxLineBytes {
+                        pending.append(base, count: newline)
+                        let line = pending
+                        try line.withUnsafeBytes { lineRaw in
+                            guard let lineBase = lineRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                                return
+                            }
+                            try process(
+                                base: lineBase, range: 0..<lineRaw.count, needles: needles,
+                                decoder: decoder, decodes: &decodes, checkCancellation: checkCancellation
+                            )
+                        }
+                    }
+                    pending = Data()
+                } else {
+                    try process(
+                        base: base, range: lineStart..<newline, needles: needles,
+                        decoder: decoder, decodes: &decodes, checkCancellation: checkCancellation
+                    )
+                }
+                lineStart = newline + 1
+            }
+            let tail = count - lineStart
+            guard tail > 0, !discardingLine else { return }
+            if pending.count + tail > AgenticUsageLoader.maxLineBytes {
+                pending = Data()
+                discardingLine = true
+            } else {
+                pending.append(base + lineStart, count: tail)
+            }
+        }
+    }
+
+    /// Records the unterminated tail would produce if the file ended here,
+    /// decoded on a copy so the committed state can still resume.
+    func provisionalTailRecords() -> [AgenticUsageRecord] {
+        guard !discardingLine, pending.count >= AgenticUsageLoader.minLineBytes else { return [] }
+        var copy = self
+        copy.records = []
+        var decodes = 0
+        pending.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
+            try? copy.process(
+                base: base, range: 0..<raw.count,
+                needles: AgenticUsageLoader.lineNeedles(for: provider),
+                decoder: JSONDecoder(), decodes: &decodes, checkCancellation: false
+            )
+        }
+        return copy.records
+    }
+
+    private mutating func process(
+        base: UnsafePointer<UInt8>,
+        range: Range<Int>,
+        needles: [[UInt8]],
+        decoder: JSONDecoder,
+        decodes: inout Int,
+        checkCancellation: Bool
+    ) throws {
+        let length = range.count
+        guard length >= AgenticUsageLoader.minLineBytes,
+              length <= AgenticUsageLoader.maxLineBytes,
+              AgenticUsageLoader.matchesAnyNeedle(base: base, range: range, needles: needles)
+        else { return }
+        decodes += 1
+        if checkCancellation, decodes.isMultiple(of: Self.cancellationStride) {
+            try Task.checkCancellation()
+        }
+        let line = Data(bytes: base + range.lowerBound, count: length)
+        AgenticUsageLoader.decode(
+            line: line,
+            provider: provider,
+            decoder: decoder,
+            codexModel: &codexModel,
+            codexTotals: &codexTotals,
+            into: &records
+        )
+    }
+}
+
+extension AgenticUsageLoader.FileCursor {
+    /// Extends the head hash and boundary bytes with the chunk about to be
+    /// consumed at `parser.consumedBytes`.
+    mutating func absorbFingerprints(_ chunk: Data) {
+        if headLength < Self.headBytes {
+            let take = min(Self.headBytes - headLength, chunk.count)
+            let seed = headHash
+            headHash = chunk.prefix(take).withUnsafeBytes {
+                AgenticUsageLoader.Fingerprint.hash($0, seed: seed)
+            }
+            headLength += take
+        }
+        if chunk.count >= Self.boundaryBytes {
+            boundary = Data(chunk.suffix(Self.boundaryBytes))
+        } else {
+            var combined = boundary
+            combined.append(chunk)
+            boundary = Data(combined.suffix(Self.boundaryBytes))
+        }
+    }
+}
+
 // MARK: - Raw JSONL shapes
 
 /// A JSON value that is either an ISO8601 string or an epoch number.
@@ -808,7 +1193,7 @@ private struct RawCodexTokenInfo: Decodable {
     }
 }
 
-private struct RawCodexTokenUsage: Decodable, Equatable {
+private struct RawCodexTokenUsage: Decodable, Equatable, Sendable {
     let inputTokens: Int?
     let cachedInputTokens: Int?
     let cacheWriteInputTokens: Int?
