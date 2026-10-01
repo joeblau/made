@@ -215,9 +215,9 @@ final class ChromiumRuntimeProbeDelegate:
             ] as? URL
             // The probe deliberately rejects every navigation recorded in
             // these lists. The cancel error can arrive after the step that
-            // triggered it (the auth rejection is dispatched from the CEF IO
-            // thread, ChromiumKit.mm:1345), so match on the failing URL
-            // rather than on the error code or on arrival timing.
+            // triggered it (ChromiumRequestPolicy.mm's GetAuthCredentials
+            // dispatches the rejection from the CEF IO thread), so match on
+            // the failing URL rather than on the error code or arrival timing.
             let expectedCancellation = failingURL.map {
                 blockedNavigationURLs.contains($0)
                     || deniedDownloadURLs.contains($0)

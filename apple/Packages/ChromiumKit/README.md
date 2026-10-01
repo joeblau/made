@@ -11,6 +11,28 @@ for the panel architecture and policies, and the
 [Chromium update and emergency runbook][update-runbook] for monitoring,
 response deadlines, signed drills, rollback, and end of support.
 
+## Source layout
+
+`include/ChromiumKit/ChromiumKit.h` is the only public header. The
+implementation is split by responsibility; each file states its ownership and
+thread contract at the top.
+
+| File | Responsibility |
+| --- | --- |
+| `ChromiumKitInternal.h` | Private Objective-C class extensions and error helpers |
+| `ChromiumCEFInternal.h` | Private C++ `EngineCore`/`BrowserClient` declarations (CEF builds only) |
+| `ChromiumKitSupport.mm` | Error construction and download quarantine |
+| `ChromiumRequests.mm` | Context-menu and permission request objects |
+| `ChromiumEngine.mm` | Message pump, `CefApp`, engine lifecycle, CEF `ChromiumEngine` |
+| `ChromiumBrowserClient.mm` | Browser lifetime, commands, and display/load events |
+| `ChromiumRequestPolicy.mm` | Fail-closed navigation, permission, download, and TLS policy |
+| `ChromiumBrowserHostView.mm` | CEF `ChromiumBrowserHostView` |
+| `ChromiumKitUnavailable.mm` | Artifact-free engine and host view for Debug/Release |
+
+The CEF units contain no code without `BLAU_CHROMIUM_CEF_ENABLED`, and the
+artifact-free unit contains no code with it. Add a new unit to the
+`ChromiumKit` target sources in `apple/project.yml`.
+
 ## Immutable upstream pin
 
 The authoritative machine-readable lock is
