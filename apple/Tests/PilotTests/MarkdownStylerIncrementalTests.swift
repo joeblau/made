@@ -186,16 +186,28 @@ struct MarkdownStylerIncrementalTests {
             }),
         ]
 
+        // Edits confined to a line or one construct must take the regional
+        // path, so the equivalence check covers it rather than the fallback.
+        let expectedRegional: Set<String> = [
+            "type inside the fence", "split a heading line", "join it back", "break an image",
+            "repair the image", "break a link label", "edit a secret value", "lowercase a secret key",
+            "edit a table cell", "nest a task",
+        ]
         let live = Live(Self.fixture)
         for edit in edits {
             edit.apply(live)
+            if expectedRegional.contains(edit.name) {
+                #expect(!live.styler.lastPass.isFullPass, "\(edit.name) fell back to a full pass")
+            }
             Self.expectMatchesFullPass(live, edit.name)
         }
     }
 
     @Test("Line separators other than LF keep regional styling exact")
     func unusualLineBreaks() {
+        // Trailing prose keeps each local edit under the full-pass threshold.
         let text = "# Title\r\n**bold\rstill bold** and `code`\u{2028}API_KEY=v\r\n```\r\nfence\r\n```\r\ntail"
+            + String(repeating: "\r\nplain prose line", count: 30)
         let live = Live(text)
         let edits: [(NSRange, String)] = [
             (NSRange(location: 2, length: 0), "x"),
@@ -207,17 +219,23 @@ struct MarkdownStylerIncrementalTests {
             let length = (live.storage.string as NSString).length
             let range = NSRange(location: min(edit.0.location, length), length: min(edit.0.length, length - min(edit.0.location, length)))
             live.replace(range, with: edit.1)
+            if index < 3 {
+                #expect(!live.styler.lastPass.isFullPass, "edit \(index) fell back to a full pass")
+            }
             Self.expectMatchesFullPass(live, "edit \(index)")
         }
     }
 
     @Test("Image source broken across an escaped line break stays one styled unit")
     func multiLineImage() {
-        let live = Live("before\n![alt\\\ntext](https://example.com/a.png)\nafter")
+        let padding = String(repeating: "\nplain prose line", count: 20)
+        let live = Live("before\n![alt\\\ntext](https://example.com/a.png)\nafter" + padding)
         live.replace(NSRange(location: 7, length: 0), with: "x ")
+        #expect(!live.styler.lastPass.isFullPass)
         Self.expectMatchesFullPass(live, "edit before image")
         let tail = Self.range(of: "after", in: live)
         live.replace(NSRange(location: tail.location, length: 0), with: "**z** ")
+        #expect(!live.styler.lastPass.isFullPass)
         Self.expectMatchesFullPass(live, "edit after image")
     }
 
@@ -235,6 +253,7 @@ struct MarkdownStylerIncrementalTests {
         }
 
         let live = Live(Self.fixture)
+        var regionalPasses = 0
         for step in 0..<400 {
             let length = (live.storage.string as NSString).length
             let location = next(length + 1)
@@ -244,11 +263,15 @@ struct MarkdownStylerIncrementalTests {
             } else {
                 live.replace(NSRange(location: location, length: 0), with: snippets[next(snippets.count)])
             }
+            if !live.styler.lastPass.isFullPass { regionalPasses += 1 }
             Self.expectMatchesFullPass(live, "step \(step)")
             if live.storage.string.isEmpty {
                 live.replace(NSRange(location: 0, length: 0), with: Self.fixture)
             }
         }
+        // Most random edits are local; the comparison must mostly be
+        // exercising the regional path, not the full-pass fallback.
+        #expect(regionalPasses >= 200, "only \(regionalPasses) of 400 edits styled regionally")
     }
 
     @Test("Changed-range diff maps unaffected ranges through the edit")

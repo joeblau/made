@@ -1,12 +1,14 @@
 import AppKit
 
 /// `NSTextView` subclass behind the Notes editor. It adds ⇧⌘L "split
-/// selection into lines" — the Sublime/VS Code multi-cursor gesture, where
-/// each line touched by the selection gets a collapsed insertion point at the
-/// end of its selected content and `NSTextView` then types into all of them —
-/// plus click handling for links, masked secrets, and task checkboxes, and the
-/// automatic task/table reflows. Floating gutter buttons, color swatches, and
-/// image previews are owned by `NoteEditorOverlays`.
+/// selection into lines" — the Sublime/VS Code multi-cursor gesture, which
+/// requests a collapsed insertion point at the end of the selected content on
+/// each line the selection touches (see `lineEndCarets(for:in:)`). `NSTextView`
+/// decides how many of those zero-length ranges it keeps; current AppKit keeps
+/// only the first, so typing lands at that caret — plus click handling for
+/// links, masked secrets, and task checkboxes, and the automatic task/table
+/// reflows. Floating gutter buttons, color swatches, and image previews are
+/// owned by `NoteEditorOverlays`.
 final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
     weak var maskController: EnvMaskController?
     var onCopySecret: (() -> Void)?
@@ -428,39 +430,41 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
     // MARK: - Multi-cursor
 
     private func splitSelectionIntoLines() {
-        let ns = string as NSString
+        let carets = Self.lineEndCarets(for: selectedRanges.map(\.rangeValue), in: string as NSString)
+        guard !carets.isEmpty else { return }
+        selectedRanges = carets.map { NSValue(range: $0) }
+    }
+
+    /// The carets ⇧⌘L requests: one collapsed insertion point at the end of
+    /// the selected content on every line each selection touches, sorted and
+    /// de-duplicated as `NSTextView` requires. A bare caret is kept as-is so
+    /// pre-existing multi-cursor state survives. Lines end at any line
+    /// terminator, and CRLF counts as one terminator.
+    nonisolated static func lineEndCarets(for selections: [NSRange], in text: NSString) -> [NSRange] {
         var cursors: [NSRange] = []
-
-        for value in selectedRanges {
-            let selection = value.rangeValue
-
-            // A bare caret (no selected text) stays as-is — there's nothing
-            // to split, but we preserve any pre-existing multi-cursor state.
+        for selection in selections {
             guard selection.length > 0 else {
                 cursors.append(selection)
                 continue
             }
-
-            let selectionEnd = selection.location + selection.length
-            var lineStart = selection.location
+            let selectionEnd = min(NSMaxRange(selection), text.length)
+            var lineStart = min(selection.location, text.length)
             while lineStart < selectionEnd {
-                let searchRange = NSRange(location: lineStart, length: selectionEnd - lineStart)
-                let newline = ns.rangeOfCharacter(from: .newlines, options: [], range: searchRange)
-                let lineEnd = newline.location == NSNotFound ? selectionEnd : newline.location
-                cursors.append(NSRange(location: lineEnd, length: 0))
-                if newline.location == NSNotFound { break }
-                lineStart = newline.location + newline.length
+                var lineEnd = 0
+                var contentsEnd = 0
+                text.getLineStart(
+                    nil, end: &lineEnd, contentsEnd: &contentsEnd,
+                    for: NSRange(location: lineStart, length: 0)
+                )
+                cursors.append(NSRange(location: min(max(contentsEnd, lineStart), selectionEnd), length: 0))
+                guard lineEnd > lineStart else { break }
+                lineStart = lineEnd
             }
         }
-
-        // `NSTextView` requires sorted, de-duplicated ranges.
-        let sorted = cursors
+        return cursors
             .sorted { $0.location < $1.location }
             .reduce(into: [NSRange]()) { result, range in
                 if result.last?.location != range.location { result.append(range) }
             }
-
-        guard !sorted.isEmpty else { return }
-        selectedRanges = sorted.map { NSValue(range: $0) }
     }
 }

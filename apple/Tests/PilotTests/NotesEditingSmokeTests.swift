@@ -127,12 +127,16 @@ struct NotesEditingSmokeTests {
         ))
         #expect(harness.textView.performKeyEquivalent(with: event))
 
-        // The gesture requests a caret at the end of every selected line;
-        // AppKit decides how many zero-length ranges it keeps, so check the
-        // kept carets are a sorted prefix of the requested ones.
-        let lineEnds = [3, 7, 13]
+        // The gesture requests a caret at the end of every selected line (the
+        // request itself is pinned by `lineEndCarets`). AppKit decides how many
+        // zero-length ranges it keeps, so check the kept carets are a non-empty
+        // sorted prefix of the requested ones, starting at the first line end.
+        let lineEnds = MultiCursorTextView.lineEndCarets(
+            for: [NSRange(location: 0, length: (original as NSString).length)], in: original as NSString
+        ).map(\.location)
+        #expect(lineEnds == [3, 7, 13])
         let carets = harness.textView.selectedRanges.map(\.rangeValue)
-        #expect(!carets.isEmpty)
+        #expect(carets.first?.location == 3)
         #expect(carets.allSatisfy { $0.length == 0 })
         #expect(carets.map(\.location) == Array(lineEnds.prefix(carets.count)))
 
@@ -150,6 +154,64 @@ struct NotesEditingSmokeTests {
 
         harness.undo.undo()
         #expect(harness.textView.string == original)
+    }
+
+    @Test("Split-into-lines requests one caret per touched line at the end of its selected content")
+    func lineEndCaretRequests() {
+        func carets(_ text: String, _ selections: [NSRange]) -> [Int] {
+            MultiCursorTextView.lineEndCarets(for: selections, in: text as NSString).map(\.location)
+        }
+        let text = "one\ntwo\nthree"
+        // Whole document: every line end, the last at the end of the text.
+        #expect(carets(text, [NSRange(location: 0, length: 13)]) == [3, 7, 13])
+        // Starting and ending mid-line: the last caret stops where the
+        // selection does, not at the end of its line.
+        #expect(carets(text, [NSRange(location: 1, length: 9)]) == [3, 7, 10])
+        // A selection ending just after a newline doesn't claim the next line.
+        #expect(carets(text, [NSRange(location: 0, length: 4)]) == [3])
+        // Bare carets are kept, and multiple selections merge sorted and unique.
+        #expect(carets(text, [NSRange(location: 9, length: 0), NSRange(location: 0, length: 3)]) == [3, 9])
+        #expect(carets(text, [NSRange(location: 0, length: 3), NSRange(location: 3, length: 0)]) == [3])
+        // CRLF is one terminator: no caret between the CR and the LF.
+        #expect(carets("ab\r\ncd\r\nef", [NSRange(location: 0, length: 10)]) == [2, 6, 10])
+        // Ranges past the end are clamped instead of trapping.
+        #expect(carets("ab", [NSRange(location: 1, length: 10)]) == [2])
+        #expect(carets("", [NSRange(location: 0, length: 0)]) == [0])
+    }
+
+    @Test("Reflows wait for an IME composition to commit, then run once")
+    func reflowWaitsForMarkedText() throws {
+        let original = "- [ ] alpha\n- [ ] beta"
+        let harness = try Harness(original)
+        let box = NSRange(location: 3, length: 1)
+
+        // Compose the checkbox mark through the input method. The edit is
+        // recorded, but the marked text must not be reflowed away.
+        harness.undo.beginUndoGrouping()
+        harness.textView.setSelectedRange(box)
+        harness.textView.setMarkedText(
+            "x", selectedRange: NSRange(location: 1, length: 0), replacementRange: box
+        )
+        harness.undo.endUndoGrouping()
+        #expect(harness.textView.hasMarkedText())
+        #expect(harness.textView.string == "- [x] alpha\n- [ ] beta")
+
+        // AppKit currently withholds `textDidChange` until the composition
+        // commits; a reflow pass that arrives anyway (another change path, or
+        // a future AppKit) must stand down and leave the composition intact.
+        harness.textView.applyAutomaticReflows()
+        #expect(harness.textView.hasMarkedText())
+        #expect(harness.textView.markedRange() == box)
+        #expect(harness.textView.string == "- [x] alpha\n- [ ] beta")
+
+        // Committing the composition runs the owed task reflow.
+        harness.undo.beginUndoGrouping()
+        harness.textView.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        harness.undo.endUndoGrouping()
+        #expect(!harness.textView.hasMarkedText())
+        #expect(harness.textView.string == "- [ ] beta\n- [x] alpha")
+        let movedLine = (harness.textView.string as NSString).range(of: "- [x] alpha")
+        #expect(harness.caret == movedLine.location + 4)
     }
 
     @Test("Plain prose edits never trigger a programmatic reflow")
