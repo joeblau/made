@@ -349,17 +349,25 @@ struct ChromiumProcessObserver: Sendable {
     let scope: ChromiumProcessScope
     let timeout: Duration
     let standardOutputLimit: Int
+    /// Extra attempts after a timed-out `ps`. On a heavily loaded machine a
+    /// single `ps` can stall past its deadline (observed once at a load
+    /// average near 118) although the next run takes about 150 ms. One retry
+    /// keeps the worst case bounded at twice `timeout`; every other failure
+    /// is reported immediately.
+    let timeoutRetries: Int
     private let runner: Runner
 
     init(
         scope: ChromiumProcessScope,
         timeout: Duration = .seconds(5),
         standardOutputLimit: Int = 8 * 1_024 * 1_024,
+        timeoutRetries: Int = 1,
         runner: @escaping Runner = { try await ProcessRunner.run($0) }
     ) {
         self.scope = scope
         self.timeout = timeout
         self.standardOutputLimit = standardOutputLimit
+        self.timeoutRetries = max(0, timeoutRetries)
         self.runner = runner
     }
 
@@ -379,15 +387,34 @@ struct ChromiumProcessObserver: Sendable {
     }
 
     func snapshot() async throws -> ChromiumProcessSnapshot {
-        try Task.checkCancellation()
-        let startedAt = ContinuousClock.now
-        let result: ProcessRunResult
-        do {
-            result = try await runner(invocation)
-        } catch let error as ProcessRunnerError {
-            throw observationError(for: error)
+        var timeoutsRemaining = timeoutRetries
+        while true {
+            try Task.checkCancellation()
+            // Each attempt has its own bounds, so a retried observation's
+            // midpoint describes the run that actually produced the rows.
+            let startedAt = ContinuousClock.now
+            let result: ProcessRunResult
+            do {
+                result = try await runner(invocation)
+            } catch ProcessRunnerError.timedOut where timeoutsRemaining > 0 {
+                timeoutsRemaining -= 1
+                continue
+            } catch let error as ProcessRunnerError {
+                throw observationError(for: error)
+            }
+            return try snapshot(
+                from: result,
+                startedAt: startedAt,
+                finishedAt: ContinuousClock.now
+            )
         }
-        let finishedAt = ContinuousClock.now
+    }
+
+    private func snapshot(
+        from result: ProcessRunResult,
+        startedAt: ContinuousClock.Instant,
+        finishedAt: ContinuousClock.Instant
+    ) throws -> ChromiumProcessSnapshot {
         let snapshot = ChromiumProcessTable.parse(
             result.standardOutputString,
             scope: scope,

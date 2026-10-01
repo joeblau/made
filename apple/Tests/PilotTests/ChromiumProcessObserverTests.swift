@@ -333,6 +333,51 @@ struct ChromiumProcessObserverTests {
         }
     }
 
+    @Test("A timed-out ps is retried once, and only a timeout is retried")
+    func retriesOneTimeout() async throws {
+        let calls = CallCounter()
+        let recovering = ChromiumProcessObserver(scope: Self.scope) { _ in
+            if calls.increment() == 1 { throw ProcessRunnerError.timedOut(Self.result()) }
+            return Self.result("101 0:00.25 30000 \(Self.renderer)\n")
+        }
+        let snapshot = try await recovering.snapshot()
+        #expect(calls.value == 2)
+        #expect(snapshot.helperCommands == [Self.renderer])
+
+        let stalled = CallCounter()
+        let alwaysTimingOut = ChromiumProcessObserver(
+            scope: Self.scope,
+            timeout: .seconds(2)
+        ) { _ in
+            stalled.increment()
+            throw ProcessRunnerError.timedOut(Self.result())
+        }
+        await #expect(throws: ChromiumProcessObservationError.timedOut(.seconds(2))) {
+            try await alwaysTimingOut.snapshot()
+        }
+        #expect(stalled.value == 2)
+
+        let exits = CallCounter()
+        let failing = ChromiumProcessObserver(scope: Self.scope) { _ in
+            exits.increment()
+            throw ProcessRunnerError.nonZeroExit(Self.result(termination: .exit(1)))
+        }
+        await #expect(throws: ChromiumProcessObservationError.exited(.exit(1))) {
+            try await failing.snapshot()
+        }
+        #expect(exits.value == 1)
+
+        let noRetry = CallCounter()
+        let strict = ChromiumProcessObserver(scope: Self.scope, timeoutRetries: 0) { _ in
+            noRetry.increment()
+            throw ProcessRunnerError.timedOut(Self.result())
+        }
+        await #expect(throws: ChromiumProcessObservationError.self) {
+            try await strict.snapshot()
+        }
+        #expect(noRetry.value == 1)
+    }
+
     @Test("Output with no parseable rows is rejected", arguments: ["", "\n\n", "garbage\nmore garbage\n"])
     func rejectsUnreadableOutput(output: String) async {
         let observer = ChromiumProcessObserver(scope: Self.scope) { _ in
@@ -381,5 +426,22 @@ private final class RecordedInvocation: @unchecked Sendable {
 
     func set(_ invocation: ProcessInvocation) {
         lock.withLock { self.invocation = invocation }
+    }
+}
+
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var value: Int {
+        lock.withLock { count }
+    }
+
+    @discardableResult
+    func increment() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
     }
 }
