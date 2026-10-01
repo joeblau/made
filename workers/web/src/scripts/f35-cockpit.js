@@ -7,10 +7,14 @@
  */
 import * as THREE from 'three';
 
-export function initCockpit() {
-  const sceneCanvas = document.querySelector('[data-cockpit-scene]');
-  const hudCanvas = document.querySelector('[data-cockpit-hud]');
-  if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return;
+/**
+ * Builds the scene inside `root` and draws its first frame. Returns false when
+ * the canvases are missing or WebGL is unavailable, true once rendering began.
+ */
+export function initCockpit(root = document) {
+  const sceneCanvas = root.querySelector('[data-cockpit-scene]');
+  const hudCanvas = root.querySelector('[data-cockpit-hud]');
+  if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return false;
 
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -31,7 +35,7 @@ export function initCockpit() {
   try {
     renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
   } catch {
-    return; // WebGL unavailable; the static --background color stays.
+    return false; // WebGL unavailable; the loader keeps the static fallback.
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   const scene = new THREE.Scene();
@@ -1136,4 +1140,5 @@ export function initCockpit() {
     drawHMD();
   }
   frame();
+  return true;
 }

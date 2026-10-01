@@ -5,6 +5,8 @@
 </div>
 
 <script>
-  import { initCockpit } from '../scripts/f35-cockpit.js';
-  initCockpit();
+  // Only the small loader is in the page's critical script graph; it fetches
+  // the Three.js scene chunk after the download slate is usable.
+  import { loadCockpitWhenIdle } from '../scripts/cockpit-loader.js';
+  loadCockpitWhenIdle();
 </script>

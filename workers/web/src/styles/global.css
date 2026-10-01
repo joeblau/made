@@ -115,6 +115,20 @@ main {
   display: block;
   width: 100%;
   height: 100%;
+  /* The scene loads after the page is usable. Until its first frame (and
+     permanently in the static fallback) only the background and scrim show. */
+  opacity: 0;
+  transition: opacity 600ms var(--ease-out);
+}
+
+.cockpit-bg[data-cockpit-state="ready"] canvas {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cockpit-bg canvas {
+    transition: none;
+  }
 }
 
 /* One scene, one scrim: the vignette tints the render toward the page

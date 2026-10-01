@@ -69,6 +69,25 @@ Cloudflare Static Assets serve the original `/made` URL, including its own
 redirects and 404s, without a prefix-stripping Worker. The generated asset tree
 is cached by Turborepo and verified by `test/mount.test.mjs`.
 
+### Script budgets
+
+The landing page's critical script graph is only the cockpit loader and the
+QR dialog. The Three.js cockpit scene is a separate chunk fetched by dynamic
+`import()` after the load event and an idle slice, and is skipped entirely
+(leaving the themed background and scrim) without WebGL, with Save-Data, or on
+2G connections. `scripts/check-build-size.mjs` follows the emitted HTML and
+import graph and fails the build when a budget is exceeded:
+
+| Group | Raw budget | gzip budget | Measured when set (#269) |
+| --- | --- | --- | --- |
+| Initial JavaScript | 8,000 B | 4,000 B | 3,361 B / 1,712 B |
+| Deferred JavaScript | 600,000 B | 150,000 B | 534,997 B / 133,704 B |
+| CSS (all files) | 35,000 B | — | 8,483 B |
+
+Emitted modules no page references (the React client entry from the build-time
+QR integration) are listed but not counted. Raise a budget only alongside a
+fresh measurement.
+
 ### Local development
 
 Use `bun run --cwd workers/web dev` for Astro at `http://localhost:4321/made`.
