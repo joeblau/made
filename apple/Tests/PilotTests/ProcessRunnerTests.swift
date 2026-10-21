@@ -242,6 +242,19 @@ struct ProcessRunnerTests {
         }
     }
 
+    @Test("Event-wait timeouts round up and saturate for poll(2)")
+    func pollMillisecondsConversion() {
+        #expect(ProcessRunner.pollMilliseconds(for: .zero) == 0)
+        #expect(ProcessRunner.pollMilliseconds(for: .milliseconds(-5)) == 0)
+        // Sub-millisecond remainders must round up: a zero-millisecond poll
+        // would busy-spin until the deadline instead of blocking.
+        #expect(ProcessRunner.pollMilliseconds(for: .microseconds(1)) == 1)
+        #expect(ProcessRunner.pollMilliseconds(for: .microseconds(10_500)) == 11)
+        #expect(ProcessRunner.pollMilliseconds(for: .milliseconds(10)) == 10)
+        #expect(ProcessRunner.pollMilliseconds(for: .seconds(20)) == 20_000)
+        #expect(ProcessRunner.pollMilliseconds(for: .seconds(1 << 40)) == Int32.max)
+    }
+
     @Test("Both output streams drain concurrently and enforce caps")
     func largeOutput() async throws {
         let script = "i=0; while [ $i -lt 8000 ]; do printf 0123456789abcdef; printf fedcba9876543210 >&2; i=$((i+1)); done"
@@ -264,5 +277,37 @@ struct ProcessRunnerTests {
             #expect(result.standardOutputTruncated)
             #expect(result.standardErrorTruncated)
         }
+    }
+
+    @Test("Children keep Foundation's default scheduling class unless a caller opts in")
+    func qualityOfServiceIsOptIn() {
+        let url = URL(fileURLWithPath: "/usr/bin/true")
+        #expect(ProcessInvocation(executableURL: url).qualityOfService == nil)
+        #expect(ProcessInvocation.developerTool("git", arguments: []).qualityOfService == nil)
+        let untouched = ProcessRunner.makeProcess(for: ProcessInvocation(executableURL: url))
+        #expect(untouched.qualityOfService == Process().qualityOfService)
+        #expect(untouched.qualityOfService == .default)
+        let raised = ProcessRunner.makeProcess(
+            for: ProcessInvocation(executableURL: url, qualityOfService: .userInitiated)
+        )
+        #expect(raised.qualityOfService == .userInitiated)
+    }
+
+    @Test("Output larger than a pipe buffer is captured completely", arguments: [
+        QualityOfService?.none, .utility, .userInitiated,
+    ])
+    func multiMegabyteOutput(qualityOfService: QualityOfService?) async throws {
+        let byteCount = 3 * 1_024 * 1_024 + 17
+        let result = try await ProcessRunner.run(ProcessInvocation(
+            executableURL: URL(fileURLWithPath: "/usr/bin/head"),
+            arguments: ["-c", String(byteCount), "/dev/zero"],
+            timeout: .seconds(10),
+            standardOutputLimit: 4 * 1_024 * 1_024,
+            qualityOfService: qualityOfService
+        ))
+        #expect(result.termination == .exit(0))
+        #expect(result.standardOutput.count == byteCount)
+        #expect(!result.standardOutputTruncated)
+        #expect(result.standardOutput.allSatisfy { $0 == 0 })
     }
 }

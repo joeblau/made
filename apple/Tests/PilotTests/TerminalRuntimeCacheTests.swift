@@ -76,7 +76,7 @@ struct TerminalRuntimeCacheTests {
         try Data("#!/bin/sh\ntrap '' TERM\nwhile :; do sleep 1; done\n".utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
         let started = ContinuousClock.now
-        let lookup = Task { await PersistentTerminalSession.loadPaneRuntime(sessionName: "test", executable: executable) }
+        let lookup = Task { await PersistentTerminalSession.loadAllPaneRuntimes(executable: executable) }
         try await Task.sleep(for: .milliseconds(20))
         #expect(started.duration(to: .now) < .milliseconds(500), "Main actor must remain available during tmux lookup")
         #expect(await lookup.value == nil)

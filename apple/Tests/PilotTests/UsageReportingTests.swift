@@ -39,7 +39,7 @@ struct UsageReportingTests {
             ],
         ]
 
-        let usage = UsageStore.parseCodexUsage(root, receivedAt: receivedAt)
+        let usage = CodexUsageAdapter.parse(root, receivedAt: receivedAt)
 
         #expect(usage.planLabel == "Pro")
         #expect(usage.windows.count == 3)
@@ -57,7 +57,7 @@ struct UsageReportingTests {
 
     @Test("Codex omits malformed windows instead of reporting false zero usage")
     func codexRejectsMalformedWindow() {
-        let usage = UsageStore.parseCodexUsage([
+        let usage = CodexUsageAdapter.parse([
             "rate_limit": [
                 "primary_window": [
                     "limit_window_seconds": 18_000,
@@ -71,7 +71,7 @@ struct UsageReportingTests {
 
     @Test("Claude exposes extra-usage credits in major currency units")
     func claudeCredits() throws {
-        let usage = UsageStore.parseClaudeUsage([
+        let usage = ClaudeUsageAdapter.parse([
             "five_hour": [
                 "utilization": 42,
                 "resets_at": "2026-07-12T20:00:00Z",
@@ -103,7 +103,7 @@ struct UsageReportingTests {
 
     @Test("Claude shows explicitly unlimited extra usage")
     func claudeUnlimitedCredits() throws {
-        let usage = UsageStore.parseClaudeUsage([
+        let usage = ClaudeUsageAdapter.parse([
             "extra_usage": [
                 "is_enabled": true,
                 "monthly_limit": NSNull(),
@@ -120,7 +120,7 @@ struct UsageReportingTests {
 
     @Test("Grok maps weekly billing usage, reset time, plan, and prepaid balance")
     func grokBilling() throws {
-        let usage = UsageStore.parseGrokUsage([
+        let usage = GrokUsageAdapter.parse([
             "subscriptionTier": "super_grok",
             "creditUsagePercent": "37.5",
             "currentPeriod": [
@@ -135,14 +135,14 @@ struct UsageReportingTests {
         let window = try #require(usage.windows.first)
         #expect(window.name == "Weekly")
         #expect(abs(window.utilization - 0.375) < 0.000_001)
-        #expect(window.resetsAt == UsageStore.date("2026-07-13T12:00:00Z"))
+        #expect(window.resetsAt == UsageJSON.date("2026-07-13T12:00:00Z"))
         #expect(usage.credits?.balance == 25)
         #expect(usage.credits?.unit == .currency("USD"))
     }
 
     @Test("Grok unwraps the current billing config response")
     func grokWrappedBillingConfig() throws {
-        let usage = UsageStore.parseGrokUsage([
+        let usage = GrokUsageAdapter.parse([
             "config": [
                 "creditUsagePercent": 2.0,
                 "currentPeriod": [
@@ -158,7 +158,7 @@ struct UsageReportingTests {
         let window = try #require(usage.windows.first)
         #expect(window.name == "Weekly")
         #expect(abs(window.utilization - 0.02) < 0.000_001)
-        #expect(window.resetsAt == UsageStore.date("2026-08-01T21:30:04.363559+00:00"))
+        #expect(window.resetsAt == UsageJSON.date("2026-08-01T21:30:04.363559+00:00"))
         #expect(usage.credits?.balance == 0)
     }
 
@@ -185,7 +185,7 @@ struct UsageReportingTests {
         }
         """.data(using: .utf8))
 
-        let now = try #require(UsageStore.date("2026-07-12T12:00:00Z"))
+        let now = try #require(UsageJSON.date("2026-07-12T12:00:00Z"))
         let session = try #require(UsageSessions.GrokSession.parse(data: data, now: now))
         #expect(session.accessToken == "oidc-token")
         #expect(session.authMode == "oidc")
@@ -322,7 +322,7 @@ struct UsageReportingTests {
     @Test("Kimi maps weekly and detailed limits with absolute and relative resets")
     func kimiUsageWindows() throws {
         let receivedAt = Date(timeIntervalSince1970: 1_800_000_000)
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "user": [
                 "membership": ["level": "LEVEL_STANDARD"],
             ],
@@ -364,7 +364,7 @@ struct UsageReportingTests {
 
         let fiveHour = try #require(usage.windows.first { $0.name == "5h limit" })
         #expect(abs(fiveHour.utilization - 0.4) < 0.000_001)
-        #expect(fiveHour.resetsAt == UsageStore.date("2027-01-16T08:00:00Z"))
+        #expect(fiveHour.resetsAt == UsageJSON.date("2027-01-16T08:00:00Z"))
     }
 
     @Test("Usage windows display hourly limits first and weekly limits last")
@@ -390,7 +390,7 @@ struct UsageReportingTests {
     func kimiParallelLimitPlan(limit: Double, expected: String) {
         // Matches the live response shape: `level` stays LEVEL_STANDARD for
         // every paid tier, so `parallel.limit` carries the tier.
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "user": [
                 "membership": ["level": "LEVEL_STANDARD"],
             ],
@@ -402,7 +402,7 @@ struct UsageReportingTests {
 
     @Test("Kimi free membership still maps to Adagio")
     func kimiFreePlan() {
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "user": [
                 "membership": ["level": "LEVEL_FREE"],
             ],
@@ -415,7 +415,7 @@ struct UsageReportingTests {
     func kimiPaidPlanWithoutMultiplier() {
         // LEVEL_STANDARD alone must NOT guess a tier — a Vivace account
         // returns exactly this, and a wrong badge is worse than none.
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "user": [
                 "membership": ["level": "LEVEL_STANDARD"],
             ],
@@ -426,7 +426,7 @@ struct UsageReportingTests {
 
     @Test("Kimi prefers an explicit plan title and hides unknown internal levels")
     func kimiMembershipPlanFallbacks() {
-        let titled = UsageStore.parseKimiUsage([
+        let titled = KimiUsageAdapter.parse([
             "user": [
                 "membership": [
                     "level": "LEVEL_FUTURE",
@@ -434,7 +434,7 @@ struct UsageReportingTests {
                 ],
             ],
         ])
-        let unknown = UsageStore.parseKimiUsage([
+        let unknown = KimiUsageAdapter.parse([
             "user": [
                 "membership": ["level": "LEVEL_FUTURE"],
             ],
@@ -446,7 +446,7 @@ struct UsageReportingTests {
 
     @Test("Kimi maps its booster wallet and monthly USD allowance")
     func kimiBoosterWallet() throws {
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "boosterWallet": [
                 "balance": [
                     "type": "BOOSTER",
@@ -475,7 +475,7 @@ struct UsageReportingTests {
 
     @Test("Kimi.ai dashboard figures map to plan usage and extra usage")
     func kimiAIDashboardFigures() throws {
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "user": [
                 "membership": ["level": "LEVEL_STANDARD"],
             ],
@@ -529,7 +529,7 @@ struct UsageReportingTests {
 
     @Test("Kimi treats a disabled monthly cap as unlimited and defaults spend to zero")
     func kimiUnlimitedBoosterWallet() throws {
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "boosterWallet": [
                 "balance": [
                     "type": "BOOSTER",
@@ -549,7 +549,7 @@ struct UsageReportingTests {
 
     @Test("Kimi omits unusable rows and clamps out-of-range utilization")
     func kimiMalformedLimits() throws {
-        let usage = UsageStore.parseKimiUsage([
+        let usage = KimiUsageAdapter.parse([
             "usage": ["used": 1, "limit": 0],
             "limits": [
                 ["name": "Missing limit", "detail": ["used": 10]],
@@ -569,7 +569,7 @@ struct UsageReportingTests {
 
     @Test("Codex labels additional multi-window pools so they are distinguishable")
     func codexLabelsAdditionalPools() throws {
-        let usage = UsageStore.parseCodexUsage([
+        let usage = CodexUsageAdapter.parse([
             "plan_type": "pro",
             "rate_limit": [
                 "primary_window": ["used_percent": 1, "limit_window_seconds": 18_000],
@@ -593,7 +593,7 @@ struct UsageReportingTests {
 
     @Test("Claude surfaces model-scoped limits like Fable and dedupes flat fields")
     func claudeScopedLimits() throws {
-        let usage = UsageStore.parseClaudeUsage([
+        let usage = ClaudeUsageAdapter.parse([
             "five_hour": ["utilization": 3, "resets_at": "2026-07-12T20:00:00Z"],
             "seven_day": ["utilization": 66, "resets_at": "2026-07-19T20:00:00Z"],
             "seven_day_opus": ["utilization": 12, "resets_at": "2026-07-19T20:00:00Z"],

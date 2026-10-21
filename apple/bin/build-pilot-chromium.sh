@@ -11,8 +11,8 @@ for tool in xcodebuild; do
   }
 done
 selected_xcode="$(xcodebuild -version)"
-grep -Eq '^Xcode 26\.' <<<"$selected_xcode" || {
-  printf 'Chromium build error: the pinned runtime requires Xcode 26.x\n' >&2
+grep -Eq '^Xcode 27\.' <<<"$selected_xcode" || {
+  printf 'Chromium build error: the pinned runtime requires Xcode 27.x\n' >&2
   exit 1
 }
 
@@ -41,9 +41,9 @@ if [[ "${1:-}" == --local ]]; then
 fi
 
 # SwiftLintPlugin 0.63.1 declares an Output directory but does not create it.
-# Xcode 26 treats the missing prebuild output as a hard failure after linting
-# succeeds. Repository lint/test gates run separately, so skip those dependency
-# plug-ins only for this pinned Xcode 26 Chromium build.
+# Xcode 26 and later treat the missing prebuild output as a hard failure after
+# linting succeeds. Repository lint/test gates run separately, so skip those
+# dependency plug-ins only for this pinned Chromium build.
 export DISABLE_SWIFTLINT=YES
 cd "$REPOSITORY_ROOT"
 exec xcodebuild \

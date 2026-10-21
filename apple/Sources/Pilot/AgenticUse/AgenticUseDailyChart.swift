@@ -138,7 +138,7 @@ struct AgenticUseDailyChartPanel: View {
         }
         .chartForegroundStyleScale(domain: visibleModels.map(AgenticModel.displayName(for:)), range: seriesColors)
         .chartLegend(position: .top, alignment: .leading, spacing: 8)
-        .chartXSelection(value: $selection)
+        .chartXSelection(value: snappedSelection)
         .chartOverlay { proxy in
             // `chartXSelection` alone only responds to drag on macOS; hover
             // is the expected tooltip gesture, so feed the same binding.
@@ -149,12 +149,12 @@ struct AgenticUseDailyChartPanel: View {
                         guard let plotFrame = proxy.plotFrame else { return }
                         let frame = geometry[plotFrame]
                         guard frame.contains(location) else {
-                            selection = nil
+                            setSelection(nil)
                             return
                         }
-                        selection = proxy.value(atX: location.x - frame.minX, as: Date.self)
+                        setSelection(proxy.value(atX: location.x - frame.minX, as: Date.self))
                     case .ended:
-                        selection = nil
+                        setSelection(nil)
                     }
                 }
             }
@@ -213,18 +213,41 @@ struct AgenticUseDailyChartPanel: View {
 
     // MARK: - Hover tooltip
 
-    /// Snaps the raw hover date to the chart's bucket grid, and only when the
-    /// bucket actually exists in the (zero-filled) series.
-    private var selectedBucket: Date? {
-        guard let selection else { return nil }
-        let calendar = Calendar.current
-        let bucket: Date?
-        if snapshot.range.bucketUnit == .day {
-            bucket = calendar.startOfDay(for: selection)
-        } else {
-            bucket = calendar.dateInterval(of: .hour, for: selection)?.start
+    /// Hover and drag both land here snapped to the bucket grid, and only
+    /// when the bucket changed — mouse-moves within one bucket would
+    /// otherwise invalidate the chart body (and re-filter the whole series)
+    /// at pointer-event rate.
+    private func setSelection(_ raw: Date?) {
+        let snapped = raw.flatMap {
+            Self.snappedBucket(for: $0, range: snapshot.range, calendar: .current)
         }
-        guard let bucket, visibleSeries.contains(where: { $0.day == bucket }) else {
+        if selection != snapped { selection = snapped }
+    }
+
+    /// `chartXSelection` writes raw drag dates, so its binding snaps too.
+    private var snappedSelection: Binding<Date?> {
+        Binding(
+            get: { selection },
+            set: { setSelection($0) }
+        )
+    }
+
+    /// The chart's bucket grid: local midnight, or top of the hour for 24h.
+    /// Static so unit tests can pin the snapping rule.
+    nonisolated static func snappedBucket(
+        for date: Date, range: AgenticUseRange, calendar: Calendar
+    ) -> Date? {
+        range.bucketUnit == .day
+            ? calendar.startOfDay(for: date)
+            : calendar.dateInterval(of: .hour, for: date)?.start
+    }
+
+    /// The snapped selection, and only when the bucket actually exists in
+    /// the (zero-filled) series.
+    private var selectedBucket: Date? {
+        guard let selection,
+              let bucket = Self.snappedBucket(for: selection, range: snapshot.range, calendar: .current),
+              visibleSeries.contains(where: { $0.day == bucket }) else {
             return nil
         }
         return bucket

@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { AlarmSchedule } from "./alarm";
 
 /**
  * Signaling / rendezvous Durable Object for UDP hole punching (issue #51,
@@ -44,7 +45,18 @@ export type RegistrationResult =
   | { status: "registered"; peer: Peer | null }
   | { status: "full" };
 
+/**
+ * The first instant at which `load` evicts every stored peer, or null when
+ * nothing is stored. Eviction requires strictly more than `PEER_TTL_MS`.
+ */
+function cleanupDeadline(peers: PeerMap): number | null {
+  const updates = Object.values(peers).map((peer) => peer.updatedAt);
+  return updates.length === 0 ? null : Math.max(...updates) + PEER_TTL_MS + 1;
+}
+
 export class SignalingRoom extends DurableObject<unknown> {
+  private readonly cleanup = new AlarmSchedule(this.ctx.storage);
+
   /**
    * Register (or refresh) a peer under this token. On success, returns the
    * OTHER peer if it is already present. A third distinct key is rejected.
@@ -74,8 +86,10 @@ export class SignalingRoom extends DurableObject<unknown> {
     peers[input.publicKey] = peer;
     await this.save(peers);
     // Bound the lifetime of this DO's storage with an alarm so abandoned
-    // tokens self-clean instead of lingering forever.
-    await this.ctx.storage.setAlarm(now + PEER_TTL_MS);
+    // tokens self-clean instead of lingering forever. A refresh only moves the
+    // deadline later, so an already-scheduled earlier alarm is kept and
+    // rearms itself when it fires.
+    await this.cleanup.require(cleanupDeadline(peers));
     const other = Object.entries(peers).find(
       ([publicKey]) => publicKey !== input.publicKey,
     )?.[1];
@@ -98,12 +112,9 @@ export class SignalingRoom extends DurableObject<unknown> {
   /** Storage TTL alarm: drop everything once the pair has gone stale. */
   async alarm(): Promise<void> {
     const peers = await this.load(Date.now());
-    if (Object.keys(peers).length === 0) {
-      await this.ctx.storage.deleteAll();
-    } else {
-      // Some peer is still fresh; re-arm for the next expiry.
-      await this.ctx.storage.setAlarm(Date.now() + PEER_TTL_MS);
-    }
+    if (Object.keys(peers).length === 0) await this.ctx.storage.deleteAll();
+    // Re-arm for the moment the last fresh peer expires, or clear the alarm.
+    await this.cleanup.replace(cleanupDeadline(peers));
   }
 
   /** Load peers, evicting any that have aged past the TTL. */

@@ -52,6 +52,23 @@ final class MirrorModel {
     private var receivedFrames = 0
     private var feedbackTask: Task<Void, Never>?
 
+    /// Snapshot JPEGs arrive every ~7s while mirroring, but reloading widget
+    /// timelines respawns the widget extension and re-renders the Live
+    /// Activity — surfaces nobody can see while Plotter is foreground
+    /// receiving frames. Nudge at most once per this interval; the App Group
+    /// file write stays unconditional so any natural reload picks up a fresh
+    /// still.
+    private static let snapshotNudgeInterval: TimeInterval = 60
+
+    /// When the widget + Live Activity were last nudged for a snapshot frame.
+    /// `nil` until the first frame after launch or (re)connect so widgets
+    /// refresh immediately instead of going stale for a full interval.
+    private var lastSnapshotNudge: Date?
+
+    /// Hash of the JPEG bytes behind the last nudge, so a static mirrored
+    /// screen (byte-identical stills) never re-renders an identical thumbnail.
+    private var lastSnapshotNudgeHash: Int?
+
     init() {
         receiver.onPacket = { [weak self] packet in
             self?.handle(packet)
@@ -74,6 +91,10 @@ final class MirrorModel {
                 // Drop Pilot's appearance on disconnect so Plotter returns to
                 // its own system light/dark setting.
                 if !connected { self?.pilotColorScheme = nil }
+                // Reset the snapshot throttle so the first frame after a
+                // (re)connect nudges the widget immediately.
+                self?.lastSnapshotNudge = nil
+                self?.lastSnapshotNudgeHash = nil
                 // Drive the widget + Live Activity off connection state.
                 PlotterSnapshotStore.writeStatus(
                     PlotterSnapshotStore.Status(isConnected: connected, title: "Cockpit", updatedAt: Date())
@@ -306,15 +327,27 @@ final class MirrorModel {
     /// Compatibility with the original JPEG stream. New Pilot builds send
     /// HEVC packets, so this path only updates diagnostics.
     private nonisolated func handleLegacyJPEG(_ data: Data) {
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            guard let self else { return }
             guard UIImage(data: data) != nil else { return }
             // Pilot now sends a periodic downscaled JPEG of its screen here.
             // Stash it in the App Group so the widget + Live Activity can show
-            // a recent still, and nudge them to refresh.
+            // a recent still.
             PlotterSnapshotStore.writeSnapshot(
                 jpeg: data,
                 status: PlotterSnapshotStore.Status(isConnected: true, title: "Cockpit", updatedAt: Date())
             )
+            // Throttle the expensive nudge: first frame after launch or
+            // (re)connect is immediate, then at most once per interval, and
+            // only when the still actually changed.
+            let hash = data.hashValue
+            let now = Date()
+            if let last = self.lastSnapshotNudge {
+                guard now.timeIntervalSince(last) >= Self.snapshotNudgeInterval,
+                      hash != self.lastSnapshotNudgeHash else { return }
+            }
+            self.lastSnapshotNudge = now
+            self.lastSnapshotNudgeHash = hash
             WidgetCenter.shared.reloadAllTimelines()
             PlotterActivityController.shared.touch(title: "Cockpit")
         }

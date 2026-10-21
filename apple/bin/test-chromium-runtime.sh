@@ -29,8 +29,8 @@ if [[ ! -d "$DEVELOPER_DIR" ]]; then
   exit 1
 fi
 xcode_version="$(xcodebuild -version)"
-if ! grep -Eq '^Xcode 26\.' <<< "$xcode_version"; then
-  printf 'Chromium runtime test error: the pinned runtime requires Xcode 26.x\n' \
+if ! grep -Eq '^Xcode 27\.' <<< "$xcode_version"; then
+  printf 'Chromium runtime test error: the pinned runtime requires Xcode 27.x\n' \
     >&2
   exit 1
 fi

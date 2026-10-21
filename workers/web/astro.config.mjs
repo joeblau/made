@@ -13,6 +13,10 @@ export default defineConfig({
     build: {
       // The CSP also forbids inline scripts, so never inline small bundles.
       assetsInlineLimit: 0,
+      // The deferred cockpit scene (Three.js) is one ~535 KB chunk by design.
+      // scripts/check-build-size.mjs enforces separate initial and deferred
+      // JavaScript budgets, so Vite's generic warning only adds noise.
+      chunkSizeWarningLimit: 600,
     },
   },
 });

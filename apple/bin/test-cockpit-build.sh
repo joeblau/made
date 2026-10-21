@@ -12,7 +12,7 @@ export PATH="$work/tools:$PATH"
 cat > "$work/tools/xcodebuild" <<'TOOL'
 #!/bin/bash
 if [[ "${1:-}" == -version ]]; then
-  printf 'Xcode 26.6\n'
+  printf 'Xcode 27.1\n'
 else
   printf '%s\n' xcodebuild "$@" >> "$COCKPIT_TEST_LOG"
 fi

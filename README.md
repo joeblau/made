@@ -39,8 +39,9 @@ names and checksums.
 
 ## Prerequisites
 
-- macOS with **Xcode 26.x** selected by `xcode-select` (the version enforced in
-  CI). Xcode 27 previews are not the supported release toolchain.
+- macOS with **Xcode 27.x** selected by `xcode-select` (the version enforced in
+  CI). The pinned GhosttyKit/ChromiumKit binary artifacts are still reproduced
+  on Xcode 26 until they are re-bootstrapped.
 - [Homebrew](https://brew.sh/) for the Apple command-line tool set, including
   Fastlane for reproducible screenshot capture.
 - Git LFS. Current checkouts download GhosttyKit through SwiftPM, while
@@ -100,7 +101,15 @@ bin/check-docs.sh
 `apple/bin/test.sh pilot` runs only the macOS suite and
 `apple/bin/test.sh shared` runs only the iOS Simulator suite. Set
 `IOS_SIMULATOR_UDID` to select an installed iPhone simulator. The scripts pin
-`Package.resolved`, disable signing, and isolate derived data.
+`Package.resolved`, disable signing, and build the Debug configuration. They
+share one derived-data directory per scheme under `BLAU_DERIVED_DATA`
+(default `$TMPDIR/blau-builds`), so `test.sh` after `build-ci.sh` can reuse
+the application hosts instead of rebuilding them. Because the two scripts
+share those directories, run them one after the other rather than
+concurrently, or point each at its own `BLAU_DERIVED_DATA`; Xcode locks the
+build database. Result bundles accumulate under the shared directories;
+delete `BLAU_DERIVED_DATA` to reclaim the space. Chromium and release builds
+keep their own derived data.
 
 To lint only a branch diff, run
 `apple/bin/lint-swift.sh --changed origin/main`. Suppress a SwiftLint rule only

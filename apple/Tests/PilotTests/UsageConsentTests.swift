@@ -147,6 +147,47 @@ struct UsageConsentTests {
         #expect(store.openAI == .disabled)
     }
 
+    @Test("A 429 honors a longer Retry-After and blocks requests past the normal spacing")
+    func rateLimitBacksOffProvider() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: UsageConsent.codexKey)
+        let probe = FetchProbe()
+        var clock = Date(timeIntervalSince1970: 1_790_000_000)
+        let store = UsageStore(
+            defaults: defaults,
+            fetchers: .init(
+                claude: { .notSignedIn },
+                codex: {
+                    _ = await probe.record("Codex")
+                    return .rateLimited(retryAfter: 900)
+                },
+                grok: { .notSignedIn },
+                kimi: { .notSignedIn }
+            ),
+            now: { clock }
+        )
+
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(store.openAI == .error("Rate limited — backing off ~15m."))
+
+        // Five minutes on, the two-minute spacing has expired and the
+        // exponential backoff alone (5 minutes for one strike) would allow a
+        // retry, so only the 15-minute Retry-After can still block it.
+        clock += 5 * 60 + 1
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(await probe.recordedProviders() == ["Codex"])
+        #expect(store.openAI == .error("Rate limited — backing off ~15m."))
+
+        // Once the Retry-After window passes, the provider is fetched again.
+        clock += 10 * 60
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(await probe.recordedProviders() == ["Codex", "Codex"])
+    }
+
     @Test("Kimi credential access is independently opted in and revocable")
     func kimiConsentIsIndependentAndRevocable() async throws {
         let (defaults, suiteName) = try makeDefaults()

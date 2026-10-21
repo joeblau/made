@@ -1,5 +1,9 @@
 ---
 import '@fontsource-variable/nunito/wght.css';
+// The page text is latin-only, so only that subset is preloaded; the others
+// stay behind unicode-range. Costs one unused download on Apple platforms,
+// where ui-rounded wins the font stack, but removes the swap flash elsewhere.
+import nunitoLatin from '@fontsource-variable/nunito/files/nunito-latin-wght-normal.woff2?url';
 
 interface Props {
   title: string;
@@ -23,6 +27,7 @@ const socialImage = new URL(`${base}og.jpg`, Astro.site).href;
     <meta name="generator" content={Astro.generator} />
     <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafafa" />
     <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090b" />
+    <link rel="preload" as="font" type="font/woff2" crossorigin href={nunitoLatin} />
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
     <link rel="canonical" href="https://blau.app/made" />
     <meta property="og:type" content="website" />

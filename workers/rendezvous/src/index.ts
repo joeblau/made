@@ -3,14 +3,14 @@ import { SignalingRoom } from "./signaling";
 
 export { SignalingRoom };
 
-interface Env {
-  ROOMS: DurableObjectNamespace<RendezvousRoom>;
-  SIGNALS: DurableObjectNamespace<SignalingRoom>;
-  SIGNAL_RATE_LIMIT: RateLimit;
-  CONNECTION_RATE_LIMIT: RateLimit;
-  ABUSE_METRICS?: AnalyticsEngineDataset;
+/**
+ * Bindings are generated from wrangler.jsonc into worker-configuration.d.ts.
+ * Only `ENVIRONMENT` is refined here: `wrangler dev --var` and tests may
+ * override the production value the configuration declares.
+ */
+type WorkerEnv = Omit<Cloudflare.Env, "ENVIRONMENT"> & {
   ENVIRONMENT: "production" | "development" | "test";
-}
+};
 
 interface SocketAttachment {
   byteCount: number;
@@ -47,7 +47,7 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
-function record(env: Env, event: string): void {
+function record(env: WorkerEnv, event: string): void {
   env.ABUSE_METRICS?.writeDataPoint({ blobs: [event], doubles: [1] });
 }
 
@@ -87,6 +87,42 @@ function validPort(value: unknown): value is number {
   );
 }
 
+/**
+ * Reads an untrusted body without ever buffering more than MAX_BODY_BYTES: a
+ * chunked request carries no content-length, so the declared-length check
+ * alone would let request.text() allocate the whole body before any bound.
+ * Returns null (and cancels the stream) as soon as the cap is crossed.
+ */
+async function readBoundedBody(
+  stream: ReadableStream<Uint8Array> | null,
+): Promise<Uint8Array | null> {
+  if (stream === null) return new Uint8Array(0);
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel("body too large");
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 async function readSignalBody(
   request: Request,
 ): Promise<SignalRequest | Response> {
@@ -100,12 +136,13 @@ async function readSignalBody(
 
   let raw: string;
   try {
-    raw = await request.text();
+    const bytes = await readBoundedBody(request.body);
+    if (bytes === null) {
+      return json({ error: "body too large" }, 413);
+    }
+    raw = new TextDecoder().decode(bytes);
   } catch {
     return json({ error: "invalid request" }, 400);
-  }
-  if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) {
-    return json({ error: "body too large" }, 413);
   }
 
   let body: unknown;
@@ -120,7 +157,7 @@ async function readSignalBody(
   return body as SignalRequest;
 }
 
-function trustedSource(request: Request, env: Env): string | null {
+function trustedSource(request: Request, env: WorkerEnv): string | null {
   const edgeAddress = request.headers.get("CF-Connecting-IP")?.trim();
   if (edgeAddress) return edgeAddress;
 
@@ -151,11 +188,11 @@ async function allow(
   return (await binding.limit({ key })).success;
 }
 
-function signalingStub(env: Env, token: string) {
+function signalingStub(env: WorkerEnv, token: string) {
   return env.SIGNALS.get(env.SIGNALS.idFromName(token));
 }
 
-async function handleRegister(request: Request, env: Env): Promise<Response> {
+async function handleRegister(request: Request, env: WorkerEnv): Promise<Response> {
   const source = trustedSource(request, env);
   if (!source) {
     record(env, "untrusted-source");
@@ -194,7 +231,7 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
   });
 }
 
-async function handleGetPeer(request: Request, env: Env): Promise<Response> {
+async function handleGetPeer(request: Request, env: WorkerEnv): Promise<Response> {
   const source = trustedSource(request, env);
   if (!source) {
     record(env, "untrusted-source");
@@ -219,7 +256,7 @@ async function handleGetPeer(request: Request, env: Env): Promise<Response> {
 }
 
 /** A bounded, hibernatable two-party WebSocket relay. */
-export class RendezvousRoom extends DurableObject<Env> {
+export class RendezvousRoom extends DurableObject<WorkerEnv> {
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected a WebSocket upgrade", { status: 426 });
@@ -307,7 +344,10 @@ export class RendezvousRoom extends DurableObject<Env> {
         peer.close(1011, "relay unavailable");
       }
     }
-    await this.armAlarm(now);
+    // No alarm re-arm here: a message only moves lastActivityAt forward, so
+    // the already-armed (earlier) alarm is still safe — when it fires, alarm()
+    // re-checks liveness and re-arms at the later deadline. Re-arming per
+    // message would be a billed storage write for every relayed frame.
   }
 
   async webSocketClose(sender: WebSocket): Promise<void> {
@@ -395,7 +435,7 @@ export class RendezvousRoom extends DurableObject<Env> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/healthz") {
@@ -437,4 +477,4 @@ export default {
 
     return env.ROOMS.get(env.ROOMS.idFromName(code)).fetch(request);
   },
-} satisfies ExportedHandler<Env>;
+} satisfies ExportedHandler<WorkerEnv>;

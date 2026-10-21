@@ -33,6 +33,21 @@ struct H264AnnexBAssembler {
     static let maxBufferSize = 4 * 1_024 * 1_024
 
     private var buffer = Data()
+    /// Scan watermark: no start code begins before this offset. Lets each
+    /// fed byte be scanned once — without it an unterminated multi-chunk NALU
+    /// (a keyframe arriving in 64 KB pipe reads) is rescanned from 0 on every
+    /// feed, quadratic on the frame-delivery path. A failed scan can only
+    /// leave a dangling start-code prefix of ≤ 3 trailing zeros, so resuming
+    /// at count - 3 misses no code that later bytes complete. Must be reset
+    /// whenever bytes are removed from the front of `buffer`.
+    private var scanOffset = 0
+    #if DEBUG
+    /// Test seam (Debug builds only): total candidate positions the
+    /// start-code scan has covered, including the few re-examined when a
+    /// start code may straddle a chunk boundary. Lets tests prove fragmented
+    /// input is scanned approximately once; Release builds carry no counter.
+    private(set) var scannedPositionCount = 0
+    #endif
     private var sawFirstStartCode = false
     private var currentSPS: Data?
     private var currentPPS: Data?
@@ -57,26 +72,30 @@ struct H264AnnexBAssembler {
 
         var events: [Event] = []
         if !sawFirstStartCode {
-            guard let first = findStartCode(in: buffer, from: 0) else {
+            guard let first = findStartCode(in: buffer, from: scanOffset) else {
                 guard buffer.count <= Self.maxLeadingGarbage else {
                     throw ParseError.leadingGarbageExceeded
                 }
+                scanOffset = max(0, buffer.count - 3)
                 return events
             }
             guard first.index <= Self.maxLeadingGarbage else {
                 throw ParseError.leadingGarbageExceeded
             }
             buffer.removeSubrange(0..<(first.index + first.length))
+            scanOffset = 0
             sawFirstStartCode = true
         }
 
         // The buffer now begins with a NALU payload. Emit every NALU that is
         // terminated by a following start code; keep the unterminated tail.
-        while let next = findStartCode(in: buffer, from: 0) {
+        while let next = findStartCode(in: buffer, from: scanOffset) {
             let nalu = buffer.prefix(next.index)
             buffer.removeSubrange(0..<(next.index + next.length))
+            scanOffset = 0
             try handle(nalu: Data(nalu), into: &events)
         }
+        scanOffset = max(0, buffer.count - 3)
         guard buffer.count <= Self.maxNALUSize else { throw ParseError.naluTooLarge }
         // Flush the batch's final access unit now rather than waiting for the
         // next chunk: encoders write whole frames per pipe write, so a
@@ -95,6 +114,7 @@ struct H264AnnexBAssembler {
         if sawFirstStartCode, !buffer.isEmpty {
             let nalu = buffer
             buffer = Data()
+            scanOffset = 0
             try handle(nalu: nalu, into: &events)
         }
         flushPendingAccessUnit(into: &events)
@@ -181,25 +201,34 @@ struct H264AnnexBAssembler {
     // MARK: - Start-code scan
 
     /// Find the next 00 00 01 / 00 00 00 01 start code at or after `from`.
-    private func findStartCode(in data: Data, from: Int) -> (index: Int, length: Int)? {
+    /// Scans over a raw pointer: Data's bounds-checked subscript is far too
+    /// slow for the per-byte hot loop of a continuous 16 Mbps stream.
+    /// `mutating` only for the Debug-gated scan counter.
+    private mutating func findStartCode(in data: Data, from: Int) -> (index: Int, length: Int)? {
         guard data.count >= 3 else { return nil }
-        var index = from
-        let end = data.count - 2
-        while index < end {
-            if data[data.startIndex + index] == 0, data[data.startIndex + index + 1] == 0 {
-                if data[data.startIndex + index + 2] == 1 {
-                    return (index, 3)
+        let found = data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> (index: Int, length: Int)? in
+            var index = from
+            let count = bytes.count
+            let end = count - 2
+            while index < end {
+                if bytes[index] == 0, bytes[index + 1] == 0 {
+                    if bytes[index + 2] == 1 {
+                        return (index, 3)
+                    }
+                    if index + 3 < count, bytes[index + 2] == 0, bytes[index + 3] == 1 {
+                        return (index, 4)
+                    }
+                    // 00 00 followed by neither 00/01: skip past the second zero.
+                    index += 1
+                } else {
+                    index += 1
                 }
-                if index + 3 < data.count, data[data.startIndex + index + 2] == 0,
-                   data[data.startIndex + index + 3] == 1 {
-                    return (index, 4)
-                }
-                // 00 00 followed by neither 00/01: skip past the second zero.
-                index += 1
-            } else {
-                index += 1
             }
+            return nil
         }
-        return nil
+        #if DEBUG
+        scannedPositionCount += found.map { $0.index + 1 - from } ?? max(0, data.count - 2 - from)
+        #endif
+        return found
     }
 }

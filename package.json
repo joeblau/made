@@ -9,13 +9,16 @@
     "devalue": "5.9.4",
     "esbuild": "0.28.1",
     "fast-uri": "3.1.8",
+    "http-cache-semantics": "4.3.0",
     "js-yaml": "4.3.2",
     "postcss": "8.5.26",
     "qr": "0.5.5",
-    "sharp": "0.35.4",
-    "smol-toml": "1.8.0",
+    "sharp": "0.35.5",
+    "smol-toml": "1.9.1",
+    "source-map-js": "1.2.2",
     "svgo": "4.1.0",
-    "undici": "7.29.1"
+    "undici": "7.29.1",
+    "vite": "8.3.5"
   },
   "scripts": {
     "dev": "turbo run dev",

@@ -527,6 +527,59 @@ struct TranscriptionLifecycleTests {
         #expect(service.modelErrorMessage != nil)
     }
 
+    @Test("memoized cache state answers gesture checks without re-walking disk")
+    func memoizedCacheStateAvoidsRepeatDiskWalks() async throws {
+        let fixture = try ModelCacheFixture()
+        defer { fixture.remove() }
+        let service = makeService(fixture: fixture)
+
+        await waitUntil { service.hasCachedModel }
+        let memoizedSize = service.cachedModelSize
+        #expect(memoizedSize != "Not downloaded")
+
+        // Deleting the backing files must go unnoticed by gesture-path
+        // checks: a re-walk would see the empty directory and flip both
+        // answers, so stable answers prove they come from the memo.
+        fixture.remove()
+        for _ in 0..<25 {
+            #expect(service.hasCachedModel)
+            #expect(service.cachedModelSize == memoizedSize)
+        }
+    }
+
+    @Test("cached-model removal clears memoized state synchronously")
+    func removalClearsMemoizedCacheState() async throws {
+        let fixture = try ModelCacheFixture()
+        defer { fixture.remove() }
+        let service = makeService(fixture: fixture)
+        await waitUntil { service.hasCachedModel }
+        #expect(service.cachedModelSize != "Not downloaded")
+
+        await service.removeCachedModel()
+        #expect(!service.hasCachedModel)
+        #expect(service.cachedModelSize == "Not downloaded")
+    }
+
+    @Test("a memoized entry that fails load-time validation is dropped, not downloaded")
+    func staleMemoizedEntryFailsLoadWithoutDownload() async throws {
+        let fixture = try ModelCacheFixture()
+        defer { fixture.remove() }
+        let service = makeService(fixture: fixture)
+        await waitUntil { service.hasCachedModel }
+
+        // Corrupt the cache behind the memoized entry. The load must surface
+        // the incomplete-cache error (never a silent download) and drop the
+        // memoized readiness synchronously — before the background re-walk
+        // lands — so a gesture arriving right after the failure re-confirms
+        // with the user instead of starting a silent download.
+        try FileManager.default.removeItem(
+            at: fixture.tokenizer.appendingPathComponent("tokenizer.json")
+        )
+        #expect(!(await service.loadModel()))
+        #expect(service.modelErrorMessage?.contains("incomplete") == true)
+        #expect(!service.hasCachedModel)
+    }
+
     private func makeService(
         fixture: ModelCacheFixture,
         loader: ControlledModelLoader? = nil,

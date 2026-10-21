@@ -74,6 +74,15 @@ final class AndroidDeviceSession {
     @ObservationIgnored private var bootProcess: Process?
     @ObservationIgnored private var bootingAVDName: String?
 
+    /// Cached Simulator-target probe results, snapshotted into each detached
+    /// scan and merged back from its result. The `isRefreshing` guard keeps
+    /// scans sequential, so snapshot/merge can't interleave.
+    @ObservationIgnored private var avdCache = AVDCache()
+    /// Bumped by `invalidateAVDSerialCache()`. A scan snapshots the cache
+    /// before the invalidation can land, so its merge must not resurrect the
+    /// serial names it carried through; the generation detects that.
+    @ObservationIgnored private var avdCacheGeneration = 0
+
     @ObservationIgnored private var connectionGeneration = 0
     @ObservationIgnored private var streamGeneration = 0
     @ObservationIgnored private(set) var isSuspended = false
@@ -106,6 +115,7 @@ final class AndroidDeviceSession {
         guard self.target != target else { return }
         self.target = target
         devices = devices.filter(target.includes)
+        invalidateAVDSerialCache()
         if status == .picking {
             refreshDevices()
         }
@@ -113,13 +123,33 @@ final class AndroidDeviceSession {
 
     // MARK: - Device list
 
+    /// Forget cached serial→AVD-name mappings. Called whenever picker polling
+    /// (re)starts: while scans are paused — streaming, pane collapsed or
+    /// inactive, session suspended — adb can reuse an emulator serial
+    /// (`emulator-5554`) for a different AVD, and scan-time eviction can't
+    /// observe that turnover. Each running emulator costs at most one
+    /// `adb emu avd name` re-query on the next scan.
+    func invalidateAVDSerialCache() {
+        avdCacheGeneration &+= 1
+        avdCache.avdNamesBySerial = [:]
+    }
+
     func refreshDevices() {
         guard !isSuspended, !isRefreshing else { return }
         isRefreshing = true
         let target = self.target
+        let cache = self.avdCache
+        let generation = avdCacheGeneration
         Task {
-            let scan = await Self.scan(target: target)
+            let scan = await Self.scan(target: target, cache: cache)
             self.isRefreshing = false
+            var merged = scan.cache
+            if generation != self.avdCacheGeneration {
+                // The serial cache was invalidated mid-scan; names carried
+                // through the stale snapshot must not be resurrected.
+                merged.avdNamesBySerial = [:]
+            }
+            self.avdCache = merged
             self.bootableAVDs = scan.bootableAVDs
             switch scan.devices {
             case .success(let devices):
@@ -148,6 +178,60 @@ final class AndroidDeviceSession {
     private struct DeviceScan: Sendable {
         let devices: LoadResult
         let bootableAVDs: [String]
+        let cache: AVDCache
+    }
+
+    /// Cached results of the two expensive Simulator-target probes.
+    /// `emulator -list-avds` loads QEMU support libraries (commonly 0.5–2 s)
+    /// and `adb emu avd name` is one 5 s-timeout subprocess per emulator, so
+    /// neither is worth recomputing on the picker's 2 s poll: the installed
+    /// list changes only when an AVD is created or deleted, and a running
+    /// emulator's AVD never changes.
+    private struct AVDCache: Sendable {
+        /// Installed AVD names; nil until the first successful `-list-avds`.
+        var installedAVDs: [String]?
+        /// AVD home directory mtime when `installedAVDs` was listed. Creating
+        /// or deleting an AVD adds/removes entries there, which bumps the
+        /// mtime and invalidates the cached list.
+        var avdHomeModified: Date?
+        /// Serial → AVD name for running emulators. Serials like
+        /// `emulator-5554` are reused across emulator instances, so entries
+        /// are evicted on every successful scan once their serial leaves
+        /// `adb devices` output, and the whole map is dropped via
+        /// `invalidateAVDSerialCache()` whenever scans resume after a pause
+        /// (turnover during the pause is unobservable by eviction).
+        var avdNamesBySerial: [String: String] = [:]
+    }
+
+    /// mtime of the directory holding AVD configs (`ANDROID_AVD_HOME`,
+    /// falling back to `~/.android/avd`); nil when it doesn't exist yet.
+    private nonisolated static func avdHomeModificationDate() -> Date? {
+        let environment = ProcessInfo.processInfo.environment
+        let home: String
+        if let override = environment["ANDROID_AVD_HOME"], !override.isEmpty {
+            home = override
+        } else {
+            home = ("~/.android/avd" as NSString).expandingTildeInPath
+        }
+        return (try? FileManager.default.attributesOfItem(atPath: home))?[.modificationDate] as? Date
+    }
+
+    /// Pure serial→AVD-name cache step, extracted for tests: keep cached names
+    /// for serials still running, drop the rest (serial reuse must not map a
+    /// new emulator to a stale AVD), and query only uncached serials. A failed
+    /// query stays uncached so the next scan retries it.
+    nonisolated static func updatedAVDNames(
+        cached: [String: String],
+        runningSerials: [String],
+        query: (String) -> String?
+    ) -> [String: String] {
+        var updated: [String: String] = [:]
+        for serial in runningSerials {
+            if let name = cached[serial] ?? query(serial) {
+                updated[serial] = name
+            }
+        }
+        return updated
     }
 
     /// One off-main pass: list running adb devices and, for the Simulator
@@ -173,22 +257,42 @@ final class AndroidDeviceSession {
         await Task.detached(priority: .userInitiated) { listDevicesResult() }.value
     }
 
-    private static func scan(target: AndroidPaneTarget?) async -> DeviceScan {
+    private static func scan(target: AndroidPaneTarget?, cache: AVDCache) async -> DeviceScan {
         await Task.detached(priority: .userInitiated) {
             let deviceResult = listDevicesResult()
             let running: [AndroidDevice]
             if case .success(let devices) = deviceResult { running = devices } else { running = [] }
 
-            var bootable: [String] = []
-            if target == .simulator,
-               let adbURL = AdbBridge.resolveAdbURL(),
-               let installed = try? EmulatorBridge.listAVDs(), !installed.isEmpty {
-                let runningAVDNames = Set(running
-                    .filter(\.isEmulator)
-                    .compactMap { AdbBridge.emulatorAVDName(adbURL: adbURL, serial: $0.serial) })
-                bootable = installed.filter { !runningAVDNames.contains($0) }
+            var cache = cache
+            if case .success = deviceResult {
+                // Serial reuse must never map a new emulator to a stale AVD:
+                // evict departed serials on every successful scan — whatever
+                // the target, and before the installed list resolves — so a
+                // serial that leaves adb output is always observed leaving.
+                let liveEmulatorSerials = Set(running.filter(\.isEmulator).map(\.serial))
+                cache.avdNamesBySerial = cache.avdNamesBySerial.filter {
+                    liveEmulatorSerials.contains($0.key)
+                }
             }
-            return DeviceScan(devices: deviceResult, bootableAVDs: bootable)
+            var bootable: [String] = []
+            if target == .simulator, let adbURL = AdbBridge.resolveAdbURL() {
+                let homeModified = avdHomeModificationDate()
+                if cache.installedAVDs == nil || homeModified != cache.avdHomeModified,
+                   let installed = try? EmulatorBridge.listAVDs() {
+                    cache.installedAVDs = installed
+                    cache.avdHomeModified = homeModified
+                }
+                if let installed = cache.installedAVDs, !installed.isEmpty {
+                    cache.avdNamesBySerial = updatedAVDNames(
+                        cached: cache.avdNamesBySerial,
+                        runningSerials: running.filter(\.isEmulator).map(\.serial),
+                        query: { AdbBridge.emulatorAVDName(adbURL: adbURL, serial: $0) }
+                    )
+                    let runningAVDNames = Set(cache.avdNamesBySerial.values)
+                    bootable = installed.filter { !runningAVDNames.contains($0) }
+                }
+            }
+            return DeviceScan(devices: deviceResult, bootableAVDs: bootable, cache: cache)
         }.value
     }
 
@@ -264,12 +368,21 @@ final class AndroidDeviceSession {
     ) async -> BootOutcome {
         await Task.detached(priority: .userInitiated) {
             let deadline = ContinuousClock.now.advanced(by: .seconds(240))
+            // A running emulator's AVD never changes, so each serial is
+            // correlated once per boot wait instead of once per 2 s poll.
+            var avdNamesBySerial: [String: String] = [:]
             while ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .seconds(2))
                 if kill(pid, 0) != 0, errno == ESRCH { return .processExited }
                 guard let devices = try? AdbBridge.listDevices() else { continue }
-                for device in devices where device.isEmulator && device.state == .device {
-                    let avd = AdbBridge.emulatorAVDName(adbURL: adbURL, serial: device.serial)
+                let candidates = devices.filter { $0.isEmulator && $0.state == .device }
+                avdNamesBySerial = updatedAVDNames(
+                    cached: avdNamesBySerial,
+                    runningSerials: candidates.map(\.serial),
+                    query: { AdbBridge.emulatorAVDName(adbURL: adbURL, serial: $0) }
+                )
+                for device in candidates {
+                    let avd = avdNamesBySerial[device.serial]
                     let matches = avd == avdName
                         || (avd == nil && !existingSerials.contains(device.serial))
                     if matches, AdbBridge.isBootCompleted(adbURL: adbURL, serial: device.serial) {
@@ -399,6 +512,9 @@ final class AndroidDeviceSession {
         connectedSerial = nil
         connectedName = nil
         bootingAVDName = nil
+        // Scans were paused while streaming; a reused emulator serial may now
+        // belong to a different AVD, so the first picker scan must re-query.
+        invalidateAVDSerialCache()
         status = .picking
         refreshDevices()
     }
