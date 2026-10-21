@@ -49,31 +49,14 @@ final class AirPlayVideoRenderer: @unchecked Sendable {
             return false
         }
         guard !needsKeyframe || packet.isKeyframe else { return false }
-        var block: CMBlockBuffer?
-        let count = packet.sample.count
-        guard CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: count,
-            blockAllocator: kCFAllocatorDefault, customBlockSource: nil,
-            offsetToData: 0, dataLength: count, flags: 0, blockBufferOut: &block
-        ) == noErr, let block else { return false }
-        let copied = packet.sample.withUnsafeBytes { bytes in
-            CMBlockBufferReplaceDataBytes(with: bytes.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: count)
-        }
-        guard copied == noErr else { return false }
-        var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
-        var size = count
-        var sample: CMSampleBuffer?
-        guard CMSampleBufferCreateReady(
-            allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format,
-            sampleCount: 1, sampleTimingEntryCount: 1, sampleTimingArray: &timing,
-            sampleSizeEntryCount: 1, sampleSizeArray: &size, sampleBufferOut: &sample
-        ) == noErr, let sample else { return false }
-        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true) {
-            let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
-            CFDictionarySetValue(dictionary,
-                                 Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
-                                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
-        }
+        // AirPlay samples carry no PTS and display on arrival; the sync flag
+        // is deliberately left unset (keyframe gating happens above).
+        guard let sample = try? EncodedVideoSample.make(
+            payload: packet.sample,
+            format: format,
+            timing: CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .zero, decodeTimeStamp: .invalid),
+            attachments: EncodedVideoSample.Attachments(displayImmediately: true, notSync: false)
+        ) else { return false }
         needsKeyframe = false
         renderer.enqueue(sample)
         return true

@@ -10,6 +10,16 @@ SUITE="${1:-all}"
 DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-builds}"
 PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
 
+case "$SUITE" in
+  pilot|shared|all) ;;
+  *) echo "Usage: apple/bin/test.sh [pilot|shared|all]" >&2; exit 2 ;;
+esac
+
+# Result bundles from earlier runs persist in the shared derived data; only
+# summarize the ones this invocation produced.
+mkdir -p "$DERIVED_ROOT"
+RUN_MARKER="$(mktemp "$DERIVED_ROOT/.test-run.XXXXXX")"
+
 # xcodebuild -quiet can omit XCTest assertion details. Preserve its exit
 # status while printing the result bundle summary needed to diagnose CI failures.
 report_failure() {
@@ -17,8 +27,9 @@ report_failure() {
   if [[ "$status" -ne 0 ]]; then
     while IFS= read -r result; do
       xcrun xcresulttool get test-results summary --path "$result" || true
-    done < <(find "$DERIVED_ROOT" -name '*.xcresult' -type d -prune 2>/dev/null)
+    done < <(find "$DERIVED_ROOT" -name '*.xcresult' -type d -newer "$RUN_MARKER" -prune 2>/dev/null)
   fi
+  rm -f "$RUN_MARKER"
   exit "$status"
 }
 trap report_failure EXIT
@@ -61,5 +72,4 @@ case "$SUITE" in
   pilot) pilot ;;
   shared) shared ;;
   all) pilot; shared ;;
-  *) echo "Usage: apple/bin/test.sh [pilot|shared|all]" >&2; exit 2 ;;
 esac

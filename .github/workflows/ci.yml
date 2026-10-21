@@ -124,6 +124,9 @@ jobs:
         run: |
           apple/bin/install-xcodegen.sh generate --spec apple/project.yml --project apple
           git diff --exit-code -- apple/made.xcodeproj
+      # build-ci.sh and test.sh share per-scheme derived data so the test
+      # step can reuse the compiled Cockpit and Walkie hosts instead of
+      # rebuilding them (measured for Cockpit; confirm Walkie from this log).
       - name: Compile every application
         run: apple/bin/build-ci.sh
       - name: Run unit tests

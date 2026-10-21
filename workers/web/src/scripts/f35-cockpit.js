@@ -7,10 +7,15 @@
  */
 import * as THREE from 'three';
 
-export function initCockpit() {
-  const sceneCanvas = document.querySelector('[data-cockpit-scene]');
-  const hudCanvas = document.querySelector('[data-cockpit-hud]');
-  if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return;
+/**
+ * Builds the scene inside `root` and starts its capped loop. Returns a truthy
+ * value on success, or null when the canvases are missing or WebGL is
+ * unavailable so the loader keeps the static fallback.
+ */
+export function initCockpit(root = document) {
+  const sceneCanvas = root.querySelector('[data-cockpit-scene]');
+  const hudCanvas = root.querySelector('[data-cockpit-hud]');
+  if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return null;
 
   const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -31,7 +36,7 @@ export function initCockpit() {
   try {
     renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
   } catch {
-    return; // WebGL unavailable; the static --background color stays.
+    return null; // WebGL unavailable; the loader keeps the static fallback.
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   const scene = new THREE.Scene();
@@ -1085,7 +1090,8 @@ export function initCockpit() {
 
   /* ============================== main loop ============================== */
   const clock = new THREE.Clock();
-  let mfdAcc = 1;
+  const MFD_INTERVAL = 1 / 12;
+  let mfdAcc = 1; // paint the instruments on the very first frame
   /* The scene is a decorative background, so ~30fps is plenty: elapsed time
      accumulates across skipped rAF ticks and a frame only renders once it
      crosses FRAME_MIN (just under 1/30 s so 60/120 Hz displays land on 30). */
@@ -1146,10 +1152,11 @@ export function initCockpit() {
     /* terrain scroll */
     groundTex.offset.y += CLOUD.speed * dt * (7 / 95000);
 
-    /* MFD repaint ~12 Hz */
+    /* MFD repaint at 12 Hz; the remainder carries so the rate holds at any
+       render cadence at or above it. */
     mfdAcc += dt;
-    if (mfdAcc > 0.085) {
-      mfdAcc = 0;
+    if (mfdAcc >= MFD_INTERVAL) {
+      mfdAcc %= MFD_INTERVAL;
       paintLeft();
       paintRight();
       paintStandby();
@@ -1161,7 +1168,7 @@ export function initCockpit() {
 
   if (reducedMotion) {
     frame(); // one static frame, no loop
-    return;
+    return true;
   }
   /* Pause the loop while the tab is hidden or the canvas is scrolled out of
      view; resume drops the paused interval so dt stays bounded. */
@@ -1189,4 +1196,5 @@ export function initCockpit() {
     }).observe(sceneCanvas);
   }
   syncLoop();
+  return true;
 }

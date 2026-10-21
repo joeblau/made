@@ -5,17 +5,11 @@
 </div>
 
 <script>
-  // The scene is decorative, so the ~535KB three.js bundle must never compete
-  // with first paint: load it after `load` on an idle slot, and skip it
-  // entirely under prefers-reduced-motion (the CSS background remains).
-  const start = () => {
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    // requestIdleCallback is unavailable on Safari < 18.
-    const idle = window.requestIdleCallback
-      ? (cb: () => void) => window.requestIdleCallback(cb, { timeout: 2000 })
-      : (cb: () => void) => setTimeout(cb, 1);
-    idle(() => import('../scripts/f35-cockpit.js').then((m) => m.initCockpit()));
-  };
-  if (document.readyState === 'complete') start();
-  else addEventListener('load', start, { once: true });
+  // The scene is decorative, so the ~535KB three.js chunk must never compete
+  // with first paint: only this small loader is in the page's critical script
+  // graph. It fetches the scene by dynamic import after `load` on an idle
+  // slot, and keeps the themed background and scrim instead under reduced
+  // motion, Save-Data, 2G, missing WebGL, or a failed fetch.
+  import { loadCockpitWhenIdle } from '../scripts/cockpit-loader.js';
+  loadCockpitWhenIdle();
 </script>

@@ -45,12 +45,22 @@ struct DockerEngineEvent: Sendable, Decodable {
     }
 }
 
+/// The Engine API surface the Docker section depends on. ``DockerEngineClient``
+/// is the only production conformer; the seam exists so store behavior around
+/// slow, overlapping, or late replies can be exercised without a live daemon.
+protocol DockerEngineAPI: Sendable {
+    func version() async throws -> DockerEngineVersion
+    func containers() async throws -> [DockerContainerSummary]
+    func perform(_ action: DockerContainerAction, containerID: String) async throws
+    func containerEvents() -> AsyncThrowingStream<DockerEngineEvent, any Error>
+}
+
 /// A read/write client for the local Docker Engine API.
 ///
 /// Scope is deliberately narrow: list containers, move them between states, and
 /// watch for changes. Pilot does not build images, manage volumes, or reach
 /// remote daemons — anything beyond the local lifecycle belongs in the terminal.
-struct DockerEngineClient: Sendable {
+struct DockerEngineClient: DockerEngineAPI {
     /// Pinned so the response shapes this file decodes stay fixed. 1.43 ships
     /// with Docker Engine 24 (2023) and is accepted by every current runtime,
     /// including Colima and Podman's compatibility service; newer daemons

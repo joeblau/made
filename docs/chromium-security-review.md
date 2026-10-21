@@ -66,7 +66,7 @@ bridge disables external command-line argument ingestion entirely.
 
 ### Certificate, authentication, and client-certificate handling — fail-closed
 
-In `apple/Packages/ChromiumKit/Sources/ChromiumKit/ChromiumKit.mm`,
+In `apple/Packages/ChromiumKit/Sources/ChromiumKit/ChromiumRequestPolicy.mm`,
 `GetAuthCredentials` returns false (origin and proxy challenges are canceled
 without collecting credentials), `OnCertificateError` returns false (invalid
 certificates are canceled with no bypass path), and

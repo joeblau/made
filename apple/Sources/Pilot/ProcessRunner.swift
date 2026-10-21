@@ -13,6 +13,12 @@ struct ProcessInvocation: Sendable {
     var standardOutputLimit = 2 * 1_024 * 1_024
     var standardErrorLimit = 256 * 1_024
     var redactedArgumentIndexes: Set<Int> = []
+    /// Optional scheduling class for the child and the worker that waits on
+    /// it. `nil` (the default) leaves `Process.qualityOfService` unset, so the
+    /// child keeps Foundation's default class, and runs the worker at
+    /// `.utility`, the runner's long-standing behavior. Set it only when the
+    /// command's latency is itself measured or awaited by a user.
+    var qualityOfService: QualityOfService?
 
     init(
         executableURL: URL,
@@ -23,7 +29,8 @@ struct ProcessInvocation: Sendable {
         terminationGracePeriod: Duration = .milliseconds(250),
         standardOutputLimit: Int = 2 * 1_024 * 1_024,
         standardErrorLimit: Int = 256 * 1_024,
-        redactedArgumentIndexes: Set<Int> = []
+        redactedArgumentIndexes: Set<Int> = [],
+        qualityOfService: QualityOfService? = nil
     ) {
         self.executableURL = executableURL
         self.arguments = arguments
@@ -34,6 +41,7 @@ struct ProcessInvocation: Sendable {
         self.standardOutputLimit = standardOutputLimit
         self.standardErrorLimit = standardErrorLimit
         self.redactedArgumentIndexes = redactedArgumentIndexes
+        self.qualityOfService = qualityOfService
     }
 
     /// A PATH that covers system and common Homebrew developer-tool installs.
@@ -57,6 +65,18 @@ struct ProcessInvocation: Sendable {
             standardOutputLimit: standardOutputLimit,
             standardErrorLimit: standardErrorLimit
         )
+    }
+
+    fileprivate var dispatchQoS: DispatchQoS.QoSClass {
+        guard let qualityOfService else { return .utility }
+        return switch qualityOfService {
+        case .userInteractive: .userInteractive
+        case .userInitiated: .userInitiated
+        case .default: .default
+        case .background: .background
+        case .utility: .utility
+        @unknown default: .utility
+        }
     }
 
     var redactedCommand: String {
@@ -149,7 +169,7 @@ enum ProcessRunner {
             // not occupy Swift's cooperative executor, or enough concurrent
             // commands would starve other tasks.
             try await withCheckedThrowingContinuation { continuation in
-                DispatchQueue.global(qos: .utility).async {
+                DispatchQueue.global(qos: invocation.dispatchQoS).async {
                     continuation.resume(with: Result { try execute(invocation, control: control) })
                 }
             }
@@ -170,18 +190,30 @@ enum ProcessRunner {
         )
     }
 
+    /// Builds the child without launching it. Internal so tests can confirm
+    /// the scheduling class a caller gets when it does not opt in.
+    static func makeProcess(for invocation: ProcessInvocation) -> Process {
+        let process = Process()
+        process.executableURL = invocation.executableURL
+        process.arguments = invocation.arguments
+        process.currentDirectoryURL = invocation.currentDirectoryURL
+        if let environment = invocation.environment { process.environment = environment }
+        // Leave the child at Foundation's default unless a caller opts in:
+        // assigning `.utility` here would demote every background command.
+        if let qualityOfService = invocation.qualityOfService {
+            process.qualityOfService = qualityOfService
+        }
+        return process
+    }
+
     private static func execute(
         _ invocation: ProcessInvocation,
         control: ProcessControl,
         cancellationProbe: (() -> Bool)? = nil
     ) throws -> ProcessRunResult {
-        let process = Process()
+        let process = makeProcess(for: invocation)
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.executableURL = invocation.executableURL
-        process.arguments = invocation.arguments
-        process.currentDirectoryURL = invocation.currentDirectoryURL
-        if let environment = invocation.environment { process.environment = environment }
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
         process.standardInput = FileHandle.nullDevice

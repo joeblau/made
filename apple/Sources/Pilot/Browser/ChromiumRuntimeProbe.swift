@@ -55,6 +55,7 @@ enum ChromiumRuntimeProbeError: LocalizedError {
     case javaScriptRejected(String)
     case helperDidNotLaunch(String)
     case invalidLifecycle(String)
+    case processObservationFailed(operation: String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -72,6 +73,8 @@ enum ChromiumRuntimeProbeError: LocalizedError {
             "The Chromium \(role) helper did not launch."
         case let .invalidLifecycle(message):
             "The Chromium runtime lifecycle was invalid: \(message)"
+        case let .processObservationFailed(operation, reason):
+            "The Chromium runtime probe could not observe Cockpit processes while \(operation): \(reason)"
         }
     }
 }
@@ -81,6 +84,9 @@ enum ChromiumRuntimeProbe {
     private static let logger = Logger(
         subsystem: "app.blau.pilot",
         category: "ChromiumRuntimeProbe"
+    )
+    private static let processObserver = ChromiumProcessObserver(
+        scope: .current()
     )
 
     static func run(
@@ -150,8 +156,7 @@ enum ChromiumRuntimeProbe {
                     && !secondHost.isLoading
             }
             logger.notice("Offline fixture JavaScript observed in both browsers")
-            let firstNavigationDuration = Date()
-                .timeIntervalSince(navigationStartedAt)
+            let firstNavigationDuration = Date().timeIntervalSince(navigationStartedAt)
 
             let scriptTitles = try await verifyJavaScript(
                 firstHost: firstHost,
@@ -255,6 +260,7 @@ enum ChromiumRuntimeProbe {
                 window: window,
                 timeout: timeout
             )
+            logger.notice("Probe durations: startup \(startupDuration) s, first navigation \(firstNavigationDuration) s, helper cleanup \(helperCleanup.duration) s")
 
             return ChromiumRuntimeProbeReport(
                 startupDuration: startupDuration,
@@ -356,12 +362,9 @@ enum ChromiumRuntimeProbe {
         let deadline = Date().addingTimeInterval(timeout)
         var helperCount: Int
         while true {
-            guard let commands = runningHelperCommands() else {
-                throw ChromiumRuntimeProbeError.invalidLifecycle(
-                    "Cockpit could not inspect Chromium helper cleanup."
-                )
-            }
-            helperCount = commands.count
+            helperCount = try await observeProcesses(
+                while: "waiting for Chromium helpers to exit"
+            ).helperCommands.count
             if helperCount == 0 {
                 break
             }
@@ -393,22 +396,23 @@ enum ChromiumRuntimeProbe {
         delegates: [ChromiumRuntimeProbeDelegate],
         timeout: TimeInterval
     ) async throws -> HelperVerificationResult {
-        var renderer = false
-        var gpu = false
+        var roles = ChromiumHelperRoles()
         try await wait(
             for: "launching renderer and GPU helpers",
             timeout: timeout,
             delegates: delegates
         ) {
-            let roles = runningHelperRoles()
-            renderer = renderer || roles.renderer
-            gpu = gpu || roles.gpu
-            return renderer && gpu
+            roles = roles.union(
+                try await observeProcesses(
+                    while: "launching renderer and GPU helpers"
+                ).helperRoles
+            )
+            return roles.renderer && roles.gpu
         }
         logger.notice("Renderer and GPU helper roles observed")
         return HelperVerificationResult(
-            renderer: renderer,
-            gpu: gpu,
+            renderer: roles.renderer,
+            gpu: roles.gpu,
             resources: try await measureIdleResources()
         )
     }
@@ -859,77 +863,26 @@ enum ChromiumRuntimeProbe {
         return window
     }
 
-    private static func runningHelperRoles() -> (
-        renderer: Bool,
-        gpu: Bool
-    ) {
-        guard let commands = runningHelperCommands() else {
-            return (false, false)
-        }
-        var renderer = false
-        var gpu = false
-        for command in commands {
-            if command.contains("Pilot Helper (Renderer).app/")
-                && command.contains("--type=renderer") {
-                renderer = true
-            }
-            if (command.contains("Pilot Helper.app/")
-                || command.contains("Pilot Helper (GPU).app/"))
-                && command.contains("--type=gpu-process") {
-                gpu = true
-            }
-        }
-        return (renderer, gpu)
-    }
-
-    private static func runningHelperCommands() -> [String]? {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "command="]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-
+    /// Observes the app's processes through the bounded process runner, so
+    /// `ps` never blocks the main actor that drives CEF's message pump.
+    /// Cancellation propagates unchanged; every other failure names the step.
+    private static func observeProcesses(
+        while operation: String
+    ) async throws -> ChromiumProcessSnapshot {
         do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let commands = String(data: data, encoding: .utf8)
-        else {
-            return nil
-        }
-
-        let frameworksPath = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Frameworks", isDirectory: true)
-            .path + "/"
-        let helperExecutables = [
-            "Pilot Helper.app/Contents/MacOS/Pilot Helper",
-            "Pilot Helper (Alerts).app/Contents/MacOS/Pilot Helper (Alerts)",
-            "Pilot Helper (GPU).app/Contents/MacOS/Pilot Helper (GPU)",
-            "Pilot Helper (Plugin).app/Contents/MacOS/Pilot Helper (Plugin)",
-            "Pilot Helper (Renderer).app/Contents/MacOS/Pilot Helper (Renderer)",
-        ].map { frameworksPath + $0 }
-        return commands.split(separator: "\n").compactMap { command in
-            guard helperExecutables.contains(where: {
-                command == $0 || command.hasPrefix($0 + " ")
-            }),
-            // macOS launches this signing worker from the base helper and
-            // intentionally keeps it until the signed test host exits. It is
-            // not a CEF browser subprocess.
-            !command.contains("--type=code-sign-clone-cleanup") else {
-                return nil
+            let snapshot = try await processObserver.snapshot()
+            if snapshot.malformedRowCount > 0 {
+                logger.notice(
+                    "Ignored \(snapshot.malformedRowCount) malformed process rows while \(operation, privacy: .public)"
+                )
             }
-            return String(command)
+            return snapshot
+        } catch let error as ChromiumProcessObservationError {
+            throw ChromiumRuntimeProbeError.processObservationFailed(
+                operation: operation,
+                reason: error.localizedDescription
+            )
         }
-    }
-
-    private struct ProcessSample {
-        let cpuSeconds: TimeInterval
-        let residentKilobytes: UInt64
     }
 
     private struct ResourceMeasurement {
@@ -938,130 +891,47 @@ enum ChromiumRuntimeProbe {
         let residentMemoryBytes: UInt64
     }
 
+    /// CPU and resident memory come from two process observations one idle
+    /// second apart, measured over the interval between their midpoints. The
+    /// watchdog count covers only the idle sleep between the observations.
     private static func measureIdleResources() async throws
         -> ResourceMeasurement {
         try await Task.sleep(for: .seconds(1))
-        let before = chromiumProcessSamples()
-        let messagePumpCountBefore = ChromiumEngine.shared.messagePumpWatchdogWorkCount
-        guard !before.isEmpty else {
-            throw ChromiumRuntimeProbeError.invalidLifecycle(
-                "No Cockpit Chromium processes were available to sample."
-            )
-        }
-        let startedAt = ContinuousClock.now
+        let before = try await observeProcesses(while: "sampling idle resources")
+        let messagePumpCountBefore =
+            ChromiumEngine.shared.messagePumpWatchdogWorkCount
         try await Task.sleep(for: .seconds(1))
-        let elapsed = startedAt.duration(to: .now)
-        let after = chromiumProcessSamples()
         let messagePumpCountAfter =
             ChromiumEngine.shared.messagePumpWatchdogWorkCount
-        let commonProcessIDs = Set(before.keys).intersection(after.keys)
-        guard !commonProcessIDs.isEmpty else {
-            throw ChromiumRuntimeProbeError.invalidLifecycle(
-                "The Cockpit Chromium process set changed during idle sampling."
-            )
-        }
-
-        let cpuSeconds = commonProcessIDs.reduce(0.0) { total, processID in
-            let delta = after[processID]!.cpuSeconds
-                - before[processID]!.cpuSeconds
-            return total + max(0, delta)
-        }
-        let elapsedSeconds = Double(elapsed.components.seconds)
-            + Double(elapsed.components.attoseconds) / 1e18
-        let residentKilobytes = after.values.reduce(UInt64(0)) {
-            $0 + $1.residentKilobytes
-        }
-        return ResourceMeasurement(
-            cpuPercent: cpuSeconds / elapsedSeconds * 100,
-            messagePumpWatchdogWorkCount: Int(messagePumpCountAfter >= messagePumpCountBefore ? messagePumpCountAfter - messagePumpCountBefore : 0),
-            residentMemoryBytes: residentKilobytes * 1_024
-        )
-    }
-
-    private static func chromiumProcessSamples() -> [Int32: ProcessSample] {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/bin/ps")
-        process.arguments = ["-axo", "pid=,time=,rss=,command="]
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
+        let after = try await observeProcesses(while: "sampling idle resources")
+        let idle: ChromiumIdleResourceMeasurement
         do {
-            try process.run()
-        } catch {
-            return [:]
-        }
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0,
-              let rows = String(data: data, encoding: .utf8)
-        else {
-            return [:]
-        }
-
-        let executablePath = Bundle.main.executableURL?.path
-        let frameworksPath = Bundle.main.bundleURL
-            .appendingPathComponent("Contents/Frameworks", isDirectory: true)
-            .path + "/"
-        var samples: [Int32: ProcessSample] = [:]
-        for row in rows.split(separator: "\n") {
-            let fields = row.split(
-                maxSplits: 3,
-                whereSeparator: \.isWhitespace
-            )
-            guard fields.count == 4,
-                  let processID = Int32(fields[0]),
-                  let cpuSeconds = cpuSeconds(String(fields[1])),
-                  let residentKilobytes = UInt64(fields[2])
-            else {
-                continue
-            }
-            let command = String(fields[3])
-            guard command.hasPrefix(executablePath ?? "\u{0}")
-                    || command.contains(frameworksPath)
-            else {
-                continue
-            }
-            samples[processID] = ProcessSample(
-                cpuSeconds: cpuSeconds,
-                residentKilobytes: residentKilobytes
+            idle = try ChromiumIdleResources.measure(before: before, after: after)
+        } catch let error as ChromiumIdleResourceError {
+            throw ChromiumRuntimeProbeError.invalidLifecycle(
+                error.localizedDescription
             )
         }
-        return samples
-    }
-
-    private static func cpuSeconds(_ value: String) -> TimeInterval? {
-        let dayAndClock = value.split(separator: "-", maxSplits: 1)
-        let days: Double
-        let clock: Substring
-        if dayAndClock.count == 2 {
-            guard let parsedDays = Double(dayAndClock[0]) else { return nil }
-            days = parsedDays
-            clock = dayAndClock[1]
-        } else {
-            days = 0
-            clock = dayAndClock[0]
-        }
-        let clockParts = clock.split(separator: ":")
-        guard !clockParts.isEmpty,
-              clockParts.count <= 3,
-              clockParts.allSatisfy({ Double($0) != nil })
-        else {
-            return nil
-        }
-        let clockSeconds = clockParts.reduce(0.0) { total, part in
-            total * 60 + (Double(part) ?? 0)
-        }
-        return days * 86_400 + clockSeconds
+        logger.notice(
+            "Idle sample window: \(idle.window.description, privacy: .public) across \(idle.comparedProcessCount) processes"
+        )
+        return ResourceMeasurement(
+            cpuPercent: idle.cpuPercent,
+            messagePumpWatchdogWorkCount: messagePumpCountAfter >= messagePumpCountBefore
+                ? Int(messagePumpCountAfter - messagePumpCountBefore)
+                : 0,
+            residentMemoryBytes: idle.residentMemoryBytes
+        )
     }
 
     fileprivate static func wait(
         for operation: String,
         timeout: TimeInterval,
         delegates: [ChromiumRuntimeProbeDelegate],
-        until condition: () -> Bool
+        until condition: () async throws -> Bool
     ) async throws {
         let deadline = Date().addingTimeInterval(timeout)
-        while !condition() {
+        while try await !condition() {
             for delegate in delegates {
                 if let error = delegate.lastFailure {
                     throw ChromiumRuntimeProbeError.navigationFailed(

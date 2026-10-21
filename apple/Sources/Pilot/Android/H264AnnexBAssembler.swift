@@ -41,6 +41,13 @@ struct H264AnnexBAssembler {
     /// at count - 3 misses no code that later bytes complete. Must be reset
     /// whenever bytes are removed from the front of `buffer`.
     private var scanOffset = 0
+    #if DEBUG
+    /// Test seam (Debug builds only): total candidate positions the
+    /// start-code scan has covered, including the few re-examined when a
+    /// start code may straddle a chunk boundary. Lets tests prove fragmented
+    /// input is scanned approximately once; Release builds carry no counter.
+    private(set) var scannedPositionCount = 0
+    #endif
     private var sawFirstStartCode = false
     private var currentSPS: Data?
     private var currentPPS: Data?
@@ -196,9 +203,10 @@ struct H264AnnexBAssembler {
     /// Find the next 00 00 01 / 00 00 00 01 start code at or after `from`.
     /// Scans over a raw pointer: Data's bounds-checked subscript is far too
     /// slow for the per-byte hot loop of a continuous 16 Mbps stream.
-    private func findStartCode(in data: Data, from: Int) -> (index: Int, length: Int)? {
+    /// `mutating` only for the Debug-gated scan counter.
+    private mutating func findStartCode(in data: Data, from: Int) -> (index: Int, length: Int)? {
         guard data.count >= 3 else { return nil }
-        return data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> (index: Int, length: Int)? in
+        let found = data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> (index: Int, length: Int)? in
             var index = from
             let count = bytes.count
             let end = count - 2
@@ -218,5 +226,9 @@ struct H264AnnexBAssembler {
             }
             return nil
         }
+        #if DEBUG
+        scannedPositionCount += found.map { $0.index + 1 - from } ?? max(0, data.count - 2 - from)
+        #endif
+        return found
     }
 }

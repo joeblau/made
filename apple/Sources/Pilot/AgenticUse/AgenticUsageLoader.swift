@@ -102,10 +102,17 @@ actor AgenticUsageLoader {
     /// The previous dedup/sort product, returned verbatim when nothing
     /// changed on disk.
     private var lastRecords: [AgenticUsageRecord]?
+    /// Test seam: runs inside `load()` just before the merge's first
+    /// cancellation check, after every file has been scanned.
+    private var willMerge: (@Sendable () -> Void)?
 
     init(sources: [Source] = AgenticUsageLoader.defaultSources(), cacheURL: URL? = nil) {
         self.sources = sources
         self.cacheURL = cacheURL
+    }
+
+    func setWillMergeHook(_ hook: (@Sendable () -> Void)?) {
+        willMerge = hook
     }
 
     /// The standard scan roots, honoring each CLI's data-dir override.
@@ -158,11 +165,15 @@ actor AgenticUsageLoader {
     /// Enumerates every source tree and returns the deduplicated record set.
     /// `onProgress` reports (files scanned, total files), throttled, for the
     /// initial determinate progress bar. Cancelling the surrounding task
-    /// aborts between files with `CancellationError`.
+    /// stops discovery, parsing, and merging promptly with
+    /// `CancellationError` and leaves the cache and the merged result exactly
+    /// as the last completed load left them: both are committed together,
+    /// after the last cancellation point.
     func load(onProgress: (@Sendable (_ scanned: Int, _ total: Int) -> Void)? = nil) async throws -> LoadResult {
         restorePersistedCacheIfNeeded()
         let files = try discoverFiles()
         guard !files.isEmpty else {
+            try Task.checkCancellation()
             if !cache.isEmpty {
                 cache = [:]
                 cacheDirty = true
@@ -192,11 +203,21 @@ actor AgenticUsageLoader {
             onProgress: onProgress
         )
 
+        // A load cancelled while its children finished must not publish
+        // partial state into the cache.
+        try Task.checkCancellation()
+
+        // Build the next cache on a copy. It is committed together with the
+        // merge it produced, so a load cancelled anywhere below leaves the
+        // cache and `lastRecords` describing the same, last completed load.
+        // (A cache committed without its merge would match every file on the
+        // next load and serve the stale merge indefinitely.)
+        var nextCache = cache
         var unreadableCount = 0
         var cacheChanged = false
         for outcome in outcomes {
             if let records = outcome.records {
-                cache[outcome.job.path] = CacheEntry(
+                nextCache[outcome.job.path] = CacheEntry(
                     size: outcome.job.size,
                     modificationDate: outcome.job.modificationDate,
                     records: records,
@@ -207,23 +228,24 @@ actor AgenticUsageLoader {
                 // Unreadable files are never cached, so a file that fails
                 // every refresh usually removes an absent key: only a real
                 // removal dirties the persisted blob.
-                if cache.removeValue(forKey: outcome.job.path) != nil { cacheChanged = true }
+                if nextCache.removeValue(forKey: outcome.job.path) != nil { cacheChanged = true }
                 unreadableCount += 1
             }
         }
 
         // Drop cache entries for files deleted since the last load.
         let livePaths = Set(files.map(\.path))
-        let countBeforeDrop = cache.count
-        cache = cache.filter { livePaths.contains($0.key) }
-        let droppedDeletedFiles = cache.count != countBeforeDrop
-        if cacheChanged || droppedDeletedFiles { cacheDirty = true }
-        scheduleCacheSave()
+        let countBeforeDrop = nextCache.count
+        nextCache = nextCache.filter { livePaths.contains($0.key) }
+        let droppedDeletedFiles = nextCache.count != countBeforeDrop
 
-        let skippedLineCount = cache.values.reduce(0) { $0 + $1.skippedLineCount }
+        let skippedLineCount = nextCache.values.reduce(0) { $0 + $1.skippedLineCount }
         // Nothing on disk changed since the last load: the previous
         // dedup/sort result is still exact, so skip rebuilding it.
         if pending.isEmpty, !droppedDeletedFiles, let lastRecords {
+            cache = nextCache
+            if cacheChanged { cacheDirty = true }
+            scheduleCacheSave()
             return LoadResult(
                 records: lastRecords,
                 fileCount: files.count,
@@ -237,12 +259,18 @@ actor AgenticUsageLoader {
         // across ALL files before any date filtering happens.
         var all: [AgenticUsageRecord] = []
         for file in files {
-            if let entry = cache[file.path] {
+            if let entry = nextCache[file.path] {
                 all.append(contentsOf: entry.records)
             }
         }
+        willMerge?()
+        try Task.checkCancellation()
         var records = Self.deduplicate(all)
+        try Task.checkCancellation()
         records.sort { $0.timestamp < $1.timestamp }
+        cache = nextCache
+        if cacheChanged || droppedDeletedFiles { cacheDirty = true }
+        scheduleCacheSave()
         lastRecords = records
         return LoadResult(
             records: records,
@@ -388,7 +416,10 @@ actor AgenticUsageLoader {
             throw LoadError.directoryUnreadable(path: root.path)
         }
 
+        var visited = 0
         for case let url as URL in enumerator {
+            visited += 1
+            if visited.isMultiple(of: 256) { try Task.checkCancellation() }
             if let fileName = source.fileName {
                 guard url.lastPathComponent == fileName else { continue }
             } else {
@@ -406,6 +437,7 @@ actor AgenticUsageLoader {
                 )
             )
         }
+        try Task.checkCancellation()
     }
 
     // MARK: - Parallel parsing

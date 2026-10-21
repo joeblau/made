@@ -28,5 +28,6 @@ build() {
 }
 
 build Pilot "platform=macOS,arch=$(uname -m)"
+# Copilot embeds the Wingman watch app; Plotter embeds its widget extension.
 build Copilot "generic/platform=iOS Simulator"
 build Plotter "generic/platform=iOS Simulator"
