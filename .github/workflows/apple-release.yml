@@ -101,9 +101,75 @@ jobs:
           printf 'build-number=%s.%s\n' \
             "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
+  chromium-runtime:
+    name: Reproduce the pinned Chromium runtime
+    needs: release-metadata
+    # The pinned CEF runtime reproduces byte-for-byte only under Xcode 26
+    # (buildToolchain.xcodeVersionPrefix in cef-artifacts.json). The xcode-27
+    # image carries no Xcode 26, so reproduce the runtime here and hand it to
+    # the Xcode 27 release build through the cache.
+    runs-on: macos-26
+    timeout-minutes: 120
+    permissions:
+      attestations: read
+      contents: read
+    env:
+      CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.release-cef-download-cache
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          lfs: true
+          ref: ${{ needs.release-metadata.outputs.tag }}
+      - name: Verify artifact toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -version | grep -E '^Xcode 26\.'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apple/Packages/ChromiumKit/Artifacts
+            apple/.release-cef-download-cache
+          key: release-cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+      - name: Install the pinned Chromium runtime
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Tags release the reviewed lock exactly. Upstream freshness is a
+          # ChromiumKit maintenance concern, not a reproducible-release gate.
+          bash apple/bin/package-chromiumkit.sh manifest
+
+          if ! apple/bin/verify-installed-chromiumkit.sh >/dev/null 2>&1; then
+            release_id="$(jq -r '.releaseID' \
+              apple/Packages/ChromiumKit/cef-artifacts.json)"
+            runtime_tag="chromiumkit-$release_id"
+            runtime_directory="$RUNNER_TEMP/chromiumkit-release"
+            mkdir -p "$runtime_directory"
+
+            if gh release view "$runtime_tag" >/dev/null 2>&1; then
+              gh release verify "$runtime_tag"
+              for asset in \
+                ChromiumKitCEF.runtime.zip \
+                ChromiumKitCEF.release.json \
+                ChromiumKitCEF.checksums.txt; do
+                gh release download "$runtime_tag" \
+                  --pattern "$asset" --dir "$runtime_directory"
+                gh release verify-asset \
+                  "$runtime_tag" "$runtime_directory/$asset"
+              done
+              apple/bin/update-chromiumkit-artifact.sh \
+                --release-directory "$runtime_directory"
+            else
+              printf '%s\n' \
+                'No immutable ChromiumKit release found; reproducing the pinned runtime.'
+              apple/bin/update-chromiumkit-artifact.sh
+            fi
+          fi
+          apple/bin/verify-installed-chromiumkit.sh
+
   macos:
     name: Signed and notarized Pilot
-    needs: release-metadata
+    needs: [release-metadata, chromium-runtime]
     # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
     runs-on: xcode-27
     environment: apple-release
@@ -164,9 +230,7 @@ jobs:
           xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            apple/.release-source-packages
-            apple/.release-cef-download-cache
+          path: apple/.release-source-packages
           key: apple-release-macos-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Import Developer ID identity
         shell: bash
@@ -202,39 +266,21 @@ jobs:
           grep -q 'BEGIN PRIVATE KEY' "$key_path"
           printf 'APP_STORE_CONNECT_KEY_PATH=%s\n' "$key_path" \
             >> "$GITHUB_ENV"
-      - name: Install the pinned Chromium runtime
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apple/Packages/ChromiumKit/Artifacts
+            apple/.release-cef-download-cache
+          key: release-cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          # The chromium-runtime job reproduced the runtime under this exact
+          # key; a miss here means the handoff broke, not that this Xcode 27
+          # job should rebuild it.
+          fail-on-cache-miss: true
+      - name: Verify the pinned Chromium runtime
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          # Tags release the reviewed lock exactly. Upstream freshness is a
-          # ChromiumKit maintenance concern, not a reproducible-release gate.
           bash apple/bin/package-chromiumkit.sh manifest
-
-          release_id="$(jq -r '.releaseID' \
-            apple/Packages/ChromiumKit/cef-artifacts.json)"
-          runtime_tag="chromiumkit-$release_id"
-          runtime_directory="$RUNNER_TEMP/chromiumkit-release"
-          mkdir -p "$runtime_directory"
-
-          if gh release view "$runtime_tag" >/dev/null 2>&1; then
-            gh release verify "$runtime_tag"
-            for asset in \
-              ChromiumKitCEF.runtime.zip \
-              ChromiumKitCEF.release.json \
-              ChromiumKitCEF.checksums.txt; do
-              gh release download "$runtime_tag" \
-                --pattern "$asset" --dir "$runtime_directory"
-              gh release verify-asset \
-                "$runtime_tag" "$runtime_directory/$asset"
-            done
-            apple/bin/update-chromiumkit-artifact.sh \
-              --release-directory "$runtime_directory"
-          else
-            printf '%s\n' \
-              'No immutable ChromiumKit release found; reproducing the pinned runtime.'
-            apple/bin/update-chromiumkit-artifact.sh
-          fi
+          apple/bin/verify-installed-chromiumkit.sh
       - name: Generate and verify the Xcode project
         run: |
           apple/bin/install-xcodegen.sh generate \

@@ -137,35 +137,33 @@ jobs:
   # Exercises the signed Chromium assembly + validation path on every PR so
   # signing regressions surface here instead of at release time. Signs ad-hoc;
   # the release workflow remains the only lane with real credentials.
-  apple-chromium-smoke:
+  chromium-runtime:
     needs: changes
     if: needs.changes.outputs.apple == 'true'
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # The pinned CEF runtime reproduces byte-for-byte only under Xcode 26
+    # (buildToolchain.xcodeVersionPrefix in cef-artifacts.json). The xcode-27
+    # image carries no Xcode 26, so reproduce the runtime here and hand it to
+    # the Xcode 27 app build through the cache.
+    runs-on: macos-26
     permissions:
       attestations: read
       contents: read
     env:
-      BLAU_SOURCE_PACKAGES: ${{ github.workspace }}/apple/.ci-source-packages
       CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.cef-download-cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-      - name: Verify supported toolchain
+      - name: Verify artifact toolchain
         run: |
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+          xcodebuild -version | grep -E '^Xcode 26\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.cef-download-cache
-          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
       - name: Install the pinned Chromium runtime
         env:
           GH_TOKEN: ${{ github.token }}
@@ -198,6 +196,44 @@ jobs:
             fi
           fi
           apple/bin/verify-installed-chromiumkit.sh
+
+  apple-chromium-smoke:
+    needs: [changes, chromium-runtime]
+    if: needs.changes.outputs.apple == 'true'
+    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
+    runs-on: xcode-27
+    permissions:
+      attestations: read
+      contents: read
+    env:
+      BLAU_SOURCE_PACKAGES: ${{ github.workspace }}/apple/.ci-source-packages
+      CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.cef-download-cache
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          lfs: true
+      - name: Verify supported toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -version | grep -E '^Xcode 27\.'
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apple/.ci-source-packages
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            apple/Packages/ChromiumKit/Artifacts
+            apple/.cef-download-cache
+          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          # The chromium-runtime job reproduced the runtime under this exact
+          # key; a miss here means the handoff broke, not that this Xcode 27
+          # job should rebuild it.
+          fail-on-cache-miss: true
+      - name: Verify the pinned Chromium runtime
+        run: |
+          bash apple/bin/package-chromiumkit.sh manifest
+          apple/bin/verify-installed-chromiumkit.sh
       - name: Build and validate an ad-hoc signed Chromium Pilot
         run: |
           derived_data="$RUNNER_TEMP/chromium-smoke-derived-data"
@@ -219,7 +255,7 @@ jobs:
 
   complete:
     if: always()
-    needs: [changes, docs, workers, apple-lint, apple-build-test, apple-chromium-smoke]
+    needs: [changes, docs, workers, apple-lint, apple-build-test, chromium-runtime, apple-chromium-smoke]
     runs-on: ubuntu-latest
     steps:
       - name: Require every selected gate
