@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Moonshot AI logomark. Simple Icons (https://simpleicons.org), icon data under CC0 1.0. The logo is a trademark of its owner, used here only to identify the provider's usage card (nominative use).
+
+  Fitted into the SF Symbols template (Template v.7.0) via
+  apple/bin/make-brand-symbols.py from the source SVG in
+  apple/bin/brand-symbol-sources/: the single logo path is uniformly
+  scaled and centered in the cap-height box at the Ultralight,
+  Regular, and Black 'Small' anchors (same artwork in each; Xcode
+  interpolates the remaining weights), so it renders, scales, and
+  tints like a native SF Symbol.
+-->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 3300 2200">
+ <!--glyph: "10035F", point size: 100.0, font version: "22.0d4e4", template writer version: "138.0.0"-->
+ <style>.SFSymbolsPreviewWireframe {fill:none;opacity:1.0;stroke:black;stroke-width:0.5}
+</style>
+ <g id="Notes">
+  <rect height="2200" id="artboard" style="fill:white;opacity:1" width="3300" x="0" y="0"/>
+  <line style="fill:none;stroke:black;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="292" y2="292"/>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;font-weight:bold;" transform="matrix(1 0 0 1 263 322)">Weight/Scale Variations</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:middle;" transform="matrix(1 0 0 1 559.711 322)">Ultralight</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:middle;" transform="matrix(1 0 0 1 1449.84 322)">Regular</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:middle;" transform="matrix(1 0 0 1 2933.4 322)">Black</text>
+  <line style="fill:none;stroke:black;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1903" y2="1903"/>
+  <text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1933)">Template v.7.0</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1951)">Requires Xcode 26 or greater</text>
+  <text id="descriptive-name" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1969)">Generated from moonshot</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1987)">Typeset at 100.0 points</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 726)">Small</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 1156)">Medium</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 1586)">Large</text>
+ </g>
+ <g id="Guides">
+  <g id="H-reference" style="fill:#27AAE1;stroke:none;" transform="matrix(1 0 0 1 339 696)">
+   <path d="M0.993654 0L3.63775 0L29.3281-67.1323L30.0303-67.1323L30.0303-70.459L28.1226-70.459ZM11.6885-24.4799L46.9815-24.4799L46.2315-26.7285L12.4385-26.7285ZM55.1196 0L57.7637 0L30.6382-70.459L29.4326-70.459L29.4326-67.1323Z"/>
+  </g>
+  <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696" y2="696"/>
+  <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+  <g id="H-reference" style="fill:#27AAE1;stroke:none;" transform="matrix(1 0 0 1 339 1126)">
+   <path d="M0.993654 0L3.63775 0L29.3281-67.1323L30.0303-67.1323L30.0303-70.459L28.1226-70.459ZM11.6885-24.4799L46.9815-24.4799L46.2315-26.7285L12.4385-26.7285ZM55.1196 0L57.7637 0L30.6382-70.459L29.4326-70.459L29.4326-67.1323Z"/>
+  </g>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126" y2="1126"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+  <g id="H-reference" style="fill:#27AAE1;stroke:none;" transform="matrix(1 0 0 1 339 1556)">
+   <path d="M0.993654 0L3.63775 0L29.3281-67.1323L30.0303-67.1323L30.0303-70.459L28.1226-70.459ZM11.6885-24.4799L46.9815-24.4799L46.2315-26.7285L12.4385-26.7285ZM55.1196 0L57.7637 0L30.6382-70.459L29.4326-70.459L29.4326-67.1323Z"/>
+  </g>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556" y2="1556"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+  <line id="right-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2987.82" x2="2987.82" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2878.98" x2="2878.98" y1="600.785" y2="720.121"/>
+  <line id="right-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1501.11" x2="1501.11" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1398.57" x2="1398.57" y1="600.785" y2="720.121"/>
+  <line id="right-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="608.529" x2="608.529" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="510.894" x2="510.894" y1="600.785" y2="720.121"/>
+ </g>
+  <g id="Symbols">
+   <g id="Black-S">
+    <path d="M2901.469 675.089 2929.288 682.527A61.249 61.194 0 0 0 2929.463 688.45L2946.834 693.094A35 34.97 0 0 1 2901.469 675.092M2898.494 658.205 2931.604 667.057A61.249 61.194 0 0 0 2930.236 672.919L2961.785 681.348A35 34.97 0 0 1 2956.404 687.193L2900.317 672.196A35 34.97 0 0 1 2898.494 658.208M2903.14 643.199L2937.985 652.514A61.249 61.194 0 0 0 2935.04 657.98L2967.989 666.788A61.249 61.194 0 0 1 2966.035 673.678L2932.348 664.674L2898.762 655.694A35 34.97 0 0 1 2903.135 643.196ZM2916.093 630.377L2949.007 639.174A61.249 61.194 0 0 0 2944.084 644.187L2966.904 650.286A61.249 61.194 0 0 1 2968.4 658.056L2904.543 640.988A35 34.97 0 0 1 2916.093 630.377M2961.63 639.961 2919.462 628.694A35 34.97 0 0 1 2961.63 639.961"/>
+   </g>
+   <g id="Regular-S">
+    <path d="M1417.909 675.089 1445.728 682.527A61.249 61.194 0 0 0 1445.903 688.45L1463.274 693.094A35 34.97 0 0 1 1417.909 675.092M1414.934 658.205 1448.044 667.057A61.249 61.194 0 0 0 1446.676 672.919L1478.225 681.348A35 34.97 0 0 1 1472.844 687.193L1416.757 672.196A35 34.97 0 0 1 1414.934 658.208M1419.58 643.199L1454.425 652.514A61.249 61.194 0 0 0 1451.48 657.98L1484.429 666.788A61.249 61.194 0 0 1 1482.475 673.678L1448.788 664.674L1415.202 655.694A35 34.97 0 0 1 1419.575 643.196ZM1432.533 630.377L1465.447 639.174A61.249 61.194 0 0 0 1460.524 644.187L1483.344 650.286A61.249 61.194 0 0 1 1484.84 658.056L1420.983 640.988A35 34.97 0 0 1 1432.533 630.377M1478.07 639.961 1435.902 628.694A35 34.97 0 0 1 1478.07 639.961"/>
+   </g>
+   <g id="Ultralight-S">
+    <path d="M527.78 675.089 555.599 682.527A61.249 61.194 0 0 0 555.774 688.45L573.145 693.094A35 34.97 0 0 1 527.78 675.092M524.805 658.205 557.915 667.057A61.249 61.194 0 0 0 556.547 672.919L588.096 681.348A35 34.97 0 0 1 582.715 687.193L526.628 672.196A35 34.97 0 0 1 524.805 658.208M529.451 643.199L564.296 652.514A61.249 61.194 0 0 0 561.351 657.98L594.3 666.788A61.249 61.194 0 0 1 592.346 673.678L558.659 664.674L525.073 655.694A35 34.97 0 0 1 529.446 643.196ZM542.404 630.377L575.318 639.174A61.249 61.194 0 0 0 570.395 644.187L593.215 650.286A61.249 61.194 0 0 1 594.711 658.056L530.854 640.988A35 34.97 0 0 1 542.404 630.377M587.941 639.961 545.773 628.694A35 34.97 0 0 1 587.941 639.961"/>
+   </g>
+  </g>
+</svg>

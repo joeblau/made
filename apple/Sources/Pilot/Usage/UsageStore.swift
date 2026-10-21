@@ -3,6 +3,7 @@ import Foundation
 enum UsageConsent {
     static let claudeKey = "usage.consent.claude"
     static let codexKey = "usage.consent.codex"
+    static let cursorKey = "usage.consent.cursor"
     static let grokKey = "usage.consent.grok"
     static let kimiKey = "usage.consent.kimi"
     static let changedNotification = Notification.Name("app.blau.pilot.usage-consent-changed")
@@ -15,6 +16,10 @@ enum UsageConsent {
         defaults.bool(forKey: codexKey)
     }
 
+    static func isCursorEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: cursorKey)
+    }
+
     static func isGrokEnabled(defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: grokKey)
     }
@@ -24,9 +29,10 @@ enum UsageConsent {
     }
 }
 
-/// Pulls **plan usage, reset windows, and credits** for Claude, Codex, Grok, and
-/// Kimi by reusing the local CLI OAuth sessions (see `UsageSessions`)
-/// and calling each CLI's own usage endpoint — no admin keys, no separate login.
+/// Pulls **plan usage, reset windows, and credits** for Claude, Codex, Cursor,
+/// Grok, and Kimi by reusing the local CLI/app OAuth sessions (see
+/// `UsageSessions`) and calling each provider's own usage endpoint — no admin
+/// keys, no separate login.
 ///
 /// The store owns consent, polling, spacing, and rate-limit backoff. The
 /// provider adapters in `Usage/Providers` own each request and its tolerant
@@ -37,6 +43,7 @@ final class UsageStore {
     struct Fetchers: Sendable {
         let claude: @Sendable () async -> ProviderFetch
         let codex: @Sendable () async -> ProviderFetch
+        let cursor: @Sendable () async -> ProviderFetch
         let grok: @Sendable () async -> ProviderFetch
         let kimi: @Sendable () async -> ProviderFetch
 
@@ -45,20 +52,28 @@ final class UsageStore {
         static let live = Fetchers(
             claude: { await ClaudeUsageAdapter.fetch(session: UsageSessions.ClaudeSession.load()) },
             codex: { await CodexUsageAdapter.fetch(session: UsageSessions.CodexSession.load()) },
+            cursor: { await CursorUsageAdapter.fetch(session: UsageSessions.CursorSession.load()) },
             grok: {
                 // Read the installed version only once a session exists.
                 guard let session = UsageSessions.GrokSession.load() else { return .notSignedIn }
                 return await GrokUsageAdapter.fetch(
                     session: session,
-                    clientVersion: UsageSessions.GrokSession.installedVersion()
+                    clientVersion: UsageSessions.GrokSession.installedVersion(),
+                    refresh: GrokUsageAdapter.liveRefresh
                 )
             },
-            kimi: { await KimiUsageAdapter.fetch(session: UsageSessions.KimiSession.load()) }
+            kimi: {
+                await KimiUsageAdapter.fetch(
+                    session: UsageSessions.KimiSession.load(),
+                    refresh: KimiUsageAdapter.liveRefresh
+                )
+            }
         )
     }
 
     private(set) var anthropic: ProviderState = .disabled
     private(set) var openAI: ProviderState = .disabled
+    private(set) var anysphere: ProviderState = .disabled
     private(set) var xAI: ProviderState = .disabled
     private(set) var moonshot: ProviderState = .disabled
     private(set) var isLoading = false
@@ -83,7 +98,7 @@ final class UsageStore {
     private static let backoffBase: TimeInterval = 300           // 5 min
     private static let backoffCap: TimeInterval = 3600           // 1 hour
 
-    private enum Provider: CaseIterable { case anthropic, openAI, xAI, moonshot }
+    private enum Provider: CaseIterable { case anthropic, openAI, anysphere, xAI, moonshot }
     /// When a provider was last actually hit (for min-spacing).
     private var lastAttempt: [Provider: Date] = [:]
     /// When a rate-limited provider may be hit again.
@@ -134,10 +149,12 @@ final class UsageStore {
         let now = self.now()
         let claudeEnabled = UsageConsent.isClaudeEnabled(defaults: defaults)
         let codexEnabled = UsageConsent.isCodexEnabled(defaults: defaults)
+        let cursorEnabled = UsageConsent.isCursorEnabled(defaults: defaults)
         let grokEnabled = UsageConsent.isGrokEnabled(defaults: defaults)
         let kimiEnabled = UsageConsent.isKimiEnabled(defaults: defaults)
         if !claudeEnabled { anthropic = .disabled }
         if !codexEnabled { openAI = .disabled }
+        if !cursorEnabled { anysphere = .disabled }
         if !grokEnabled { xAI = .disabled }
         if !kimiEnabled { moonshot = .disabled }
 
@@ -149,6 +166,7 @@ final class UsageStore {
 
         let doAnthropic = claudeEnabled && mayFetch(.anthropic, now: now)
         let doOpenAI = codexEnabled && mayFetch(.openAI, now: now)
+        let doCursor = cursorEnabled && mayFetch(.anysphere, now: now)
         let doGrok = grokEnabled && mayFetch(.xAI, now: now)
         let doKimi = kimiEnabled && mayFetch(.moonshot, now: now)
         if doAnthropic {
@@ -158,6 +176,10 @@ final class UsageStore {
         if doOpenAI {
             lastAttempt[.openAI] = now
             if case .usage = openAI {} else { openAI = .loading }
+        }
+        if doCursor {
+            lastAttempt[.anysphere] = now
+            if case .usage = anysphere {} else { anysphere = .loading }
         }
         if doGrok {
             lastAttempt[.xAI] = now
@@ -169,7 +191,7 @@ final class UsageStore {
         }
 
         // Nothing to do this tick — everything is spaced-out or backed-off.
-        guard doAnthropic || doOpenAI || doGrok || doKimi else {
+        guard doAnthropic || doOpenAI || doCursor || doGrok || doKimi else {
             isLoading = false
             return
         }
@@ -178,6 +200,7 @@ final class UsageStore {
         activeProviders = Set([
             doAnthropic ? Provider.anthropic : nil,
             doOpenAI ? Provider.openAI : nil,
+            doCursor ? Provider.anysphere : nil,
             doGrok ? Provider.xAI : nil,
             doKimi ? Provider.moonshot : nil,
         ].compactMap { $0 })
@@ -185,11 +208,13 @@ final class UsageStore {
         loadTask = Task {
             async let anthropicResult = Self.fetch(when: doAnthropic, using: fetchers.claude)
             async let openAIResult = Self.fetch(when: doOpenAI, using: fetchers.codex)
+            async let anysphereResult = Self.fetch(when: doCursor, using: fetchers.cursor)
             async let xAIResult = Self.fetch(when: doGrok, using: fetchers.grok)
             async let moonshotResult = Self.fetch(when: doKimi, using: fetchers.kimi)
-            let (aRes, oRes, xRes, kRes) = await (
+            let (aRes, oRes, cRes, xRes, kRes) = await (
                 anthropicResult,
                 openAIResult,
+                anysphereResult,
                 xAIResult,
                 moonshotResult
             )
@@ -199,6 +224,9 @@ final class UsageStore {
                 : .disabled
             openAI = UsageConsent.isCodexEnabled(defaults: defaults)
                 ? resolve(.openAI, previous: openAI, result: oRes)
+                : .disabled
+            anysphere = UsageConsent.isCursorEnabled(defaults: defaults)
+                ? resolve(.anysphere, previous: anysphere, result: cRes)
                 : .disabled
             xAI = UsageConsent.isGrokEnabled(defaults: defaults)
                 ? resolve(.xAI, previous: xAI, result: xRes)

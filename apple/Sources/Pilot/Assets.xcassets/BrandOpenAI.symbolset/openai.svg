@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  OpenAI logomark. Simple Icons (https://simpleicons.org), icon data under CC0 1.0. The logo is a trademark of its owner, used here only to identify the provider's usage card (nominative use).
+
+  Fitted into the SF Symbols template (Template v.7.0) via
+  apple/bin/make-brand-symbols.py from the source SVG in
+  apple/bin/brand-symbol-sources/: the single logo path is uniformly
+  scaled and centered in the cap-height box at the Ultralight,
+  Regular, and Black 'Small' anchors (same artwork in each; Xcode
+  interpolates the remaining weights), so it renders, scales, and
+  tints like a native SF Symbol.
+-->
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 3300 2200">
+ <!--glyph: "10035F", point size: 100.0, font version: "22.0d4e4", template writer version: "138.0.0"-->
+ <style>.SFSymbolsPreviewWireframe {fill:none;opacity:1.0;stroke:black;stroke-width:0.5}
+</style>
+ <g id="Notes">
+  <rect height="2200" id="artboard" style="fill:white;opacity:1" width="3300" x="0" y="0"/>
+  <line style="fill:none;stroke:black;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="292" y2="292"/>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;font-weight:bold;" transform="matrix(1 0 0 1 263 322)">Weight/Scale Variations</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:middle;" transform="matrix(1 0 0 1 559.711 322)">Ultralight</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:middle;" transform="matrix(1 0 0 1 1449.84 322)">Regular</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:middle;" transform="matrix(1 0 0 1 2933.4 322)">Black</text>
+  <line style="fill:none;stroke:black;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1903" y2="1903"/>
+  <text id="template-version" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1933)">Template v.7.0</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1951)">Requires Xcode 26 or greater</text>
+  <text id="descriptive-name" style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1969)">Generated from openai</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;text-anchor:end;" transform="matrix(1 0 0 1 3036 1987)">Typeset at 100.0 points</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 726)">Small</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 1156)">Medium</text>
+  <text style="stroke:none;fill:black;font-family:sans-serif;font-size:13;" transform="matrix(1 0 0 1 263 1586)">Large</text>
+ </g>
+ <g id="Guides">
+  <g id="H-reference" style="fill:#27AAE1;stroke:none;" transform="matrix(1 0 0 1 339 696)">
+   <path d="M0.993654 0L3.63775 0L29.3281-67.1323L30.0303-67.1323L30.0303-70.459L28.1226-70.459ZM11.6885-24.4799L46.9815-24.4799L46.2315-26.7285L12.4385-26.7285ZM55.1196 0L57.7637 0L30.6382-70.459L29.4326-70.459L29.4326-67.1323Z"/>
+  </g>
+  <line id="Baseline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="696" y2="696"/>
+  <line id="Capline-S" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="625.541" y2="625.541"/>
+  <g id="H-reference" style="fill:#27AAE1;stroke:none;" transform="matrix(1 0 0 1 339 1126)">
+   <path d="M0.993654 0L3.63775 0L29.3281-67.1323L30.0303-67.1323L30.0303-70.459L28.1226-70.459ZM11.6885-24.4799L46.9815-24.4799L46.2315-26.7285L12.4385-26.7285ZM55.1196 0L57.7637 0L30.6382-70.459L29.4326-70.459L29.4326-67.1323Z"/>
+  </g>
+  <line id="Baseline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1126" y2="1126"/>
+  <line id="Capline-M" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1055.54" y2="1055.54"/>
+  <g id="H-reference" style="fill:#27AAE1;stroke:none;" transform="matrix(1 0 0 1 339 1556)">
+   <path d="M0.993654 0L3.63775 0L29.3281-67.1323L30.0303-67.1323L30.0303-70.459L28.1226-70.459ZM11.6885-24.4799L46.9815-24.4799L46.2315-26.7285L12.4385-26.7285ZM55.1196 0L57.7637 0L30.6382-70.459L29.4326-70.459L29.4326-67.1323Z"/>
+  </g>
+  <line id="Baseline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1556" y2="1556"/>
+  <line id="Capline-L" style="fill:none;stroke:#27AAE1;opacity:1;stroke-width:0.5;" x1="263" x2="3036" y1="1485.54" y2="1485.54"/>
+  <line id="right-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2987.82" x2="2987.82" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Black-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="2878.98" x2="2878.98" y1="600.785" y2="720.121"/>
+  <line id="right-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1501.11" x2="1501.11" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Regular-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="1398.57" x2="1398.57" y1="600.785" y2="720.121"/>
+  <line id="right-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="608.529" x2="608.529" y1="600.785" y2="720.121"/>
+  <line id="left-margin-Ultralight-S" style="fill:none;stroke:#00AEEF;stroke-width:0.5;opacity:1.0;" x1="510.894" x2="510.894" y1="600.785" y2="720.121"/>
+ </g>
+  <g id="Symbols">
+   <g id="Black-S">
+    <path d="M2963.393 654.409A17.458 17.458 0 0 0 2961.889 640.084A17.637 17.637 0 0 0 2942.899 631.625A17.692 17.692 0 0 0 2912.924 637.959A17.458 17.458 0 0 0 2901.262 646.419A17.637 17.637 0 0 0 2903.429 667.12A17.444 17.444 0 0 0 2904.92 681.445A17.651 17.651 0 0 0 2923.923 689.905A17.458 17.458 0 0 0 2937.075 695.771A17.665 17.665 0 0 0 2953.912 683.502A17.472 17.472 0 0 0 2965.574 675.042A17.665 17.665 0 0 0 2963.393 654.41ZM2937.075 691.188A13.055 13.055 0 0 1 2928.685 688.152L2929.098 687.918 2943.037 679.872A2.319 2.319 0 0 0 2944.183 677.884L2944.183 658.232L2950.075 661.641A0.207 0.207 0 0 1 2950.186 661.793L2950.186 678.078A13.139 13.139 0 0 1 2937.075 691.188ZM2908.894 679.154A13.042 13.042 0 0 1 2907.335 670.363L2907.749 670.611 2921.701 678.657A2.25 2.25 0 0 0 2923.978 678.657L2941.022 668.831L2941.022 675.635A0.235 0.235 0 0 1 2940.926 675.814L2926.807 683.957A13.125 13.125 0 0 1 2908.894 679.154ZM2905.223 648.793A13.083 13.083 0 0 1 2912.124 643.038L2912.124 659.599A2.236 2.236 0 0 0 2913.255 661.572L2930.216 671.357 2924.323 674.765A0.221 0.221 0 0 1 2924.116 674.765L2910.026 666.637A13.139 13.139 0 0 1 2905.223 648.724ZM2953.636 660.04L2936.62 650.159 2942.499 646.763A0.221 0.221 0 0 1 2942.706 646.763L2956.797 654.906A13.111 13.111 0 0 1 2954.823 678.547L2954.823 661.986A2.305 2.305 0 0 0 2953.636 660.04ZM2959.502 651.222L2959.087 650.973 2945.163 642.858A2.263 2.263 0 0 0 2942.872 642.858L2925.842 652.684L2925.842 645.881A0.193 0.193 0 0 1 2925.925 645.701L2940.015 637.573A13.125 13.125 0 0 1 2959.502 651.166ZM2922.626 663.283L2916.733 659.888A0.235 0.235 0 0 1 2916.622 659.723L2916.622 643.479A13.125 13.125 0 0 1 2938.138 633.405L2937.724 633.639L2923.785 641.685A2.319 2.319 0 0 0 2922.64 643.672ZM2925.828 656.383L2933.418 652.008 2941.022 656.383L2941.022 665.132L2933.446 669.507 2925.842 665.132Z"/>
+   </g>
+   <g id="Regular-S">
+    <path d="M1479.833 654.409A17.458 17.458 0 0 0 1478.329 640.084A17.637 17.637 0 0 0 1459.339 631.625A17.692 17.692 0 0 0 1429.364 637.959A17.458 17.458 0 0 0 1417.702 646.419A17.637 17.637 0 0 0 1419.869 667.12A17.444 17.444 0 0 0 1421.36 681.445A17.651 17.651 0 0 0 1440.363 689.905A17.458 17.458 0 0 0 1453.515 695.771A17.665 17.665 0 0 0 1470.352 683.502A17.472 17.472 0 0 0 1482.014 675.042A17.665 17.665 0 0 0 1479.833 654.41ZM1453.515 691.188A13.055 13.055 0 0 1 1445.125 688.152L1445.538 687.918 1459.477 679.872A2.319 2.319 0 0 0 1460.623 677.884L1460.623 658.232L1466.515 661.641A0.207 0.207 0 0 1 1466.626 661.793L1466.626 678.078A13.139 13.139 0 0 1 1453.515 691.188ZM1425.334 679.154A13.042 13.042 0 0 1 1423.775 670.363L1424.189 670.611 1438.141 678.657A2.25 2.25 0 0 0 1440.418 678.657L1457.462 668.831L1457.462 675.635A0.235 0.235 0 0 1 1457.366 675.814L1443.247 683.957A13.125 13.125 0 0 1 1425.334 679.154ZM1421.663 648.793A13.083 13.083 0 0 1 1428.564 643.038L1428.564 659.599A2.236 2.236 0 0 0 1429.695 661.572L1446.656 671.357 1440.763 674.765A0.221 0.221 0 0 1 1440.556 674.765L1426.466 666.637A13.139 13.139 0 0 1 1421.663 648.724ZM1470.076 660.04L1453.06 650.159 1458.939 646.763A0.221 0.221 0 0 1 1459.146 646.763L1473.237 654.906A13.111 13.111 0 0 1 1471.263 678.547L1471.263 661.986A2.305 2.305 0 0 0 1470.076 660.04ZM1475.942 651.222L1475.527 650.973 1461.603 642.858A2.263 2.263 0 0 0 1459.312 642.858L1442.282 652.684L1442.282 645.881A0.193 0.193 0 0 1 1442.365 645.701L1456.455 637.573A13.125 13.125 0 0 1 1475.942 651.166ZM1439.066 663.283L1433.173 659.888A0.235 0.235 0 0 1 1433.062 659.723L1433.062 643.479A13.125 13.125 0 0 1 1454.578 633.405L1454.164 633.639L1440.225 641.685A2.319 2.319 0 0 0 1439.08 643.672ZM1442.268 656.383L1449.858 652.008 1457.462 656.383L1457.462 665.132L1449.886 669.507 1442.282 665.132Z"/>
+   </g>
+   <g id="Ultralight-S">
+    <path d="M589.704 654.409A17.458 17.458 0 0 0 588.2 640.084A17.637 17.637 0 0 0 569.21 631.625A17.692 17.692 0 0 0 539.235 637.959A17.458 17.458 0 0 0 527.573 646.419A17.637 17.637 0 0 0 529.74 667.12A17.444 17.444 0 0 0 531.231 681.445A17.651 17.651 0 0 0 550.234 689.905A17.458 17.458 0 0 0 563.386 695.771A17.665 17.665 0 0 0 580.223 683.502A17.472 17.472 0 0 0 591.885 675.042A17.665 17.665 0 0 0 589.704 654.41ZM563.386 691.188A13.055 13.055 0 0 1 554.996 688.152L555.409 687.918 569.348 679.872A2.319 2.319 0 0 0 570.494 677.884L570.494 658.232L576.386 661.641A0.207 0.207 0 0 1 576.497 661.793L576.497 678.078A13.139 13.139 0 0 1 563.386 691.188ZM535.205 679.154A13.042 13.042 0 0 1 533.646 670.363L534.06 670.611 548.012 678.657A2.25 2.25 0 0 0 550.289 678.657L567.333 668.831L567.333 675.635A0.235 0.235 0 0 1 567.237 675.814L553.118 683.957A13.125 13.125 0 0 1 535.205 679.154ZM531.534 648.793A13.083 13.083 0 0 1 538.435 643.038L538.435 659.599A2.236 2.236 0 0 0 539.566 661.572L556.527 671.357 550.634 674.765A0.221 0.221 0 0 1 550.427 674.765L536.337 666.637A13.139 13.139 0 0 1 531.534 648.724ZM579.947 660.04L562.931 650.159 568.81 646.763A0.221 0.221 0 0 1 569.017 646.763L583.108 654.906A13.111 13.111 0 0 1 581.134 678.547L581.134 661.986A2.305 2.305 0 0 0 579.947 660.04ZM585.813 651.222L585.398 650.973 571.474 642.858A2.263 2.263 0 0 0 569.183 642.858L552.153 652.684L552.153 645.881A0.193 0.193 0 0 1 552.236 645.701L566.326 637.573A13.125 13.125 0 0 1 585.813 651.166ZM548.937 663.283L543.044 659.888A0.235 0.235 0 0 1 542.933 659.723L542.933 643.479A13.125 13.125 0 0 1 564.449 633.405L564.035 633.639L550.096 641.685A2.319 2.319 0 0 0 548.951 643.672ZM552.139 656.383L559.729 652.008 567.333 656.383L567.333 665.132L559.757 669.507 552.153 665.132Z"/>
+   </g>
+  </g>
+</svg>

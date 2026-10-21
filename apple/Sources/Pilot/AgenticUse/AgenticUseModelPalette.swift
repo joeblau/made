@@ -21,6 +21,12 @@ enum AgenticUseModelPalette {
         return shade(hue: hue(for: provider), step: index)
     }
 
+    /// The provider's flagship (deepest) shade — used to tint its brand mark so
+    /// the glyph matches the top of that provider's stacked bar.
+    static func providerColor(for provider: AgenticProvider) -> Color {
+        shade(hue: hue(for: provider), step: 0)
+    }
+
     /// Which provider's hue family a canonical model id belongs to.
     static func provider(for canonicalModel: String) -> AgenticProvider? {
         if canonicalModel.hasPrefix("claude-") { return .claude }

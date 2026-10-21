@@ -5,25 +5,87 @@ private typealias JSON = UsageJSON
 /// Reads Kimi Code (Moonshot AI) plan usage through Kimi Code's own session.
 enum KimiUsageAdapter {
     static let endpoint = URL(string: "https://api.kimi.ai/coding/v1/usages")!
+    /// The account endpoint carries the membership tier name; the usages
+    /// endpoint does not.
+    static let accountEndpoint = URL(string: "https://api.kimi.ai/coding/v1/me")!
+    static let expiredMessage = "Kimi: session expired — re-run `kimi login` to sign in."
+
+    /// Refreshes the Kimi session; injectable so tests never touch the real
+    /// token endpoint or credential file.
+    typealias Refresh = @Sendable (UsageSessions.KimiSession) async -> UsageSessions.KimiSession?
+
+    static let liveRefresh: Refresh = { session in
+        await UsageSessions.KimiSession.refresh(session: session)
+    }
 
     static func fetch(
         session: UsageSessions.KimiSession?,
-        transport: UsageHTTP.Transport = UsageHTTP.live
+        transport: UsageHTTP.Transport = UsageHTTP.live,
+        refresh: Refresh? = nil
     ) async -> ProviderFetch {
-        guard let session else { return .notSignedIn }
-        guard !session.isExpired else {
-            return .failure("Kimi: session expired — re-run `kimi login` to sign in.")
+        guard var session else { return .notSignedIn }
+
+        // Kimi access tokens last fifteen minutes, so an expired session is
+        // the steady state between CLI runs — revive it instead of surfacing
+        // it. Without a refresh path the expiry is reported as before.
+        var didRefresh = false
+        if session.isExpired {
+            guard session.canRefresh, let refresh, let refreshed = await refresh(session) else {
+                return .failure(expiredMessage)
+            }
+            session = refreshed
+            didRefresh = true
         }
+
+        var result = await request(session: session, transport: transport)
+        // A 401/403 ahead of the recorded expiry means the token was revoked
+        // early; one refresh-and-retry covers it without risking a loop.
+        if case .failure = result, isAuthFailure(result), !didRefresh,
+           session.canRefresh, let refresh,
+           let refreshed = await refresh(session) {
+            result = await request(session: refreshed, transport: transport)
+        }
+        return result
+    }
+
+    private static func request(
+        session: UsageSessions.KimiSession,
+        transport: UsageHTTP.Transport
+    ) async -> ProviderFetch {
         let headers = [
             "Authorization": "Bearer \(session.accessToken)",
             "Accept": "application/json",
         ]
         do {
             let root = try await UsageHTTP.getJSONObject(url: endpoint, headers: headers, transport: transport)
-            return .success(parse(root, receivedAt: Date()))
+            var usage = parse(root, receivedAt: Date())
+            // The usages payload has no plan title; the account endpoint reports
+            // the tier directly (e.g. "Vivace"). Best-effort: a failed or absent
+            // lookup just leaves whatever `parse` could infer, so the card never
+            // fails over a missing badge.
+            if let level = try? await accountLevel(headers: headers, transport: transport) {
+                usage.planLabel = level
+            }
+            return .success(usage)
         } catch {
             return UsageHTTP.classify(error, provider: "Kimi", cli: "kimi login")
         }
+    }
+
+    /// The authoritative membership tier from Kimi's account endpoint.
+    private static func accountLevel(
+        headers: [String: String],
+        transport: UsageHTTP.Transport
+    ) async throws -> String? {
+        let account = try await UsageHTTP.getJSONObject(
+            url: accountEndpoint, headers: headers, transport: transport
+        )
+        return JSON.string(account, keys: ["user_level_name", "userLevelName"])
+    }
+
+    private static func isAuthFailure(_ fetch: ProviderFetch) -> Bool {
+        guard case .failure(let message) = fetch else { return false }
+        return message.contains("session expired")
     }
 
     /// Parse Kimi Code's intentionally loose usage schema: a weekly summary,
@@ -69,15 +131,16 @@ enum KimiUsageAdapter {
         return usage
     }
 
-    /// Kimi's usage endpoint reports no public plan title, and its
+    /// Fallback plan inference from the usages payload, used only when the
+    /// account endpoint's `user_level_name` is unavailable (see `request`).
+    /// The usages payload reports no public plan title, and its
     /// `membership.level` is a coarse legacy field — a Vivace account returns
-    /// `LEVEL_STANDARD` (verified against the live endpoint), so the old
-    /// level→plan mapping mislabeled paid tiers. The reliable tier signal is
-    /// the Kimi Code credit multiplier in `parallel.limit`: the official plan
-    /// table's Kimi Code credits row is 1×/5×/15×/30× for
-    /// Moderato/Allegretto/Allegro/Vivace. Prefer an explicit title when the
-    /// service includes one, then the multiplier, then the free level; hide
-    /// the badge rather than show a wrong one.
+    /// `LEVEL_STANDARD`, so a level→plan mapping mislabels paid tiers. The
+    /// reliable in-payload signal is the Kimi Code credit multiplier in
+    /// `parallel.limit`: the official plan table's Kimi Code credits row is
+    /// 1×/5×/15×/30× for Moderato/Allegretto/Allegro/Vivace. Prefer an explicit
+    /// title when the service includes one, then the multiplier, then the free
+    /// level; hide the badge rather than show a wrong one.
     private static func planLabel(_ root: [String: Any]) -> String? {
         let user = JSON.dictionary(root, keys: ["user"]) ?? [:]
         let membership = JSON.dictionary(user, keys: ["membership"])

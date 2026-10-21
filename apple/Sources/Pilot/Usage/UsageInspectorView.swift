@@ -10,7 +10,7 @@ enum SettingsTab {
 
 /// Inspector "Usage" tab. Provider cards show plan usage windows (utilization + reset
 /// countdown) and credits, read from local `claude`, `codex`, `grok`, and `kimi`
-/// CLI sessions.
+/// CLI sessions and the Cursor editor's session.
 /// A not-signed-in card links to the Usage settings section for setup help.
 struct UsageListView: View {
     let store: UsageStore
@@ -19,6 +19,7 @@ struct UsageListView: View {
     @AppStorage(SettingsTab.storageKey) private var selectedSettingsTab = SettingsTab.general
     @AppStorage(UsageConsent.claudeKey) private var claudeEnabled = false
     @AppStorage(UsageConsent.codexKey) private var codexEnabled = false
+    @AppStorage(UsageConsent.cursorKey) private var cursorEnabled = false
     @AppStorage(UsageConsent.grokKey) private var grokEnabled = false
     @AppStorage(UsageConsent.kimiKey) private var kimiEnabled = false
 
@@ -29,8 +30,8 @@ struct UsageListView: View {
                 VStack(spacing: 12) {
                     ProviderCard(
                         title: "Claude",
-                        systemImage: "sparkle",
-                        tint: .orange,
+                        symbol: "BrandAnthropic",
+                        tint: .anthropicCoral,
                         cli: "claude",
                         state: store.anthropic,
                         enable: enableClaude,
@@ -38,7 +39,7 @@ struct UsageListView: View {
                     )
                     ProviderCard(
                         title: "Codex",
-                        systemImage: "chevron.left.forwardslash.chevron.right",
+                        symbol: "BrandOpenAI",
                         tint: .green,
                         cli: "codex",
                         state: store.openAI,
@@ -47,7 +48,7 @@ struct UsageListView: View {
                     )
                     ProviderCard(
                         title: "Kimi",
-                        systemImage: "moon.stars.fill",
+                        symbol: "BrandMoonshot",
                         tint: .blue,
                         cli: "kimi login",
                         state: store.moonshot,
@@ -56,11 +57,21 @@ struct UsageListView: View {
                     )
                     ProviderCard(
                         title: "Grok",
-                        systemImage: "bolt.fill",
+                        symbol: "BrandGrok",
                         tint: .purple,
                         cli: "grok",
                         state: store.xAI,
                         enable: enableGrok,
+                        openSetup: openSetup
+                    )
+                    ProviderCard(
+                        title: "Cursor",
+                        symbol: "BrandCursor",
+                        tint: .teal,
+                        cli: "cursor",
+                        signInMessage: "Not signed in. Sign in to the Cursor app, then refresh.",
+                        state: store.anysphere,
+                        enable: enableCursor,
                         openSetup: openSetup
                     )
                 }
@@ -92,6 +103,11 @@ struct UsageListView: View {
 
     private func enableCodex() {
         codexEnabled = true
+        usageConsentChanged()
+    }
+
+    private func enableCursor() {
+        cursorEnabled = true
         usageConsentChanged()
     }
 
@@ -128,9 +144,13 @@ enum UsageResetCountdown {
 /// One provider's plan usage card. Renders per `ProviderState`.
 private struct ProviderCard: View {
     let title: String
-    let systemImage: String
+    /// Asset-catalog symbol name for the provider's brand mark.
+    let symbol: String
     let tint: Color
     let cli: String
+    /// Overrides the terminal-flavored default for providers whose sign-in
+    /// lives in an app rather than a CLI.
+    var signInMessage: String?
     let state: ProviderState
     let enable: () -> Void
     let openSetup: () -> Void
@@ -147,7 +167,9 @@ private struct ProviderCard: View {
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: systemImage)
+            // Brand marks are custom symbol assets, tinted like SF Symbols.
+            Image(symbol)
+                .font(.body)
                 .foregroundStyle(tint)
             Text(title)
                 .font(.body.weight(.semibold))
@@ -184,7 +206,10 @@ private struct ProviderCard: View {
                 .frame(maxWidth: .infinity, alignment: .center)
 
         case .notSignedIn:
-            setupPrompt(message: "Not signed in. Run `\(cli)` in a terminal to log in, then refresh.")
+            setupPrompt(
+                message: signInMessage
+                    ?? "Not signed in. Run `\(cli)` in a terminal to log in, then refresh."
+            )
 
         case .error(let message):
             setupPrompt(message: message)
@@ -330,4 +355,10 @@ private struct ProviderCard: View {
         default: .red
         }
     }
+}
+
+extension Color {
+    /// Anthropic's brand coral — the one provider here with a distinctive
+    /// official color, so the Claude card uses it instead of a generic orange.
+    static let anthropicCoral = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
 }

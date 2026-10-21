@@ -16,6 +16,16 @@ enum AgenticProvider: String, Sendable, CaseIterable, Codable {
         case .kimi: "Kimi"
         }
     }
+
+    /// Asset-catalog brand mark, shared with the Plan Usage inspector cards.
+    var brandSymbol: String {
+        switch self {
+        case .claude: "BrandAnthropic"
+        case .codex: "BrandOpenAI"
+        case .grok: "BrandGrok"
+        case .kimi: "BrandMoonshot"
+        }
+    }
 }
 
 /// One priced agent-CLI API call, parsed from a local usage log

@@ -193,6 +193,250 @@ struct UsageReportingTests {
         #expect(session.teamId == "team-1")
     }
 
+    @Test("Grok auth falls back to an expired entry that can still refresh")
+    func grokAuthExpiredRefreshableFallback() throws {
+        let data = try #require("""
+        {
+          "https://auth.x.ai::client-id": {
+            "key": "stale-token",
+            "auth_mode": "oidc",
+            "expires_at": "2026-10-14T16:28:25.653188Z",
+            "refresh_token": "rotating-refresh-token",
+            "oidc_client_id": "client-id",
+            "oidc_issuer": "https://auth.x.ai"
+          }
+        }
+        """.data(using: .utf8))
+
+        let now = try #require(UsageJSON.date("2026-10-21T12:00:00Z"))
+        let session = try #require(UsageSessions.GrokSession.parse(data: data, now: now))
+        #expect(session.accessToken == "stale-token")
+        #expect(session.isExpired(at: now))
+        #expect(session.canRefresh)
+        #expect(session.refreshToken == "rotating-refresh-token")
+        #expect(session.oidcClientId == "client-id")
+        #expect(session.oidcIssuer == "https://auth.x.ai")
+
+        // Without refresh material an expired entry stays unusable.
+        let bareData = try #require("""
+        {
+          "https://auth.x.ai::client-id": {
+            "key": "stale-token",
+            "expires_at": "2026-10-14T16:28:25.653188Z"
+          }
+        }
+        """.data(using: .utf8))
+        #expect(UsageSessions.GrokSession.parse(data: bareData, now: now) == nil)
+    }
+
+    @Test("Grok refresh persists the rotated pair back to the CLI's auth file")
+    func grokRefreshPersistsRotation() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grok-refresh-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let authFile = directory.appendingPathComponent("auth.json")
+        try Data("""
+        {
+          "https://auth.x.ai::client-id": {
+            "key": "stale-token",
+            "auth_mode": "oidc",
+            "email": "dev@example.com",
+            "expires_at": "2026-10-14T16:28:25.653188Z",
+            "refresh_token": "spent-refresh-token",
+            "oidc_client_id": "client-id",
+            "oidc_issuer": "https://auth.x.ai"
+          }
+        }
+        """.utf8).write(to: authFile)
+
+        let now = try #require(UsageJSON.date("2026-10-21T12:00:00Z"))
+        let session = try #require(UsageSessions.GrokSession.parse(
+            data: try Data(contentsOf: authFile), now: now
+        ))
+        let granted = Data(#"""
+        {"access_token":"fresh-token","refresh_token":"rotated-refresh-token",
+         "expires_in":21600,"token_type":"Bearer"}
+        """#.utf8)
+        actor RequestLog {
+            private(set) var requests: [URLRequest] = []
+            func append(_ request: URLRequest) { requests.append(request) }
+        }
+        let log = RequestLog()
+        let refreshed = await UsageSessions.GrokSession.refresh(
+            session: session,
+            transport: { request in
+                await log.append(request)
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+                )!
+                return (granted, response)
+            },
+            authFileURL: authFile,
+            now: now
+        )
+
+        let result = try #require(refreshed)
+        #expect(result.accessToken == "fresh-token")
+        #expect(result.refreshToken == "rotated-refresh-token")
+        #expect(result.expiresAt == now.addingTimeInterval(21600))
+        let request = try #require(await log.requests.first)
+        #expect(request.url == URL(string: "https://auth.x.ai/oauth2/token"))
+        #expect(request.httpMethod == "POST")
+        let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+        #expect(body.contains("grant_type=refresh_token"))
+        #expect(body.contains("refresh_token=spent-refresh-token"))
+        #expect(body.contains("client_id=client-id"))
+
+        // The file now carries the rotated pair with unrelated fields intact.
+        let persisted = try #require(
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: authFile)) as? [String: Any]
+        )
+        let entry = try #require(persisted["https://auth.x.ai::client-id"] as? [String: Any])
+        #expect(entry["key"] as? String == "fresh-token")
+        #expect(entry["refresh_token"] as? String == "rotated-refresh-token")
+        #expect(entry["expires_at"] as? String == "2026-10-21T18:00:00.000000Z")
+        #expect(entry["email"] as? String == "dev@example.com")
+        let attributes = try FileManager.default.attributesOfItem(atPath: authFile.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.int16Value == 0o600)
+    }
+
+    @Test("Kimi refresh persists the rotated pair back to the CLI's credential file")
+    func kimiRefreshPersistsRotation() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kimi-refresh-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let credentialFile = directory.appendingPathComponent("kimi-code.json")
+        try Data("""
+        {
+          "access_token": "stale-token",
+          "refresh_token": "spent-refresh-token",
+          "expires_in": 900,
+          "expires_at": 1799999999,
+          "scope": "openid profile",
+          "token_type": "Bearer",
+          "device_id": "device-123"
+        }
+        """.utf8).write(to: credentialFile)
+
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var session = try #require(UsageSessions.KimiSession.parse(
+            data: try Data(contentsOf: credentialFile)
+        ))
+        session.fileURL = credentialFile
+        #expect(session.isExpired(at: now))
+        #expect(session.canRefresh)
+        let granted = Data(#"""
+        {"access_token":"fresh-token","refresh_token":"rotated-refresh-token",
+         "expires_in":900,"token_type":"Bearer","scope":"openid profile"}
+        """#.utf8)
+        actor RequestLog {
+            private(set) var requests: [URLRequest] = []
+            func append(_ request: URLRequest) { requests.append(request) }
+        }
+        let log = RequestLog()
+        let refreshed = await UsageSessions.KimiSession.refresh(
+            session: session,
+            transport: { request in
+                await log.append(request)
+                let response = HTTPURLResponse(
+                    url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil
+                )!
+                return (granted, response)
+            },
+            host: "https://auth.kimi.test",
+            now: now
+        )
+
+        let result = try #require(refreshed)
+        #expect(result.accessToken == "fresh-token")
+        #expect(result.refreshToken == "rotated-refresh-token")
+        #expect(result.expiresAt == now.addingTimeInterval(900))
+        #expect(result.fileURL == credentialFile)
+        let request = try #require(await log.requests.first)
+        #expect(request.url == URL(string: "https://auth.kimi.test/api/oauth/token"))
+        #expect(request.httpMethod == "POST")
+        #expect(request.value(forHTTPHeaderField: "User-Agent") == UsageSessions.KimiSession.oauthUserAgent)
+        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/x-www-form-urlencoded")
+        let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+        #expect(body.contains("grant_type=refresh_token"))
+        #expect(body.contains("refresh_token=spent-refresh-token"))
+        #expect(body.contains("client_id=\(UsageSessions.KimiSession.oauthClientId)"))
+
+        // The file now carries the rotated pair with unrelated fields intact.
+        let persisted = try #require(
+            try JSONSerialization.jsonObject(with: try Data(contentsOf: credentialFile)) as? [String: Any]
+        )
+        #expect(persisted["access_token"] as? String == "fresh-token")
+        #expect(persisted["refresh_token"] as? String == "rotated-refresh-token")
+        #expect((persisted["expires_at"] as? NSNumber)?.doubleValue == 1_800_000_900)
+        #expect((persisted["expires_in"] as? NSNumber)?.intValue == 900)
+        #expect(persisted["device_id"] as? String == "device-123")
+        #expect(persisted["scope"] as? String == "openid profile")
+        let attributes = try FileManager.default.attributesOfItem(atPath: credentialFile.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.int16Value == 0o600)
+    }
+
+    @Test("Cursor decodes its session JWT and flags expiry")
+    func cursorSessionJWT() throws {
+        func segment(_ json: String) -> String {
+            Data(json.utf8).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        let token = [
+            segment(#"{"alg":"HS256","typ":"JWT"}"#),
+            segment(#"{"sub":"github|1218847","exp":1797031563}"#),
+            "signature",
+        ].joined(separator: ".")
+
+        let session = try #require(UsageSessions.CursorSession.parse(token: token))
+        #expect(session.userId == "github|1218847")
+        #expect(session.expiresAt == Date(timeIntervalSince1970: 1_797_031_563))
+        #expect(!session.isExpired(at: Date(timeIntervalSince1970: 1_797_000_000)))
+        #expect(session.isExpired(at: Date(timeIntervalSince1970: 1_797_031_560)))
+
+        #expect(UsageSessions.CursorSession.parse(token: "not-a-jwt") == nil)
+    }
+
+    @Test("Cursor maps the weekly included budget and monthly spend for unified plans")
+    func cursorUnifiedUsage() throws {
+        let summary = try #require(try JSONSerialization.jsonObject(with: Data("""
+        {"billingCycleStart":"2026-10-01T00:00:00.000Z",
+         "billingCycleEnd":"2026-11-01T00:00:00.000Z",
+         "membershipType":"unified_ultra","limitType":"user","isUnlimited":false,
+         "individualUsage":{
+           "plan":{"enabled":true,"used":0,"limit":55395,"remaining":55395,"totalPercentUsed":0},
+           "onDemand":{"enabled":false,"used":0,"limit":null,"remaining":null}},
+         "teamUsage":{}}
+        """.utf8)) as? [String: Any])
+        let status = try #require(try JSONSerialization.jsonObject(with: Data("""
+        {"availability":"available",
+         "monthlyUsage":{"usedCents":1250,"limitCents":5000,"creditsUsedCents":0,
+                         "periodStart":"2026-10-01T00:00:00.000Z",
+                         "resetsAt":"2026-11-01T00:00:00.000Z"},
+         "weeklyIncludedUsage":{"usedCents":298,"budgetCents":55395,
+                                "periodStart":"2026-10-21T19:18:10.084Z",
+                                "resetsAt":"2026-10-28T19:18:10.084Z"}}
+        """.utf8)) as? [String: Any])
+
+        let usage = CursorUsageAdapter.parse(summary: summary, status: status)
+
+        #expect(usage.planLabel == "Ultra")
+        // The summary plan mirrors the weekly budget (same limit), so only the
+        // weekly bar renders.
+        #expect(usage.windows.map(\.name) == ["Weekly"])
+        let weekly = try #require(usage.windows.first)
+        #expect(abs(weekly.utilization - 298.0 / 55395.0) < 0.000_001)
+        #expect(weekly.resetsAt == UsageJSON.date("2026-10-28T19:18:10.084Z"))
+        let credits = try #require(usage.credits)
+        #expect(credits.used == 12.50)
+        #expect(credits.limit == 50.00)
+        #expect(credits.unit == .currency("USD"))
+    }
+
     @Test("Kimi accepts its current OAuth credential and identifies expired tokens")
     func kimiOAuthCredential() throws {
         let currentData = try #require("""
