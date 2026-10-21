@@ -7,11 +7,12 @@ options:
     # #available toolbar guards), but the Xcode 26 SDK breaks Network.framework
     # for binaries targeting < 26: NWListener pinned to loopback never reaches
     # .ready and AF_UNIX NWConnection (Docker transport) times out. Verified by
-    # A/B at target 15 vs 26 on the same SDK; the Xcode 27 SDK fixes it. Lower
-    # this to "15.0" once CI's pinned toolchain moves to Xcode 27.
+    # A/B at target 15 vs 26 on the same SDK; the Xcode 27 SDK fixes it. The
+    # toolchain now pins Xcode 27, so lower this to "15.0" once the lower
+    # targets are re-validated end to end.
     macOS: "26.0"
     watchOS: "26.0"
-  xcodeVersion: "26.0"
+  xcodeVersion: "27.0"
   generateEmptyDirectories: true
 
 configs:

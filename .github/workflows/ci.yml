@@ -80,10 +80,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Verify supported toolchain
+      - name: Select and verify Xcode 27
         run: |
+          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - name: Lint changed Swift
         run: |
           if [[ -n "${{ github.base_ref }}" ]]; then
@@ -105,14 +107,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
-      - name: Verify supported toolchain
+      - name: Select and verify Xcode 27
         run: |
+          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Validate Chromium artifact lock
         run: |
           bash apple/bin/package-chromiumkit.sh manifest
@@ -149,20 +153,22 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-      - name: Verify supported toolchain
+      - name: Select and verify Xcode 27
         run: |
+          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.cef-download-cache
-          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
       - name: Install the pinned Chromium runtime
         env:
           GH_TOKEN: ${{ github.token }}

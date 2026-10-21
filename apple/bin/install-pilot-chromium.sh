@@ -96,11 +96,11 @@ case "$DESTINATION" in
 esac
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
-  # The pinned runtime requires Xcode 26.x. build-pilot-chromium.sh reads
+  # The pinned runtime requires Xcode 27.x. build-pilot-chromium.sh reads
   # whatever xcode-select points at, which is commonly a newer beta, so select
   # the required toolchain here unless the caller already chose one.
-  if [[ -z "${DEVELOPER_DIR:-}" ]] && ! xcodebuild -version 2>/dev/null | grep -Eq '^Xcode 26\.'; then
-    for candidate in /Applications/Xcode-26*.app/Contents/Developer; do
+  if [[ -z "${DEVELOPER_DIR:-}" ]] && ! xcodebuild -version 2>/dev/null | grep -Eq '^Xcode 27\.'; then
+    for candidate in /Applications/Xcode-27*.app/Contents/Developer; do
       [[ -d "$candidate" ]] || continue
       DEVELOPER_DIR="$candidate"
       export DEVELOPER_DIR

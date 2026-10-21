@@ -36,7 +36,7 @@ bun run ci
 bin/check-docs.sh
 ```
 
-CI runs Apple work on Xcode 26 and Worker work from the frozen Bun lockfile.
+CI runs Apple work on Xcode 27 and Worker work from the frozen Bun lockfile.
 Avoid new unpinned network downloads or Actions. A generated artifact must have
 one authoritative source, a checked-in regeneration path, and a validation
 step.

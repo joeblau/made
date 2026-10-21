@@ -157,16 +157,18 @@ jobs:
               exit 1
             }
           done
-      - name: Verify supported Xcode
+      - name: Select and verify Xcode 27
         run: |
+          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             apple/.release-source-packages
             apple/.release-cef-download-cache
-          key: apple-release-macos-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
+          key: apple-release-macos-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Import Developer ID identity
         shell: bash
         env:
@@ -429,14 +431,16 @@ jobs:
               exit 1
             }
           done
-      - name: Verify supported Xcode
+      - name: Select and verify Xcode 27
         run: |
+          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apple/.release-source-packages
-          key: apple-release-mobile-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift') }}
+          key: apple-release-mobile-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift') }}
       - name: Install App Store Connect API key
         shell: bash
         run: |

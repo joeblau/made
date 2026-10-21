@@ -39,8 +39,9 @@ names and checksums.
 
 ## Prerequisites
 
-- macOS with **Xcode 26.x** selected by `xcode-select` (the version enforced in
-  CI). Xcode 27 previews are not the supported release toolchain.
+- macOS with **Xcode 27.x** selected by `xcode-select` (the version enforced in
+  CI). The pinned GhosttyKit/ChromiumKit binary artifacts are still reproduced
+  on Xcode 26 until they are re-bootstrapped.
 - [Homebrew](https://brew.sh/) for the Apple command-line tool set, including
   Fastlane for reproducible screenshot capture.
 - Git LFS. Current checkouts download GhosttyKit through SwiftPM, while
