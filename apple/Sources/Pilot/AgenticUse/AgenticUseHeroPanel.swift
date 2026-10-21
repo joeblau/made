@@ -21,6 +21,7 @@ struct AgenticUseHeroPanel: View {
         return byProvider
             .map { provider, totals in
                 AgenticProviderGroup(
+                    provider: provider,
                     name: provider?.displayName ?? "Other",
                     totals: totals,
                     cost: totals.reduce(0) { $0 + $1.cost },
@@ -84,6 +85,10 @@ private struct AgenticUseProviderSection: View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
+                    if let provider = group.provider {
+                        Image(provider.brandSymbol)
+                            .foregroundStyle(AgenticUseModelPalette.providerColor(for: provider))
+                    }
                     Text(group.name)
                         .scaledFont(size: 13, weight: .semibold)
                     Spacer(minLength: 8)
@@ -115,6 +120,8 @@ private struct AgenticUseProviderSection: View {
 /// A provider bucket of the hero list, keyed by display name ("Claude",
 /// "Codex", "Grok", "Kimi", or "Other" for unrecognized models).
 struct AgenticProviderGroup: Identifiable {
+    /// nil for the "Other" bucket of unrecognized models.
+    let provider: AgenticProvider?
     let name: String
     let totals: [AgenticModelTotal]
     let cost: Double

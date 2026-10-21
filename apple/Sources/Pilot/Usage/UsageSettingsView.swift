@@ -1,22 +1,26 @@
 import SwiftUI
 
 /// Settings section for AI usage. There are **no keys to enter** — usage is read
-/// from the `claude`, `codex`, `grok`, and `kimi` CLI sessions already on this
-/// Mac. This page shows whether each is signed in and how to sign in if not.
+/// from the `claude`, `codex`, `grok`, and `kimi` CLI sessions and the Cursor
+/// editor's session already on this Mac. This page shows whether each is
+/// signed in and how to sign in if not.
 struct UsageSettingsView: View {
     var showsPageHeader = false
 
     @AppStorage(UsageConsent.claudeKey) private var claudeEnabled = false
     @AppStorage(UsageConsent.codexKey) private var codexEnabled = false
+    @AppStorage(UsageConsent.cursorKey) private var cursorEnabled = false
     @AppStorage(UsageConsent.grokKey) private var grokEnabled = false
     @AppStorage(UsageConsent.kimiKey) private var kimiEnabled = false
     @State private var claudeSignedIn: Bool?
     @State private var codexSignedIn: Bool?
+    @State private var cursorSignedIn: Bool?
     @State private var grokSignedIn: Bool?
     @State private var kimiSignedIn: Bool?
 
     private static let claudeDocsURL = URL(string: "https://code.claude.com/docs/en/overview")!
     private static let codexDocsURL = URL(string: "https://developers.openai.com/codex/cli")!
+    private static let cursorDocsURL = URL(string: "https://cursor.com/docs")!
     private static let grokDocsURL = URL(string: "https://docs.x.ai/build/overview")!
     private static let kimiDocsURL = URL(
         string: "https://www.kimi.ai/help/kimi-code/cli-getting-started"
@@ -69,7 +73,11 @@ struct UsageSettingsView: View {
                 Text(
                     "When enabled, Cockpit reads Kimi Code's credential file under "
                         + "$KIMI_CODE_HOME (or ~/.kimi-code), with legacy ~/.kimi fallback, "
-                        + "and sends its bearer token only to api.kimi.ai/coding/v1/usages."
+                        + "and sends its bearer token only to Kimi's usage and sign-in endpoints. "
+                        + "Kimi's fifteen-minute tokens rotate on refresh, so when the stored token "
+                        + "has expired Cockpit refreshes it and saves the rotated token back to "
+                        + "Kimi Code's own credential file — keeping both Cockpit and the kimi CLI "
+                        + "signed in."
                 )
             }
 
@@ -84,19 +92,39 @@ struct UsageSettingsView: View {
             } footer: {
                 Text(
                     "When enabled, Cockpit reads $GROK_HOME/auth.json (or ~/.grok/auth.json) "
-                        + "and sends its bearer token only to xAI's usage endpoint."
+                        + "and sends its bearer token only to xAI's usage and sign-in endpoints. "
+                        + "Grok's six-hour tokens rotate on refresh, so when the stored token has "
+                        + "expired Cockpit refreshes it and saves the rotated token back to "
+                        + "auth.json — keeping both Cockpit and the grok CLI signed in."
+                )
+            }
+
+            Section {
+                Toggle("Allow Cockpit to read Cursor credentials and usage", isOn: $cursorEnabled)
+                statusRow(enabled: cursorEnabled, signedIn: cursorSignedIn)
+                Link(destination: Self.cursorDocsURL) {
+                    Label("Install & sign in to Cursor", systemImage: "arrow.up.forward.app")
+                }
+            } header: {
+                Text("Cursor")
+            } footer: {
+                Text(
+                    "When enabled, Cockpit reads the Cursor app's local state database "
+                        + "(~/Library/Application Support/Cursor) and sends its session token "
+                        + "only to cursor.com's usage endpoints."
                 )
             }
 
             Section {
                 EmptyView()
             } footer: {
-                Text("All providers are disabled by default. Cockpit does not read auth files, query Keychain, or make usage requests until you enable that provider. Tokens are never stored by Cockpit.")
+                Text("All providers are disabled by default. Cockpit does not read auth files, query Keychain, or make usage requests until you enable that provider. Cockpit keeps no token store of its own; the only credentials it ever writes are Grok's and Kimi's rotated tokens, back into each CLI's own credential file.")
             }
         }
         .task { await detect() }
         .onChange(of: claudeEnabled) { consentChanged() }
         .onChange(of: codexEnabled) { consentChanged() }
+        .onChange(of: cursorEnabled) { consentChanged() }
         .onChange(of: grokEnabled) { consentChanged() }
         .onChange(of: kimiEnabled) { consentChanged() }
     }
@@ -127,17 +155,20 @@ struct UsageSettingsView: View {
     private func detect() async {
         claudeSignedIn = nil
         codexSignedIn = nil
+        cursorSignedIn = nil
         grokSignedIn = nil
         kimiSignedIn = nil
         async let claude = Self.detectClaude(enabled: claudeEnabled)
         async let codex = Self.detectCodex(enabled: codexEnabled)
+        async let cursor = Self.detectCursor(enabled: cursorEnabled)
         async let grok = Self.detectGrok(enabled: grokEnabled)
         async let kimi = Self.detectKimi(enabled: kimiEnabled)
-        let values = await (claude, codex, grok, kimi)
+        let values = await (claude, codex, cursor, grok, kimi)
         claudeSignedIn = claudeEnabled ? values.0 : nil
         codexSignedIn = codexEnabled ? values.1 : nil
-        grokSignedIn = grokEnabled ? values.2 : nil
-        kimiSignedIn = kimiEnabled ? values.3 : nil
+        cursorSignedIn = cursorEnabled ? values.2 : nil
+        grokSignedIn = grokEnabled ? values.3 : nil
+        kimiSignedIn = kimiEnabled ? values.4 : nil
     }
 
     private func consentChanged() {
@@ -153,6 +184,14 @@ struct UsageSettingsView: View {
     private static func detectCodex(enabled: Bool) async -> Bool {
         guard enabled else { return false }
         return await Task.detached { UsageSessions.CodexSession.load() != nil }.value
+    }
+
+    private static func detectCursor(enabled: Bool) async -> Bool {
+        guard enabled else { return false }
+        return await Task.detached {
+            guard let session = UsageSessions.CursorSession.load() else { return false }
+            return !session.isExpired
+        }.value
     }
 
     private static func detectGrok(enabled: Bool) async -> Bool {

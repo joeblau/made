@@ -63,6 +63,7 @@ struct UsageConsentTests {
 
         #expect(!UsageConsent.isClaudeEnabled(defaults: defaults))
         #expect(!UsageConsent.isCodexEnabled(defaults: defaults))
+        #expect(!UsageConsent.isCursorEnabled(defaults: defaults))
         #expect(!UsageConsent.isGrokEnabled(defaults: defaults))
         #expect(!UsageConsent.isKimiEnabled(defaults: defaults))
     }
@@ -77,6 +78,7 @@ struct UsageConsentTests {
             fetchers: .init(
                 claude: { await probe.record("Claude") },
                 codex: { await probe.record("Codex") },
+                cursor: { await probe.record("Cursor") },
                 grok: { await probe.record("Grok") },
                 kimi: { await probe.record("Kimi") }
             )
@@ -88,6 +90,7 @@ struct UsageConsentTests {
         #expect(await probe.recordedProviders().isEmpty)
         #expect(store.anthropic == .disabled)
         #expect(store.openAI == .disabled)
+        #expect(store.anysphere == .disabled)
         #expect(store.xAI == .disabled)
         #expect(store.moonshot == .disabled)
     }
@@ -103,6 +106,7 @@ struct UsageConsentTests {
             fetchers: .init(
                 claude: { .notSignedIn },
                 codex: { await suspendedFetch.run() },
+                cursor: { .notSignedIn },
                 grok: { .notSignedIn },
                 kimi: { .notSignedIn }
             )
@@ -132,6 +136,7 @@ struct UsageConsentTests {
             fetchers: .init(
                 claude: { await probe.record("Claude") },
                 codex: { await probe.record("Codex") },
+                cursor: { await probe.record("Cursor") },
                 grok: { await probe.record("Grok") },
                 kimi: { await probe.record("Kimi") }
             )
@@ -162,6 +167,7 @@ struct UsageConsentTests {
                     _ = await probe.record("Codex")
                     return .rateLimited(retryAfter: 900)
                 },
+                cursor: { .notSignedIn },
                 grok: { .notSignedIn },
                 kimi: { .notSignedIn }
             ),
@@ -199,6 +205,7 @@ struct UsageConsentTests {
             fetchers: .init(
                 claude: { await probe.record("Claude") },
                 codex: { await probe.record("Codex") },
+                cursor: { await probe.record("Cursor") },
                 grok: { await probe.record("Grok") },
                 kimi: { await probe.record("Kimi") }
             )
@@ -212,5 +219,32 @@ struct UsageConsentTests {
         store.reload()
         await store.waitForCurrentLoad()
         #expect(store.moonshot == .disabled)
+    }
+
+    @Test("Cursor credential access is independently opted in and revocable")
+    func cursorConsentIsIndependentAndRevocable() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: UsageConsent.cursorKey)
+        let probe = FetchProbe()
+        let store = UsageStore(
+            defaults: defaults,
+            fetchers: .init(
+                claude: { await probe.record("Claude") },
+                codex: { await probe.record("Codex") },
+                cursor: { await probe.record("Cursor") },
+                grok: { await probe.record("Grok") },
+                kimi: { await probe.record("Kimi") }
+            )
+        )
+
+        store.reload()
+        await store.waitForCurrentLoad()
+
+        #expect(await probe.recordedProviders() == ["Cursor"])
+        defaults.set(false, forKey: UsageConsent.cursorKey)
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(store.anysphere == .disabled)
     }
 }

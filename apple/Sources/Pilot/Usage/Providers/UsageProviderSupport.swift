@@ -49,6 +49,43 @@ enum UsageHTTP {
         return object
     }
 
+    /// POST a `application/x-www-form-urlencoded` body and parse the JSON
+    /// reply — the shape of an OAuth token-endpoint grant. Extra `headers`
+    /// are applied after the defaults, so a caller can override them (some
+    /// token endpoints reject a generic `User-Agent`).
+    static func postForm(
+        url: URL,
+        fields: [String: String],
+        headers: [String: String] = [:],
+        transport: Transport
+    ) async throws -> [String: Any] {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 20
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        request.httpBody = fields
+            .sorted { $0.key < $1.key }
+            .map { key, value in
+                let encoded = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+                return "\(key)=\(encoded)"
+            }
+            .joined(separator: "&")
+            .data(using: .utf8)
+        let (data, response) = try await transport(request)
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap { Double($0) }
+            throw UsageFetchError.http(status: http.statusCode, retryAfter: retryAfter)
+        }
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw UsageFetchError.malformed
+        }
+        return object
+    }
+
     /// Turn a thrown fetch error into a `ProviderFetch`, routing 429s to the
     /// backoff path and everything else to a displayable failure.
     static func classify(_ error: Error, provider: String, cli: String) -> ProviderFetch {

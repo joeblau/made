@@ -49,10 +49,36 @@ struct UsageProviderAdapterTests {
         authMode: "oidc",
         email: nil,
         teamId: nil,
-        expiresAt: nil
+        expiresAt: nil,
+        refreshToken: nil,
+        oidcClientId: nil,
+        oidcIssuer: nil
+    )
+    private static let expiredGrokSession = UsageSessions.GrokSession(
+        accessToken: "grok-stale-token",
+        scope: "https://auth.x.ai::client-id",
+        authMode: "oidc",
+        email: nil,
+        teamId: nil,
+        expiresAt: Date(timeIntervalSince1970: 1),
+        refreshToken: "grok-refresh-token",
+        oidcClientId: "client-id",
+        oidcIssuer: "https://auth.x.ai"
     )
     private static let kimiSession = UsageSessions.KimiSession(
         accessToken: "kimi-token",
+        expiresAt: nil
+    )
+    private static let kimiCredentialFile = URL(fileURLWithPath: "/nonexistent/kimi-code.json")
+    private static let expiredKimiSession = UsageSessions.KimiSession(
+        accessToken: "kimi-stale-token",
+        expiresAt: Date(timeIntervalSince1970: 1),
+        refreshToken: "kimi-refresh-token",
+        fileURL: kimiCredentialFile
+    )
+    private static let cursorSession = UsageSessions.CursorSession(
+        accessToken: "cursor-token",
+        userId: "github|1218847",
         expiresAt: nil
     )
 
@@ -69,6 +95,7 @@ struct UsageProviderAdapterTests {
         let results = [
             await ClaudeUsageAdapter.fetch(session: nil, transport: transport),
             await CodexUsageAdapter.fetch(session: nil, transport: transport),
+            await CursorUsageAdapter.fetch(session: nil, transport: transport),
             await GrokUsageAdapter.fetch(session: nil, clientVersion: nil, transport: transport),
             await KimiUsageAdapter.fetch(session: nil, transport: transport),
         ]
@@ -95,13 +122,21 @@ struct UsageProviderAdapterTests {
             accessToken: "kimi-token",
             expiresAt: Date(timeIntervalSince1970: 1)
         )
+        let expiredCursor = UsageSessions.CursorSession(
+            accessToken: "cursor-token",
+            userId: "github|1218847",
+            expiresAt: Date(timeIntervalSince1970: 1)
+        )
 
         let claude = await ClaudeUsageAdapter.fetch(session: unscoped, transport: transport)
         let kimi = await KimiUsageAdapter.fetch(session: expired, transport: transport)
+        let cursor = await CursorUsageAdapter.fetch(session: expiredCursor, transport: transport)
 
         #expect(failureMessage(claude)
             == "Claude: this session lacks the user:profile scope — re-run `claude` to sign in.")
         #expect(failureMessage(kimi) == "Kimi: session expired — re-run `kimi login` to sign in.")
+        #expect(failureMessage(cursor)
+            == "Cursor: session expired — sign in to the Cursor app, then refresh.")
         #expect(await stub.requests.isEmpty)
     }
 
@@ -168,6 +203,187 @@ struct UsageProviderAdapterTests {
             == GrokUsageAdapter.fallbackClientVersion)
         #expect(request.value(forHTTPHeaderField: "User-Agent")
             == "grok/\(GrokUsageAdapter.fallbackClientVersion)")
+    }
+
+    @Test("Cursor sends the dashboard session cookie to both usage endpoints")
+    func cursorRequestAndParse() async throws {
+        let stub = StubTransport(body: """
+        {"membershipType":"unified_ultra",
+         "billingCycleStart":"2026-10-01T00:00:00.000Z",
+         "billingCycleEnd":"2026-11-01T00:00:00.000Z",
+         "individualUsage":{"plan":{"enabled":true,"limit":55395,"totalPercentUsed":12},
+                            "onDemand":{"enabled":false,"used":0,"limit":null}}}
+        """)
+
+        let result = await CursorUsageAdapter.fetch(
+            session: Self.cursorSession,
+            transport: await stub.transport
+        )
+
+        guard case .success(let usage) = result else {
+            Issue.record("Expected success, got \(result)")
+            return
+        }
+        #expect(usage.planLabel == "Ultra")
+        #expect(usage.windows.map(\.name) == ["Monthly"])
+        #expect(usage.windows.first?.utilization == 0.12)
+        let requests = await stub.requests
+        #expect(requests.map(\.url) == [
+            CursorUsageAdapter.summaryEndpoint,
+            CursorUsageAdapter.statusEndpoint,
+        ])
+        for request in requests {
+            #expect(request.value(forHTTPHeaderField: "Cookie")
+                == "WorkosCursorSessionToken=github%7C1218847%3A%3Acursor-token")
+        }
+    }
+
+    @Test("An expired Grok session refreshes before the request instead of failing")
+    func grokExpiredSessionRefreshes() async throws {
+        let stub = StubTransport(body: #"{"config":{"creditUsagePercent":25}}"#)
+        let refreshed = Self.grokSession
+
+        let result = await GrokUsageAdapter.fetch(
+            session: Self.expiredGrokSession,
+            clientVersion: nil,
+            transport: await stub.transport,
+            refresh: { _ in refreshed }
+        )
+
+        guard case .success(let usage) = result else {
+            Issue.record("Expected success, got \(result)")
+            return
+        }
+        #expect(usage.windows.first?.utilization == 0.25)
+        let request = try #require(await stub.requests.first)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer grok-token")
+    }
+
+    @Test("A failed Grok refresh reports the expiry without hitting the usage endpoint")
+    func grokFailedRefreshReportsExpiry() async {
+        let stub = StubTransport()
+
+        let result = await GrokUsageAdapter.fetch(
+            session: Self.expiredGrokSession,
+            clientVersion: nil,
+            transport: await stub.transport,
+            refresh: { _ in nil }
+        )
+
+        #expect(failureMessage(result) == "Grok: session expired — re-run `grok` to sign in.")
+        #expect(await stub.requests.isEmpty)
+    }
+
+    @Test("A Grok token revoked ahead of expiry gets one refresh-and-retry")
+    func grokEarlyRevocationRetriesOnce() async {
+        let stub = StubTransport(status: 401)
+        let revivableSession = UsageSessions.GrokSession(
+            accessToken: "grok-revoked-token",
+            scope: "https://auth.x.ai::client-id",
+            authMode: "oidc",
+            email: nil,
+            teamId: nil,
+            expiresAt: Date().addingTimeInterval(3600),
+            refreshToken: "grok-refresh-token",
+            oidcClientId: "client-id",
+            oidcIssuer: nil
+        )
+
+        let result = await GrokUsageAdapter.fetch(
+            session: revivableSession,
+            clientVersion: nil,
+            transport: await stub.transport,
+            refresh: { _ in Self.grokSession }
+        )
+
+        // Both attempts 401 here; the point is exactly one retry, no loop.
+        #expect(failureMessage(result) == "Grok: session expired — re-run `grok` to sign in.")
+        let requests = await stub.requests
+        #expect(requests.count == 2)
+        #expect(requests.last?.value(forHTTPHeaderField: "Authorization") == "Bearer grok-token")
+    }
+
+    @Test("An expired Kimi session refreshes before the request instead of failing")
+    func kimiExpiredSessionRefreshes() async throws {
+        let stub = StubTransport(body: #"{"usage":{"limit":100,"used":25}}"#)
+        let refreshed = Self.kimiSession
+
+        let result = await KimiUsageAdapter.fetch(
+            session: Self.expiredKimiSession,
+            transport: await stub.transport,
+            refresh: { _ in refreshed }
+        )
+
+        guard case .success(let usage) = result else {
+            Issue.record("Expected success, got \(result)")
+            return
+        }
+        #expect(usage.windows.first?.utilization == 0.25)
+        let request = try #require(await stub.requests.first)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer kimi-token")
+    }
+
+    @Test("Kimi labels the card with the account endpoint's membership tier")
+    func kimiPlanLabelFromAccountEndpoint() async throws {
+        let usagesBody = Data(#"{"usage":{"limit":100,"used":22}}"#.utf8)
+        let accountBody = Data(#"{"user_level_name":"Vivace","user_level":30}"#.utf8)
+        let transport: UsageHTTP.Transport = { request in
+            let body = request.url == KimiUsageAdapter.accountEndpoint ? accountBody : usagesBody
+            let response = HTTPURLResponse(
+                url: request.url ?? URL(fileURLWithPath: "/"),
+                statusCode: 200,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+            )!
+            return (body, response)
+        }
+
+        let result = await KimiUsageAdapter.fetch(session: Self.kimiSession, transport: transport)
+
+        guard case .success(let usage) = result else {
+            Issue.record("Expected success, got \(result)")
+            return
+        }
+        // The account endpoint's exact tier name wins over any in-payload guess.
+        #expect(usage.planLabel == "Vivace")
+        #expect(usage.windows.first?.utilization == 0.22)
+    }
+
+    @Test("A failed Kimi refresh reports the expiry without hitting the usage endpoint")
+    func kimiFailedRefreshReportsExpiry() async {
+        let stub = StubTransport()
+
+        let result = await KimiUsageAdapter.fetch(
+            session: Self.expiredKimiSession,
+            transport: await stub.transport,
+            refresh: { _ in nil }
+        )
+
+        #expect(failureMessage(result) == "Kimi: session expired — re-run `kimi login` to sign in.")
+        #expect(await stub.requests.isEmpty)
+    }
+
+    @Test("A Kimi token revoked ahead of expiry gets one refresh-and-retry")
+    func kimiEarlyRevocationRetriesOnce() async {
+        let stub = StubTransport(status: 401)
+        let revivableSession = UsageSessions.KimiSession(
+            accessToken: "kimi-revoked-token",
+            expiresAt: Date().addingTimeInterval(600),
+            refreshToken: "kimi-refresh-token",
+            fileURL: Self.kimiCredentialFile
+        )
+
+        let result = await KimiUsageAdapter.fetch(
+            session: revivableSession,
+            transport: await stub.transport,
+            refresh: { _ in Self.kimiSession }
+        )
+
+        // Both attempts 401 here; the point is exactly one retry, no loop.
+        #expect(failureMessage(result) == "Kimi: session expired — re-run `kimi login` to sign in.")
+        let requests = await stub.requests
+        #expect(requests.count == 2)
+        #expect(requests.last?.value(forHTTPHeaderField: "Authorization") == "Bearer kimi-token")
     }
 
     @Test("429 responses carry the server Retry-After hint to the backoff policy")

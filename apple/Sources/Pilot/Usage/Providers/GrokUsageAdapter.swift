@@ -7,12 +7,49 @@ enum GrokUsageAdapter {
     static let endpoint = URL(string: "https://cli-chat-proxy.grok.com/v1/billing?format=credits")!
     static let fallbackClientVersion = "0.2.93"
 
+    /// Refreshes the Grok session; injectable so tests never touch the real
+    /// token endpoint or credential file.
+    typealias Refresh = @Sendable (UsageSessions.GrokSession) async -> UsageSessions.GrokSession?
+
+    static let liveRefresh: Refresh = { session in
+        await UsageSessions.GrokSession.refresh(session: session)
+    }
+
     static func fetch(
         session: UsageSessions.GrokSession?,
         clientVersion: String?,
-        transport: UsageHTTP.Transport = UsageHTTP.live
+        transport: UsageHTTP.Transport = UsageHTTP.live,
+        refresh: Refresh? = nil
     ) async -> ProviderFetch {
-        guard let session else { return .notSignedIn }
+        guard var session else { return .notSignedIn }
+
+        // Grok access tokens last six hours, so an expired session is the
+        // steady state between CLI runs — revive it instead of surfacing it.
+        var didRefresh = false
+        if session.isExpired, session.canRefresh, let refresh {
+            guard let refreshed = await refresh(session) else {
+                return .failure("Grok: session expired — re-run `grok` to sign in.")
+            }
+            session = refreshed
+            didRefresh = true
+        }
+
+        var result = await request(session: session, clientVersion: clientVersion, transport: transport)
+        // A 401/403 ahead of the recorded expiry means the token was revoked
+        // early; one refresh-and-retry covers it without risking a loop.
+        if case .failure = result, isAuthFailure(result), !didRefresh,
+           session.canRefresh, let refresh,
+           let refreshed = await refresh(session) {
+            result = await request(session: refreshed, clientVersion: clientVersion, transport: transport)
+        }
+        return result
+    }
+
+    private static func request(
+        session: UsageSessions.GrokSession,
+        clientVersion: String?,
+        transport: UsageHTTP.Transport
+    ) async -> ProviderFetch {
         let clientVersion = clientVersion ?? fallbackClientVersion
         let headers = [
             "Authorization": "Bearer \(session.accessToken)",
@@ -27,6 +64,11 @@ enum GrokUsageAdapter {
         } catch {
             return UsageHTTP.classify(error, provider: "Grok", cli: "grok")
         }
+    }
+
+    private static func isAuthFailure(_ fetch: ProviderFetch) -> Bool {
+        guard case .failure(let message) = fetch else { return false }
+        return message.contains("session expired")
     }
 
     static func parse(

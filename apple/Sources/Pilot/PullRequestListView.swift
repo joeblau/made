@@ -42,14 +42,20 @@ struct InspectorSectionHeader: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            if isLoading {
+            if isLoading, refresh == nil {
                 ProgressView()
                     .controlSize(.mini)
             }
 
             Spacer(minLength: 8)
 
-            if let refresh {
+            if isLoading, refresh != nil {
+                // Activity replaces the refresh control in place, so the
+                // feedback appears exactly where the user just clicked.
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 17, height: 17)
+            } else if let refresh {
                 Button(action: refresh) {
                     Image(systemName: "arrow.clockwise")
                         .scaledFont(size: 13)
