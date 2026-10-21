@@ -104,7 +104,8 @@ jobs:
   macos:
     name: Signed and notarized Pilot
     needs: release-metadata
-    runs-on: macos-26
+    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
+    runs-on: xcode-27
     environment: apple-release
     timeout-minutes: 240
     permissions:
@@ -157,10 +158,8 @@ jobs:
               exit 1
             }
           done
-      - name: Select and verify Xcode 27
+      - name: Verify supported Xcode
         run: |
-          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -397,7 +396,8 @@ jobs:
     name: TestFlight (${{ matrix.scheme }})
     needs: release-metadata
     if: ${{ github.event_name == 'push' }}
-    runs-on: macos-26
+    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
+    runs-on: xcode-27
     environment: apple-release
     timeout-minutes: 120
     strategy:
@@ -431,10 +431,8 @@ jobs:
               exit 1
             }
           done
-      - name: Select and verify Xcode 27
+      - name: Verify supported Xcode
         run: |
-          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

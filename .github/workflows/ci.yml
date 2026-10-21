@@ -75,15 +75,14 @@ jobs:
   apple-lint:
     needs: changes
     if: needs.changes.outputs.apple == 'true'
-    runs-on: macos-26
+    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
+    runs-on: xcode-27
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: Select and verify Xcode 27
+      - name: Verify supported toolchain
         run: |
-          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
       - name: Lint changed Swift
@@ -97,7 +96,8 @@ jobs:
   apple-build-test:
     needs: changes
     if: needs.changes.outputs.apple == 'true'
-    runs-on: macos-26
+    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
+    runs-on: xcode-27
     # A hung xcodebuild otherwise burns the 6-hour runner default (seen when a
     # deployment-target change stalled Network.framework-dependent tests).
     timeout-minutes: 90
@@ -107,10 +107,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
-      - name: Select and verify Xcode 27
+      - name: Verify supported toolchain
         run: |
-          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -142,7 +140,8 @@ jobs:
   apple-chromium-smoke:
     needs: changes
     if: needs.changes.outputs.apple == 'true'
-    runs-on: macos-26
+    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
+    runs-on: xcode-27
     permissions:
       attestations: read
       contents: read
@@ -153,10 +152,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-      - name: Select and verify Xcode 27
+      - name: Verify supported toolchain
         run: |
-          # macos-26 images still default to Xcode 26; Xcode 27 ships alongside.
-          sudo xcode-select -s "$(ls -d /Applications/Xcode_27*.app | sort -V | tail -n 1)/Contents/Developer"
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
