@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XCTest
 @testable import Pilot
 
 /// The assembler parses bytes an untrusted device controls, so these tests are
@@ -242,6 +243,44 @@ struct H264AnnexBAssemblerTests {
     }
 
     @Test
+    func chunkedFeedsMatchOneShotFeed() throws {
+        // Large single-slice NALUs whose payloads embed zero runs (00 00 02 /
+        // 00 00 00 02 — never a start code) so every chunk boundary lands in
+        // the scanner's trickiest state, including NAL bytes and start codes
+        // split across feed boundaries.
+        var bigIDR = Data([0x65, 0xB8])
+        var bigP = Data([0x41, 0x9A])
+        for i in 0..<4_096 {
+            bigIDR.append(contentsOf: [0, 0, 2, UInt8(truncatingIfNeeded: i) | 1])
+            bigP.append(contentsOf: [0, 0, 0, 2, UInt8(truncatingIfNeeded: i) | 1])
+        }
+        let full = stream([sps, pps, bigIDR, bigP, pSlice])
+
+        var oneShot = H264AnnexBAssembler()
+        var expected = try oneShot.feed(full)
+        expected += try oneShot.flushTrailing()
+        #expect(expected.count == 4)  // parameter sets + three access units
+        #expect(expected[0] == .parameterSets(sps: sps, pps: pps))
+        guard case .accessUnit(let idrData, true) = expected[1] else {
+            Issue.record("expected IDR access unit"); return
+        }
+        #expect(idrData.dropFirst(4) == bigIDR)
+
+        for chunkSize in [1, 2, 3, 4, 5, 7, 64, 1_024] {
+            var assembler = H264AnnexBAssembler()
+            var events: [H264AnnexBAssembler.Event] = []
+            var offset = 0
+            while offset < full.count {
+                let next = min(offset + chunkSize, full.count)
+                events += try assembler.feed(full.subdata(in: offset..<next))
+                offset = next
+            }
+            events += try assembler.flushTrailing()
+            #expect(events == expected, "chunk size \(chunkSize)")
+        }
+    }
+
+    @Test
     func zeroLengthNALUsAreDropped() throws {
         var assembler = H264AnnexBAssembler()
         // Two adjacent start codes produce a zero-length NALU between them.
@@ -254,5 +293,53 @@ struct H264AnnexBAssemblerTests {
         events += try assembler.flushTrailing()
         let accessUnits = events.filter { if case .accessUnit = $0 { true } else { false } }
         #expect(accessUnits.count == 1)
+    }
+}
+
+/// Throughput benchmark for the start-code scanner: a few MB of synthetic
+/// annex-B fed in 64 KB chunks, the shape of a keyframe arriving across many
+/// pipe reads — the case the assembler's scan watermark exists for. XCTest
+/// because Swift Testing has no `measure` equivalent.
+final class H264AnnexBAssemblerPerformanceTests: XCTestCase {
+    func testChunkedFeedThroughput() {
+        var full = Data()
+        full.append(contentsOf: [0, 0, 0, 1, 0x67, 0x42, 0xC0, 0x32, 0x8D, 0x68])
+        full.append(contentsOf: [0, 0, 0, 1, 0x68, 0xCE, 0x01, 0xA8])
+        // Payload bytes are never zero, so the only start codes are the real
+        // ones; each ~512 KB NALU stays buffered across several feeds.
+        var payload = Data(capacity: 512 * 1_024)
+        for i in 0..<(512 * 1_024) {
+            payload.append(UInt8(truncatingIfNeeded: i) | 1)
+        }
+        for i in 0..<8 {
+            full.append(contentsOf: [0, 0, 0, 1, i == 0 ? 0x65 : 0x41, 0xB8])
+            full.append(payload)
+        }
+        let chunkSize = 64 * 1_024
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < full.count {
+            let next = min(offset + chunkSize, full.count)
+            chunks.append(full.subdata(in: offset..<next))
+            offset = next
+        }
+
+        measure {
+            var assembler = H264AnnexBAssembler()
+            var accessUnits = 0
+            do {
+                for chunk in chunks {
+                    for event in try assembler.feed(chunk) {
+                        if case .accessUnit = event { accessUnits += 1 }
+                    }
+                }
+                for event in try assembler.flushTrailing() {
+                    if case .accessUnit = event { accessUnits += 1 }
+                }
+            } catch {
+                XCTFail("feed threw: \(error)")
+            }
+            XCTAssertEqual(accessUnits, 8)
+        }
     }
 }

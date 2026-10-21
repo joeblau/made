@@ -235,6 +235,10 @@ private struct NoteEditor: View {
     let wordWrapColumns: Int?
     let onCopySecret: () -> Void
     @Environment(\.uiZoom) private var uiZoom
+    /// Pending debounced save. Saving synchronously in `onChange` paid a SQLite
+    /// write transaction per keystroke; typing reschedules this instead, and
+    /// SwiftData's main-context autosave backstops durability while it waits.
+    @State private var pendingSave: DispatchWorkItem?
 
     var body: some View {
         NoteTextView(
@@ -245,8 +249,42 @@ private struct NoteEditor: View {
         )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .onChange(of: note.body) {
-                _ = note.modelContext?.saveReporting(operation: "Saving note")
+                scheduleSave()
             }
+            // The editor is recreated per note (`.id(note.id)` above), so a
+            // pending save must flush — not cancel — on note switch/teardown,
+            // when the app resigns active, and at termination. Cmd-Q posts
+            // willTerminate (not willResignActive) and SwiftUI does not
+            // reliably run onDisappear during process exit, so without the
+            // willTerminate flush the last debounce window of typing would
+            // die with the pending work item.
+            .onDisappear { flushPendingSave() }
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.willResignActiveNotification
+            )) { _ in
+                flushPendingSave()
+            }
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.willTerminateNotification
+            )) { _ in
+                flushPendingSave()
+            }
+    }
+
+    private func scheduleSave() {
+        pendingSave?.cancel()
+        let work = DispatchWorkItem { [note] in
+            _ = note.modelContext?.saveReporting(operation: "Saving note")
+        }
+        pendingSave = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+    }
+
+    private func flushPendingSave() {
+        guard let work = pendingSave else { return }
+        work.cancel()
+        pendingSave = nil
+        _ = note.modelContext?.saveReporting(operation: "Saving note")
     }
 }
 
@@ -1267,6 +1305,10 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
         guard !isReordering, let textStorage else { return }
         let ns = string as NSString
         guard ns.length > 0 else { return }
+        // A table needs a pipe somewhere; checking before the caret-line scan
+        // (not just inside `reflow`) keeps pipe-free notes allocation-free on
+        // every keystroke.
+        guard string.contains("|") else { return }
 
         let skip: Set<Int> = protectingCaret ? caretLineIndices() : []
         guard let newText = MarkdownTableFormatter.reflow(string, skipLines: skip) else { return }
@@ -1307,15 +1349,26 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
         for value in selectedRanges {
             let r = value.rangeValue
             let start = lineIndex(at: min(r.location, ns.length), in: ns)
-            let end = lineIndex(at: min(r.location + r.length, ns.length), in: ns)
+            let end = r.length == 0
+                ? start
+                : lineIndex(at: min(r.location + r.length, ns.length), in: ns)
             for i in start...end { indices.insert(i) }
         }
         return indices
     }
 
+    /// Newlines before `location`, counted over the raw UTF-16 units. This runs
+    /// per keystroke (via `formatMarkdownTables`), so it must not materialize a
+    /// prefix substring and walk it grapheme-by-grapheme like
+    /// `substring(to:).reduce` did — O(doc) allocation per call.
     private func lineIndex(at location: Int, in ns: NSString) -> Int {
-        guard location > 0 else { return 0 }
-        return ns.substring(to: min(location, ns.length)).reduce(0) { $0 + ($1 == "\n" ? 1 : 0) }
+        let length = min(location, ns.length)
+        guard length > 0 else { return 0 }
+        var buffer = [unichar](repeating: 0, count: length)
+        ns.getCharacters(&buffer, range: NSRange(location: 0, length: length))
+        var newlines = 0
+        for unit in buffer where unit == 0x0A { newlines += 1 }
+        return newlines
     }
 
     private func splitSelectionIntoLines() {

@@ -802,10 +802,13 @@ struct ContentView: View {
         .onChange(of: store.selectedWorkspaceID) {
             branchStore.refresh(branchTargets(in: store.workspaces))
         }
-        // Refetch usage the moment the inspector switches to the Usage tab, so a
-        // key just saved in Settings shows results without waiting for the poll.
+        // Re-aim inspector polling the moment the tab changes: each store fetches
+        // its list once and only the visible tab keeps polling, so a parked tab
+        // costs no `gh` spawns. Usage refetches so a key just saved in Settings
+        // shows results without waiting for the poll.
         .onChange(of: store.selectedWorkspace?.inspectorTab) { _, tab in
             if tab == .usage { usageStore.reload() }
+            syncInspectorTab(tab)
         }
         .onAppear { installNotesToggleMonitor() }
         .onDisappear {
@@ -1167,8 +1170,16 @@ struct ContentView: View {
             return
         }
 
-        gitStore.startWatching(directory: repoPath)
-        tasksStore.load(directory: repoPath)
+        let tab = store.selectedWorkspace?.inspectorTab ?? .actions
+        gitStore.startWatching(directory: repoPath, visibleTab: tab)
+        tasksStore.load(directory: repoPath, isVisible: tab == .tasks)
+    }
+
+    private func syncInspectorTab(_ tab: InspectorTab?) {
+        guard isInspectorPresentedForSelectedWorkspace,
+              let repoPath = selectedWorkspaceRootPath else { return }
+        gitStore.setVisibleTab(tab ?? .actions)
+        tasksStore.load(directory: repoPath, isVisible: tab == .tasks)
     }
 }
 

@@ -242,6 +242,19 @@ struct ProcessRunnerTests {
         }
     }
 
+    @Test("Event-wait timeouts round up and saturate for poll(2)")
+    func pollMillisecondsConversion() {
+        #expect(ProcessRunner.pollMilliseconds(for: .zero) == 0)
+        #expect(ProcessRunner.pollMilliseconds(for: .milliseconds(-5)) == 0)
+        // Sub-millisecond remainders must round up: a zero-millisecond poll
+        // would busy-spin until the deadline instead of blocking.
+        #expect(ProcessRunner.pollMilliseconds(for: .microseconds(1)) == 1)
+        #expect(ProcessRunner.pollMilliseconds(for: .microseconds(10_500)) == 11)
+        #expect(ProcessRunner.pollMilliseconds(for: .milliseconds(10)) == 10)
+        #expect(ProcessRunner.pollMilliseconds(for: .seconds(20)) == 20_000)
+        #expect(ProcessRunner.pollMilliseconds(for: .seconds(1 << 40)) == Int32.max)
+    }
+
     @Test("Both output streams drain concurrently and enforce caps")
     func largeOutput() async throws {
         let script = "i=0; while [ $i -lt 8000 ]; do printf 0123456789abcdef; printf fedcba9876543210 >&2; i=$((i+1)); done"

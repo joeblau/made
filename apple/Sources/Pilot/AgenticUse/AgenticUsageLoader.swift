@@ -11,11 +11,13 @@ import Foundation
 ///   (or `$KIMI_DATA_DIR`).
 ///
 /// The corpus is large (thousands of files, gigabytes of append-only logs),
-/// so files parse in parallel off the main actor and an in-memory
+/// so files parse in parallel off the main actor and a
 /// `(path, size, mtime)` cache makes every load after the first near-instant
-/// — unchanged files never re-parse. The logs are untrusted input: files
-/// stream with bounded lines, malformed lines are skipped, and no
-/// single bad file fails a load.
+/// — unchanged files never re-parse. The cache persists to disk (versioned,
+/// written off the load path) so relaunches only parse files that changed
+/// since the last run. The logs are untrusted input: files stream with
+/// bounded lines, malformed lines are skipped, and no single bad file fails
+/// a load. The persisted cache gets the same treatment on restore.
 actor AgenticUsageLoader {
     /// One scan root and the parser its files get.
     struct Source: Sendable {
@@ -40,6 +42,10 @@ actor AgenticUsageLoader {
         /// Files that could not be read.
         let unreadableFileCount: Int
         var skippedLineCount: Int = 0
+        /// False when no source file changed since the previous load and
+        /// `records` is the previous array verbatim — the store can skip
+        /// re-ingesting it.
+        var changed: Bool = true
     }
 
     enum LoadError: Error, LocalizedError {
@@ -68,7 +74,7 @@ actor AgenticUsageLoader {
         var skippedLineCount: Int = 0
     }
 
-    private struct CacheEntry {
+    private struct CacheEntry: Codable, Sendable {
         let size: Int
         let modificationDate: Date
         let records: [AgenticUsageRecord]
@@ -81,10 +87,25 @@ actor AgenticUsageLoader {
     private static let minLineBytes = 24
 
     private let sources: [Source]
+    /// `nil` disables the disk cache (parse-only tests).
+    private let cacheURL: URL?
     private var cache: [String: CacheEntry] = [:]
+    private var restoredPersistedCache = false
+    private var cacheDirty = false
+    private var saveTask: Task<Void, Never>?
+    /// Supersession marker for debounced saves: only the newest scheduled
+    /// snapshot may write.
+    private var saveGeneration = 0
+    /// Nothing may hit the disk before this instant; `nil` means a write has
+    /// never landed, so the first save goes out immediately.
+    private var nextSaveAllowedAt: ContinuousClock.Instant?
+    /// The previous dedup/sort product, returned verbatim when nothing
+    /// changed on disk.
+    private var lastRecords: [AgenticUsageRecord]?
 
-    init(sources: [Source] = AgenticUsageLoader.defaultSources()) {
+    init(sources: [Source] = AgenticUsageLoader.defaultSources(), cacheURL: URL? = nil) {
         self.sources = sources
+        self.cacheURL = cacheURL
     }
 
     /// The standard scan roots, honoring each CLI's data-dir override.
@@ -139,9 +160,15 @@ actor AgenticUsageLoader {
     /// initial determinate progress bar. Cancelling the surrounding task
     /// aborts between files with `CancellationError`.
     func load(onProgress: (@Sendable (_ scanned: Int, _ total: Int) -> Void)? = nil) async throws -> LoadResult {
+        restorePersistedCacheIfNeeded()
         let files = try discoverFiles()
         guard !files.isEmpty else {
-            cache = [:]
+            if !cache.isEmpty {
+                cache = [:]
+                cacheDirty = true
+                scheduleCacheSave()
+            }
+            lastRecords = nil
             return LoadResult(records: [], fileCount: 0, unreadableFileCount: 0)
         }
 
@@ -166,6 +193,7 @@ actor AgenticUsageLoader {
         )
 
         var unreadableCount = 0
+        var cacheChanged = false
         for outcome in outcomes {
             if let records = outcome.records {
                 cache[outcome.job.path] = CacheEntry(
@@ -174,15 +202,36 @@ actor AgenticUsageLoader {
                     records: records,
                     skippedLineCount: outcome.skippedLineCount
                 )
+                cacheChanged = true
             } else {
-                cache[outcome.job.path] = nil
+                // Unreadable files are never cached, so a file that fails
+                // every refresh usually removes an absent key: only a real
+                // removal dirties the persisted blob.
+                if cache.removeValue(forKey: outcome.job.path) != nil { cacheChanged = true }
                 unreadableCount += 1
             }
         }
 
         // Drop cache entries for files deleted since the last load.
         let livePaths = Set(files.map(\.path))
+        let countBeforeDrop = cache.count
         cache = cache.filter { livePaths.contains($0.key) }
+        let droppedDeletedFiles = cache.count != countBeforeDrop
+        if cacheChanged || droppedDeletedFiles { cacheDirty = true }
+        scheduleCacheSave()
+
+        let skippedLineCount = cache.values.reduce(0) { $0 + $1.skippedLineCount }
+        // Nothing on disk changed since the last load: the previous
+        // dedup/sort result is still exact, so skip rebuilding it.
+        if pending.isEmpty, !droppedDeletedFiles, let lastRecords {
+            return LoadResult(
+                records: lastRecords,
+                fileCount: files.count,
+                unreadableFileCount: 0,
+                skippedLineCount: skippedLineCount,
+                changed: false
+            )
+        }
 
         // Flatten in stable path order so dedup is deterministic, then dedup
         // across ALL files before any date filtering happens.
@@ -194,12 +243,114 @@ actor AgenticUsageLoader {
         }
         var records = Self.deduplicate(all)
         records.sort { $0.timestamp < $1.timestamp }
+        lastRecords = records
         return LoadResult(
             records: records,
             fileCount: files.count,
             unreadableFileCount: unreadableCount,
-            skippedLineCount: cache.values.reduce(0) { $0 + $1.skippedLineCount }
+            skippedLineCount: skippedLineCount
         )
+    }
+
+    // MARK: - Disk cache
+
+    /// Mirror of `cache` persisted across launches so a relaunch only
+    /// re-parses files whose (size, mtime) changed. It regenerates from the
+    /// logs, so a missing, corrupt, oversized, or stale-version blob is a
+    /// cold start, never an error.
+    private struct PersistedCache: Codable, Sendable {
+        let version: Int
+        let entries: [String: CacheEntry]
+    }
+
+    /// Bump whenever a provider parser, a dedup heuristic, or an
+    /// `AgenticUsageRecord` field changes, so stale parses can't silently
+    /// misreport costs.
+    private static let persistedCacheVersion = 1
+    /// The persisted blob is untrusted input like any other file: bound what
+    /// restore will read and decode, and what save will write.
+    private static let maxPersistedCacheBytes = 256 * 1024 * 1024
+    private static let maxPersistedRecordCount = 5_000_000
+
+    nonisolated static func defaultCacheURL() -> URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("app.blau.pilot/agentic-usage-cache.json")
+    }
+
+    private func restorePersistedCacheIfNeeded() {
+        guard !restoredPersistedCache else { return }
+        restoredPersistedCache = true
+        guard let cacheURL,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: cacheURL.path),
+              let size = attributes[.size] as? Int, size <= Self.maxPersistedCacheBytes,
+              let data = try? Data(contentsOf: cacheURL),
+              let persisted = try? JSONDecoder().decode(PersistedCache.self, from: data),
+              persisted.version == Self.persistedCacheVersion,
+              persisted.entries.values.reduce(0, { $0 + $1.records.count }) <= Self.maxPersistedRecordCount
+        else { return }
+        // Unreadable files were never cached, so they retry naturally; stale
+        // entries fall to the size/mtime check or the deleted-file filter.
+        cache = persisted.entries
+    }
+
+    /// The persisted blob is the whole corpus (tens of MB), and a visible
+    /// dashboard refreshes every minute while an active session log keeps
+    /// growing; rewriting per tick would burn encode CPU and SSD writes for
+    /// no durability the next window wouldn't buy. A superseded snapshot is
+    /// simply skipped — the newer one contains everything it had.
+    private static let cacheSaveDebounce: Duration = .seconds(5 * 60)
+
+    /// Write-back runs detached so the load path never waits on encoding,
+    /// and debounced so steady refresh ticks coalesce: after a write lands,
+    /// the next one waits out `cacheSaveDebounce`, and a newer save
+    /// supersedes an in-flight one. Cancelling a pending save only skips its
+    /// wait (see `flushCacheWrites`); supersession is what skips a write.
+    private func scheduleCacheSave() {
+        guard cacheDirty, let cacheURL else { return }
+        cacheDirty = false
+        saveGeneration += 1
+        let generation = saveGeneration
+        let previous = saveTask
+        previous?.cancel()
+        let snapshot = PersistedCache(version: Self.persistedCacheVersion, entries: cache)
+        let deadline = nextSaveAllowedAt ?? ContinuousClock.now
+        saveTask = Task.detached(priority: .utility) { [weak self] in
+            // Serialize behind the superseded save so writes land in order.
+            await previous?.value
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            guard await self?.isCurrentSave(generation) == true else { return }
+            Self.writePersistedCache(snapshot, to: cacheURL)
+            await self?.noteCacheSaveLanded()
+        }
+    }
+
+    private func isCurrentSave(_ generation: Int) -> Bool {
+        generation == saveGeneration
+    }
+
+    private func noteCacheSaveLanded() {
+        nextSaveAllowedAt = ContinuousClock.now + Self.cacheSaveDebounce
+    }
+
+    /// Test seam: expedite any debounced write-back and wait until it has
+    /// landed on disk.
+    func flushCacheWrites() async {
+        saveTask?.cancel()
+        await saveTask?.value
+    }
+
+    private nonisolated static func writePersistedCache(_ snapshot: PersistedCache, to url: URL) {
+        guard let data = try? JSONEncoder().encode(snapshot),
+              data.count <= maxPersistedCacheBytes else { return }
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        guard (try? data.write(to: url, options: .atomic)) != nil else { return }
+        // The cache regenerates from the logs; keep it out of backups.
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var url = url
+        try? url.setResourceValues(values)
     }
 
     // MARK: - Discovery

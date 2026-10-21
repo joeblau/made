@@ -49,6 +49,27 @@ struct FileSystemEntry: Identifiable {
     let children: [FileSystemEntry]?
 }
 
+/// Which GitHub-backed lists the inspector's 30s refresh tick fetches, derived
+/// from the visible inspector tab so a hidden tab spends no `gh` spawns or API
+/// round-trips. Workflow runs stay badged for every workspace by
+/// `WorkspaceActionWatcher` regardless of what polls here. A `nil` tab is a
+/// host that doesn't gate by tab and keeps the legacy poll-both behavior.
+enum RepositoryPolledResources: Equatable {
+    case pullRequests
+    case workflowRuns
+    case both
+    case none
+
+    init(visibleTab: InspectorTab?) {
+        switch visibleTab {
+        case .pullRequests: self = .pullRequests
+        case .actions: self = .workflowRuns
+        case .tasks, .filesystem, .usage: self = .none
+        case nil: self = .both
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class RepositoryStore {
@@ -60,6 +81,7 @@ final class RepositoryStore {
     var isLoading = false
     var isLoadingFilesystem = false
     private var refreshTimer: Timer?
+    private var polledResources: RepositoryPolledResources = .both
 
     var repositoryName: String {
         guard !repoPath.isEmpty else { return "Repository" }
@@ -67,9 +89,9 @@ final class RepositoryStore {
         return name.isEmpty ? repoPath : name
     }
 
-    func startWatching(directory: String) {
+    func startWatching(directory: String, visibleTab: InspectorTab? = nil) {
         if repoPath == directory {
-            fetchAll(policy: .automatic)
+            setVisibleTab(visibleTab)
             if filesystem.isEmpty && !isLoadingFilesystem {
                 fetchFilesystem()
             }
@@ -81,12 +103,45 @@ final class RepositoryStore {
         actions = []
         runs = []
         filesystem = []
-        fetchAll(policy: .automatic)
         fetchFilesystem()
+        polledResources = RepositoryPolledResources(visibleTab: visibleTab)
+        fetchPolledResources()
+        rearmRefreshTimer()
+    }
+
+    /// Re-aim polling at the newly visible tab: fetch its list once (the shared
+    /// scheduler cache makes the switch instant when the data is fresh) and
+    /// keep the 30s tick only while a GitHub-backed tab is showing.
+    func setVisibleTab(_ tab: InspectorTab?) {
+        polledResources = RepositoryPolledResources(visibleTab: tab)
+        guard !repoPath.isEmpty else { return }
+        if tab == .filesystem, filesystem.isEmpty, !isLoadingFilesystem {
+            fetchFilesystem()
+        }
+        fetchPolledResources()
+        rearmRefreshTimer()
+    }
+
+    private func fetchPolledResources(policy: RepositoryRefreshPolicy = .automatic) {
+        switch polledResources {
+        case .pullRequests:
+            fetchPullRequests(policy: policy)
+        case .workflowRuns:
+            fetchWorkflowRuns(policy: policy)
+        case .both:
+            fetchAll(policy: policy)
+        case .none:
+            break
+        }
+    }
+
+    private func rearmRefreshTimer() {
         refreshTimer?.invalidate()
+        refreshTimer = nil
+        guard polledResources != .none, !repoPath.isEmpty else { return }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { _ in
             Task { @MainActor in
-                self.fetchAll()
+                self.fetchPolledResources()
             }
         }
     }

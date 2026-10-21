@@ -42,32 +42,21 @@ enum FuzzyMatcher {
     static func score(query: PreparedQuery, candidate: String) -> Int? {
         if query.isEmpty { return 0 }
 
-        let candidateScalars = Array(candidate.unicodeScalars)
-        guard candidateScalars.count >= query.scalars.count else { return nil }
-
-        let basenameStart = lastSeparatorIndex(in: candidateScalars).map { $0 + 1 } ?? 0
-
         // One-letter searches are extremely broad, so avoid allocating two DP
         // rows for every matching file. The best position is independent here.
         if query.scalars.count == 1 {
-            var best = impossible
-            for candidateIndex in candidateScalars.indices
-            where lowercased(candidateScalars[candidateIndex]) == query.scalars[0] {
-                best = max(
-                    best,
-                    positionBonus(
-                        scalars: candidateScalars,
-                        index: candidateIndex,
-                        basenameStart: basenameStart
-                    ) + leadingPenalty * candidateIndex
-                )
-            }
-            return best == impossible ? nil : best
+            return singleScalarScore(query.scalars[0], in: candidate.unicodeScalars)
         }
 
-        // Reject non-matches in one pass. Most files disappear here, keeping the
-        // more precise dynamic program cheap even in very large repositories.
-        guard containsSubsequence(query.scalars, in: candidateScalars) else { return nil }
+        // Reject non-matches in one streaming pass over the scalar view, before
+        // materializing a scalar array. Most files disappear here, keeping the
+        // more precise dynamic program (and its allocations) cheap even in very
+        // large repositories. A successful preflight also guarantees the
+        // candidate has at least as many scalars as the query.
+        guard containsSubsequence(query.scalars, in: candidate.unicodeScalars) else { return nil }
+
+        let candidateScalars = Array(candidate.unicodeScalars)
+        let basenameStart = lastSeparatorIndex(in: candidateScalars).map { $0 + 1 } ?? 0
 
         var previous = [Int](repeating: impossible, count: candidateScalars.count)
 
@@ -133,7 +122,7 @@ enum FuzzyMatcher {
 
     private static func containsSubsequence(
         _ query: [UnicodeScalar],
-        in candidate: [UnicodeScalar]
+        in candidate: some Sequence<UnicodeScalar>
     ) -> Bool {
         var queryIndex = 0
         for scalar in candidate where lowercased(scalar) == query[queryIndex] {
@@ -141,6 +130,42 @@ enum FuzzyMatcher {
             if queryIndex == query.count { return true }
         }
         return false
+    }
+
+    /// Streaming equivalent of the one-letter fast path: two passes over the
+    /// scalar view (basename start, then best position) so the broadest queries
+    /// never materialize a scalar array per candidate.
+    private static func singleScalarScore(
+        _ queryScalar: UnicodeScalar,
+        in scalars: String.UnicodeScalarView
+    ) -> Int? {
+        var basenameStart = 0
+        var index = 0
+        for scalar in scalars {
+            index += 1
+            if scalar == "/" { basenameStart = index }
+        }
+
+        var best = impossible
+        var previousScalar: UnicodeScalar?
+        index = 0
+        for scalar in scalars {
+            if lowercased(scalar) == queryScalar {
+                var score = 0
+                if index == basenameStart {
+                    score += startBonus
+                } else if isBoundary(previous: previousScalar, current: scalar) {
+                    score += boundaryBonus
+                }
+                if index >= basenameStart {
+                    score += basenameBonus
+                }
+                best = max(best, score + leadingPenalty * index)
+            }
+            previousScalar = scalar
+            index += 1
+        }
+        return best == impossible ? nil : best
     }
 
     private static func positionBonus(
@@ -171,13 +196,16 @@ enum FuzzyMatcher {
 
     /// Separators and camelCase edges are natural filename anchors.
     private static func isBoundary(_ scalars: [UnicodeScalar], at index: Int) -> Bool {
-        guard index > 0 else { return true }
-        let previous = scalars[index - 1]
+        isBoundary(previous: index > 0 ? scalars[index - 1] : nil, current: scalars[index])
+    }
+
+    private static func isBoundary(previous: UnicodeScalar?, current: UnicodeScalar) -> Bool {
+        guard let previous else { return true }
         switch previous {
         case "/", "_", "-", ".", " ":
             return true
         default:
-            return !isUppercase(previous) && isUppercase(scalars[index])
+            return !isUppercase(previous) && isUppercase(current)
         }
     }
 

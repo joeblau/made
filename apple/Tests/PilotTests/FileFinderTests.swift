@@ -149,6 +149,47 @@ struct FileFinderTests {
         #expect(FileFinder.filter(items: Array(secondOrder), query: "target").map(\.relativePath) == expected)
     }
 
+    /// The folded forms are cached when the item is built (index time), so the
+    /// per-keystroke filter never has to re-lowercase candidates.
+    @Test("Case-folded forms are precomputed on FileItem")
+    func foldedFormsArePrecomputed() {
+        let file = item("Apple/Sources/Pilot/FileFinder.swift")
+        #expect(file.foldedRelativePath == "apple/sources/pilot/filefinder.swift")
+        #expect(file.foldedName == "filefinder.swift")
+    }
+
+    /// Tier bonuses compare the query against the *cached* folds, so matching
+    /// must stay case-insensitive in both directions: an uppercase query still
+    /// lands the mixed-case file, and the exact-stem tier still outranks a
+    /// weaker path hit.
+    @Test("Mixed-case queries rank via the cached folds")
+    func mixedCaseQueriesRankViaCachedFolds() {
+        let files = [
+            item("docs/filefinder-notes.md"),
+            item("apple/Sources/Pilot/FileFinder.swift"),
+        ]
+
+        let upper = FileFinder.filter(items: files, query: "FILEFINDER")
+        let lower = FileFinder.filter(items: files, query: "filefinder")
+
+        #expect(upper.first?.name == "FileFinder.swift")
+        #expect(lower.first?.name == "FileFinder.swift")
+    }
+
+    /// The one-letter fast path streams the scalar view instead of building an
+    /// array per candidate; its position bonuses (basename start beats an
+    /// interior hit) must be unchanged.
+    @Test("One-letter queries keep their position bonuses")
+    func singleLetterQueriesKeepPositionBonuses() throws {
+        let basenameStart = try #require(FuzzyMatcher.score(query: "f", candidate: "FileFinder.swift"))
+        let afterSeparator = try #require(FuzzyMatcher.score(query: "f", candidate: "a/File.swift"))
+        let interior = try #require(FuzzyMatcher.score(query: "f", candidate: "xf"))
+
+        #expect(basenameStart > afterSeparator)
+        #expect(afterSeparator > interior)
+        #expect(FuzzyMatcher.score(query: "q", candidate: "FileFinder.swift") == nil)
+    }
+
     /// Exercises indexing against a real nested tree so this catches regressions
     /// in the non-git recursive-walk fallback, not just the in-memory filter.
     @Test("A real nested directory is indexed recursively")

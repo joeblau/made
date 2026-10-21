@@ -145,8 +145,9 @@ enum ProcessRunner {
     static func run(_ invocation: ProcessInvocation) async throws -> ProcessRunResult {
         let control = ProcessControl(gracePeriod: invocation.terminationGracePeriod)
         return try await withTaskCancellationHandler {
-            // Process and pipe polling must not occupy Swift's cooperative
-            // executor: enough concurrent commands would starve other tasks.
+            // The worker blocks waiting on the child and its pipes; that must
+            // not occupy Swift's cooperative executor, or enough concurrent
+            // commands would starve other tasks.
             try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .utility).async {
                     continuation.resume(with: Result { try execute(invocation, control: control) })
@@ -195,9 +196,15 @@ enum ProcessRunner {
         }
 
         let started = ContinuousClock.now
+        let waker: EventWaker
         do {
+            waker = try EventWaker()
             try stdout.makeNonblocking(stdoutPipe.fileHandleForReading)
             try stderr.makeNonblocking(stderrPipe.fileHandleForReading)
+            // Exit and stop requests only wake the worker's wait below; the
+            // loop itself re-reads all process and pipe state after waking.
+            process.terminationHandler = { _ in waker.signal() }
+            control.setStopHandler { waker.signal() }
             try process.run()
         } catch {
             throw ProcessRunnerError.launch(
@@ -223,7 +230,17 @@ enum ProcessRunner {
             if !running && ((stdout.reachedEOF && stderr.reachedEOF) || control.stopReason != nil) {
                 break
             }
-            Thread.sleep(forTimeInterval: 0.01)
+
+            // Block until pipe data or EOF, a wake (child exit or a stop
+            // request), or the nearest timer — no periodic busy-poll.
+            var wait = control.stopReason == nil
+                ? ContinuousClock.now.duration(to: deadline)
+                : Self.stopSettleInterval
+            if cancellationProbe != nil { wait = min(wait, Self.cancellationProbeInterval) }
+            var readable: [Int32] = []
+            if !stdout.reachedEOF { readable.append(stdoutPipe.fileHandleForReading.fileDescriptor) }
+            if !stderr.reachedEOF { readable.append(stderrPipe.fileHandleForReading.fileDescriptor) }
+            waker.wait(forReadableDescriptors: readable, timeout: wait)
         }
         let stopReason = control.finish()
 
@@ -256,6 +273,75 @@ enum ProcessRunner {
             throw ProcessRunnerError.nonZeroExit(result)
         }
         return result
+    }
+
+    /// The blocking bridge has no cancellation event to observe, so its waits
+    /// are capped to keep the cancellation probe responsive.
+    private static let cancellationProbeInterval: Duration = .milliseconds(50)
+
+    /// Defensive wait bound after a stop request, in case the termination
+    /// handler's wake is missed; exit normally wakes the wait immediately.
+    private static let stopSettleInterval: Duration = .milliseconds(100)
+
+    /// poll(2) timeout: rounds up so a positive remainder never spins at zero
+    /// milliseconds, and saturates instead of overflowing Int32.
+    static func pollMilliseconds(for duration: Duration) -> Int32 {
+        guard duration > .zero else { return 0 }
+        guard duration < .milliseconds(Int32.max) else { return Int32.max }
+        let components = duration.components
+        let milliseconds = components.seconds * 1_000
+            + (components.attoseconds + 999_999_999_999_999) / 1_000_000_000_000_000
+        return Int32(clamping: milliseconds)
+    }
+}
+
+/// A nonblocking self-pipe that lets the termination handler and stop requests
+/// wake the worker's poll(2) wait. Close-on-exec keeps both ends out of
+/// children, and the descriptors stay open until every signaller has released
+/// its reference, so a late termination handler can never hit a reused
+/// descriptor.
+private final class EventWaker: @unchecked Sendable {
+    private let readDescriptor: Int32
+    private let writeDescriptor: Int32
+
+    init() throws {
+        var descriptors: [Int32] = [-1, -1]
+        guard Darwin.pipe(&descriptors) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        readDescriptor = descriptors[0]
+        writeDescriptor = descriptors[1]
+        for descriptor in descriptors {
+            _ = fcntl(descriptor, F_SETFL, fcntl(descriptor, F_GETFL) | O_NONBLOCK)
+            _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
+        }
+    }
+
+    deinit {
+        Darwin.close(readDescriptor)
+        Darwin.close(writeDescriptor)
+    }
+
+    func signal() {
+        var token: UInt8 = 1
+        _ = Darwin.write(writeDescriptor, &token, 1)
+    }
+
+    /// Blocks until any descriptor is readable, a wake token arrives, or the
+    /// timeout lapses, then drains pending tokens so a handled wake cannot
+    /// spin the caller.
+    func wait(forReadableDescriptors descriptors: [Int32], timeout: Duration) {
+        var pollDescriptors = [pollfd(fd: readDescriptor, events: Int16(POLLIN), revents: 0)]
+        for descriptor in descriptors {
+            pollDescriptors.append(pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0))
+        }
+        _ = Darwin.poll(
+            &pollDescriptors,
+            nfds_t(pollDescriptors.count),
+            ProcessRunner.pollMilliseconds(for: timeout)
+        )
+        var drained = [UInt8](repeating: 0, count: 64)
+        while Darwin.read(readDescriptor, &drained, drained.count) == drained.count {}
     }
 }
 
@@ -324,6 +410,7 @@ private final class ProcessControl: @unchecked Sendable {
     private let gracePeriod: Duration
     private var processIdentifier: pid_t?
     private var requestedStop: StopReason?
+    private var onStopRequested: (@Sendable () -> Void)?
     private var finished = false
 
     init(gracePeriod: Duration) {
@@ -338,12 +425,21 @@ private final class ProcessControl: @unchecked Sendable {
         if shouldStop { terminateThenKill(processIdentifier) }
     }
 
+    /// Wakes the worker's event wait when a stop arrives after the child has
+    /// already exited, where no termination handler will fire again.
+    func setStopHandler(_ handler: @escaping @Sendable () -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+        onStopRequested = handler
+    }
+
     func requestStop(_ reason: StopReason) {
         lock.lock()
         defer { lock.unlock() }
         guard requestedStop == nil, !finished else { return }
         requestedStop = reason
         if let processIdentifier { terminateThenKill(processIdentifier) }
+        onStopRequested?()
     }
 
     func childDidExit() {

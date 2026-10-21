@@ -189,6 +189,10 @@ final class TranscriptionService: @unchecked Sendable {
     private var streamStopCompletion: TranscriptionStopCompletion?
     private var audioSessionGeneration: Int?
 
+    private var validatedCacheEntry: WhisperModelCache.Entry?
+    private var cacheRefreshTask: Task<Void, Never>?
+    private var cacheRefreshGeneration = 0
+
     private let modelCache: WhisperModelCache
     private let networkStatusProvider: @Sendable () -> TranscriptionNetworkStatus
     private let modelLoader: ModelLoader
@@ -213,6 +217,7 @@ final class TranscriptionService: @unchecked Sendable {
         streamFactory = Self.makeWhisperStream
         activateAudioSession = Self.activateRecordingAudioSession
         deactivateAudioSession = Self.deactivateRecordingAudioSession
+        refreshCachedModelState()
     }
 
     init(
@@ -231,20 +236,62 @@ final class TranscriptionService: @unchecked Sendable {
         self.streamFactory = streamFactory
         self.activateAudioSession = activateAudioSession
         self.deactivateAudioSession = deactivateAudioSession
+        refreshCachedModelState()
     }
 
-    var hasCachedModel: Bool { modelCache.validEntry != nil }
-
-    var cachedModelSize: String {
-        let bytes = modelCache.storedBytes
-        guard bytes > 0 else { return "Not downloaded" }
-        return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
-    }
+    /// Memoized by `refreshCachedModelState()`. Validating the cache walks the
+    /// ~150 MB model folder and parses multi-MB tokenizer JSON, and the
+    /// volume-hold gesture path reads these synchronously at gesture time.
+    private(set) var hasCachedModel = false
+    private(set) var cachedModelSize = "Not downloaded"
 
     var networkStatus: TranscriptionNetworkStatus { networkStatusProvider() }
 
+    /// Revalidates the on-disk cache off the main actor and memoizes the
+    /// result. Call after anything that can change the cached model on disk.
+    private func refreshCachedModelState() {
+        cacheRefreshGeneration += 1
+        let generation = cacheRefreshGeneration
+        let cache = modelCache
+        cacheRefreshTask = Task.detached(priority: .utility) { [weak self] in
+            let entry = cache.validEntry
+            let storedBytes = entry == nil ? 0 : cache.storedBytes
+            await self?.finishCacheRefresh(
+                entry: entry,
+                storedBytes: storedBytes,
+                generation: generation
+            )
+        }
+    }
+
+    private func finishCacheRefresh(
+        entry: WhisperModelCache.Entry?,
+        storedBytes: Int64,
+        generation: Int
+    ) {
+        guard generation == cacheRefreshGeneration else { return }
+        validatedCacheEntry = entry
+        hasCachedModel = entry != nil
+        cachedModelSize = storedBytes > 0
+            ? ByteCountFormatter.string(fromByteCount: storedBytes, countStyle: .file)
+            : "Not downloaded"
+    }
+
+    private func resolveCachedEntry() async -> WhisperModelCache.Entry? {
+        if let task = cacheRefreshTask { await task.value }
+        return validatedCacheEntry
+    }
+
     @discardableResult
     func loadModel(allowRestrictedNetwork: Bool = false) async -> Bool {
+        guard !isModelLoaded else { return true }
+        if let existing = modelCompletionTask {
+            return await waitForModelLoad(existing, generation: modelLoadGeneration)
+        }
+        // Resolve the memoized entry before taking the gate so this method
+        // stays suspension-free between begin() and installing the completion
+        // task, which concurrent callers join through `modelCompletionTask`.
+        let cachedEntry = await resolveCachedEntry()
         guard !isModelLoaded else { return true }
         if let existing = modelCompletionTask {
             return await waitForModelLoad(existing, generation: modelLoadGeneration)
@@ -254,7 +301,7 @@ final class TranscriptionService: @unchecked Sendable {
         let preparation: TranscriptionModelPreparation
         do {
             preparation = try TranscriptionDownloadPolicy.preparation(
-                cachedEntry: modelCache.validEntry,
+                cachedEntry: cachedEntry,
                 network: networkStatusProvider(),
                 allowRestrictedNetwork: allowRestrictedNetwork
             )
@@ -342,11 +389,29 @@ final class TranscriptionService: @unchecked Sendable {
         case .success(let loaded):
             guard modelCache.isComplete(loaded.cacheEntry) else {
                 modelErrorMessage = TranscriptionServiceError.incompleteCache.localizedDescription
+                // The memoized entry failed deep validation: drop it
+                // synchronously so a volume hold that lands before the
+                // detached re-walk finishes re-confirms with the user
+                // instead of silently starting the download.
+                validatedCacheEntry = nil
+                hasCachedModel = false
+                refreshCachedModelState()
                 return false
             }
             modelCache.remember(loaded.cacheEntry.modelFolder)
             loadedModel = loaded
             isModelLoaded = true
+            validatedCacheEntry = loaded.cacheEntry
+            hasCachedModel = true
+            if cachedModelSize == "Not downloaded" {
+                // A just-loaded model has a size on disk; show a provisional
+                // value so an open storage sheet never renders
+                // "Not downloaded" beside an enabled Remove button while the
+                // detached re-walk formats the real size.
+                cachedModelSize = "Calculating…"
+            }
+            // Recompute the stored-size string off the main actor.
+            refreshCachedModelState()
             return true
         case .failure(let error):
             if error is CancellationError {
@@ -354,6 +419,15 @@ final class TranscriptionService: @unchecked Sendable {
                     ?? "Speech model download was cancelled. You can retry when ready."
             } else {
                 modelErrorMessage = "Speech model load failed: \(error.localizedDescription)"
+                if error is TranscriptionServiceError {
+                    // Same as the incomplete-cache guard above: drop the
+                    // memoized readiness synchronously so the gesture gate
+                    // cannot see stale `hasCachedModel == true` during the
+                    // background re-walk.
+                    validatedCacheEntry = nil
+                    hasCachedModel = false
+                    refreshCachedModelState()
+                }
             }
             return false
         }
@@ -548,11 +622,19 @@ final class TranscriptionService: @unchecked Sendable {
         await stop()
         loadedModel = nil
         isModelLoaded = false
+        // Invalidate any in-flight revalidation so it cannot resurrect the
+        // entry after the files are gone.
+        cacheRefreshGeneration += 1
+        cacheRefreshTask?.cancel()
+        cacheRefreshTask = nil
         do {
             try modelCache.remove()
             modelErrorMessage = nil
+            finishCacheRefresh(entry: nil, storedBytes: 0, generation: cacheRefreshGeneration)
         } catch {
             modelErrorMessage = "Could not remove the speech model: \(error.localizedDescription)"
+            // Removal may have partially succeeded; recompute from disk.
+            refreshCachedModelState()
         }
     }
 

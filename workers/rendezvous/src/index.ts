@@ -87,6 +87,42 @@ function validPort(value: unknown): value is number {
   );
 }
 
+/**
+ * Reads an untrusted body without ever buffering more than MAX_BODY_BYTES: a
+ * chunked request carries no content-length, so the declared-length check
+ * alone would let request.text() allocate the whole body before any bound.
+ * Returns null (and cancels the stream) as soon as the cap is crossed.
+ */
+async function readBoundedBody(
+  stream: ReadableStream<Uint8Array> | null,
+): Promise<Uint8Array | null> {
+  if (stream === null) return new Uint8Array(0);
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel("body too large");
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
 async function readSignalBody(
   request: Request,
 ): Promise<SignalRequest | Response> {
@@ -100,12 +136,13 @@ async function readSignalBody(
 
   let raw: string;
   try {
-    raw = await request.text();
+    const bytes = await readBoundedBody(request.body);
+    if (bytes === null) {
+      return json({ error: "body too large" }, 413);
+    }
+    raw = new TextDecoder().decode(bytes);
   } catch {
     return json({ error: "invalid request" }, 400);
-  }
-  if (new TextEncoder().encode(raw).byteLength > MAX_BODY_BYTES) {
-    return json({ error: "body too large" }, 413);
   }
 
   let body: unknown;
@@ -307,7 +344,10 @@ export class RendezvousRoom extends DurableObject<Env> {
         peer.close(1011, "relay unavailable");
       }
     }
-    await this.armAlarm(now);
+    // No alarm re-arm here: a message only moves lastActivityAt forward, so
+    // the already-armed (earlier) alarm is still safe — when it fires, alarm()
+    // re-checks liveness and re-arms at the later deadline. Re-arming per
+    // message would be a billed storage write for every relayed frame.
   }
 
   async webSocketClose(sender: WebSocket): Promise<void> {

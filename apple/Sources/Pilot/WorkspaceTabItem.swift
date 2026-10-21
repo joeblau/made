@@ -86,11 +86,12 @@ struct TabItemContent: View {
 
 /// Accent capsule naming the coding agent (Claude, Codex, …) currently open in
 /// a terminal pane, shown right after "Terminal". Polls the shell's process tree
-/// every couple of seconds while its workspace is active; renders nothing when
-/// no supported agent is open.
+/// every couple of seconds while its workspace is active and the app is
+/// frontmost; renders nothing when no supported agent is open.
 private struct TerminalAgentBadge: View {
     let pane: Pane
     let isWorkspaceActive: Bool
+    @State private var isApplicationActive = true
     @State private var agent: TerminalAgent?
 
     var body: some View {
@@ -106,9 +107,11 @@ private struct TerminalAgentBadge: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: agent)
-        // Restart polling when activation flips; only the visible workspace polls.
-        .task(id: isWorkspaceActive) {
-            guard isWorkspaceActive else { return }
+        .observingApplicationActivity($isApplicationActive)
+        // Restart polling when activation flips; only the visible workspace of
+        // the frontmost app polls.
+        .task(id: isWorkspaceActive && isApplicationActive) {
+            guard isWorkspaceActive, isApplicationActive else { return }
             while !Task.isCancelled {
                 agent = pane.liveShellAgent()
                 try? await Task.sleep(for: .seconds(2))
@@ -120,11 +123,13 @@ private struct TerminalAgentBadge: View {
 /// "Clean" / "Dirty" word shown after "Terminal" in a terminal tab header,
 /// reflecting whether the shell's current directory sits in a git work tree with
 /// uncommitted changes. Polls `git status` every few seconds while its workspace
-/// is active (it reads the shell's live cwd, so it tracks `cd` and file edits);
-/// renders nothing when the directory isn't a git repo.
+/// is active and the app is frontmost (it reads the shell's live cwd, so it
+/// tracks `cd` and file edits); panes sharing a cwd share one subprocess via
+/// GitDirtyStateCache. Renders nothing when the directory isn't a git repo.
 private struct TerminalDirtyBadge: View {
     let pane: Pane
     let isWorkspaceActive: Bool
+    @State private var isApplicationActive = true
     @State private var isDirty: Bool?
 
     var body: some View {
@@ -135,16 +140,37 @@ private struct TerminalDirtyBadge: View {
                     .foregroundStyle(isDirty ? Color.orange : Color.green)
             }
         }
-        // Restart polling when activation flips; only the visible workspace polls.
-        .task(id: isWorkspaceActive) {
-            guard isWorkspaceActive else { return }
+        .observingApplicationActivity($isApplicationActive)
+        // Restart polling when activation flips; only the visible workspace of
+        // the frontmost app polls.
+        .task(id: isWorkspaceActive && isApplicationActive) {
+            guard isWorkspaceActive, isApplicationActive else { return }
             while !Task.isCancelled {
                 let directory = pane.liveShellCurrentDirectory() ?? pane.currentDirectory
-                let status: Bool? = directory.isEmpty ? nil : await GitStatus.isDirty(directory: directory)
+                let status: Bool? = directory.isEmpty
+                    ? nil
+                    : await GitDirtyStateCache.shared.isDirty(directory: directory)
                 if Task.isCancelled { break }
                 isDirty = status
                 try? await Task.sleep(for: .seconds(3))
             }
         }
+    }
+}
+
+/// Mirrors NSApplication's active state into `isActive` so polling badges stop
+/// forking subprocesses while the app is backgrounded — the same activation
+/// signal RepositoryPollingEnvironmentMonitor feeds the gh polling scheduler.
+private extension View {
+    @MainActor
+    func observingApplicationActivity(_ isActive: Binding<Bool>) -> some View {
+        self
+            .onAppear { isActive.wrappedValue = NSApplication.shared.isActive }
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification
+            )) { _ in isActive.wrappedValue = true }
+            .onReceive(NotificationCenter.default.publisher(
+                for: NSApplication.didResignActiveNotification
+            )) { _ in isActive.wrappedValue = false }
     }
 }

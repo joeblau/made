@@ -64,7 +64,7 @@ struct WorkspaceRootTrackingTests {
         defer { try? FileManager.default.removeItem(at: nonRepoDirectory) }
 
         let repoDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
-        guard let expectedRoot = RepositoryStore.findGitRoot(from: repoDirectory) else {
+        guard let expectedRoot = GitStatus.findWorkTreeRoot(from: repoDirectory) else {
             Issue.record("Expected test fixture to live inside a git repository")
             return
         }

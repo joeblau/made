@@ -4,7 +4,10 @@ set -euo pipefail
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$APPLE_ROOT/made.xcodeproj"
 SUITE="${1:-all}"
-DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-tests}"
+# The default root and the per-scheme subdirectories below must match
+# build-ci.sh so a test run reuses the app products a preceding build
+# produced instead of cold-compiling them into a disjoint DerivedData tree.
+DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-builds}"
 PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
 
 # xcodebuild -quiet can omit XCTest assertion details. Preserve its exit
@@ -25,7 +28,7 @@ pilot() {
     -project "$PROJECT" \
     -scheme PilotTests \
     -destination "platform=macOS,arch=$(uname -m)" \
-    -derivedDataPath "$DERIVED_ROOT/pilot" \
+    -derivedDataPath "$DERIVED_ROOT/Pilot" \
     -clonedSourcePackagesDirPath "$PACKAGES" \
     -onlyUsePackageVersionsFromResolvedFile \
     -skipPackagePluginValidation \
@@ -47,7 +50,7 @@ shared() {
     -project "$PROJECT" \
     -scheme SharedTests \
     -destination "platform=iOS Simulator,id=$udid" \
-    -derivedDataPath "$DERIVED_ROOT/shared" \
+    -derivedDataPath "$DERIVED_ROOT/Copilot" \
     -clonedSourcePackagesDirPath "$PACKAGES" \
     -onlyUsePackageVersionsFromResolvedFile \
     -skipPackagePluginValidation \

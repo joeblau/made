@@ -6,6 +6,20 @@ struct FileItem: Identifiable, Hashable {
     let path: String          // absolute
     let relativePath: String  // path relative to root, shown in the UI
     let name: String          // basename
+    /// Case-folded forms, cached once at index time. Filtering runs over the
+    /// whole index on every keystroke, so re-lowercasing up to 200k candidates
+    /// per pass dominated finder latency; these are pure functions of the
+    /// fields above and cost one extra copy of each string.
+    let foldedRelativePath: String
+    let foldedName: String
+
+    init(path: String, relativePath: String, name: String) {
+        self.path = path
+        self.relativePath = relativePath
+        self.name = name
+        self.foldedRelativePath = relativePath.lowercased()
+        self.foldedName = name.lowercased()
+    }
 }
 
 /// In-memory file index + fuzzy search for the editor's "open file" finder.
@@ -260,8 +274,18 @@ final class FileFinder {
     /// the old early-return behavior where any weak basename subsequence hid a
     /// much better exact directory/path match.
     private nonisolated static func score(term: SearchTerm, item: FileItem) -> Int? {
-        let nameScore = smartScore(term: term, candidate: item.name, isBasename: true)
-        let pathScore = smartScore(term: term, candidate: item.relativePath, isBasename: false)
+        let nameScore = smartScore(
+            term: term,
+            candidate: item.name,
+            foldedCandidate: item.foldedName,
+            isBasename: true
+        )
+        let pathScore = smartScore(
+            term: term,
+            candidate: item.relativePath,
+            foldedCandidate: item.foldedRelativePath,
+            isBasename: false
+        )
         switch (nameScore, pathScore) {
         case let (name?, path?): return max(name, path)
         case let (name?, nil): return name
@@ -273,13 +297,13 @@ final class FileFinder {
     private nonisolated static func smartScore(
         term: SearchTerm,
         candidate: String,
+        foldedCandidate: String,
         isBasename: Bool
     ) -> Int? {
         guard let fuzzyScore = FuzzyMatcher.score(query: term.fuzzy, candidate: candidate) else {
             return nil
         }
 
-        let foldedCandidate = candidate.lowercased()
         var tierBonus = 0
 
         if isBasename {
@@ -320,9 +344,9 @@ final class FileFinder {
         if lhs.item.relativePath.count != rhs.item.relativePath.count {
             return lhs.item.relativePath.count < rhs.item.relativePath.count
         }
-        let lhsFolded = lhs.item.relativePath.lowercased()
-        let rhsFolded = rhs.item.relativePath.lowercased()
-        if lhsFolded != rhsFolded { return lhsFolded < rhsFolded }
+        if lhs.item.foldedRelativePath != rhs.item.foldedRelativePath {
+            return lhs.item.foldedRelativePath < rhs.item.foldedRelativePath
+        }
         return lhs.item.relativePath < rhs.item.relativePath
     }
 
@@ -343,9 +367,9 @@ final class FileFinder {
     }
 
     private nonisolated static func alphabeticallyBefore(_ lhs: FileItem, _ rhs: FileItem) -> Bool {
-        let lhsFolded = lhs.relativePath.lowercased()
-        let rhsFolded = rhs.relativePath.lowercased()
-        if lhsFolded != rhsFolded { return lhsFolded < rhsFolded }
+        if lhs.foldedRelativePath != rhs.foldedRelativePath {
+            return lhs.foldedRelativePath < rhs.foldedRelativePath
+        }
         return lhs.relativePath < rhs.relativePath
     }
 

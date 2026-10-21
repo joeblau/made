@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreMedia
 import Testing
 @testable import Pilot
 
@@ -96,5 +97,40 @@ struct ScreenMirrorBitrateTests {
 
         let recoveryWasForced = latch.takeForSubmission()
         #expect(recoveryWasForced)
+    }
+
+    @Test("Snapshot gate throttles to one admission per interval")
+    func snapshotGateThrottlesToInterval() {
+        var gate = SnapshotGate(interval: 7)
+        func pts(_ seconds: Double) -> CMTime {
+            CMTime(seconds: seconds, preferredTimescale: 600)
+        }
+
+        let first = gate.admit(pts: pts(0))
+        #expect(first)
+        gate.finish()
+
+        let beforeInterval = gate.admit(pts: pts(6.9))
+        #expect(!beforeInterval)
+        let atInterval = gate.admit(pts: pts(7))
+        #expect(atInterval)
+    }
+
+    @Test("Snapshot gate admits at most one render in flight")
+    func snapshotGateBoundsInFlightRenders() {
+        var gate = SnapshotGate(interval: 7)
+        func pts(_ seconds: Double) -> CMTime {
+            CMTime(seconds: seconds, preferredTimescale: 600)
+        }
+
+        let first = gate.admit(pts: pts(0))
+        #expect(first)
+        // Interval elapsed but the previous render is still running: a slow
+        // render must never stack retained capture buffers.
+        let whileRenderInFlight = gate.admit(pts: pts(20))
+        #expect(!whileRenderInFlight)
+        gate.finish()
+        let afterFinish = gate.admit(pts: pts(20))
+        #expect(afterFinish)
     }
 }

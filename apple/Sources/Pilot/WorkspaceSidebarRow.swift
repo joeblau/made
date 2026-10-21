@@ -149,8 +149,10 @@ struct WorkspaceSidebarRow: View {
 /// three agents all waiting for input reads `0/3`. Hidden when no agent is
 /// currently started, even if the workspace has ordinary terminal panes.
 ///
-/// Polls the process tree every couple of seconds — the same walk the pane
-/// header's agent capsule uses, resolving each pane's shell pid from tmux.
+/// Polls the process tree every couple of seconds while Pilot is active — the
+/// same walk the pane header's agent capsule uses. Every mounted row shares
+/// one batched tmux snapshot per tick (see `PersistentTerminalSession`), so a
+/// tall sidebar costs one subprocess, not one per pane.
 ///
 /// Clicking the ring while at least one agent is running jumps straight to
 /// the working pane: it activates the workspace (leaving Notes or any other
@@ -159,6 +161,10 @@ private struct WorkspaceLLMGauge: View {
     let workspace: Workspace
     let store: WorkspaceStore
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    /// Rows stay mounted (and their `.task` loops alive) while Pilot sits in
+    /// the background, so polling gates on window activity the way the tab
+    /// badges gate on `isWorkspaceActive`.
+    @Environment(\.appearsActive) private var appearsActive
     @State private var running = 0
     @State private var started = 0
     @State private var runningPaneIDs: Set<UUID> = []
@@ -166,6 +172,12 @@ private struct WorkspaceLLMGauge: View {
     /// Row budget for the gauge. The ring is drawn at this size instead of
     /// scaling the much larger `.accessoryCircular` control into the row.
     private static let diameter: CGFloat = 26
+
+    /// Ticks the poll may hold previous state while cache snapshots are cold
+    /// (reactivation after the TTL, a transient tmux stall). Two cover the
+    /// runtime refresh plus the capture-pane refresh it unlocks; after that a
+    /// still-cold cache is believed to mean tmux is gone, and zeros commit.
+    private static let coldCacheGraceTicks = 2
 
     var body: some View {
         let isVisible = started > 0
@@ -204,18 +216,55 @@ private struct WorkspaceLLMGauge: View {
             height: isVisible ? Self.diameter : 0
         )
         .clipped()
-        .task {
+        // Restart polling when activation flips; only an active app polls.
+        .task(id: appearsActive) {
+            guard appearsActive else { return }
+            // The cache snapshots these status reads serve age out while
+            // Pilot sits inactive, so the restarted task's first ticks would
+            // read nil for every pane and animate a live ring down to zero
+            // width, shifting the row. A nil snapshot means "unknown", not
+            // "no agents": hold the previous gauge state for a bounded number
+            // of ticks while the refreshes those reads schedule land. The
+            // bound keeps a genuinely wedged tmux server from freezing a
+            // stale ring forever.
+            var graceTicks = Self.coldCacheGraceTicks
             while !Task.isCancelled {
+                // A workspace with no terminal panes probes nothing: status
+                // reads are cache snapshots, so this tick spawns no subprocess
+                // of its own and just idles until a pane appears.
                 let terminals = workspace.panes.filter { $0.kind == .terminal }
+                if !terminals.isEmpty, graceTicks > 0,
+                   !PersistentTerminalSession.hasPaneRuntimeSnapshot() {
+                    graceTicks -= 1
+                    try? await Task.sleep(for: .seconds(2))
+                    continue
+                }
                 var nextStarted = 0
                 var nextRunningPaneIDs: Set<UUID> = []
+                var contentsPending = false
                 for pane in terminals {
-                    guard let status = await pane.liveShellAgentStatus() else { continue }
+                    guard let status = pane.liveShellAgentStatus() else { continue }
                     nextStarted += 1
+                    // Agents classified from viewport text read a second,
+                    // separately cached snapshot. While it is cold the status
+                    // above fell back to cursor state alone and can misreport
+                    // idle, so treat this tick as unresolved too.
+                    if status.agent.needsVisibleTerminalContentsForActivity,
+                       PersistentTerminalSession.visibleContents(
+                           sessionName: pane.persistentSessionName
+                       ) == nil {
+                        contentsPending = true
+                    }
                     if status.activity == .running {
                         nextRunningPaneIDs.insert(pane.id)
                     }
                 }
+                if contentsPending, graceTicks > 0 {
+                    graceTicks -= 1
+                    try? await Task.sleep(for: .seconds(2))
+                    continue
+                }
+                graceTicks = Self.coldCacheGraceTicks
                 runningPaneIDs = nextRunningPaneIDs
                 let nextRunning = nextRunningPaneIDs.count
                 if started != nextStarted || running != nextRunning {

@@ -530,32 +530,14 @@ export function initCockpit() {
     [0.78, 0.300], [0.82, 0.310], [0.76, 0.475], [0.84, 0.500], [0.90, 0.505], [0.93, 0.530], [0.90, 0.560],
     [0.80, 0.585], [0.60, 0.610], [0.34, 0.620], [0.16, 0.590], [0.05, 0.560]];
 
-  function paintLeft() {
-    const g = leftC.getContext('2d'), w = 820, h = 606, t = S.t;
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, w, h);
-    g.fillStyle = '#04140c';
-    g.fillRect(0, 0, w, h);
-    g.strokeStyle = 'rgba(70,255,138,.4)';
-    g.lineWidth = 2;
-    g.strokeRect(1, 1, w - 2, h - 2);
-    tabs(g, w, ['FCS', 'FUEL', 'STOR', 'TSD', 'DAS', 'EOTS', 'CNI', 'CKLST'], 1, GRN2);
-
-    /* left column gauges */
-    gauge(g, 66, 120, 34, 0.72 + turb(t, 0.9, 1.7, 2.9, 0.02), 'HYD A', '3050', GRN);
-    gauge(g, 66, 226, 34, 0.70 + turb(t, 0.8, 1.5, 2.4, 0.02), 'HYD B', '3020', GRN);
-    gauge(g, 66, 332, 34, 0.86, 'OXY', '88%', GRN);
-    gauge(g, 66, 438, 34, 0.55 + 0.05 * Math.sin(t * 0.2), 'EPS', '28V', GRN);
-    /* right column gauges */
-    gauge(g, w - 66, 120, 34, 0.62, 'ECS', 'NORM', GRN);
-    gauge(g, w - 66, 226, 34, 0.5 + 0.04 * Math.sin(t * 0.13), 'CAB', '8.1K', GRN);
-    gauge(g, w - 66, 332, 34, 0.44, 'LIQ', 'OK', GRN);
-    gauge(g, w - 66, 438, 34, 0.9, 'BATT', '25V', GRN);
-
-    /* planform */
-    const cx = w / 2, sx = 290, oy = 68, sy = 400;
+  /* The glowing airframe drawings never change, and shadowBlur strokes are
+     among the most expensive canvas operations, so they are rendered once to
+     offscreen layers that the 12 Hz MFD repaints simply blit. */
+  const planformL = cnv(820, 606);
+  (function () {
+    const g = planformL.getContext('2d');
+    const cx = 410, sx = 290, oy = 68, sy = 400;
     const map = (p) => [cx + (p[0] - 0.5) * sx, oy + p[1] * sy];
-    g.save();
     g.strokeStyle = GRN;
     g.lineWidth = 2.2;
     g.shadowColor = GRN;
@@ -597,7 +579,57 @@ export function initCockpit() {
       g.arc(p[0], p[1], 3.4, 0, 7);
       g.fill();
     }
-    g.restore();
+  })();
+  const profileL = cnv(820, 606);
+  (function () {
+    const g = profileL.getContext('2d');
+    const mx = (u) => 30 + u * 350, my = (v) => 96 + (v - 0.28) * (190 / 0.34);
+    g.strokeStyle = CYN;
+    g.lineWidth = 2;
+    g.shadowColor = CYN;
+    g.shadowBlur = 7;
+    g.beginPath();
+    SP.forEach((p, i) => {
+      (i ? g.lineTo : g.moveTo).call(g, mx(p[0]), my(p[1]));
+    });
+    g.stroke();
+    /* canopy stroke */
+    g.beginPath();
+    g.moveTo(mx(0.22), my(0.47));
+    g.quadraticCurveTo(mx(0.30), my(0.415), mx(0.38), my(0.45));
+    g.stroke();
+    /* stabilator */
+    g.beginPath();
+    g.moveTo(mx(0.76), my(0.545));
+    g.lineTo(mx(0.92), my(0.565));
+    g.stroke();
+  })();
+
+  function paintLeft() {
+    const g = leftC.getContext('2d'), w = 820, h = 606, t = S.t;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, w, h);
+    g.fillStyle = '#04140c';
+    g.fillRect(0, 0, w, h);
+    g.strokeStyle = 'rgba(70,255,138,.4)';
+    g.lineWidth = 2;
+    g.strokeRect(1, 1, w - 2, h - 2);
+    tabs(g, w, ['FCS', 'FUEL', 'STOR', 'TSD', 'DAS', 'EOTS', 'CNI', 'CKLST'], 1, GRN2);
+
+    /* left column gauges */
+    gauge(g, 66, 120, 34, 0.72 + turb(t, 0.9, 1.7, 2.9, 0.02), 'HYD A', '3050', GRN);
+    gauge(g, 66, 226, 34, 0.70 + turb(t, 0.8, 1.5, 2.4, 0.02), 'HYD B', '3020', GRN);
+    gauge(g, 66, 332, 34, 0.86, 'OXY', '88%', GRN);
+    gauge(g, 66, 438, 34, 0.55 + 0.05 * Math.sin(t * 0.2), 'EPS', '28V', GRN);
+    /* right column gauges */
+    gauge(g, w - 66, 120, 34, 0.62, 'ECS', 'NORM', GRN);
+    gauge(g, w - 66, 226, 34, 0.5 + 0.04 * Math.sin(t * 0.13), 'CAB', '8.1K', GRN);
+    gauge(g, w - 66, 332, 34, 0.44, 'LIQ', 'OK', GRN);
+    gauge(g, w - 66, 438, 34, 0.9, 'BATT', '25V', GRN);
+
+    /* planform (pre-rendered glow layer) */
+    const cx = w / 2;
+    g.drawImage(planformL, 0, 0);
 
     /* fuel block */
     g.textAlign = 'center';
@@ -690,27 +722,8 @@ export function initCockpit() {
     g.textAlign = 'left';
     g.fillText('ENGINE  F135-PW-100', 26, 58);
     const mx = (u) => 30 + u * 350, my = (v) => 96 + (v - 0.28) * (190 / 0.34);
-    g.save();
-    g.strokeStyle = CYN;
-    g.lineWidth = 2;
-    g.shadowColor = CYN;
-    g.shadowBlur = 7;
-    g.beginPath();
-    SP.forEach((p, i) => {
-      (i ? g.lineTo : g.moveTo).call(g, mx(p[0]), my(p[1]));
-    });
-    g.stroke();
-    /* canopy stroke */
-    g.beginPath();
-    g.moveTo(mx(0.22), my(0.47));
-    g.quadraticCurveTo(mx(0.30), my(0.415), mx(0.38), my(0.45));
-    g.stroke();
-    /* stabilator */
-    g.beginPath();
-    g.moveTo(mx(0.76), my(0.545));
-    g.lineTo(mx(0.92), my(0.565));
-    g.stroke();
-    g.restore();
+    /* side profile (pre-rendered glow layer) */
+    g.drawImage(profileL, 0, 0);
     /* engine highlight */
     g.strokeStyle = AMB;
     g.lineWidth = 2;
@@ -1073,9 +1086,19 @@ export function initCockpit() {
   /* ============================== main loop ============================== */
   const clock = new THREE.Clock();
   let mfdAcc = 1;
+  /* The scene is a decorative background, so ~30fps is plenty: elapsed time
+     accumulates across skipped rAF ticks and a frame only renders once it
+     crosses FRAME_MIN (just under 1/30 s so 60/120 Hz displays land on 30). */
+  const FRAME_MIN = 1 / 34;
+  let frameAcc = 0;
+  let rafId = 0;
+  let running = false;
   function frame() {
-    if (!reducedMotion) requestAnimationFrame(frame);
-    const dt = Math.min(clock.getDelta(), 0.05);
+    if (running) rafId = requestAnimationFrame(frame);
+    frameAcc += Math.min(clock.getDelta(), 0.05);
+    if (running && frameAcc < FRAME_MIN) return;
+    const dt = Math.min(frameAcc, 0.05);
+    frameAcc = 0;
     const t = (S.t += dt);
 
     /* attitude: slow wandering bank + pitch + turbulence */
@@ -1135,5 +1158,35 @@ export function initCockpit() {
     renderer.render(scene, camera);
     drawHMD();
   }
-  frame();
+
+  if (reducedMotion) {
+    frame(); // one static frame, no loop
+    return;
+  }
+  /* Pause the loop while the tab is hidden or the canvas is scrolled out of
+     view; resume drops the paused interval so dt stays bounded. */
+  let pageVisible = document.visibilityState !== 'hidden';
+  let canvasInView = true;
+  function syncLoop() {
+    const shouldRun = pageVisible && canvasInView;
+    if (shouldRun === running) return;
+    running = shouldRun;
+    if (shouldRun) {
+      clock.getDelta();
+      rafId = requestAnimationFrame(frame);
+    } else {
+      cancelAnimationFrame(rafId);
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    pageVisible = document.visibilityState !== 'hidden';
+    syncLoop();
+  });
+  if (typeof IntersectionObserver === 'function') {
+    new IntersectionObserver((entries) => {
+      canvasInView = entries.some((entry) => entry.isIntersecting);
+      syncLoop();
+    }).observe(sceneCanvas);
+  }
+  syncLoop();
 }

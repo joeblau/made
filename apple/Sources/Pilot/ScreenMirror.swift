@@ -323,6 +323,31 @@ struct KeyframeRequestLatch {
     }
 }
 
+/// Admission gate for the periodic widget snapshot: throttles to one per
+/// interval and admits at most one render in flight, so a slow JPEG encode can
+/// never accumulate retained capture buffers from SCStream's shallow pool.
+/// Mutated only on the encoder's state queue.
+struct SnapshotGate {
+    let interval: Double
+    private(set) var isInFlight = false
+    private var lastAdmittedPTS: CMTime = .invalid
+
+    mutating func admit(pts: CMTime) -> Bool {
+        guard !isInFlight else { return false }
+        if lastAdmittedPTS.isValid {
+            let elapsed = (pts - lastAdmittedPTS).seconds
+            guard elapsed.isFinite, elapsed >= interval else { return false }
+        }
+        lastAdmittedPTS = pts
+        isInFlight = true
+        return true
+    }
+
+    mutating func finish() {
+        isInFlight = false
+    }
+}
+
 /// Off-main-actor object that receives SCStream frames, encodes them to HEVC,
 /// and forwards them to the ``FrameSender``. Kept separate from
 /// ``ScreenMirror`` because ScreenCaptureKit requires `nonisolated` delegate
@@ -389,12 +414,20 @@ fileprivate final class StreamOutput: NSObject, SCStreamDelegate, SCStreamOutput
     var onStop: (() -> Void)?
 
     // MARK: - Snapshot (low-rate JPEG still for Plotter's widget/Live Activity)
-    /// Reused CoreImage context for downscale + JPEG encode.
+    /// Reused CoreImage context for downscale + JPEG encode. CIContext is
+    /// thread-safe, so `snapshotQueue` can render with it while `stateQueue`
+    /// keeps encoding.
     private let ciContext = CIContext(options: [.cacheIntermediates: false])
-    /// PTS of the last snapshot we emitted, to throttle to one every few seconds.
-    private var lastSnapshotPTS: CMTime = .invalid
-    /// Seconds between snapshots — a widget only needs a recent still.
-    private let snapshotInterval: Double = 7
+    /// Throttles snapshots to one every few seconds — a widget only needs a
+    /// recent still — and to one render in flight.
+    private var snapshotGate = SnapshotGate(interval: 7)
+    /// Renders the snapshot off `stateQueue` so the CoreImage downscale + JPEG
+    /// encode (5-20 ms on a large frame) cannot stall frame admission, encode
+    /// submission, or encoded-sample emission, which all serialize there.
+    private let snapshotQueue = DispatchQueue(
+        label: "app.blau.screenmirror.snapshot",
+        qos: .utility
+    )
     /// Downscaled width for the snapshot JPEG (aspect preserved).
     private let snapshotWidth: CGFloat = 720
 
@@ -498,17 +531,30 @@ fileprivate final class StreamOutput: NSObject, SCStreamDelegate, SCStreamOutput
         }
     }
 
-    /// Every `snapshotInterval` seconds, downscale the captured frame to a small
-    /// JPEG and send it over the legacy `.jpeg` channel. Plotter stashes it in
-    /// the shared App Group container for its widget + Live Activity. This is
-    /// independent of the HEVC video stream.
+    /// Every `snapshotGate.interval` seconds, downscale the captured frame to a
+    /// small JPEG and send it over the legacy `.jpeg` channel. Plotter stashes
+    /// it in the shared App Group container for its widget + Live Activity.
+    /// This is independent of the HEVC video stream. Admission runs on
+    /// `stateQueue`; the render itself runs on `snapshotQueue` so it never
+    /// blocks the encode pipeline.
     private func maybeCaptureSnapshot(_ pixelBuffer: CVPixelBuffer, pts: CMTime) {
-        if lastSnapshotPTS.isValid {
-            let elapsed = (pts - lastSnapshotPTS).seconds
-            guard elapsed.isFinite, elapsed >= snapshotInterval else { return }
-        }
-        lastSnapshotPTS = pts
+        guard snapshotGate.admit(pts: pts) else { return }
 
+        // Reading the capture buffer concurrently with VTCompressionSession is
+        // safe (both are read-only); the gate bounds retention to one pool
+        // buffer at a time.
+        let request = EncodeRequest(pixelBuffer: pixelBuffer, presentationTimeStamp: pts)
+        snapshotQueue.async { [weak self] in
+            guard let self else { return }
+            self.renderSnapshot(request.pixelBuffer)
+            self.stateQueue.async { [weak self] in
+                self?.snapshotGate.finish()
+            }
+        }
+    }
+
+    /// Always on `snapshotQueue`.
+    private func renderSnapshot(_ pixelBuffer: CVPixelBuffer) {
         var image = CIImage(cvPixelBuffer: pixelBuffer)
         let width = image.extent.width
         if width > snapshotWidth, width > 0 {

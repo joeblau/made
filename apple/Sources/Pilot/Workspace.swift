@@ -164,9 +164,21 @@ enum TerminalFastCommandStore {
 }
 
 enum PersistentTerminalSession {
-    private static let runtimeCache = TerminalRuntimeCache<PaneRuntime> { sessionName in
+    /// One batched `list-panes -a` subprocess reports every pane's runtime at
+    /// once, so all the sidebar gauges and tab badges polling in the same tick
+    /// share a single tmux query instead of one `display-message` per session.
+    /// The cache holds a single entry for the whole server under this key.
+    private static let runtimeCacheKey = "all-panes"
+    private static let runtimeCache = TerminalRuntimeCache<[String: PaneRuntime]> { _ in
         guard let tmuxPath = tmuxExecutablePath() else { return nil }
-        return await loadPaneRuntime(sessionName: sessionName, executable: URL(fileURLWithPath: tmuxPath))
+        return await loadAllPaneRuntimes(executable: URL(fileURLWithPath: tmuxPath))
+    }
+
+    /// `capture-pane` has no tmux-side cache, so viewport snapshots get the
+    /// same TTL treatment as runtimes: at most one subprocess per second per
+    /// session, shared by every poller reading agent activity.
+    private static let contentsCache = TerminalRuntimeCache<String> { sessionName in
+        await captureVisibleContents(sessionName: sessionName)
     }
     private static let tmuxCandidates = [
         "/opt/homebrew/bin/tmux",
@@ -216,7 +228,8 @@ enum PersistentTerminalSession {
               let tmuxPath = tmuxExecutablePath() else { return }
 
         let sessionName = pane.persistentSessionName
-        runtimeCache.invalidate(sessionName)
+        runtimeCache.invalidate(runtimeCacheKey)
+        contentsCache.invalidate(sessionName)
         Task {
             _ = try? await ProcessRunner.run(ProcessInvocation(
                 executableURL: URL(fileURLWithPath: tmuxPath),
@@ -236,32 +249,71 @@ enum PersistentTerminalSession {
     /// the agent. Cursor visibility distinguishes an agent working from one
     /// parked at its input composer for agents that use the native cursor.
     static func paneRuntime(sessionName: String) -> PaneRuntime? {
-        runtimeCache.snapshot(for: sessionName)
+        runtimeCache.snapshot(for: runtimeCacheKey)?[sessionName]
     }
 
-    static func loadPaneRuntime(sessionName: String, executable: URL) async -> PaneRuntime? {
+    /// Whether a fresh batched runtime snapshot exists right now. `false`
+    /// means "unknown", not "no panes": the snapshot has aged out (Pilot sat
+    /// inactive past the cache TTL, or tmux is stalled) and this read has
+    /// already scheduled its refresh, so a poller that holds previous state
+    /// instead of committing nil-derived zeros converges on a later tick.
+    static func hasPaneRuntimeSnapshot() -> Bool {
+        runtimeCache.snapshot(for: runtimeCacheKey) != nil
+    }
+
+    static func loadAllPaneRuntimes(executable: URL) async -> [String: PaneRuntime]? {
         guard let result = try? await ProcessRunner.run(ProcessInvocation(
             executableURL: executable,
-            arguments: ["display-message", "-p", "-t", sessionName, "#{pane_pid}\t#{cursor_flag}"],
-            timeout: .seconds(1), standardOutputLimit: 4096, standardErrorLimit: 4096
+            arguments: [
+                "list-panes", "-a", "-F",
+                "#{session_name}\t#{pane_pid}\t#{cursor_flag}\t#{window_active}\t#{pane_active}",
+            ],
+            timeout: .seconds(1), standardOutputLimit: 256 * 1_024, standardErrorLimit: 4096
         )) else { return nil }
-        let text = result.standardOutputString
-        let fields = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(separator: "\t", omittingEmptySubsequences: false)
-        guard fields.count == 2,
-              let pid = pid_t(fields[0]),
-              pid > 0 else { return nil }
-        return PaneRuntime(shellPID: pid, cursorVisible: fields[1] == "1")
+        return parsePaneRuntimes(result.standardOutputString)
+    }
+
+    /// Parses batched `list-panes -a` output into per-session runtimes. The
+    /// tmux server also hosts the user's own sessions, so only `pilot-` names
+    /// are kept, and the output is untrusted: malformed lines and non-positive
+    /// pids are dropped and the map is bounded. A session split by hand lists
+    /// several panes; the active pane of the active window wins, matching the
+    /// pane that `display-message -t session` used to target.
+    static func parsePaneRuntimes(_ output: String) -> [String: PaneRuntime] {
+        var runtimes: [String: PaneRuntime] = [:]
+        var resolved: Set<String> = []
+        for line in output.split(separator: "\n") {
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count == 5 else { continue }
+            let session = String(fields[0])
+            let isActive = fields[3] == "1" && fields[4] == "1"
+            guard session.hasPrefix("pilot-"),
+                  !resolved.contains(session),
+                  runtimes[session] == nil || isActive,
+                  let pid = pid_t(fields[1]),
+                  pid > 0 else { continue }
+            if runtimes[session] == nil, runtimes.count >= 512 { break }
+            runtimes[session] = PaneRuntime(shellPID: pid, cursorVisible: fields[2] == "1")
+            if isActive { resolved.insert(session) }
+        }
+        return runtimes
     }
 
     static func paneShellPID(sessionName: String) -> pid_t? {
         paneRuntime(sessionName: sessionName)?.shellPID
     }
 
-    /// The visible viewport only, bounded so arbitrary terminal output cannot
-    /// grow an allocation without limit. Used for agents whose TUI does not
-    /// expose native-cursor state while waiting for input.
-    static func visibleContents(sessionName: String) async -> String? {
+    /// The visible viewport only, served from the snapshot cache: the first
+    /// read of a session returns `nil` and schedules the refresh, converging
+    /// by the caller's next poll tick.
+    static func visibleContents(sessionName: String) -> String? {
+        contentsCache.snapshot(for: sessionName)
+    }
+
+    /// Bounded so arbitrary terminal output cannot grow an allocation without
+    /// limit. Used for agents whose TUI does not expose native-cursor state
+    /// while waiting for input.
+    private static func captureVisibleContents(sessionName: String) async -> String? {
         guard let tmuxPath = tmuxExecutablePath() else { return nil }
         let invocation = ProcessInvocation(
             executableURL: URL(fileURLWithPath: tmuxPath),
@@ -750,12 +802,12 @@ final class Pane {
     /// these separate is important: an idle TUI remains a live child of the
     /// shell, but it should contribute only to the sidebar denominator.
     @MainActor
-    func liveShellAgentStatus() async -> LiveTerminalAgent? {
+    func liveShellAgentStatus() -> LiveTerminalAgent? {
         guard kind == .terminal,
               let runtime = PersistentTerminalSession.paneRuntime(sessionName: persistentSessionName),
               let agent = TerminalAgent.started(under: runtime.shellPID) else { return nil }
         let contents: String? = if agent.needsVisibleTerminalContentsForActivity {
-            await PersistentTerminalSession.visibleContents(sessionName: persistentSessionName)
+            PersistentTerminalSession.visibleContents(sessionName: persistentSessionName)
         } else {
             nil
         }
@@ -1286,7 +1338,15 @@ final class Workspace {
         let cachedDirectory = rootTrackingTerminalPane.currentDirectory
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let directory = (liveDirectory?.isEmpty == false ? liveDirectory! : cachedDirectory)
-        let repoRoot = directory.isEmpty ? nil : RepositoryStore.findGitRoot(from: directory)
+        // Resolved in-process: this runs on the main actor for every pane and
+        // workspace switch, so it must never block on a git subprocess — and
+        // never stat a network/FUSE mount, where a dead server blocks each
+        // ancestor stat until the mount's own timeout. The locality check
+        // reads only the kernel's cached mount table, so it cannot hang;
+        // when the shell sits off a local volume, keep the prior root rather
+        // than clear it on a walk we refuse to run.
+        if !directory.isEmpty, !GitStatus.isOnLocalVolume(path: directory) { return }
+        let repoRoot = directory.isEmpty ? nil : GitStatus.findWorkTreeRoot(from: directory)
         let nextRootPath = repoRoot ?? ""
 
         guard rootPath != nextRootPath else { return }

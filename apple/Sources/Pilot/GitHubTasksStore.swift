@@ -63,14 +63,16 @@ final class GitHubTasksStore {
     private var loadTask: Task<Void, Never>?
     private var pollTimer: Timer?
 
-    /// How often to re-poll `gh issue list` while the inspector is showing.
+    /// How often to re-poll `gh issue list` while the Tasks tab is showing.
     /// Matches `RepositoryStore`'s PR/Actions cadence.
     private static let pollInterval: TimeInterval = 30
 
-    /// Point the store at a repo (or `nil` to clear). Fetches immediately and
-    /// keeps the list live via a background poll, so the inspector auto-updates
-    /// without a manual refresh.
-    func load(directory: String?) {
+    /// Point the store at a repo (or `nil` to clear). While the Tasks tab is
+    /// visible this fetches immediately and keeps the list live via a
+    /// background poll; while it's hidden the store only tracks the repo
+    /// (still dropping a previous repo's issues on a switch) so a tab nobody
+    /// is reading spends no `gh` round-trips.
+    func load(directory: String?, isVisible: Bool = true) {
         let trimmed = directory?.trimmingCharacters(in: .whitespaces)
         guard let trimmed, !trimmed.isEmpty else {
             stopPolling()
@@ -89,8 +91,15 @@ final class GitHubTasksStore {
             // spinner until the first fetch lands.
             tasks = []
             errorMessage = nil
-            startPolling()
         }
+
+        guard isVisible else {
+            stopPolling()
+            isLoading = false
+            return
+        }
+
+        startPolling()
         // Spinner only when we have nothing to show; background polls update
         // silently so the list doesn't flash.
         fetch(showSpinner: tasks.isEmpty, policy: .automatic)

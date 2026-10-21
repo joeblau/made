@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -224,18 +225,23 @@ final class AgenticUsageStore {
     private var aggregateTask: Task<Void, Never>?
     private var hasLoadedOnce = false
     private var isRunning = false
+    private var occlusionObserver: NSObjectProtocol?
+    private var isDisplayVisible = true
+    private var skippedRefreshWhileHidden = false
 
     private static let rangeKey = "agenticUse.range"
 
     init(
         defaults: UserDefaults = .standard,
         sources: [AgenticUsageLoader.Source]? = nil,
-        pricingCatalog: AgenticPricingCatalog = AgenticPricingCatalog()
+        pricingCatalog: AgenticPricingCatalog = AgenticPricingCatalog(),
+        cacheURL: URL? = AgenticUsageLoader.defaultCacheURL()
     ) {
         self.defaults = defaults
         self.pricingCatalog = pricingCatalog
         self.loader = AgenticUsageLoader(
-            sources: sources ?? AgenticUsageLoader.defaultSources()
+            sources: sources ?? AgenticUsageLoader.defaultSources(),
+            cacheURL: cacheURL
         )
         self.range = defaults.string(forKey: Self.rangeKey)
             .flatMap(AgenticUseRange.init(rawValue:)) ?? .month
@@ -249,11 +255,21 @@ final class AgenticUsageStore {
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        isDisplayVisible = Self.hasVisibleWindow
+        skippedRefreshWhileHidden = false
+        observeWindowVisibility()
         load(initial: !hasLoadedOnce)
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .seconds(60)) } catch { return }
                 guard let self, isRunning else { return }
+                // onDisappear never fires for minimize, Hide, or occlusion,
+                // so the loop itself skips ticks nobody can see; the skipped
+                // work runs once on unhide instead.
+                guard isDisplayVisible else {
+                    skippedRefreshWhileHidden = true
+                    continue
+                }
                 if !isRefreshing, phase != .idle, hasLoadedOnce { load(initial: false) }
             }
         }
@@ -268,10 +284,47 @@ final class AgenticUsageStore {
         aggregateTask = nil
         refreshTask?.cancel()
         refreshTask = nil
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+        }
+        occlusionObserver = nil
+        skippedRefreshWhileHidden = false
         isRefreshing = false
         if case .scanning = phase, !hasLoadedOnce {
             phase = .idle
         }
+    }
+
+    // MARK: Window visibility
+
+    private func observeWindowVisibility() {
+        guard occlusionObserver == nil else { return }
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteWindowVisibilityChanged() }
+        }
+    }
+
+    private func noteWindowVisibilityChanged() {
+        guard isRunning else { return }
+        let visible = Self.hasVisibleWindow
+        guard visible != isDisplayVisible else { return }
+        isDisplayVisible = visible
+        if visible, skippedRefreshWhileHidden {
+            skippedRefreshWhileHidden = false
+            if !isRefreshing, phase != .idle, hasLoadedOnce { load(initial: false) }
+        }
+    }
+
+    /// Whether any app window can actually be seen. Minimize, Hide, and full
+    /// occlusion all clear `.visible`; the conservative any-window check
+    /// never pauses while a Pilot window is still on screen.
+    private static var hasVisibleWindow: Bool {
+        guard let app = NSApp else { return true }
+        return app.windows.contains { $0.isVisible && $0.occlusionState.contains(.visible) }
     }
 
     /// Manual refresh / the Retry and Rescan buttons.
@@ -332,7 +385,33 @@ final class AgenticUsageStore {
     private func apply(_ result: AgenticUsageLoader.LoadResult, pricingWarning: String?) {
         hasLoadedOnce = true
         isRefreshing = false
+        if !result.changed, phase == .loaded {
+            // No file changed; keep the ingested records but still recompute
+            // so the trailing window slides forward and any refreshed pricing
+            // rates apply. Rebuild the warning from current state (not only
+            // when non-nil) so a resolved pricing or transient load warning
+            // clears instead of sticking until a log file happens to change.
+            scanWarning = Self.warningText(for: result, pricingWarning: pricingWarning)
+            recompute()
+            return
+        }
         records = result.records
+        scanWarning = Self.warningText(for: result, pricingWarning: pricingWarning)
+        if records.isEmpty {
+            snapshot = nil
+            phase = .empty
+        } else {
+            phase = .loaded
+            recompute()
+        }
+    }
+
+    /// The non-fatal problems a load surfaced, joined for the warning banner;
+    /// `nil` when there are none, so a resolved warning clears.
+    private nonisolated static func warningText(
+        for result: AgenticUsageLoader.LoadResult,
+        pricingWarning: String?
+    ) -> String? {
         var warnings: [String] = []
         if result.unreadableFileCount > 0 {
             let plural = result.unreadableFileCount == 1 ? "" : "s"
@@ -342,14 +421,7 @@ final class AgenticUsageStore {
             warnings.append("Skipped \(result.skippedLineCount) oversized log lines; usage may be incomplete.")
         }
         if let pricingWarning { warnings.append(pricingWarning) }
-        scanWarning = warnings.isEmpty ? nil : warnings.joined(separator: " ")
-        if records.isEmpty {
-            snapshot = nil
-            phase = .empty
-        } else {
-            phase = .loaded
-            recompute()
-        }
+        return warnings.isEmpty ? nil : warnings.joined(separator: " ")
     }
 
     // MARK: Aggregation

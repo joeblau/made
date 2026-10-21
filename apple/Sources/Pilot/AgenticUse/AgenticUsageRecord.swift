@@ -2,7 +2,7 @@ import Foundation
 
 /// Which local agent CLI a usage record came from. Each provider has its own
 /// on-disk log format, parser, and dedup semantics in `AgenticUsageLoader`.
-enum AgenticProvider: String, Sendable, CaseIterable {
+enum AgenticProvider: String, Sendable, CaseIterable, Codable {
     case claude
     case codex
     case grok
@@ -27,7 +27,7 @@ enum AgenticProvider: String, Sendable, CaseIterable {
 /// only become billable after `AgenticUsageLoader` deduplicates on
 /// `dedupKey`. Token counts are kept in the raw categories the APIs report;
 /// `AgenticUsagePricing` turns them into dollars.
-struct AgenticUsageRecord: Sendable, Equatable {
+struct AgenticUsageRecord: Sendable, Equatable, Codable {
     let provider: AgenticProvider
     /// Provider-scoped identity for deduplication, or `nil` for records that
     /// never deduplicate (Grok and Kimi logs are append-once).

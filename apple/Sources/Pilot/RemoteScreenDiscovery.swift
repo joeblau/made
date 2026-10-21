@@ -40,10 +40,17 @@ final class RemoteScreenDiscovery {
 
     private(set) var services: [Service] = []
     private var browser: NWBrowser?
+    /// True between start() and stop(); gates the delayed restart so a pending
+    /// one can't resurrect browsing after the picker closes (stop() also nils
+    /// the browser, so `browser == nil` alone would not distinguish the two).
+    private var shouldBeRunning = false
+    private var restartTask: Task<Void, Never>?
+    private var restartAttempt = 0
 
     /// Start (idempotent) browsing for `_rfb._tcp`. Safe to call on every picker
     /// open; a no-op while a browser is already live.
     func start() {
+        shouldBeRunning = true
         guard browser == nil else { return }
         let parameters = NWParameters()
         parameters.includePeerToPeer = false
@@ -58,6 +65,7 @@ final class RemoteScreenDiscovery {
                 switch state {
                 case .ready:
                     self.browseState = .browsing
+                    self.restartAttempt = 0
                 case .waiting(let error):
                     // `.waiting` here almost always means macOS hasn't granted
                     // Pilot Local Network access (or `_rfb._tcp` isn't allowed in
@@ -79,15 +87,40 @@ final class RemoteScreenDiscovery {
     }
 
     func stop() {
+        shouldBeRunning = false
+        restartTask?.cancel()
+        restartTask = nil
+        restartAttempt = 0
         browser?.cancel()
         browser = nil
         services = []
         browseState = .idle
     }
 
+    /// Re-create the browser after `.failed`, waiting out an exponential backoff
+    /// so a persistently broken mDNS responder can't drive a tight
+    /// create/fail/restart loop on the main queue while the picker is open.
     private func restart() {
         browser = nil
-        start()
+        let delay = Self.restartDelay(attempt: restartAttempt, unitJitter: .random(in: 0..<1))
+        restartAttempt += 1
+        restartTask?.cancel()
+        restartTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard let self, !Task.isCancelled else { return }
+            guard self.shouldBeRunning, self.browser == nil else { return }
+            self.start()
+        }
+    }
+
+    /// Equal-jitter exponential backoff: `2^attempt` seconds capped at 30, then
+    /// randomized into the upper half of that window. `unitJitter` is a value in
+    /// [0, 1], injected so the schedule stays deterministic under test.
+    nonisolated static func restartDelay(attempt: Int, unitJitter: Double) -> Duration {
+        let cap = 30.0
+        let base = min(pow(2.0, Double(min(max(attempt, 0), 16))), cap)
+        let jitter = min(max(unitJitter, 0), 1)
+        return .seconds(base / 2 + base / 2 * jitter)
     }
 
     private func apply(_ results: Set<NWBrowser.Result>) {

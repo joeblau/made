@@ -250,6 +250,10 @@ private struct AndroidPickerView: View {
             // Devices come and go on the USB cable; keep the list fresh while
             // the picker is actually visible.
             guard isPolling else { return }
+            // Scans were paused while the picker was hidden or inactive; a
+            // reused emulator serial may now belong to a different AVD, so
+            // drop the serial→AVD cache before the next scan trusts it.
+            session.invalidateAVDSerialCache()
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 guard session.status == .picking, !session.isRefreshing else { continue }

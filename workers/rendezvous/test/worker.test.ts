@@ -131,6 +131,37 @@ describe("signaling", () => {
     expect((await fetch(oversized)).status).toBe(413);
   });
 
+  it("rejects an oversized streamed body without buffering it", async () => {
+    // No content-length header: the declared-length fast path cannot reject,
+    // so the bounded reader must stop pulling once the cap is crossed.
+    let pulled = 0;
+    let cancelled = false;
+    const chunk = new Uint8Array(1024).fill(0x20);
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const response = await fetch(
+      new Request(`${endpoint}/register`, {
+        method: "POST",
+        headers: {
+          "CF-Connecting-IP": "203.0.113.10",
+          "content-type": "application/json",
+        },
+        body,
+      }),
+    );
+    expect(response.status).toBe(413);
+    expect(cancelled).toBe(true);
+    // Allow a little readahead, but nothing near an unbounded buffer.
+    expect(pulled).toBeLessThanOrEqual(16 * 1024);
+  });
+
   it("requires the trusted Cloudflare source header in production", async () => {
     const response = await fetch(
       new Request(`${endpoint}/register`, {
@@ -218,6 +249,38 @@ describe("WebSocket relay", () => {
     );
     for (let index = 0; index < 61; index += 1) socket?.send("message");
     await expect(closed).resolves.toMatchObject({ code: 1008 });
+  });
+
+  it("relays messages without writing alarm storage", async () => {
+    const pairingToken = token();
+    const first = await fetch(upgradeRequest(pairingToken));
+    const second = await fetch(upgradeRequest(pairingToken));
+    expect(first.status).toBe(101);
+    expect(second.status).toBe(101);
+    first.webSocket?.accept();
+    second.webSocket?.accept();
+
+    const stub = env.ROOMS.get(env.ROOMS.idFromName(pairingToken));
+    let alarmWrites = 0;
+    await runInDurableObject(stub, async (_instance, state) => {
+      const original = state.storage.setAlarm.bind(state.storage);
+      state.storage.setAlarm = ((scheduledTime, options) => {
+        alarmWrites += 1;
+        return original(scheduledTime, options);
+      }) as typeof state.storage.setAlarm;
+    });
+
+    const relayed = new Promise<unknown>((resolve) => {
+      second.webSocket?.addEventListener("message", (event) => {
+        if (event.data === "hello") resolve(event.data);
+      });
+    });
+    first.webSocket?.send("hello");
+    await expect(relayed).resolves.toBe("hello");
+    expect(alarmWrites).toBe(0);
+
+    first.webSocket?.close();
+    second.webSocket?.close();
   });
 
   it("bounds relay throughput even below the message-count limit", async () => {
