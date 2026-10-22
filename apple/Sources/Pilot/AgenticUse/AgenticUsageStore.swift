@@ -198,6 +198,7 @@ final class AgenticUsageStore {
             guard range != oldValue else { return }
             defaults.set(range.rawValue, forKey: Self.rangeKey)
             recompute()
+            if isRunning { load(initial: !hasLoadedOnce) }
         }
     }
 
@@ -209,6 +210,7 @@ final class AgenticUsageStore {
 
     private let loader: AgenticUsageLoader
     private let pricingCatalog: AgenticPricingCatalog
+    private let cursorHistory: CursorUsageHistory
     private var pricingRates = AgenticUsagePricing.rates
     private(set) var pricingFetchedAt: Date?
     private var refreshTask: Task<Void, Never>?
@@ -238,10 +240,12 @@ final class AgenticUsageStore {
         defaults: UserDefaults = .standard,
         sources: [AgenticUsageLoader.Source]? = nil,
         pricingCatalog: AgenticPricingCatalog = AgenticPricingCatalog(),
+        cursorHistory: CursorUsageHistory = CursorUsageHistory(),
         cacheURL: URL? = AgenticUsageLoader.defaultCacheURL()
     ) {
         self.defaults = defaults
         self.pricingCatalog = pricingCatalog
+        self.cursorHistory = cursorHistory
         self.loader = AgenticUsageLoader(
             sources: sources ?? AgenticUsageLoader.defaultSources(),
             cacheURL: cacheURL
@@ -352,9 +356,12 @@ final class AgenticUsageStore {
         } else {
             isRefreshing = true
         }
-        loadTask = Task { [weak self, loader, pricingCatalog] in
+        let cursorEnabled = UsageConsent.isCursorEnabled(defaults: defaults)
+        let selectedRange = range
+        loadTask = Task { [weak self, loader, pricingCatalog, cursorHistory] in
             do {
                 async let pricing = pricingCatalog.load(force: forcePricing)
+                async let cursor = cursorHistory.load(enabled: cursorEnabled, range: selectedRange)
                 let result = try await loader.load { [weak self] scanned, total in
                     guard initial, let store = self else { return }
                     Task { @MainActor in
@@ -362,10 +369,11 @@ final class AgenticUsageStore {
                     }
                 }
                 let refreshedPricing = await pricing
+                let cursorResult = try await cursor
                 guard let self, !Task.isCancelled, generation == loadGeneration else { return }
                 pricingRates = refreshedPricing.rates
                 pricingFetchedAt = refreshedPricing.fetchedAt
-                apply(result, pricingWarning: refreshedPricing.warning)
+                apply(result, pricingWarning: refreshedPricing.warning, cursorResult: cursorResult)
             } catch is CancellationError {
                 // Whoever cancelled owns the state transition.
             } catch {
@@ -389,21 +397,20 @@ final class AgenticUsageStore {
         phase = .scanning(scanned: scanned, total: total)
     }
 
-    private func apply(_ result: AgenticUsageLoader.LoadResult, pricingWarning: String?) {
+    private func apply(
+        _ result: AgenticUsageLoader.LoadResult,
+        pricingWarning: String?,
+        cursorResult: CursorUsageHistory.Result
+    ) {
         hasLoadedOnce = true
         isRefreshing = false
-        if !result.changed, phase == .loaded {
-            // No file changed; keep the ingested records but still recompute
-            // so the trailing window slides forward and any refreshed pricing
-            // rates apply. Rebuild the warning from current state (not only
-            // when non-nil) so a resolved pricing or transient load warning
-            // clears instead of sticking until a log file happens to change.
-            scanWarning = Self.warningText(for: result, pricingWarning: pricingWarning)
-            recompute()
-            return
-        }
-        records = result.records
+        // Cursor history can change even when every local log is unchanged.
+        let cursorRecords = UsageConsent.isCursorEnabled(defaults: defaults) ? cursorResult.records : []
+        records = result.records + cursorRecords
         scanWarning = Self.warningText(for: result, pricingWarning: pricingWarning)
+        if UsageConsent.isCursorEnabled(defaults: defaults), let warning = cursorResult.warning {
+            scanWarning = [scanWarning, warning].compactMap { $0 }.joined(separator: " ")
+        }
         if records.isEmpty {
             snapshot = nil
             phase = .empty
@@ -490,8 +497,8 @@ final class AgenticUsageStore {
         }
         // "All" is unbounded for filtering; clamp the presented window (the
         // header subtitle and the chart's zero-fill span) to the oldest
-        // record. `records` arrive sorted ascending, so first is oldest.
-        if range == .all, let first = filtered.first {
+        // record across both local logs and Cursor history.
+        if range == .all, let first = filtered.min(by: { $0.timestamp < $1.timestamp }) {
             interval = DateInterval(start: calendar.startOfDay(for: first.timestamp), end: interval.end)
         }
 

@@ -1,10 +1,11 @@
 import Foundation
 
-/// Which local agent CLI a usage record came from. Each provider has its own
-/// on-disk log format, parser, and dedup semantics in `AgenticUsageLoader`.
+/// The CLI or editor a usage record came from. Local log parsing lives in
+/// `AgenticUsageLoader`; Cursor's dashboard history uses `CursorUsageHistory`.
 enum AgenticProvider: String, Sendable, CaseIterable, Codable {
     case claude
     case codex
+    case cursor
     case grok
     case kimi
 
@@ -12,6 +13,7 @@ enum AgenticProvider: String, Sendable, CaseIterable, Codable {
         switch self {
         case .claude: "Claude"
         case .codex: "Codex"
+        case .cursor: "Cursor"
         case .grok: "Grok"
         case .kimi: "Kimi"
         }
@@ -22,6 +24,7 @@ enum AgenticProvider: String, Sendable, CaseIterable, Codable {
         switch self {
         case .claude: "BrandAnthropic"
         case .codex: "BrandOpenAI"
+        case .cursor: "BrandCursor"
         case .grok: "BrandGrok"
         case .kimi: "BrandMoonshot"
         }
@@ -63,7 +66,7 @@ struct AgenticUsageRecord: Sendable, Equatable, Codable {
     let thinkingTokens: Int?
     /// Whether the call billed at the priority tier (Claude `speed: "fast"`).
     let isFast: Bool
-    /// Exact USD cost carried by the log itself (Grok's `costUsdTicks`).
+    /// Exact USD cost reported by the source (Grok logs or Cursor history).
     /// When present it wins over the pricing table.
     let nativeCostUSD: Double?
 
@@ -71,6 +74,11 @@ struct AgenticUsageRecord: Sendable, Equatable, Codable {
     /// global API-equivalent rates.
     var serviceTier: String? = nil
     var inferenceGeo: String? = nil
+
+    /// Cursor uses its own series identity while sharing underlying API rates.
+    var pricingModel: String {
+        model.hasPrefix("cursor/") ? String(model.dropFirst("cursor/".count)) : model
+    }
 
     /// Every token the API processed for this call.
     var totalTokens: Int {
@@ -123,6 +131,9 @@ enum AgenticModel {
     /// Non-Claude ids are already presentable ("gpt-5.6-sol", "k3") and pass
     /// through unchanged, as do unrecognized shapes, so nothing renders blank.
     static func displayName(for canonical: String) -> String {
+        if canonical.hasPrefix("cursor/") {
+            return "Cursor · " + displayName(for: String(canonical.dropFirst("cursor/".count)))
+        }
         guard canonical.hasPrefix("claude-") else { return canonical }
         let parts = canonical.dropFirst("claude-".count).split(separator: "-")
         guard let family = parts.first, !family.isEmpty else { return canonical }

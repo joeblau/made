@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Detail-area view for the global Agentic Use mode: a historical Claude Code
-/// cost dashboard parsed from the local `~/.claude/projects` transcripts.
+/// Historical agent usage from local CLI logs and opted-in Cursor history.
 ///
 /// Header bar over a scrolling stack of cards — hero total plus per-model
 /// breakdown, the daily cost chart, a five-cell stat row, and the breakdown
@@ -19,6 +18,9 @@ struct AgenticUseView: View {
         }
         .onAppear { store.start() }
         .onDisappear { store.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: UsageConsent.changedNotification)) { _ in
+            store.rescan()
+        }
     }
 
     // MARK: - Header bar
@@ -154,7 +156,7 @@ struct AgenticUseView: View {
                 ProgressView()
                     .controlSize(.small)
             }
-            Text("Scanning agent CLI logs…")
+            Text("Loading agent usage…")
                 .scaledFont(size: 12)
                 .foregroundStyle(.secondary)
             if total > 0 {
@@ -173,8 +175,8 @@ struct AgenticUseView: View {
             Label("No Usage Data", systemImage: "chart.line.uptrend.xyaxis")
         } description: {
             VStack(spacing: 6) {
-                Text("No agent CLI logs were found (Claude Code, Codex, Grok, or Kimi).")
-                Text("Run an agent session and this dashboard fills in.")
+                Text("No usage was found for Claude Code, Codex, Cursor, Grok, or Kimi.")
+                Text("Run an agent session, or enable Cursor usage in Settings.")
                     .foregroundStyle(.tertiary)
             }
         } actions: {
