@@ -39,7 +39,7 @@ struct CursorUsageHistoryTests {
         private var date = CursorUsageHistoryTests.now
 
         func now() -> Date { lock.withLock { date } }
-        func advance() { lock.withLock { date.addTimeInterval(601) } }
+        func advance(_ seconds: TimeInterval = 601) { lock.withLock { date.addTimeInterval(seconds) } }
     }
 
     private func history(_ stub: Stub, clock: Clock = Clock()) -> CursorUsageHistory {
@@ -157,6 +157,21 @@ struct CursorUsageHistoryTests {
         let result = try await history.load(enabled: true, range: .month)
         #expect(result.records.count == 1)
         #expect(result.records.first?.nativeCostUSD == 0.025)
+    }
+
+    @Test("Returning after a long pause fills the entire cached history gap even in a narrow range")
+    func refreshAfterLongPause() async throws {
+        let stub = Stub([page(), page()])
+        let clock = Clock()
+        let history = history(stub, clock: clock)
+        _ = try await history.load(enabled: true, range: .month)
+        clock.advance(7 * 86_400)
+        _ = try await history.load(enabled: true, range: .day)
+        let requests = await stub.requests
+        let data = try #require(requests.last?.httpBody)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let start = try #require(body["startDate"] as? String)
+        #expect(Double(start) == (Self.now.timeIntervalSince1970 - 86_400) * 1000)
     }
 
     @Test("Cursor-only history populates the dashboard and disappears when consent is disabled")

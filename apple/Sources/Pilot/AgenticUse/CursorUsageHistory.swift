@@ -58,7 +58,7 @@ actor CursorUsageHistory {
         // provisional values. A wider range loads the missing history too.
         let queryStart: Date
         if covered, let fetchedAt {
-            queryStart = max(start, fetchedAt.addingTimeInterval(-86_400))
+            queryStart = max(coveredStart ?? start, fetchedAt.addingTimeInterval(-86_400))
         } else {
             queryStart = start
         }
