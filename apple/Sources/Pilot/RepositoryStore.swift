@@ -251,7 +251,7 @@ final class RepositoryStore {
 
         var actions: [GitAction] = []
         var runs: [GitRun] = []
-        for item in items.prefix(10) {
+        for item in items.prefix(20) {
             guard let databaseID = item["databaseId"] as? Int else { continue }
             let name = item["name"] as? String ?? ""
             let title = item["displayTitle"] as? String ?? ""
