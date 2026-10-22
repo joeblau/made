@@ -607,6 +607,8 @@ actor AgenticUsageLoader {
             decodeGrokRecords(from: line, decoder: state.decoder, into: &state.records)
         case .kimi:
             if let record = decodeKimiRecord(from: line, decoder: state.decoder) { state.records.append(record) }
+        case .cursor:
+            break // Cursor history comes from its dashboard, not JSONL logs.
         }
     }
 
@@ -635,6 +637,7 @@ actor AgenticUsageLoader {
         case .codex: codexNeedles
         case .grok: grokNeedles
         case .kimi: kimiNeedles
+        case .cursor: []
         }
     }
 

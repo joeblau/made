@@ -4,7 +4,7 @@ import SwiftUI
 /// hero list, and breakdown table.
 ///
 /// Each provider owns one hue family — Claude orange, Codex blue, Grok
-/// purple, Kimi green — and every model inside a family gets its own shade
+/// purple, Kimi green, Cursor teal — and each model gets its own shade
 /// of that hue, iPhone-storage-bar style: the flagship model takes the
 /// deepest, most saturated step and adjacent models alternate lightness. Color
 /// follows the canonical model id — never chart order — so a model keeps its
@@ -29,6 +29,7 @@ enum AgenticUseModelPalette {
 
     /// Which provider's hue family a canonical model id belongs to.
     static func provider(for canonicalModel: String) -> AgenticProvider? {
+        if canonicalModel.hasPrefix("cursor/") { return .cursor }
         if canonicalModel.hasPrefix("claude-") { return .claude }
         if canonicalModel.hasPrefix("gpt-") { return .codex }
         if canonicalModel.hasPrefix("grok") { return .grok }
@@ -53,6 +54,7 @@ enum AgenticUseModelPalette {
         switch provider {
         case .claude: 27
         case .codex: 214
+        case .cursor: 185
         case .grok: 275
         case .kimi: 138
         }

@@ -20,6 +20,7 @@
 		07F1B6AD12372EFBA3B98E9A /* AgenticUsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67A2B4718DE8059B84367B8 /* AgenticUsageStore.swift */; };
 		08CA454023B86BFAC8BC7CE1 /* PilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B802877FCCBEB9F318728CDD /* PilotApp.swift */; };
 		08DD49F5AAEFF7B638031970 /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */; };
+		0A48AE7E34524871F0A92274 /* CursorUsageHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */; };
 		0ABA4A2179B50C85A13C6EB6 /* PlotterUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6013148EE4B3B5AAC6B3719A /* PlotterUITests.swift */; };
 		0AF3B095E3BC4FFB592C5745 /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F894A09A33E9EAE02EB8CF /* Workspace.swift */; };
 		0B0AE5A89351AACCBF8EB97B /* PeerSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072174CC5D47F85E892E627D /* PeerSyncService.swift */; };
@@ -48,6 +49,7 @@
 		1AEA8BA19CC862B3ED8AD226 /* GitHubTasksStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49BE3995F68E7CF284D531B /* GitHubTasksStore.swift */; };
 		1CBBEA8AE26C69B8050D281B /* DockerEngineClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B6894B06257EAC0A54053D9 /* DockerEngineClient.swift */; };
 		1E8634A2640A03720B032D49 /* ChromiumKitSupport.mm in Sources */ = {isa = PBXBuildFile; fileRef = F8D35A9879E13BFE1CA24AC8 /* ChromiumKitSupport.mm */; };
+		1F153D0F57E16BF640A2ACA1 /* CursorUsageHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80B23B3E4C6E3094EA9E25C /* CursorUsageHistory.swift */; };
 		20962CC5037E40D82C69BD9F /* WingmanDeliveryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD24581F338C2987036C440 /* WingmanDeliveryState.swift */; };
 		215ED32D633C89B6FDDBA247 /* UsageSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD99993E8B657F9B0A13D6EA /* UsageSettingsView.swift */; };
 		2289A58CCC3DADC0FC2E11DF /* AirPlayVideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F5C475300C597A18AC0E0D1 /* AirPlayVideoRenderer.swift */; };
@@ -518,6 +520,7 @@
 		2307A244B06EF550533AA6D0 /* UsageProviderAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageProviderAdapterTests.swift; sourceTree = "<group>"; };
 		245AF30397DB998A089D3DE7 /* ActiveConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveConnectionTests.swift; sourceTree = "<group>"; };
 		25F7342047ADD2BC10513404 /* PullRequestListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PullRequestListView.swift; sourceTree = "<group>"; };
+		265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageHistoryTests.swift; sourceTree = "<group>"; };
 		268DE5CA8E14D127C3AA54D3 /* AndroidInputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidInputInjector.swift; sourceTree = "<group>"; };
 		291474D85FF92A9D26A1ACC4 /* PersistenceReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceReportingTests.swift; sourceTree = "<group>"; };
 		29FBE1AF3B6C990F797CEBD1 /* ChromiumKit.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChromiumKit.h; sourceTree = "<group>"; };
@@ -788,6 +791,7 @@
 		F4B1CB42E023D3F070FE75AD /* CopilotUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotUITests.swift; sourceTree = "<group>"; };
 		F6BB061510E1CB0FE5CC715C /* FileFinderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileFinderTests.swift; sourceTree = "<group>"; };
 		F75191853E82811C304A16BF /* BrowserController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserController.swift; sourceTree = "<group>"; };
+		F80B23B3E4C6E3094EA9E25C /* CursorUsageHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageHistory.swift; sourceTree = "<group>"; };
 		F8BBD45248A0E9BB55D36174 /* TerminalRuntimeCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalRuntimeCacheTests.swift; sourceTree = "<group>"; };
 		F8D35A9879E13BFE1CA24AC8 /* ChromiumKitSupport.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ChromiumKitSupport.mm; sourceTree = "<group>"; };
 		F927D073C933040C7FC25A5B /* CryptoCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CryptoCore.swift; sourceTree = "<group>"; };
@@ -879,6 +883,7 @@
 				854F5C59C2F6EDF14C12B73F /* ChromiumRealEngineSmokeTests.swift */,
 				3D84F3E5C1D0ECFF89593BF3 /* ChromiumSecurityPolicyTests.swift */,
 				0EA8E47EFDBB2F97086B2ADF /* ColorChipTests.swift */,
+				265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */,
 				6D20724997EA356496283A78 /* DeviceCaptureLifecycleTests.swift */,
 				553A35BBB5134886F77EA5F0 /* DockerContainerDecodingTests.swift */,
 				E0D1B4F15F96F23AFD699685 /* DockerEngineSmokeTests.swift */,
@@ -1229,6 +1234,7 @@
 				31BD7F8FEA34B2C3CD4CD25C /* AgenticUseModelPalette.swift */,
 				D04DE326CA4180BF5BA79267 /* AgenticUseStatRow.swift */,
 				35C6BA77D947DC977F50CA82 /* AgenticUseView.swift */,
+				F80B23B3E4C6E3094EA9E25C /* CursorUsageHistory.swift */,
 			);
 			path = AgenticUse;
 			sourceTree = "<group>";
@@ -1907,6 +1913,7 @@
 				80BE92B32FA6EEDBE84BB724 /* ContentView.swift in Sources */,
 				0FE4217F98C0853005FF7083 /* CryptoCore.swift in Sources */,
 				9C1DAF0C3371AB3219BBE4DE /* CursorUsageAdapter.swift in Sources */,
+				1F153D0F57E16BF640A2ACA1 /* CursorUsageHistory.swift in Sources */,
 				76BE4FD1BED943E5DA2CE4D0 /* DeviceCaptureRegistry.swift in Sources */,
 				DE9D205939F35BDE73B4CA1B /* DeviceCaptureSession.swift in Sources */,
 				AD355A463C2DCAEF572D8586 /* DeviceIdentity.swift in Sources */,
@@ -2150,6 +2157,7 @@
 				96AF60125EA20ABCA2059AD1 /* ChromiumRealEngineSmokeTests.swift in Sources */,
 				00C646AB06BACDB7D1C56EA8 /* ChromiumSecurityPolicyTests.swift in Sources */,
 				F25EB271FD6F50B0A08CD3F0 /* ColorChipTests.swift in Sources */,
+				0A48AE7E34524871F0A92274 /* CursorUsageHistoryTests.swift in Sources */,
 				B0DC4F509CE9C37A11AAACBD /* DeviceCaptureLifecycleTests.swift in Sources */,
 				FDD63501A309DB55427BF066 /* DockerContainerDecodingTests.swift in Sources */,
 				1759C87EC9985DFE5E832530 /* DockerEngineSmokeTests.swift in Sources */,

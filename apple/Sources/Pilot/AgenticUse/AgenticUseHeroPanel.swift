@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Left column of the dashboard: the raw-token-cost hero number over one
-/// section per provider (Claude, Codex, Grok, Kimi), each led by a
+/// section per provider (Claude, Codex, Cursor, Grok, Kimi), each led by a
 /// storage-style stacked bar of that provider's models with the provider's
 /// model rows below as its legend.
 struct AgenticUseHeroPanel: View {
@@ -118,7 +118,7 @@ private struct AgenticUseProviderSection: View {
 }
 
 /// A provider bucket of the hero list, keyed by display name ("Claude",
-/// "Codex", "Grok", "Kimi", or "Other" for unrecognized models).
+/// "Codex", "Cursor", "Grok", "Kimi", or "Other" for unrecognized models).
 struct AgenticProviderGroup: Identifiable {
     /// nil for the "Other" bucket of unrecognized models.
     let provider: AgenticProvider?

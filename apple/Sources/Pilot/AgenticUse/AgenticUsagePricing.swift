@@ -171,7 +171,7 @@ enum AgenticUsagePricing {
     /// unless the record carries a native cost, which is exact and wins.
     static func cost(of record: AgenticUsageRecord, rates: [String: AgenticModelRate] = rates) -> Double? {
         if let native = record.nativeCostUSD { return native }
-        guard let rate = rates[record.model] else { return nil }
+        guard let rate = rates[record.pricingModel] else { return nil }
         let effective = effectiveRates(for: rate, record: record)
         let write1h = min(record.cacheWrite1hTokens, record.cacheWriteTokens)
         let write5m = record.cacheWriteTokens - write1h
@@ -188,7 +188,7 @@ enum AgenticUsagePricing {
     /// meaningful. `nil` when the model is unpriced (native-cost records
     /// still need a table entry to have a baseline).
     static func fullRateCost(of record: AgenticUsageRecord, rates: [String: AgenticModelRate] = rates) -> Double? {
-        guard let rate = rates[record.model] else { return nil }
+        guard let rate = rates[record.pricingModel] else { return nil }
         let effective = effectiveRates(for: rate, record: record)
         let total = Double(record.observedInputTokens) * effective.input
             + Double(record.outputTokens) * effective.output
