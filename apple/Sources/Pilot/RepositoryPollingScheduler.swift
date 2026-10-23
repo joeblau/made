@@ -300,6 +300,7 @@ actor RepositoryPollingScheduler {
           headSha: .head_sha,
           name,
           createdAt: .created_at,
+          startedAt: .run_started_at,
           updatedAt: .updated_at,
           url: .html_url,
           actor: .actor.login
