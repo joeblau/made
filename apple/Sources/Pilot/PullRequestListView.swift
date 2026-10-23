@@ -697,8 +697,7 @@ struct ActionsListView: View {
                         Text(String(action.headSha.prefix(7)))
                             .font(.system(.subheadline, design: .monospaced))
                             .foregroundStyle(.tertiary)
-                        // Hash • user • time ago, matching the Commits and
-                        // Tasks metadata lines.
+                        // Hash • user • duration • time ago.
                         if !action.actor.isEmpty {
                             Text("•")
                                 .font(.subheadline)
@@ -708,6 +707,15 @@ struct ActionsListView: View {
                                 .foregroundStyle(.tertiary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
+                        }
+                        if !action.duration.isEmpty {
+                            Text("•")
+                                .font(.subheadline)
+                                .foregroundStyle(.quaternary)
+                            Text(action.duration)
+                                .font(.subheadline)
+                                .foregroundStyle(.tertiary)
+                                .fixedSize()
                         }
                         if !action.elapsed.isEmpty {
                             Text("•")

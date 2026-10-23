@@ -24,6 +24,8 @@ struct WorkspaceSidebarList<WorkspaceRow: View>: View {
                     .tag(SidebarSelection.docker)
                 Label("Agentic Use", systemImage: "chart.bar.xaxis")
                     .tag(SidebarSelection.agenticUse)
+                Label("Runners", systemImage: "server.rack")
+                    .tag(SidebarSelection.runners)
             }
 
             if !pinned.isEmpty {

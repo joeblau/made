@@ -20,11 +20,35 @@ struct GitAction: Identifiable {
     let headSha: String
     let status: String
     let conclusion: String
+    let duration: String
     let elapsed: String
     let url: String
     /// GitHub login of whoever triggered the run — the pusher for a normal
     /// commit, or whoever hit re-run. Empty when GitHub reports no actor.
     let actor: String
+
+    static func formattedDuration(
+        startedAt: String,
+        updatedAt: String,
+        status: String,
+        now: Date = Date()
+    ) -> String {
+        guard let start = RelativeTime.parseISODate(startedAt) else { return "" }
+        let end: Date
+        switch status {
+        case "completed":
+            guard let finished = RelativeTime.parseISODate(updatedAt) else { return "" }
+            end = finished
+        case "in_progress":
+            end = now
+        default:
+            return ""
+        }
+        let seconds = Int(max(0, end.timeIntervalSince(start)))
+        if seconds >= 3_600 { return "\(seconds / 3_600)h" }
+        if seconds >= 60 { return "\(seconds / 60)m" }
+        return "\(seconds)s"
+    }
 }
 
 struct GitRun: Identifiable {
@@ -268,6 +292,11 @@ final class RepositoryStore {
                 headSha: item["headSha"] as? String ?? "",
                 status: statusStr,
                 conclusion: conclusionStr,
+                duration: GitAction.formattedDuration(
+                    startedAt: item["startedAt"] as? String ?? "",
+                    updatedAt: item["updatedAt"] as? String ?? "",
+                    status: statusStr
+                ),
                 elapsed: createdAt.isEmpty ? "" : Self.relativeTime(from: createdAt),
                 url: item["url"] as? String ?? "",
                 actor: item["actor"] as? String ?? ""

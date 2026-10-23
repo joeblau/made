@@ -7,5 +7,6 @@ enum SidebarSelection: Hashable {
     case remoteDesktop
     case docker
     case agenticUse
+    case runners
     case workspace(UUID)
 }
