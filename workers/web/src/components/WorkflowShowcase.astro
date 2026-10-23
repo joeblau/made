@@ -1,0 +1,103 @@
+---
+import CockpitScreenshot from './CockpitScreenshot.astro';
+
+const chapters = [
+  {
+    id: 'agents',
+    number: '01',
+    label: 'AGENTIC WORKSPACE',
+    title: 'Run in parallel. Stay in context.',
+    description: 'Put agents side by side, compare their progress, and keep source, tests, notes, and project files in the same workspace.',
+    features: ['Parallel agent terminals', 'Editor and test results', 'Notes and project files'],
+    scene: 'workspace',
+    caption: 'Two agents. One shared mission.',
+    alt: 'Cockpit running Claude Code and Codex side by side with project context and test output',
+  },
+  {
+    id: 'previews',
+    number: '02',
+    label: 'MULTIMODAL FEEDBACK',
+    title: 'See the work as it takes shape.',
+    description: 'Move from a prompt to a browser preview to a real device without rebuilding your context in another tool.',
+    features: ['Browser previews beside agents', 'Device capture and simulators', 'Remote screens in the same workspace'],
+    scene: 'browser',
+    caption: 'Code and feedback, side by side.',
+    alt: 'Cockpit showing a web preview beside an active agent terminal',
+  },
+  {
+    id: 'delivery',
+    number: '03',
+    label: 'DELIVERY PIPELINE',
+    title: 'From green checks to shipped.',
+    description: 'Keep GitHub tasks, pull requests, Actions, runners, containers, and remote machines within reach of the work itself.',
+    features: ['Tasks, pull requests, and Actions', 'macOS and Linux runner fleets', 'Docker and remote development'],
+    scene: 'actions',
+    caption: 'The whole pipeline, in frame.',
+    alt: 'Cockpit inspecting GitHub Actions workflow runs and a failing job',
+  },
+  {
+    id: 'usage',
+    number: '04',
+    label: 'AGENTIC USE',
+    title: 'Know what every token costs.',
+    description: 'Track provider plans, API-equivalent spend, token volume, and cache savings across the models that move your work forward.',
+    features: ['Provider cost and plan visibility', 'Token and cache analytics', 'Model and day breakdowns'],
+    scene: 'agentic-use',
+    caption: 'Usage you can act on.',
+    alt: 'Cockpit Agentic Use dashboard with provider costs, token totals, and cache savings',
+  },
+];
+---
+
+<section class="workflow section" id="workflows" aria-labelledby="workflow-title" data-workflows>
+  <div class="section-heading" data-reveal>
+    <p class="eyebrow">01 / INSIDE THE COCKPIT</p>
+    <h2 id="workflow-title">One workspace.<br /><span>Zero scattered context.</span></h2>
+    <p>From the first prompt to the final check, every part of the build has a place.</p>
+  </div>
+  <div class="workflow__scroll">
+    <div class="workflow__stage">
+      <div class="workflow__screen">
+        {chapters.map((chapter, index) => (
+          <figure class:list={['workflow__slide', index === 0 && 'is-active']} data-workflow-slide={index}>
+            <CockpitScreenshot scene={chapter.scene} alt={chapter.alt} />
+            <figcaption>
+              <span>{chapter.caption}</span>
+              <span>{chapter.number} / 04</span>
+            </figcaption>
+          </figure>
+        ))}
+      </div>
+      <div class="workflow__controls" aria-label="Choose a workflow chapter">
+        {chapters.map((chapter, index) => (
+          <button
+            type="button"
+            class:list={['workflow__jump', index === 0 && 'is-active']}
+            data-workflow-jump={index}
+            aria-label={`Show ${chapter.label.toLowerCase()} chapter`}
+            aria-pressed={index === 0 ? 'true' : 'false'}
+          >
+            <span>{chapter.number}</span><span class="workflow__jump-line" aria-hidden="true"></span>
+          </button>
+        ))}
+      </div>
+    </div>
+    <div class="workflow__chapters">
+      {chapters.map((chapter) => (
+        <article class="workflow__chapter" id={`workflow-${chapter.id}`} data-workflow-chapter>
+          <div class="workflow__chapter-mobile-shot">
+            <CockpitScreenshot scene={chapter.scene} alt={chapter.alt} />
+          </div>
+          <div class="workflow__chapter-inner">
+            <p class="eyebrow">{chapter.number} / {chapter.label}</p>
+            <h3>{chapter.title}</h3>
+            <p>{chapter.description}</p>
+            <ul>
+              {chapter.features.map((feature) => <li>{feature}</li>)}
+            </ul>
+          </div>
+        </article>
+      ))}
+    </div>
+  </div>
+</section>

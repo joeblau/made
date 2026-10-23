@@ -293,7 +293,7 @@ private struct NoteEditor: View {
 /// directly (⇧⌘L multi-cursor), and attaching a `MarkdownStyler` as the text
 /// storage delegate so markdown renders in place as you type. The raw markdown
 /// source stays editable and is what we persist — only attributes change.
-private struct NoteTextView: NSViewRepresentable {
+struct NoteTextView: NSViewRepresentable {
     @Binding var text: String
     let fontSize: CGFloat
     let wordWrapColumns: Int?

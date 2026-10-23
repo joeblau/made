@@ -1,0 +1,31 @@
+---
+import { MACOS_RELEASE_URL } from '../data/downloads';
+---
+
+<a class="skip-link" href="#content">Skip to content</a>
+<header class="site-header" data-site-header>
+  <div class="site-header__inner">
+    <a class="brand" href="#top" aria-label="made home">made<span aria-hidden="true">.</span></a>
+    <nav class="site-header__nav" aria-label="Primary navigation">
+      <a href="#workflows">Workflows</a>
+      <a href="#capabilities">Capabilities</a>
+      <a href="#companions">Companions</a>
+      <a href="#security">Security</a>
+    </nav>
+    <div class="site-header__actions">
+      <a class="site-header__download" href={MACOS_RELEASE_URL}>
+        <span>Download</span><span aria-hidden="true">↗</span>
+      </a>
+      <button class="theme-toggle" type="button" data-theme-toggle aria-label="Switch color theme" aria-pressed="false">
+        <svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.5" />
+          <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41" />
+        </svg>
+        <svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M20.4 15.2A8.7 8.7 0 0 1 8.8 3.6 8.7 8.7 0 1 0 20.4 15.2Z" />
+        </svg>
+        <span class="sr-only" data-theme-label>Switch color theme</span>
+      </button>
+    </div>
+  </div>
+</header>

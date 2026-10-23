@@ -1,0 +1,85 @@
+---
+import CockpitScreenshot from './CockpitScreenshot.astro';
+
+const capabilities = [
+  {
+    label: 'EDITOR + TESTS',
+    title: 'Close the loop without leaving.',
+    description: 'Read the code, make the change, and see the test result in one continuous flow.',
+    scene: 'editor',
+    alt: 'Cockpit editor with Atlas API source code and passing test results',
+  },
+  {
+    label: 'DEVICE + PREVIEW',
+    title: 'Every pixel has a place.',
+    description: 'Keep responsive web previews and captured device screens beside the agents building them.',
+    scene: 'device',
+    alt: 'Cockpit with a browser preview beside a captured iPhone screen',
+  },
+  {
+    label: 'RUNNER FLEETS',
+    title: 'Your compute, at a glance.',
+    description: 'See idle, busy, and offline macOS and Linux runners before you dispatch the next job.',
+    scene: 'runners',
+    alt: 'Cockpit showing an eight-machine macOS and Linux runner fleet',
+  },
+  {
+    label: 'DOCKER',
+    title: 'Containers without the detour.',
+    description: 'Inspect Compose stacks and standalone services, follow status, and control local containers beside your code.',
+  },
+  {
+    label: 'REMOTE DESKTOP',
+    title: 'Every screen is a work surface.',
+    description: 'Bring remote development screens, simulators, and device capture into the same visual field.',
+  },
+  {
+    label: 'PROJECT FLOW',
+    title: 'The details stay in orbit.',
+    description: 'Notes, files, tasks, pull requests, and GitHub Actions stay connected to the workspace they belong to.',
+  },
+];
+---
+
+<section class="capabilities section" id="capabilities" aria-labelledby="capabilities-title">
+  <div class="section-heading section-heading--row" data-reveal>
+    <div>
+      <p class="eyebrow">02 / MORE IN REACH</p>
+      <h2 id="capabilities-title">Not just an editor.<br /><span>Your entire operation.</span></h2>
+    </div>
+    <div class="rail-controls" aria-label="Capability carousel controls">
+      <button type="button" data-rail-previous aria-label="Previous capabilities" aria-controls="capability-rail" disabled><span aria-hidden="true">←</span></button>
+      <button type="button" data-rail-next aria-label="Next capabilities" aria-controls="capability-rail"><span aria-hidden="true">→</span></button>
+    </div>
+  </div>
+  <div
+    class="capability-rail"
+    id="capability-rail"
+    data-capability-rail
+    tabindex="0"
+    role="region"
+    aria-label="Cockpit capabilities"
+  >
+    {capabilities.map((capability, index) => (
+      <article class="capability-card">
+        <div class="capability-card__visual">
+          {capability.scene ? (
+            <CockpitScreenshot scene={capability.scene} alt={capability.alt} />
+          ) : (
+            <div class="capability-card__abstract" aria-hidden="true">
+              <span class="capability-card__index">0{index + 1}</span>
+              <span class="capability-card__orb"></span>
+              <span class="capability-card__orbit"></span>
+            </div>
+          )}
+        </div>
+        <div class="capability-card__content">
+          <p class="eyebrow">0{index + 1} / {capability.label}</p>
+          <h3>{capability.title}</h3>
+          <p>{capability.description}</p>
+        </div>
+      </article>
+    ))}
+  </div>
+  <p class="capabilities__hint" aria-hidden="true">DRAG, SWIPE, OR USE THE ARROWS</p>
+</section>

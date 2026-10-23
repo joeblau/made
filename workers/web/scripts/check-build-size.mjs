@@ -3,11 +3,11 @@
  * module graph the built HTML actually references (see script-graph.mjs):
  *
  *   initial  - <script src>/modulepreload entries and their static imports.
- *              This is the critical path for the download slate and must stay
- *              free of Three.js. Measured at 3,517 raw / 1,771 gzip bytes
- *              with the cockpit loader and the QR dialog.
- *   deferred - dynamic import() chunks, i.e. the decorative cockpit scene
- *              fetched after load. Measured at 535,648 raw / 133,953 gzip.
+ *              This is the critical path for theme, downloads, and the cockpit
+ *              loader and must stay free of Three.js. Measured at 6,522 raw /
+ *              3,182 gzip bytes.
+ *   deferred - dynamic import() chunks: the decorative cockpit scene and
+ *              optional interactions. Measured at 570,536 raw / 142,924 gzip.
  *
  * Thresholds leave roughly 10-15% headroom over the measured sizes (raw and
  * gzip -9 are both enforced). Modules no page references are reported but not

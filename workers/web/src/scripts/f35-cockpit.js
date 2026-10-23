@@ -1,9 +1,8 @@
 /*
- * F-35 cockpit flight scene, rendered as the landing-page background.
- * Ported from a standalone three.js r128 page; three stays pinned to 0.128.x
- * because light intensities and color management changed in later majors.
- * Sound, hints, and CDN loading from the original were dropped: the CSP only
- * allows same-origin bundles and the background never receives pointer events.
+ * F-35 cockpit flight scene, rendered as the landing-page hero background.
+ * Ported from a standalone three.js page. Sound, hints, and CDN loading from
+ * the original were dropped: the CSP only allows same-origin bundles and the
+ * background never receives pointer events.
  */
 import * as THREE from 'three';
 
@@ -26,6 +25,11 @@ export function initCockpit(root = document) {
     c.height = h;
     return c;
   };
+  const colorTexture = (canvas) => {
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    return texture;
+  };
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -38,6 +42,7 @@ export function initCockpit(root = document) {
   } catch {
     return null; // WebGL unavailable; the loader keeps the static fallback.
   }
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0xcfe0ee, 9000, 42000);
@@ -53,11 +58,11 @@ export function initCockpit(root = document) {
 
   /* ============================== lights ============================== */
   const SUN_DIR = new THREE.Vector3(-0.42, 0.52, -0.74).normalize();
-  scene.add(new THREE.HemisphereLight(0xcfe2ff, 0x35383d, 0.9));
-  const sun = new THREE.DirectionalLight(0xfff2dc, 1.55);
+  scene.add(new THREE.HemisphereLight(0xcfe2ff, 0x35383d, 0.9 * Math.PI));
+  const sun = new THREE.DirectionalLight(0xfff2dc, 1.55 * Math.PI);
   sun.position.copy(SUN_DIR).multiplyScalar(60);
   scene.add(sun);
-  scene.add(new THREE.AmbientLight(0x40464e, 0.35));
+  scene.add(new THREE.AmbientLight(0x40464e, 0.35 * Math.PI));
 
   /* ============================== sky dome ============================== */
   const skyMat = new THREE.ShaderMaterial({
@@ -85,6 +90,8 @@ export function initCockpit(root = document) {
         float s=max(dot(d,sunDir),0.);
         col+=sunCol*(pow(s,1400.)*9.0+pow(s,44.)*0.42+pow(s,4.5)*0.12);
         gl_FragColor=vec4(col,1.);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`,
   });
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(32000, 40, 24), skyMat));
@@ -100,7 +107,7 @@ export function initCockpit(root = document) {
     g.fillStyle = gr;
     g.fillRect(0, 0, 128, 128);
     const sp = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: new THREE.CanvasTexture(c),
+      map: colorTexture(c),
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       transparent: true,
@@ -126,7 +133,7 @@ export function initCockpit(root = document) {
       g.arc(x, y, r, 0, 7);
       g.fill();
     }
-    return new THREE.CanvasTexture(c);
+    return colorTexture(c);
   }
   const cloudTexs = [cloudTexture(), cloudTexture(), cloudTexture()];
   const clouds = [];
@@ -178,7 +185,7 @@ export function initCockpit(root = document) {
     for (let y = 0; y <= S; y += 16) (y === 0 ? g.moveTo : g.lineTo).call(g, x0 + Math.sin(y / S * Math.PI * 4) * 60, y);
     g.stroke();
     g.globalAlpha = 1;
-    const t = new THREE.CanvasTexture(c);
+    const t = colorTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(7, 7);
     return t;
@@ -229,8 +236,8 @@ export function initCockpit(root = document) {
 
   /* ---- screen canvases / textures ---- */
   const leftC = cnv(820, 606), rightC = cnv(820, 606), standC = cnv(200, 150), stripC = cnv(700, 56);
-  const leftT = new THREE.CanvasTexture(leftC), rightT = new THREE.CanvasTexture(rightC),
-    standT = new THREE.CanvasTexture(standC), stripT = new THREE.CanvasTexture(stripC);
+  const leftT = colorTexture(leftC), rightT = colorTexture(rightC),
+    standT = colorTexture(standC), stripT = colorTexture(stripC);
   const screenMat = (t) => new THREE.MeshBasicMaterial({ map: t });
 
   /* generic small switch-panel texture */
@@ -272,7 +279,7 @@ export function initCockpit(root = document) {
       }
       y += ph + 9;
     }
-    return new THREE.CanvasTexture(c);
+    return colorTexture(c);
   }
   /* ICP keypad texture */
   function keypadTexture() {
@@ -290,7 +297,7 @@ export function initCockpit(root = document) {
       g.textAlign = 'center';
       g.fillText(String((r * 5 + col + 1) % 10), x + 18, y + 21);
     }
-    return new THREE.CanvasTexture(c);
+    return colorTexture(c);
   }
   /* yellow/black stripe texture (ejection handle) */
   function stripeTexture() {
@@ -307,7 +314,7 @@ export function initCockpit(root = document) {
       g.closePath();
       g.fill();
     }
-    const t = new THREE.CanvasTexture(c);
+    const t = colorTexture(c);
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.repeat.set(8, 1);
     return t;
@@ -1054,25 +1061,26 @@ export function initCockpit(root = document) {
 
   /* ============================== input ============================== */
   let lookX = 0, lookY = 0, tgtX = 0, tgtY = 0;
+  const interactionRoot = root.closest('[data-hero]') ?? root;
   const coarsePointer = matchMedia('(pointer: coarse)').matches;
   if (!coarsePointer) {
     // Desktop: absolute mouse position steers the view. Skipped on touch
     // devices so iOS's synthetic mousemove after a tap can't snap the camera.
-    addEventListener('mousemove', (e) => {
-      tgtX = clamp((e.clientX / W - 0.5) * 2, -1, 1);
-      tgtY = clamp((e.clientY / H - 0.5) * 2, -1, 1);
+    interactionRoot.addEventListener('mousemove', (e) => {
+      const bounds = root.getBoundingClientRect();
+      tgtX = clamp(((e.clientX - bounds.left) / bounds.width - 0.5) * 2, -1, 1);
+      tgtY = clamp(((e.clientY - bounds.top) / bounds.height - 0.5) * 2, -1, 1);
     });
   }
-  // Touch: dragging pans the cockpit view while the page content stays
-  // pinned — deltas accumulate, so lifting the finger keeps the view put.
+  // Touch pans only inside the hero; normal page scrolling stays untouched.
   let lastTX = null, lastTY = null;
-  addEventListener('touchstart', (e) => {
+  interactionRoot.addEventListener('touchstart', (e) => {
     if (e.touches.length === 1) {
       lastTX = e.touches[0].clientX;
       lastTY = e.touches[0].clientY;
     }
   }, { passive: true });
-  addEventListener('touchmove', (e) => {
+  interactionRoot.addEventListener('touchmove', (e) => {
     const t = e.touches[0];
     if (!t || lastTX === null) return;
     tgtX = clamp(tgtX - (t.clientX - lastTX) * 2.2 / W, -1, 1);
@@ -1080,16 +1088,18 @@ export function initCockpit(root = document) {
     lastTX = t.clientX;
     lastTY = t.clientY;
   }, { passive: true });
-  addEventListener('touchend', () => {
+  const resetTouch = () => {
     lastTX = null;
     lastTY = null;
-  }, { passive: true });
+  };
+  interactionRoot.addEventListener('touchend', resetTouch, { passive: true });
+  interactionRoot.addEventListener('touchcancel', resetTouch, { passive: true });
   addEventListener('keydown', (e) => {
     if (e.key === 'h' || e.key === 'H') S.hmd = !S.hmd;
   });
 
   /* ============================== main loop ============================== */
-  const clock = new THREE.Clock();
+  const timer = new THREE.Timer();
   const MFD_INTERVAL = 1 / 12;
   let mfdAcc = 1; // paint the instruments on the very first frame
   /* The scene is a decorative background, so ~30fps is plenty: elapsed time
@@ -1101,7 +1111,8 @@ export function initCockpit(root = document) {
   let running = false;
   function frame() {
     if (running) rafId = requestAnimationFrame(frame);
-    frameAcc += Math.min(clock.getDelta(), 0.05);
+    timer.update();
+    frameAcc += Math.min(timer.getDelta(), 0.05);
     if (running && frameAcc < FRAME_MIN) return;
     const dt = Math.min(frameAcc, 0.05);
     frameAcc = 0;
@@ -1179,7 +1190,8 @@ export function initCockpit(root = document) {
     if (shouldRun === running) return;
     running = shouldRun;
     if (shouldRun) {
-      clock.getDelta();
+      timer.update();
+      timer.getDelta();
       rafId = requestAnimationFrame(frame);
     } else {
       cancelAnimationFrame(rafId);

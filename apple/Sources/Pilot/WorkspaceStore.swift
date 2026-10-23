@@ -5,12 +5,13 @@ import SwiftUI
 @MainActor
 final class WorkspaceStore {
     let modelContext: ModelContext
+    private let defaults: UserDefaults
     let workspaceGroups: WorkspaceGroups
     var changeCount: Int = 0
     var selectedWorkspaceID: UUID? {
         didSet {
             if let id = selectedWorkspaceID {
-                UserDefaults.standard.set(id.uuidString, forKey: "selectedWorkspaceID")
+                defaults.set(id.uuidString, forKey: "selectedWorkspaceID")
                 // Looking at a workspace clears its "Action completed" badge,
                 // mirroring how selecting clears terminal bells.
                 if let workspace = workspaces.first(where: { $0.id == id }),
@@ -20,7 +21,7 @@ final class WorkspaceStore {
                     changeCount += 1
                 }
             } else {
-                UserDefaults.standard.removeObject(forKey: "selectedWorkspaceID")
+                defaults.removeObject(forKey: "selectedWorkspaceID")
             }
         }
     }
@@ -30,7 +31,7 @@ final class WorkspaceStore {
     /// out of Notes returns to whatever workspace was selected.
     var isNotesMode: Bool = false {
         didSet {
-            UserDefaults.standard.set(isNotesMode, forKey: "notesMode")
+            defaults.set(isNotesMode, forKey: "notesMode")
             // Notes, Remote Desktop, Docker, Agentic Use, and Runners are all
             // full-detail global modes; entering one exits the others.
             if isNotesMode {
@@ -46,7 +47,7 @@ final class WorkspaceStore {
     /// (toggled with ⇧⌘0). Mutually exclusive with the other global modes.
     var isRemoteDesktopMode: Bool = false {
         didSet {
-            UserDefaults.standard.set(isRemoteDesktopMode, forKey: "remoteDesktopMode")
+            defaults.set(isRemoteDesktopMode, forKey: "remoteDesktopMode")
             if isRemoteDesktopMode {
                 isNotesMode = false
                 isDockerMode = false
@@ -60,7 +61,7 @@ final class WorkspaceStore {
     /// with ⌃⌘0). Mutually exclusive with the other global modes.
     var isDockerMode: Bool = false {
         didSet {
-            UserDefaults.standard.set(isDockerMode, forKey: "dockerMode")
+            defaults.set(isDockerMode, forKey: "dockerMode")
             if isDockerMode {
                 isNotesMode = false
                 isRemoteDesktopMode = false
@@ -74,7 +75,7 @@ final class WorkspaceStore {
     /// Mutually exclusive with the other global modes.
     var isAgenticUseMode: Bool = false {
         didSet {
-            UserDefaults.standard.set(isAgenticUseMode, forKey: "agenticUseMode")
+            defaults.set(isAgenticUseMode, forKey: "agenticUseMode")
             if isAgenticUseMode {
                 isNotesMode = false
                 isRemoteDesktopMode = false
@@ -86,7 +87,7 @@ final class WorkspaceStore {
 
     var isRunnersMode: Bool = false {
         didSet {
-            UserDefaults.standard.set(isRunnersMode, forKey: "runnersMode")
+            defaults.set(isRunnersMode, forKey: "runnersMode")
             if isRunnersMode {
                 isNotesMode = false
                 isRemoteDesktopMode = false
@@ -107,9 +108,9 @@ final class WorkspaceStore {
     var selectedRemoteConnectionID: UUID? {
         didSet {
             if let id = selectedRemoteConnectionID {
-                UserDefaults.standard.set(id.uuidString, forKey: "selectedRemoteConnectionID")
+                defaults.set(id.uuidString, forKey: "selectedRemoteConnectionID")
             } else {
-                UserDefaults.standard.removeObject(forKey: "selectedRemoteConnectionID")
+                defaults.removeObject(forKey: "selectedRemoteConnectionID")
             }
         }
     }
@@ -117,9 +118,9 @@ final class WorkspaceStore {
     var selectedNoteID: UUID? {
         didSet {
             if let id = selectedNoteID {
-                UserDefaults.standard.set(id.uuidString, forKey: "selectedNoteID")
+                defaults.set(id.uuidString, forKey: "selectedNoteID")
             } else {
-                UserDefaults.standard.removeObject(forKey: "selectedNoteID")
+                defaults.removeObject(forKey: "selectedNoteID")
             }
         }
     }
@@ -592,23 +593,28 @@ final class WorkspaceStore {
         }
     }
 
-    init(modelContext: ModelContext, workspaceGroups: WorkspaceGroups = WorkspaceGroups()) {
+    init(
+        modelContext: ModelContext,
+        workspaceGroups: WorkspaceGroups = WorkspaceGroups(),
+        defaults: UserDefaults = .standard
+    ) {
+        self.defaults = defaults
         self.modelContext = modelContext
         self.workspaceGroups = workspaceGroups
-        if let stored = UserDefaults.standard.string(forKey: "selectedWorkspaceID") {
+        if let stored = defaults.string(forKey: "selectedWorkspaceID") {
             self.selectedWorkspaceID = UUID(uuidString: stored)
         }
-        if let storedNote = UserDefaults.standard.string(forKey: "selectedNoteID") {
+        if let storedNote = defaults.string(forKey: "selectedNoteID") {
             self.selectedNoteID = UUID(uuidString: storedNote)
         }
-        self.isNotesMode = UserDefaults.standard.bool(forKey: "notesMode")
-        if let storedRemote = UserDefaults.standard.string(forKey: "selectedRemoteConnectionID") {
+        self.isNotesMode = defaults.bool(forKey: "notesMode")
+        if let storedRemote = defaults.string(forKey: "selectedRemoteConnectionID") {
             self.selectedRemoteConnectionID = UUID(uuidString: storedRemote)
         }
-        self.isRemoteDesktopMode = UserDefaults.standard.bool(forKey: "remoteDesktopMode")
-        self.isDockerMode = UserDefaults.standard.bool(forKey: "dockerMode")
-        self.isAgenticUseMode = UserDefaults.standard.bool(forKey: "agenticUseMode")
-        self.isRunnersMode = UserDefaults.standard.bool(forKey: "runnersMode")
+        self.isRemoteDesktopMode = defaults.bool(forKey: "remoteDesktopMode")
+        self.isDockerMode = defaults.bool(forKey: "dockerMode")
+        self.isAgenticUseMode = defaults.bool(forKey: "agenticUseMode")
+        self.isRunnersMode = defaults.bool(forKey: "runnersMode")
         cleanupBadDirectories()
         if let selectedWorkspaceID, !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
             self.selectedWorkspaceID = workspaces.first?.id

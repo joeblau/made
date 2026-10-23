@@ -1,15 +1,30 @@
 ---
 import Layout from '../layouts/Layout.astro';
-import CockpitBackground from './CockpitBackground.astro';
+import CapabilityRail from './CapabilityRail.astro';
+import CompanionApps from './CompanionApps.astro';
 import Hero from './Hero.astro';
+import SecuritySection from './SecuritySection.astro';
+import SiteFooter from './SiteFooter.astro';
+import SiteHeader from './SiteHeader.astro';
+import WorkflowShowcase from './WorkflowShowcase.astro';
 ---
 
 <Layout
-  title="made"
-  description="made — Multimodal Agentic Development Environment for macOS, with iOS and iPadOS companions."
+  title="made — One cockpit for every agent"
+  description="made is a multimodal agentic development environment for macOS, with iOS, iPadOS, and watchOS companions. Run agents, code, preview, and ship from one cockpit."
 >
-  <CockpitBackground />
-  <main>
+  <SiteHeader />
+  <main id="content">
     <Hero />
+    <WorkflowShowcase />
+    <CapabilityRail />
+    <CompanionApps />
+    <SecuritySection />
   </main>
+  <SiteFooter />
 </Layout>
+
+<script>
+  import { initSite } from '../scripts/site.js';
+  initSite();
+</script>

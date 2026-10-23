@@ -7,7 +7,7 @@ const assets = new URL('../.worker-assets/', import.meta.url);
 test('the deployable asset tree serves pages and every local asset under /made', async () => {
   assert.deepEqual((await readdir(assets)).sort(), ['_headers', 'made']);
   const html = await readFile(new URL('made/index.html', assets), 'utf8');
-  const urls = [...html.matchAll(/(?:src|href|content)="([^"\s]+)"/g)]
+  const urls = [...html.matchAll(/(?:src|href|content|srcset)="([^"\s]+)"/g)]
     .map((match) => match[1])
     .filter((value) => value.startsWith('/') || value.startsWith('https://blau.app/'));
   assert.ok(urls.length > 3, 'checks emitted scripts, CSS, favicon, and metadata');

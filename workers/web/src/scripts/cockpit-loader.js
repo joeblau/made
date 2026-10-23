@@ -1,6 +1,5 @@
 /*
- * Defers the decorative cockpit scene until the download slate is usable.
- * The page's critical script graph is only this loader and the QR dialog;
+ * Defers the decorative cockpit scene until the landing page is usable.
  * Three.js and the scene ship as a separate chunk fetched by dynamic import
  * after the load event and an idle period. Until it renders (and forever when
  * it is skipped or fails) the background is the themed page color plus the
@@ -28,11 +27,11 @@ export function staticReason(env) {
   return null;
 }
 
-/** Probes for WebGL on a throwaway canvas and releases the context. */
+/** Probes for WebGL2 on a throwaway canvas and releases the context. */
 export function probeWebGL(doc = document) {
   try {
     const canvas = doc.createElement('canvas');
-    const gl = canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+    const gl = canvas.getContext('webgl2');
     if (!gl) return false;
     gl.getExtension('WEBGL_lose_context')?.loseContext();
     return true;

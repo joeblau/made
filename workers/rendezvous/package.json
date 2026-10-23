@@ -14,10 +14,10 @@
     "types": "wrangler types --include-runtime=false"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "0.21.3",
-    "@cloudflare/workers-types": "5.20260817.1",
-    "typescript": "6.0.3",
-    "vitest": "4.1.11",
-    "wrangler": "4.123.0"
+    "@cloudflare/vitest-plugin": "1.4.7",
+    "@cloudflare/workers-types": "5.20261023.1",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5",
+    "wrangler": "4.152.0"
   }
 }

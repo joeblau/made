@@ -67,6 +67,10 @@ final class GitHubTasksStore {
     /// Matches `RepositoryStore`'s PR/Actions cadence.
     private static let pollInterval: TimeInterval = 30
 
+    init(tasks: [GitHubTask] = []) {
+        self.tasks = tasks
+    }
+
     /// Point the store at a repo (or `nil` to clear). While the Tasks tab is
     /// visible this fetches immediately and keeps the list live via a
     /// background poll; while it's hidden the store only tracks the repo

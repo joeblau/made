@@ -1,0 +1,64 @@
+---
+import { KNEEBOARD_TESTFLIGHT_URL, WALKIE_TESTFLIGHT_URL } from '../data/downloads';
+import QrDownloadDialog from './QrDownloadDialog.astro';
+import AppleIcon from './ui/AppleIcon.astro';
+import Button from './ui/Button.astro';
+---
+
+<section class="companions section" id="companions" aria-labelledby="companions-title">
+  <div class="section-heading" data-reveal>
+    <p class="eyebrow">03 / BEYOND THE DESK</p>
+    <h2 id="companions-title">Your cockpit,<br /><span>within reach.</span></h2>
+    <p>Native companions keep you connected to the session, not chained to the chair.</p>
+  </div>
+  <div class="companions__grid">
+    <article class="companion-card companion-card--walkie" data-reveal>
+      <div class="companion-card__topline"><span class="companion-card__monogram" aria-hidden="true">W</span><span class="eyebrow">IPHONE / WALKIE</span></div>
+      <div>
+        <h3>Voice and touch,<br />untethered.</h3>
+        <p>Use your iPhone as a trackpad, dictate with voice transcription, and keep secure peer messages close.</p>
+      </div>
+      <ul class="companion-card__features"><li>Trackpad control</li><li>Voice transcription</li><li>Secure peer messaging</li></ul>
+      <Button
+        rounded
+        variant="secondary"
+        href={WALKIE_TESTFLIGHT_URL}
+        target="_blank"
+        rel="noreferrer"
+        title="Download Walkie with TestFlight"
+        data-qr="walkie"
+      >
+        <AppleIcon /><span>Download for iOS</span>
+      </Button>
+    </article>
+    <article class="companion-card companion-card--trigger" data-reveal>
+      <div class="companion-card__topline"><span class="companion-card__monogram" aria-hidden="true">T</span><span class="eyebrow">WATCH / TRIGGER</span></div>
+      <div>
+        <h3>A small gesture.<br />A quick response.</h3>
+        <p>Send short-lived terminal control gestures from your wrist through your paired Walkie.</p>
+      </div>
+      <div class="companion-card__pulse" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div>
+      <p class="companion-card__included"><span class="status-dot" aria-hidden="true"></span>Included with Walkie for iOS</p>
+    </article>
+    <article class="companion-card companion-card--kneeboard" data-reveal>
+      <div class="companion-card__topline"><span class="companion-card__monogram" aria-hidden="true">K</span><span class="eyebrow">IPAD / KNEEBOARD</span></div>
+      <div>
+        <h3>Mirror the work.<br />Mark the next move.</h3>
+        <p>Mirror a Cockpit window with low-latency video and send precise Pencil annotations back to the desktop.</p>
+      </div>
+      <ul class="companion-card__features"><li>Low-latency mirroring</li><li>Pencil annotations</li><li>Split View and Stage Manager</li></ul>
+      <Button
+        rounded
+        variant="secondary"
+        href={KNEEBOARD_TESTFLIGHT_URL}
+        target="_blank"
+        rel="noreferrer"
+        title="Download Kneeboard with TestFlight"
+        data-qr="kneeboard"
+      >
+        <AppleIcon /><span>Download for iPad</span>
+      </Button>
+    </article>
+  </div>
+  <QrDownloadDialog />
+</section>

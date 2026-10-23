@@ -1,0 +1,18 @@
+---
+import { Cuer } from 'cuer';
+import { KNEEBOARD_TESTFLIGHT_URL, WALKIE_TESTFLIGHT_URL } from '../data/downloads';
+import Button from './ui/Button.astro';
+---
+
+<dialog class="qr-dialog" data-qr-dialog aria-labelledby="qr-dialog-title">
+  <p class="eyebrow">CONTINUE ON YOUR DEVICE</p>
+  <h2 class="qr-dialog__title" id="qr-dialog-title" data-qr-title>Scan to install</h2>
+  <div class="qr-dialog__code" data-qr-code="walkie">
+    <Cuer value={WALKIE_TESTFLIGHT_URL} />
+  </div>
+  <div class="qr-dialog__code" data-qr-code="kneeboard" hidden>
+    <Cuer value={KNEEBOARD_TESTFLIGHT_URL} />
+  </div>
+  <p class="qr-dialog__hint">Point your camera at the code to open TestFlight.</p>
+  <Button rounded variant="secondary" type="button" data-qr="close">Close</Button>
+</dialog>
