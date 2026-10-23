@@ -1,0 +1,132 @@
+{
+  "assets" : [
+    {
+      "alt" : "Cockpit — two agents building orbit in parallel (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-workspace-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "workspace",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — two agents building orbit in parallel (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-workspace-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "workspace",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — atlas api source beside its test output (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-editor-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "editor",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — atlas api source beside its test output (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-editor-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "editor",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — orbit browser preview beside a running agent (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-browser-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "browser",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — orbit browser preview beside a running agent (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-browser-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "browser",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — orbit preview on the web and an iphone (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-device-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "device",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — orbit preview on the web and an iphone (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-device-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "device",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — workflow results alongside the project (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-actions-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "actions",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — workflow results alongside the project (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-actions-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "actions",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — a mixed fleet of idle, busy, and offline runners (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-runners-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "runners",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — a mixed fleet of idle, busy, and offline runners (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-runners-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "runners",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — agent cost, token history, and cache savings (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-agentic-use-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "agentic-use",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — agent cost, token history, and cache savings (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-agentic-use-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "agentic-use",
+      "width" : 2880
+    }
+  ],
+  "fixtureDate" : "2026-10-23",
+  "version" : 1
+}

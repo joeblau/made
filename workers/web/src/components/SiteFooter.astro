@@ -1,0 +1,27 @@
+---
+import { GITHUB_URL, MACOS_RELEASE_URL, X_URL } from '../data/downloads';
+import AppleIcon from './ui/AppleIcon.astro';
+import Button from './ui/Button.astro';
+---
+
+<footer class="site-footer" id="download">
+  <div class="site-footer__cta" data-reveal>
+    <p class="eyebrow">YOUR NEXT SESSION</p>
+    <h2>Ready for<br /><span>takeoff?</span></h2>
+    <p>One native cockpit for every agent, surface, and next move.</p>
+    <Button rounded size="lg" href={MACOS_RELEASE_URL} title="Download Cockpit for macOS 26 or later — Apple silicon and Intel">
+      <AppleIcon /><span>Download for macOS</span>
+    </Button>
+    <small>macOS 26+ · Apple silicon &amp; Intel</small>
+  </div>
+  <div class="site-footer__meta">
+    <a class="brand" href="#top" aria-label="made home">made<span aria-hidden="true">.</span></a>
+    <p>Multimodal Agentic Development Environment</p>
+    <nav aria-label="Social links">
+      <a href={GITHUB_URL} target="_blank" rel="noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+      <a href={X_URL} target="_blank" rel="noreferrer">X <span aria-hidden="true">↗</span></a>
+      <a href="#top">Back to top <span aria-hidden="true">↑</span></a>
+    </nav>
+  </div>
+  <div class="site-footer__wordmark" aria-hidden="true">made<span>.</span></div>
+</footer>

@@ -1,9 +1,7 @@
 ---
-import '@fontsource-variable/nunito/wght.css';
-// The page text is latin-only, so only that subset is preloaded; the others
-// stay behind unicode-range. Costs one unused download on Apple platforms,
-// where ui-rounded wins the font stack, but removes the swap flash elsewhere.
-import nunitoLatin from '@fontsource-variable/nunito/files/nunito-latin-wght-normal.woff2?url';
+import '@fontsource-variable/geist/wght.css';
+// Only the Latin subset is preloaded; other subsets stay behind unicode-range.
+import geistLatin from '@fontsource-variable/geist/files/geist-latin-wght-normal.woff2?url';
 
 interface Props {
   title: string;
@@ -12,7 +10,7 @@ interface Props {
 
 const {
   title,
-  description = 'made — Multimodal Agentic Development Environment for macOS, with iOS and iPadOS companions.',
+  description = 'made — Multimodal Agentic Development Environment for macOS, with Apple companion apps.',
 } = Astro.props;
 const base = `${import.meta.env.BASE_URL.replace(/\/$/, '')}/`;
 const socialImage = new URL(`${base}og.jpg`, Astro.site).href;
@@ -25,9 +23,10 @@ const socialImage = new URL(`${base}og.jpg`, Astro.site).href;
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafafa" />
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#09090b" />
-    <link rel="preload" as="font" type="font/woff2" crossorigin href={nunitoLatin} />
+    <meta name="theme-color" data-theme-color="light" media="(prefers-color-scheme: light)" content="#f4f3ef" />
+    <meta name="theme-color" data-theme-color="dark" media="(prefers-color-scheme: dark)" content="#0a0b0b" />
+    <script is:inline src={`${base}theme-init.js`}></script>
+    <link rel="preload" as="font" type="font/woff2" crossorigin href={geistLatin} />
     <link rel="icon" type="image/svg+xml" href={`${base}favicon.svg`} />
     <link rel="canonical" href="https://blau.app/made" />
     <meta property="og:type" content="website" />
@@ -38,10 +37,7 @@ const socialImage = new URL(`${base}og.jpg`, Astro.site).href;
     <meta property="og:image" content={socialImage} />
     <meta property="og:image:width" content="3600" />
     <meta property="og:image:height" content="1890" />
-    <meta
-      property="og:image:alt"
-      content="MADE — Multimodal Agentic Development Environment"
-    />
+    <meta property="og:image:alt" content="made — Multimodal Agentic Development Environment" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:image" content={socialImage} />
     <title>{title}</title>

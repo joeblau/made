@@ -119,29 +119,7 @@ struct AgenticUseView: View {
     }
 
     private func dashboard(_ snapshot: AgenticUseSnapshot) -> some View {
-        ScrollView {
-            VStack(spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    AgenticUseHeroPanel(
-                        totalCost: snapshot.totalCostUSD,
-                        modelTotals: snapshot.modelTotals,
-                        hasUnpricedModels: snapshot.hasUnpricedModels,
-                        unpricedTokens: snapshot.unpricedTokens,
-                        pricingStatus: store.pricingStatus
-                    )
-                    .frame(width: 300)
-
-                    AgenticUseDailyChartPanel(snapshot: snapshot)
-                        .frame(maxWidth: .infinity)
-                }
-                AgenticUseStatRow(stats: snapshot.stats)
-                AgenticUseBreakdownView(
-                    modelTotals: snapshot.modelTotals,
-                    dayTotals: snapshot.dayTotals
-                )
-            }
-            .padding(12)
-        }
+        AgenticUseDashboard(snapshot: snapshot, pricingStatus: store.pricingStatus)
     }
 
     // MARK: - States
@@ -225,5 +203,37 @@ extension View {
                 .quaternary.opacity(0.4),
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
+    }
+}
+
+/// Shared presentation for live usage and deterministic product captures.
+struct AgenticUseDashboard: View {
+    let snapshot: AgenticUseSnapshot
+    let pricingStatus: String
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 12) {
+                HStack(alignment: .top, spacing: 12) {
+                    AgenticUseHeroPanel(
+                        totalCost: snapshot.totalCostUSD,
+                        modelTotals: snapshot.modelTotals,
+                        hasUnpricedModels: snapshot.hasUnpricedModels,
+                        unpricedTokens: snapshot.unpricedTokens,
+                        pricingStatus: pricingStatus
+                    )
+                    .frame(width: 300)
+
+                    AgenticUseDailyChartPanel(snapshot: snapshot)
+                        .frame(maxWidth: .infinity)
+                }
+                AgenticUseStatRow(stats: snapshot.stats)
+                AgenticUseBreakdownView(
+                    modelTotals: snapshot.modelTotals,
+                    dayTotals: snapshot.dayTotals
+                )
+            }
+            .padding(12)
+        }
     }
 }

@@ -72,3 +72,26 @@ test('a failed chunk or initializer leaves the static fallback in place', async 
   assert.equal(await startCockpit(second, noContext), 'no-webgl');
   assert.equal(second.dataset.cockpitState, 'static');
 });
+
+test('the graphics probe requires WebGL2 and releases a successful context', async () => {
+  const { probeWebGL } = await import('../src/scripts/cockpit-loader.js');
+  const requests = [];
+  const unavailable = {
+    createElement: () => ({
+      getContext: (type) => { requests.push(type); return null; },
+    }),
+  };
+  assert.equal(probeWebGL(unavailable), false);
+  assert.deepEqual(requests, ['webgl2'], 'WebGL1 is never requested');
+
+  let released = 0;
+  const available = {
+    createElement: () => ({
+      getContext: (type) => type === 'webgl2' ? {
+        getExtension: () => ({ loseContext: () => { released++; } }),
+      } : null,
+    }),
+  };
+  assert.equal(probeWebGL(available), true);
+  assert.equal(released, 1);
+});

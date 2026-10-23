@@ -1,5 +1,69 @@
 # Design review — made (blau.app web + Pilot/Walkie/Kneeboard apps)
 
+## 2026-10-23 — contemporary web redesign
+
+Scope: the complete `workers/web` landing experience at `/` and `/made`, its
+light/dark themes, product captures, downloads, companion QR dialog, motion,
+and the Worker/JavaScript dependency refresh. The earlier native-app review is
+retained below.
+
+### Direction and implementation
+
+- Replaced the single download screen with a cinematic hero, four Cockpit
+  workflow chapters, a sliding capability rail, companion and security
+  sections, and a final download/footer sequence.
+- Used locally hosted Geist, porcelain/carbon semantic tokens, the app icon's
+  green/orange accents, and real native Cockpit captures instead of generic AI
+  imagery. Both routes still emit identical markup and preserve the existing
+  canonical/social metadata and download destinations.
+- Added an early external theme bootstrap, persisted/system theme behavior,
+  synchronized product captures and browser theme colors, and a circular View
+  Transitions reveal. Reduced-motion, storage-denied, and non-View-Transitions
+  paths remain usable.
+- Kept enhancement code native and deferred: no hydrated React, animation
+  framework, scroll hijacking, inline script/style, or remote asset dependency.
+  Desktop uses the sticky workflow stage; mobile uses per-chapter images in
+  normal flow so sticky imagery cannot cover the copy.
+- Upgraded Three.js to 0.186.1 with WebGL2 detection, sRGB canvas textures,
+  current shader output chunks, legacy-equivalent light scaling, and `Timer`.
+  The cockpit remains off the critical script graph and pauses offscreen.
+- Updated the workspace to Bun 1.4.4 and current direct dependencies, including
+  Astro 7.4, React 19.3, Vitest 5 with `@cloudflare/vitest-plugin`, and Wrangler
+  4.152. TypeScript 6 remains only where Astro/embedded-language tooling
+  explicitly rejects TypeScript 7; the rendezvous Worker uses TypeScript 7.
+
+### Verified
+
+- Web lint and Astro checks pass with zero diagnostics. All 14 web tests and
+  all 25 rendezvous tests pass. Documentation links and repository paths pass
+  `bin/check-docs.sh`.
+- The production build preserves the CSP and asset-mount checks. Measured
+  budgets: CSS 33,239/35,000 bytes; initial JavaScript 6,522/8,000 raw and
+  3,182/4,000 gzip; deferred JavaScript 570,536/600,000 raw and
+  142,924/150,000 gzip.
+- Real Chrome scenarios pass against both Astro and the prepared Cloudflare
+  Worker: theme transition and persistence, live OS fallback, matching
+  screenshots/meta colors, keyboard carousel controls, workflow controls,
+  desktop QR open/close, direct mobile TestFlight behavior, 390px and 320px
+  overflow checks, reduced motion without a Three.js request, and core content
+  without JavaScript. No browser console errors or failed asset requests were
+  observed. Headless GPU performance notices were the only warnings.
+- `bun audit` reports no known vulnerabilities in 509 resolved packages. The
+  only `bun outdated --recursive` entries are the two documented TypeScript 6
+  compatibility pins.
+
+Review captures (bottom capture-only system UI is trimmed; no site content is
+removed):
+
+- `design-review/redesign-web-desktop-light.png`
+- `design-review/redesign-web-desktop-dark.png`
+- `design-review/redesign-web-mobile-light.png`
+- `design-review/redesign-web-mobile-dark.png`
+- `design-review/redesign-web-workflow-dark.png`
+- `design-review/redesign-web-qr-dialog-light.png`
+
+## 2026-09-20 — prior design catalog review
+
 Reviewed 2026-09-20 against the zandesign check catalog (30 checks, IDs cited
 below; each links to its source video at
 `https://x.com/zander_supafast/status/<id>`). Brief: "super clean, minimal, no

@@ -39,6 +39,15 @@ names and checksums.
 
 ## Prerequisites
 
+To **use Cockpit**, download the macOS app from the
+[latest release](https://github.com/joeblau/made/releases/latest), move
+`Cockpit.app` into Applications, and open it. macOS 26 or later is required;
+Apple silicon and Intel Macs are supported. First-run setup walks through
+permissions and optional developer tools. Reopen it from **Cockpit > Set Up
+Cockpit…**. The terminal, editor, notes, and browser are included.
+
+The prerequisites below are for **building from source**.
+
 - macOS with **Xcode 27.x** selected by `xcode-select` (the version enforced in
   CI). The pinned GhosttyKit/ChromiumKit binary artifacts are still reproduced
   on Xcode 26 until they are re-bootstrapped.
@@ -47,9 +56,14 @@ names and checksums.
 - Git LFS. Current checkouts download GhosttyKit through SwiftPM, while
   historical revisions still contain LFS pointers; keeping LFS installed makes
   bisects and old release checkouts work.
-- [Bun 1.3.14](https://bun.sh/) (pinned by `packageManager`) for all Worker and
+- [Bun 1.4.4](https://bun.sh/) (pinned by `packageManager`) for all Worker and
   web dependencies.
+- Node.js 22.23.4 or newer for the current Astro and Vitest build tooling.
 - A Cloudflare account only when running or deploying the Worker services.
+
+The root and web TypeScript 6 pins are intentional until `astro check` and the
+embedded-language tooling support TypeScript 7. The rendezvous Worker uses
+TypeScript 7 directly.
 
 XcodeGen is downloaded at a pinned version and checksum by the repository; do
 not rely on an arbitrary global installation.
@@ -154,8 +168,12 @@ are connected, select one with `--device`, for example
 `bun kneeboard --device "My iPad"`. Set `BLAU_IOS_DEVICE` for the equivalent
 non-interactive selection.
 
-The screenshot harness uses deterministic demo state and writes to
-`workers/web/public/screenshots/`. It never requires a live peer.
+For populated desktop feature scenes in both appearances, run
+`bun run screenshots:cockpit`. It exports 28 native-panel mockups, a manifest,
+and a review gallery to `apple/.build/snapshots/output/`. See the
+[Cockpit screenshot guide](docs/cockpit-snapshots.md) for scene selection,
+fixture editing, and website embedding. The older mobile screenshot harness
+writes to `workers/web/public/screenshots/` and never requires a live peer.
 
 ## Deployment and secrets
 
