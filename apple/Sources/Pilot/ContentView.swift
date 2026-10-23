@@ -207,6 +207,7 @@ struct ContentView: View {
     @State private var usageStore = UsageStore()
     @State private var dockerStore = DockerStore()
     @State private var agenticUseStore = AgenticUsageStore()
+    @State private var runnersStore = RunnersStore()
     @State private var branchStore = WorkspaceBranchStore()
     @State private var isDrawingActive = false
     @AppStorage("sidebar.pinnedExpanded") private var pinnedSectionExpanded = true
@@ -360,6 +361,11 @@ struct ContentView: View {
 
                 if store.isAgenticUseMode {
                     AgenticUseView(store: agenticUseStore)
+                        .zIndex(100)
+                }
+
+                if store.isRunnersMode {
+                    RunnersView(store: runnersStore)
                         .zIndex(100)
                 }
 
@@ -594,6 +600,7 @@ struct ContentView: View {
         if store.isRemoteDesktopMode { return "Remote Desktop" }
         if store.isDockerMode { return "Docker" }
         if store.isAgenticUseMode { return "Agentic Use" }
+        if store.isRunnersMode { return "Runners" }
         return store.selectedWorkspace?.name ?? ""
     }
 
@@ -604,6 +611,7 @@ struct ContentView: View {
                 if store.isRemoteDesktopMode { return .remoteDesktop }
                 if store.isDockerMode { return .docker }
                 if store.isAgenticUseMode { return .agenticUse }
+                if store.isRunnersMode { return .runners }
                 if let id = store.selectedWorkspaceID { return .workspace(id) }
                 return nil
             },
@@ -617,6 +625,8 @@ struct ContentView: View {
                     store.enterDockerMode()
                 case .agenticUse:
                     store.enterAgenticUseMode()
+                case .runners:
+                    store.enterRunnersMode()
                 case .workspace(let id):
                     store.selectWorkspace(id)
                 case nil:

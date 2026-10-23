@@ -751,6 +751,8 @@ struct PilotApp: App {
                 }
                 .keyboardShortcut("0", modifiers: [.command, .control])
 
+                Button(store.isRunnersMode ? "Hide Runners" : "Show Runners") { store.isRunnersMode.toggle() }
+
                 Button("Focus Selected Pane") {
                     guard let workspace = store.selectedWorkspace,
                           let pane = workspace.selectedPane else { return }

@@ -29,6 +29,21 @@ struct WorkspaceGlobalModeTests {
         #expect(store.isRemoteDesktopMode)
         #expect(!store.isDockerMode)
         #expect(!store.isNotesMode)
+
+        store.enterRunnersMode()
+        #expect(store.isRunnersMode)
+        #expect(!store.isAgenticUseMode)
+        #expect(!store.isRemoteDesktopMode)
+        #expect(!store.isWorkspaceDetailVisible)
+
+        store.enterAgenticUseMode()
+        #expect(store.isAgenticUseMode)
+        #expect(!store.isRunnersMode)
+
+        store.enterRunnersMode()
+        store.enterNotesMode()
+        #expect(store.isNotesMode)
+        #expect(!store.isRunnersMode)
     }
 
     @Test("Toggling Docker returns to the workspace it came from")
@@ -70,6 +85,19 @@ struct WorkspaceGlobalModeTests {
         store.enterDockerMode()
         store.selectWorkspace(workspace.id)
         #expect(!store.isDockerMode)
+        #expect(store.isWorkspaceDetailVisible)
+    }
+
+    @Test("Selecting a workspace exits Runners")
+    func selectingAWorkspaceExitsRunners() throws {
+        let fixture = try makeFixture()
+        let store = fixture.store
+        defer { clearModes(store) }
+        store.addWorkspace()
+        let workspace = try #require(store.workspaces.first)
+        store.enterRunnersMode()
+        store.selectWorkspace(workspace.id)
+        #expect(!store.isRunnersMode)
         #expect(store.isWorkspaceDetailVisible)
     }
 
@@ -121,5 +149,7 @@ struct WorkspaceGlobalModeTests {
         store.isNotesMode = false
         store.isRemoteDesktopMode = false
         store.isDockerMode = false
+        store.isAgenticUseMode = false
+        store.isRunnersMode = false
     }
 }

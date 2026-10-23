@@ -31,12 +31,13 @@ final class WorkspaceStore {
     var isNotesMode: Bool = false {
         didSet {
             UserDefaults.standard.set(isNotesMode, forKey: "notesMode")
-            // Notes, Remote Desktop, Docker, and Agentic Use are all
+            // Notes, Remote Desktop, Docker, Agentic Use, and Runners are all
             // full-detail global modes; entering one exits the others.
             if isNotesMode {
                 isRemoteDesktopMode = false
                 isDockerMode = false
                 isAgenticUseMode = false
+                isRunnersMode = false
             }
         }
     }
@@ -50,6 +51,7 @@ final class WorkspaceStore {
                 isNotesMode = false
                 isDockerMode = false
                 isAgenticUseMode = false
+                isRunnersMode = false
             }
         }
     }
@@ -63,6 +65,7 @@ final class WorkspaceStore {
                 isNotesMode = false
                 isRemoteDesktopMode = false
                 isAgenticUseMode = false
+                isRunnersMode = false
             }
         }
     }
@@ -76,6 +79,19 @@ final class WorkspaceStore {
                 isNotesMode = false
                 isRemoteDesktopMode = false
                 isDockerMode = false
+                isRunnersMode = false
+            }
+        }
+    }
+
+    var isRunnersMode: Bool = false {
+        didSet {
+            UserDefaults.standard.set(isRunnersMode, forKey: "runnersMode")
+            if isRunnersMode {
+                isNotesMode = false
+                isRemoteDesktopMode = false
+                isDockerMode = false
+                isAgenticUseMode = false
             }
         }
     }
@@ -85,7 +101,7 @@ final class WorkspaceStore {
     /// (pane activation, the ink overlay, ⌘W) keys off this rather than
     /// re-listing the modes.
     var isWorkspaceDetailVisible: Bool {
-        !isNotesMode && !isRemoteDesktopMode && !isDockerMode && !isAgenticUseMode
+        !isNotesMode && !isRemoteDesktopMode && !isDockerMode && !isAgenticUseMode && !isRunnersMode
     }
 
     var selectedRemoteConnectionID: UUID? {
@@ -295,6 +311,7 @@ final class WorkspaceStore {
         if isRemoteDesktopMode { isRemoteDesktopMode = false }
         if isDockerMode { isDockerMode = false }
         if isAgenticUseMode { isAgenticUseMode = false }
+        if isRunnersMode { isRunnersMode = false }
         if selectedWorkspaceID != workspaceID {
             selectedWorkspaceID = workspaceID
         }
@@ -481,6 +498,10 @@ final class WorkspaceStore {
         isAgenticUseMode = true
     }
 
+    func enterRunnersMode() {
+        isRunnersMode = true
+    }
+
     @discardableResult
     func addRemoteConnection(host: String, port: Int = 5900, nickname: String = "", username: String = "") -> RemoteDesktopConnection {
         let maxOrder = remoteConnections.map(\.sortOrder).max() ?? -1
@@ -587,6 +608,7 @@ final class WorkspaceStore {
         self.isRemoteDesktopMode = UserDefaults.standard.bool(forKey: "remoteDesktopMode")
         self.isDockerMode = UserDefaults.standard.bool(forKey: "dockerMode")
         self.isAgenticUseMode = UserDefaults.standard.bool(forKey: "agenticUseMode")
+        self.isRunnersMode = UserDefaults.standard.bool(forKey: "runnersMode")
         cleanupBadDirectories()
         if let selectedWorkspaceID, !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
             self.selectedWorkspaceID = workspaces.first?.id
