@@ -7,6 +7,8 @@ actor CursorUsageHistory {
     struct Result: Sendable {
         var records: [AgenticUsageRecord] = []
         var warning: String?
+        var fetchedAt: Date?
+        var isStale = false
     }
 
     static let endpoint = URL(string: "https://cursor.com/api/dashboard/get-filtered-usage-events")!
@@ -67,7 +69,7 @@ actor CursorUsageHistory {
             try Task.checkCancellation()
             let retained = cached.records.filter { $0.timestamp < queryStart }
             cached = Result(records: AgenticUsageLoader.deduplicate(retained + fresh)
-                .sorted { $0.timestamp < $1.timestamp })
+                .sorted { $0.timestamp < $1.timestamp }, fetchedAt: end)
             coveredStart = min(coveredStart ?? start, start)
             fetchedAt = end
             retryAt = nil
@@ -80,9 +82,12 @@ actor CursorUsageHistory {
                 delay = max(600, retryAfter ?? 0)
             }
             retryAt = end.addingTimeInterval(delay)
-            cached.warning = cached.records.isEmpty
-                ? "Cursor history could not load. Sign in to Cursor, then try refreshing."
-                : "Cursor history could not refresh; showing previously loaded usage."
+            // A temporary refresh failure does not make previously loaded
+            // history unusable. Keep it visible and retry on the next tick.
+            cached.isStale = cached.fetchedAt != nil
+            cached.warning = cached.fetchedAt == nil
+                ? "Cursor history could not load. Try refreshing again shortly."
+                : nil
         }
         return cached
     }
@@ -119,10 +124,19 @@ actor CursorUsageHistory {
                     retryAfter: http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init)
                 )
             }
-            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let events = object["usageEventsDisplay"] as? [[String: Any]],
-                  let total = UsageJSON.number(object["totalUsageEventsCount"]),
-                  total.isFinite, total >= 0 else { throw UsageFetchError.malformed }
+            guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw UsageFetchError.malformed
+            }
+            // Cursor omits default-valued fields for an empty time window:
+            // its successful response is {}. This is common on the daily
+            // overlap fetch, even when older history is already cached.
+            if object.isEmpty, page == 1 { return [] }
+            guard let total = UsageJSON.number(object["totalUsageEventsCount"]),
+                  total.isFinite, total >= 0,
+                  let events = object["usageEventsDisplay"] as? [[String: Any]]
+                    ?? (total == 0 && object["usageEventsDisplay"] == nil ? [] : nil) else {
+                throw UsageFetchError.malformed
+            }
             received += events.count
             records += events.compactMap(Self.parse)
             if Double(received) >= total { return records }

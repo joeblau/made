@@ -22,7 +22,8 @@ struct CursorUsageHistoryTests {
 
         init(_ bodies: [String] = []) { self.bodies = bodies }
 
-        func fail() { status = 429 }
+        func fail(_ code: Int = 429) { status = code }
+        func recover(_ body: String) { status = 200; bodies = [body] }
 
         func respond(_ request: URLRequest) -> (Data, URLResponse) {
             requests.append(request)
@@ -132,9 +133,68 @@ struct CursorUsageHistoryTests {
         await stub.fail()
         let result = try await history.load(enabled: true, range: .quarter)
         #expect(result.records.count == 1)
-        #expect(result.warning != nil)
+        #expect(result.warning == nil)
+        #expect(result.isStale)
+        #expect(result.fetchedAt == Self.now)
         clock.advance()
         _ = try await history.load(enabled: true, range: .quarter)
+        #expect(await stub.requests.count == 3)
+    }
+
+    @Test("Cursor's empty success response preserves older history without a refresh warning")
+    func emptyIncrementalResponse() async throws {
+        let stub = Stub([page(), "{}"])
+        let clock = Clock()
+        let history = history(stub, clock: clock)
+        _ = try await history.load(enabled: true, range: .month)
+        clock.advance(3 * 86_400)
+        // Refresh the gap first; a subsequent empty overlap must retain the
+        // older cached event and advance the successful-fetch timestamp.
+        await stub.recover(page())
+        _ = try await history.load(enabled: true, range: .month)
+        clock.advance()
+        await stub.recover("{}")
+        let result = try await history.load(enabled: true, range: .month)
+        #expect(result.records.count == 1)
+        #expect(result.warning == nil)
+        #expect(!result.isStale)
+        #expect(result.fetchedAt == clock.now())
+    }
+
+    @Test("Empty first loads accept omitted default fields but reject unrelated payloads")
+    func emptyFirstResponse() async throws {
+        for body in ["{}", "{\"totalUsageEventsCount\":0}", page("", total: 0)] {
+            let result = try await history(Stub([body])).load(enabled: true, range: .month)
+            #expect(result.records.isEmpty)
+            #expect(result.warning == nil)
+            #expect(result.fetchedAt == Self.now)
+        }
+        let invalid = try await history(Stub(["{\"error\":\"unavailable\"}"])).load(enabled: true, range: .month)
+        #expect(invalid.warning != nil)
+        #expect(invalid.fetchedAt == nil)
+    }
+
+    @Test("Temporary server failures keep cached usage quiet, then recover automatically")
+    func silentRecovery() async throws {
+        let stub = Stub([page()])
+        let clock = Clock()
+        let history = history(stub, clock: clock)
+        _ = try await history.load(enabled: true, range: .month)
+        clock.advance()
+        await stub.fail(503)
+        let stale = try await history.load(enabled: true, range: .month)
+        #expect(stale.records.count == 1)
+        #expect(stale.warning == nil)
+        #expect(stale.isStale)
+        _ = try await history.load(enabled: true, range: .month)
+        #expect(await stub.requests.count == 2)
+        clock.advance(121)
+        await stub.recover(page())
+        let recovered = try await history.load(enabled: true, range: .month)
+        #expect(recovered.records.count == 1)
+        #expect(!recovered.isStale)
+        #expect(recovered.warning == nil)
+        #expect(recovered.fetchedAt == clock.now())
         #expect(await stub.requests.count == 3)
     }
 
