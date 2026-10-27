@@ -64,6 +64,9 @@ enum SyncMessage: Codable, Sendable {
     case transcribedSpeech(TranscribedSpeech)
     case terminalInput(TerminalInput)
     case executeTranscript(ExecuteTranscript)
+    case followBuild(BuildFollowRequest)
+    case unfollowBuild(BuildUnfollowRequest)
+    case buildRunUpdate(BuildWorkflowRun)
     /// Announces this device's long-term public key to the paired peer so the
     /// two sides exchange keys automatically over the encrypted Multipeer
     /// channel — no manual entry (issue #51).
@@ -286,6 +289,8 @@ enum ConnectedDeviceCatalog {
 struct WorkspaceState: Codable, Sendable {
     let workspaces: [WorkspaceSummary]
     let selectedWorkspaceID: UUID?
+    // Optional so older companions can still exchange workspace snapshots.
+    var workflowRuns: [BuildWorkflowRun]? = nil
 }
 
 struct SelectWorkspace: Codable, Sendable {

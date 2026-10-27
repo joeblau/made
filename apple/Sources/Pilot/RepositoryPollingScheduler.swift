@@ -232,6 +232,10 @@ actor RepositoryPollingScheduler {
         failures = failures.filter { $0.key.repositoryID != repository.id }
     }
 
+    func lastSuccessfulFetch(for resource: RepositoryPollResource, repository: CanonicalRepository) -> Date? {
+        cache[CacheKey(repositoryID: repository.id, resource: resource)]?.fetchedAt
+    }
+
     private func effectiveExpiration(
         for entry: CacheEntry,
         resource: RepositoryPollResource
@@ -293,6 +297,7 @@ actor RepositoryPollingScheduler {
     private static let workflowRunProjection = """
         [.workflow_runs[] | {
           databaseId: .id,
+          attempt: .run_attempt,
           status,
           conclusion,
           displayTitle: .display_title,

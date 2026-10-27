@@ -11,9 +11,17 @@
   "vars": {
     "ENVIRONMENT": "production"
   },
+  "secrets": {
+    "required": ["APNS_KEY_ID", "APNS_TEAM_ID", "APNS_PRIVATE_KEY"]
+  },
   // Keys are SHA-256 digests produced by the Worker, so neither a source IP
   // nor a pairing secret is stored in the rate-limiter service.
   "ratelimits": [
+    {
+      "name": "BUILD_ACTIVITY_RATE_LIMIT",
+      "namespace_id": "71003",
+      "simple": { "limit": 60, "period": 60 }
+    },
     {
       "name": "SIGNAL_RATE_LIMIT",
       "namespace_id": "71001",
@@ -39,7 +47,8 @@
   "durable_objects": {
     "bindings": [
       { "name": "ROOMS", "class_name": "RendezvousRoom" },
-      { "name": "SIGNALS", "class_name": "SignalingRoom" }
+      { "name": "SIGNALS", "class_name": "SignalingRoom" },
+      { "name": "BUILD_ACTIVITIES", "class_name": "BuildActivityRoom" }
     ]
   },
   // SQLite-backed classes so this runs on the Workers free plan. ROOMS keeps
@@ -47,7 +56,8 @@
   // eviction. Both must still be declared as sqlite-backed migrations.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RendezvousRoom"] },
-    { "tag": "v2", "new_sqlite_classes": ["SignalingRoom"] }
+    { "tag": "v2", "new_sqlite_classes": ["SignalingRoom"] },
+    { "tag": "v3", "new_sqlite_classes": ["BuildActivityRoom"] }
   ],
   "routes": [
     {

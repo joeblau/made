@@ -320,6 +320,7 @@ targets:
     platform: iOS
     sources:
       - Sources/Copilot
+      - Sources/CopilotShared
       - Sources/Shared
     settings:
       base:
@@ -330,14 +331,42 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: false
         INFOPLIST_FILE: Sources/Copilot/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/Copilot/Copilot.entitlements
+        APS_ENVIRONMENT: production
+        BUILD_PUSH_ENVIRONMENT: production
         TARGETED_DEVICE_FAMILY: "1"
         # Lets the shared SettingsView surface the Copilot-only secure
         # messaging screen (issue #51) without leaking it into Pilot/Plotter.
         SWIFT_ACTIVE_COMPILATION_CONDITIONS: COPILOT
+      configs:
+        Debug:
+          APS_ENVIRONMENT: development
+          BUILD_PUSH_ENVIRONMENT: sandbox
     dependencies:
+      - target: CopilotWidgets
+        embed: true
       - target: Wingman Watch App
       - package: WhisperKit
         product: WhisperKit
+
+  CopilotWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Sources/CopilotWidgets
+      - Sources/CopilotShared
+      - Sources/Shared/BuildWorkflowRun.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.blau.copilot.widgets
+        PRODUCT_NAME: CopilotWidgets
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: false
+        INFOPLIST_FILE: Sources/CopilotWidgets/Info.plist
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        SKIP_INSTALL: true
 
   Plotter:
     type: application

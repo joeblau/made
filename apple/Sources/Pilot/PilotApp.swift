@@ -245,6 +245,7 @@ struct PilotApp: App {
     @State private var didSetupSync = false
     /// Badges background workspaces when their GitHub Actions complete.
     @State private var actionWatcher = WorkspaceActionWatcher()
+    @State private var buildPush = BuildPushCoordinator()
     /// Auto-generated identity key, auto-exchanged with Copilot over the
     /// encrypted channel (issue #51).
     @State private var secureIdentity = SecureIdentity(role: .pilot)
@@ -559,6 +560,8 @@ struct PilotApp: App {
                     headphoneDetector.start()
                     setupSync()
                     actionWatcher.start(store: store)
+                    buildPush.onUpdate = { run in syncService.send(.buildRunUpdate(run)) }
+                    buildPush.restore()
                     frameSender.onClientCountChanged = { clientCount in
                         Task { @MainActor in
                             let wasConnected = plotterClientCount > 0
@@ -1021,6 +1024,12 @@ struct PilotApp: App {
                 }
             case .executeTranscript(let command):
                 walkieDelivery.execute(command, state: &walkieInput)
+            case .followBuild(let request):
+                buildPush.follow(request, available: actionWatcher.recentRuns)
+            case .unfollowBuild(let request):
+                buildPush.stop(runKey: request.runKey)
+            case .buildRunUpdate:
+                break
             case .terminalInput(.enter):
                 walkieDelivery.enterSelection()
             case .deviceKey(let announce):
@@ -1037,6 +1046,7 @@ struct PilotApp: App {
         @MainActor final class LastBroadcast {
             var summaries: [WorkspaceSummary]?
             var selectedID: UUID?
+            var runs: [BuildWorkflowRun]?
         }
         let lastBroadcast = LastBroadcast()
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -1047,15 +1057,18 @@ struct PilotApp: App {
                 }
                 let summaries = store.syncSummaries
                 let selectedID = store.selectedSyncWorkspaceID
+                let runs = actionWatcher.recentRuns
                 guard summaries != lastBroadcast.summaries
-                        || selectedID != lastBroadcast.selectedID else { return }
+                        || selectedID != lastBroadcast.selectedID || runs != lastBroadcast.runs else { return }
                 lastBroadcast.summaries = summaries
                 lastBroadcast.selectedID = selectedID
+                lastBroadcast.runs = runs
                 let state = WorkspaceState(
                     workspaces: summaries,
-                    selectedWorkspaceID: selectedID
+                    selectedWorkspaceID: selectedID,
+                    workflowRuns: runs
                 )
-                syncService.send(.workspaceState(state), reliable: false)
+                syncService.send(.workspaceState(state))
             }
         }
     }

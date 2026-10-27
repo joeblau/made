@@ -204,6 +204,7 @@ final class PhoneSessionDelegate: NSObject, WCSessionDelegate, UNUserNotificatio
 
 @main
 struct CopilotApp: App {
+    @State private var buildMonitor = BuildActivityController()
     @State private var syncService = PeerSyncService(
         role: .browser,
         displayName: UIDevice.current.name
@@ -214,7 +215,8 @@ struct CopilotApp: App {
         WindowGroup {
             ContentView(
                 syncService: syncService,
-                watchDelegate: phoneSessionDelegate
+                watchDelegate: phoneSessionDelegate,
+                buildMonitor: buildMonitor
             )
             .task {
                 phoneSessionDelegate.syncService = syncService
