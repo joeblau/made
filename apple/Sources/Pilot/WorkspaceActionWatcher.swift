@@ -31,6 +31,22 @@ struct ActionCompletionTracker {
 /// `RepositoryStore` only polls the selected repo, so this sweeps them all.
 @MainActor
 final class WorkspaceActionWatcher {
+    private(set) var workflowRuns: [UUID: [BuildWorkflowRun]] = [:]
+
+    var recentRuns: [BuildWorkflowRun] {
+        // Multiple worktrees can advertise the same GitHub attempt.
+        let unique = Dictionary(grouping: workflowRuns.values.flatMap { $0 }, by: \.id).values.compactMap { matches in
+            matches.sorted {
+                if $0.state.checkedAt != $1.state.checkedAt { return $0.state.checkedAt > $1.state.checkedAt }
+                return $0.workspaceID.uuidString < $1.workspaceID.uuidString
+            }.first
+        }
+        return Array(unique.sorted {
+            if $0.state.isComplete != $1.state.isComplete { return !$0.state.isComplete }
+            if $0.runID != $1.runID { return $0.runID > $1.runID }
+            return $0.id < $1.id
+        }.prefix(60))
+    }
     private weak var store: WorkspaceStore?
     private var timer: Timer?
     private var trackers: [UUID: ActionCompletionTracker] = [:]
@@ -97,16 +113,18 @@ final class WorkspaceActionWatcher {
             let dir = workspace.effectiveRootPath ?? ""
             guard !dir.isEmpty else { continue }
             let wsID = workspace.id
+            let workspaceName = workspace.name
             fetchTasks[wsID]?.cancel()
             let generation = (fetchGenerations[wsID] ?? 0) + 1
             fetchGenerations[wsID] = generation
             fetchTasks[wsID] = Task { [weak self] in
-                let result = await Self.runSnapshot(in: dir)
+                let result = await Self.runSnapshot(in: dir, workspaceID: wsID, workspaceName: workspaceName)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
                     guard let self, self.fetchGenerations[wsID] == generation else { return }
                     self.fetchTasks[wsID] = nil
                     if case .success(let snapshot) = result {
+                        self.workflowRuns[wsID] = snapshot.runs
                         // Cadence changes take effect immediately rather than
                         // waiting for the next tick, so a run starting shortens
                         // the wait and the last one finishing ends the fast poll.
@@ -128,6 +146,7 @@ final class WorkspaceActionWatcher {
         // Workspaces that disappeared cannot keep the fast cadence alive.
         let liveIDs = Set(store.workspaces.map(\.id))
         workspacesWithActiveRuns.formIntersection(liveIDs)
+        workflowRuns = workflowRuns.filter { liveIDs.contains($0.key) }
     }
 
     private func process(workspaceID: UUID, result: Result<Set<Int>, ActionRunFetchError>) {
@@ -146,12 +165,13 @@ final class WorkspaceActionWatcher {
     struct RunSnapshot: Sendable {
         let completedIDs: Set<Int>
         let hasActiveRun: Bool
+        let runs: [BuildWorkflowRun]
     }
 
     /// Runs for the repo at `dir`. Newly-completed runs (vs. the last sweep)
     /// are what we badge on; the active flag only drives the poll cadence.
     private nonisolated static func runSnapshot(
-        in dir: String
+        in dir: String, workspaceID: UUID, workspaceName: String
     ) async -> Result<RunSnapshot, ActionRunFetchError> {
         guard let repository = await RepositoryPollingScheduler.shared.repository(for: dir) else {
             return .failure(.launchFailed("Not a Git repository"))
@@ -187,7 +207,11 @@ final class WorkspaceActionWatcher {
                 hasActiveRun = true
             }
         }
-        return .success(RunSnapshot(completedIDs: ids, hasActiveRun: hasActiveRun))
+        let fetchedAt = await RepositoryPollingScheduler.shared.lastSuccessfulFetch(for: .workflowRuns, repository: repository)
+        let runs = items.compactMap {
+            BuildWorkflowRun.parse($0, workspaceID: workspaceID, workspaceName: workspaceName, checkedAt: fetchedAt ?? .distantPast)
+        }
+        return .success(RunSnapshot(completedIDs: ids, hasActiveRun: hasActiveRun, runs: runs))
     }
 
 }

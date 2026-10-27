@@ -1,5 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { SignalingRoom } from "./signaling";
+import { handleBuildActivity } from "./build-activity";
+export { BuildActivityRoom } from "./build-activity";
 
 export { SignalingRoom };
 
@@ -437,6 +439,10 @@ export class RendezvousRoom extends DurableObject<WorkerEnv> {
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname.startsWith("/live-activities/")) {
+      return handleBuildActivity(request, env);
+    }
 
     if (url.pathname === "/healthz") {
       return new Response("ok\n", {

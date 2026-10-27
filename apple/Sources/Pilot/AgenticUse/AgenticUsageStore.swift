@@ -192,6 +192,8 @@ final class AgenticUsageStore {
     private(set) var isRefreshing = false
     /// Non-fatal problem from the last load (e.g. skipped unreadable files).
     private(set) var scanWarning: String?
+    /// Informational freshness for cached Cursor history, separate from errors.
+    private(set) var cursorLastUpdated: Date?
 
     var range: AgenticUseRange {
         didSet {
@@ -406,6 +408,8 @@ final class AgenticUsageStore {
         isRefreshing = false
         // Cursor history can change even when every local log is unchanged.
         let cursorRecords = UsageConsent.isCursorEnabled(defaults: defaults) ? cursorResult.records : []
+        cursorLastUpdated = UsageConsent.isCursorEnabled(defaults: defaults) && cursorResult.isStale
+            ? cursorResult.fetchedAt : nil
         records = result.records + cursorRecords
         scanWarning = Self.warningText(for: result, pricingWarning: pricingWarning)
         if UsageConsent.isCursorEnabled(defaults: defaults), let warning = cursorResult.warning {

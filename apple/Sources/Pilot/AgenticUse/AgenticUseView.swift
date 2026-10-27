@@ -15,6 +15,14 @@ struct AgenticUseView: View {
                 warningBanner(warning)
             }
             content
+            if let updated = store.cursorLastUpdated {
+                Text("Cursor last updated \(updated.formatted(date: .abbreviated, time: .shortened))")
+                    .scaledFont(size: 11)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+            }
         }
         .onAppear { store.start() }
         .onDisappear { store.stop() }

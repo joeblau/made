@@ -19,6 +19,8 @@ enum CopilotVolumeHoldAction: Equatable, Sendable {
 struct ContentView: View {
     let syncService: PeerSyncService
     let watchDelegate: PhoneSessionDelegate
+    let buildMonitor: BuildActivityController
+    @State private var showBuildMonitor = false
     /// When true, the view seeds representative fixture content and skips
     /// the live sync/transcription setup so screenshots render without a
     /// Pilot peer. Defaults to the launch-arg-driven UserDefaults flag.
@@ -38,9 +40,11 @@ struct ContentView: View {
     @State private var secureIdentity = SecureIdentity(role: .copilot)
 
     init(syncService: PeerSyncService, watchDelegate: PhoneSessionDelegate,
+         buildMonitor: BuildActivityController = BuildActivityController(),
          demoMode: Bool = UserDefaults.standard.bool(forKey: "demoMode")) {
         self.syncService = syncService
         self.watchDelegate = watchDelegate
+        self.buildMonitor = buildMonitor
         self.demoMode = demoMode
         let transcription = TranscriptionService()
         _transcription = State(initialValue: transcription)
@@ -67,6 +71,9 @@ struct ContentView: View {
             mainContent
             .toolbar {
                 deviceToolbar
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Builds", systemImage: "hammer") { showBuildMonitor = true }
+                }
             }
             .safeAreaInset(edge: .bottom) {
                 trackpadInset
@@ -76,6 +83,12 @@ struct ContentView: View {
             }
         }
         .environment(secureIdentity)
+        .sheet(isPresented: $showBuildMonitor) {
+            BuildMonitorView(monitor: buildMonitor, connected: isPeerConnected)
+        }
+        .onOpenURL { url in
+            if url.scheme == "walkie", url.host == "build" { showBuildMonitor = true }
+        }
         .task {
             guard !demoMode else {
                 seedDemoState()
@@ -92,12 +105,14 @@ struct ContentView: View {
                 return
             }
             sendDeviceStatus()
+            buildMonitor.connected()
             secureIdentity.refreshPeer()
             // Confirm the already-approved pin to the authenticated peer.
             secureIdentity.announce()
         }
         .onChange(of: scenePhase) {
             if scenePhase != .active { walkie.interrupt() }
+            if scenePhase == .active { buildMonitor.connected() }
         }
         .onDisappear { walkie.interrupt() }
         .overlay(alignment: .top) {
@@ -368,16 +383,21 @@ struct ContentView: View {
     }
 
     private func setupSync() {
+        buildMonitor.send = { syncService.send($0) }
+        buildMonitor.restore()
         secureIdentity.send = { syncService.send($0) }
         syncService.onReceive = { message in
             switch message {
             case .workspaceState(let state):
                 workspaces = state.workspaces
                 selectedID = selectionState.receive(state)
+                buildMonitor.receive(state.workflowRuns ?? [])
+            case .buildRunUpdate(let run):
+                buildMonitor.receive(run)
             case .deviceKey(let announce):
                 secureIdentity.receive(announce)
             case .selectWorkspace, .selectTab, .deviceStatus, .mouseMove, .mouseClick,
-                 .voiceRecord, .transcribedSpeech, .terminalInput, .executeTranscript:
+                 .voiceRecord, .transcribedSpeech, .terminalInput, .executeTranscript, .followBuild, .unfollowBuild:
                 break
             }
         }
