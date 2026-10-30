@@ -125,6 +125,60 @@
       "scale" : 2,
       "scene" : "agentic-use",
       "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — local application stacks and container status (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-docker-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "docker",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — local application stacks and container status (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-docker-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "docker",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — a four-machine remote development workspace (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-remote-desktop-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "remote-desktop",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — a four-machine remote development workspace (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-remote-desktop-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "remote-desktop",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — project tasks alongside an agent session (light mode)",
+      "appearance" : "light",
+      "file" : "cockpit-tasks-light.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "tasks",
+      "width" : 2880
+    },
+    {
+      "alt" : "Cockpit — project tasks alongside an agent session (dark mode)",
+      "appearance" : "dark",
+      "file" : "cockpit-tasks-dark.png",
+      "height" : 1920,
+      "scale" : 2,
+      "scene" : "tasks",
+      "width" : 2880
     }
   ],
   "fixtureDate" : "2026-10-23",

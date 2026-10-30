@@ -130,6 +130,14 @@ final class ChromiumRealEngineSmokeTests: XCTestCase {
             ChromiumOrigin(url: tlsServer.baseURL)
         )
         XCTAssertEqual(
+            report.policy.approvedCertificateURL,
+            tlsServer.baseURL
+        )
+        XCTAssertEqual(
+            report.policy.approvedCertificatePageTitle,
+            "Cockpit Chromium approved certificate"
+        )
+        XCTAssertEqual(
             report.policy.hostileMessageSurvivorTitle,
             "Cockpit Chromium hostile messages ignored"
         )

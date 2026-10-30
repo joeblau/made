@@ -9,6 +9,7 @@ enum ChromiumBrowserRuntimeState: Equatable, Sendable {
     case unavailable
     case navigationBlocked
     case navigationFailed
+    case certificateRejected(String)
     case rendererTerminated
     case closed
 }
@@ -212,14 +213,22 @@ struct ChromiumBrowserView: NSViewRepresentable {
         private var wasFocused = false
         private var isActiveAndSelected = false
         private var pendingExternalOpenURL: URL?
+        private var certificateNavigationURL: URL?
+        private var certificateNavigationGeneration = 0
+        private var certificateExceptions = BrowserCertificateExceptions()
+        private var isPresentingCertificateWarning = false
+        private var rejectedCertificateOrigin: ChromiumOrigin?
+        private let confirmCertificate: @MainActor (BrowserCertificateIdentity) -> Bool
         private(set) var lastDiagnostic: ChromiumDiagnosticRecord?
 
         init(
             state: BrowserState,
-            onSelect: @escaping () -> Void
+            onSelect: @escaping () -> Void,
+            confirmCertificate: @escaping @MainActor (BrowserCertificateIdentity) -> Bool = BrowserCertificateWarning.confirm
         ) {
             self.state = state
             self.onSelect = onSelect
+            self.confirmCertificate = confirmCertificate
         }
 
         func attach(
@@ -297,6 +306,9 @@ struct ChromiumBrowserView: NSViewRepresentable {
         }
 
         func close() {
+            certificateNavigationGeneration += 1
+            certificateNavigationURL = nil
+            certificateExceptions.removeAll()
             host?.delegate = nil
             host?.performBrowserCommand(.close)
             host = nil
@@ -309,6 +321,8 @@ struct ChromiumBrowserView: NSViewRepresentable {
 
         func retry() {
             if let host {
+                certificateNavigationGeneration += 1
+                rejectedCertificateOrigin = nil
                 container?.runtimeState = .ready
                 state.isLoading = true
                 host.performBrowserCommand(.reload)
@@ -322,10 +336,13 @@ struct ChromiumBrowserView: NSViewRepresentable {
             defer { state.pendingURL = nil }
 
             let command = BrowserControllerCommandRouter.command(for: pendingURL)
+            certificateNavigationGeneration += 1
+            rejectedCertificateOrigin = nil
             switch command {
             case .navigate:
                 load(pendingURL)
             case .stop:
+                certificateNavigationURL = nil
                 host.performBrowserCommand(command)
                 state.isLoading = false
             default:
@@ -341,6 +358,9 @@ struct ChromiumBrowserView: NSViewRepresentable {
             )
             switch ChromiumNavigationPolicy.disposition(for: request) {
             case .allowInCurrentPane:
+                certificateNavigationURL = url
+                certificateNavigationGeneration += 1
+                rejectedCertificateOrigin = nil
                 state.isLoading = true
                 container?.runtimeState = .ready
                 host.performBrowserCommand(.navigate(url))
@@ -457,6 +477,9 @@ struct ChromiumBrowserView: NSViewRepresentable {
                 )
                 switch ChromiumNavigationPolicy.disposition(for: request) {
                 case .allowInCurrentPane:
+                    certificateNavigationURL = url
+                    certificateNavigationGeneration += 1
+                    rejectedCertificateOrigin = nil
                     return .allow
                 case .requestUserConfirmedExternalOpen:
                     pendingExternalOpenURL = url
@@ -755,6 +778,50 @@ struct ChromiumBrowserView: NSViewRepresentable {
             }
         }
 
+        @objc(chromiumBrowserHostView:shouldAllowCertificateError:forURL:certificateDER:)
+        nonisolated func chromiumBrowserHostView(
+            _ browserView: ChromiumBrowserHostView,
+            shouldAllowCertificateError errorCode: Int,
+            for url: URL,
+            certificateDER: Data
+        ) -> Bool {
+            MainActor.assumeIsolated {
+                guard host === browserView else { return false }
+                return shouldAllowCertificateError(errorCode, url: url, certificateDER: certificateDER) {
+                    browserView.window?.isVisible == true && !browserView.isHiddenOrHasHiddenAncestor
+                }
+            }
+        }
+
+        /// CEF supplies only recoverable failures. Keep the same restriction at
+        /// the UI boundary and tie approval to the navigation that raised it.
+        func shouldAllowCertificateError(
+            _ errorCode: Int,
+            url: URL,
+            certificateDER: Data,
+            isVisible: () -> Bool
+        ) -> Bool {
+            guard [-200, -201, -202].contains(errorCode),
+                  let host,
+                  let identity = BrowserCertificateIdentity(url: url, certificateDER: certificateDER),
+                  let navigationURL = certificateNavigationURL,
+                  ChromiumOrigin(url: navigationURL) == identity.origin else { return false }
+            if certificateExceptions.allows(identity) { return true }
+            guard isActiveAndSelected, isVisible(), !isPresentingCertificateWarning else { return false }
+
+            let generation = certificateNavigationGeneration
+            let requestID = state.navigationRequestID
+            isPresentingCertificateWarning = true
+            defer { isPresentingCertificateWarning = false }
+            guard confirmCertificate(identity),
+                  self.host === host,
+                  generation == certificateNavigationGeneration,
+                  requestID == state.navigationRequestID,
+                  isActiveAndSelected, isVisible() else { return false }
+            certificateExceptions.allow(identity)
+            return true
+        }
+
         @objc(chromiumBrowserHostView:didRejectCertificateError:forURL:)
         nonisolated func chromiumBrowserHostView(
             _ browserView: ChromiumBrowserHostView,
@@ -762,7 +829,11 @@ struct ChromiumBrowserView: NSViewRepresentable {
             for url: URL?
         ) {
             MainActor.assumeIsolated {
-                _ = browserView
+                guard host === browserView,
+                      let origin = url.flatMap(ChromiumOrigin.init(url:)),
+                      certificateNavigationURL.flatMap(ChromiumOrigin.init(url:)) == origin else { return }
+                rejectedCertificateOrigin = origin
+                container?.runtimeState = .certificateRejected(origin.serialized)
                 lastDiagnostic = ChromiumDiagnosticRecord.make(
                     event: .navigationFailed,
                     errorCode: errorCode,
@@ -921,16 +992,31 @@ struct ChromiumBrowserView: NSViewRepresentable {
             didFailNavigationWithError error: any Error
         ) {
             MainActor.assumeIsolated {
-                let nsError = error as NSError
-                state.isLoading = false
-                state.estimatedProgress = 0
-                container?.runtimeState = .navigationFailed
-                lastDiagnostic = ChromiumDiagnosticRecord.make(
-                    event: .navigationFailed,
-                    errorCode: nsError.code,
-                    url: browserView.url
-                )
+                guard host === browserView else { return }
+                handleNavigationFailure(error as NSError)
             }
+        }
+
+        func handleNavigationFailure(_ error: NSError) {
+            // A rejected warning can finish after the user has navigated away.
+            // Its late load failure must not cover the new page with an error.
+            let failedURL = error.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+            if let failedURL,
+               ChromiumOrigin(url: failedURL) != certificateNavigationURL.flatMap(ChromiumOrigin.init(url:)) {
+                return
+            }
+            state.isLoading = false
+            state.estimatedProgress = 0
+            if let origin = rejectedCertificateOrigin {
+                container?.runtimeState = .certificateRejected(origin.serialized)
+            } else {
+                container?.runtimeState = .navigationFailed
+            }
+            lastDiagnostic = ChromiumDiagnosticRecord.make(
+                event: .navigationFailed,
+                errorCode: error.code,
+                url: failedURL ?? certificateNavigationURL
+            )
         }
 
         @objc(chromiumBrowserHostView:rendererTerminatedWithStatus:)
@@ -1106,6 +1192,10 @@ final class ChromiumBrowserContainerView: NSView {
             retryButton.isHidden = true
         case .navigationFailed:
             messageLabel.stringValue = "Chromium could not load this page."
+            messageLabel.isHidden = false
+            retryButton.isHidden = false
+        case .certificateRejected(let origin):
+            messageLabel.stringValue = "The certificate for \(origin) could not be verified."
             messageLabel.isHidden = false
             retryButton.isHidden = false
         case .rendererTerminated:

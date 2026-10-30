@@ -1,5 +1,8 @@
 # WhisperKit 1.0 migration and benchmark report
 
+Historical report: Walkie now uses [Parakeet v3 Ultra](parakeet-ultra-migration.md).
+The Whisper benchmark tool and results below remain for comparison.
+
 ## Reviewed upstream changes
 
 The reviewed target is the official `argmaxinc/argmax-oss-swift` `v1.0.0`

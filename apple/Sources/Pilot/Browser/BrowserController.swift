@@ -1,3 +1,5 @@
+import AppKit
+import CryptoKit
 import Foundation
 
 /// Engine-neutral commands issued by Pilot's browser chrome.
@@ -61,5 +63,54 @@ enum BrowserZoomConversion {
     static func linearScale(forChromiumLevel level: Double) -> Double {
         guard level.isFinite else { return 1 }
         return pow(1.2, level)
+    }
+}
+
+/// The native warning's decision key binds the HTTPS origin and exact leaf
+/// certificate. Browser engines may also keep their own certificate decisions.
+struct BrowserCertificateIdentity: Hashable, Sendable {
+    let origin: ChromiumOrigin
+    let fingerprint: String
+
+    init?(url: URL, certificateDER: Data) {
+        guard let origin = ChromiumOrigin(url: url), origin.scheme == "https",
+              url.user == nil, url.password == nil, !certificateDER.isEmpty else { return nil }
+        self.origin = origin
+        fingerprint = SHA256.hash(data: certificateDER).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// In-memory decisions only; this never changes Keychain or system trust.
+struct BrowserCertificateExceptions {
+    private var approved: Set<BrowserCertificateIdentity> = []
+
+    func allows(_ identity: BrowserCertificateIdentity) -> Bool {
+        approved.contains(identity)
+    }
+
+    mutating func allow(_ identity: BrowserCertificateIdentity) {
+        approved.insert(identity)
+    }
+
+    mutating func removeAll() {
+        approved.removeAll()
+    }
+}
+
+@MainActor
+enum BrowserCertificateWarning {
+    static func confirm(_ identity: BrowserCertificateIdentity) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "This connection is not private"
+        alert.informativeText = """
+        Cockpit can’t verify the certificate for \(identity.origin.serialized).
+
+        If you trust this site, choose Visit Website to continue.
+        """
+        alert.addButton(withTitle: "Cancel")
+        let visitButton = alert.addButton(withTitle: "Visit Website")
+        visitButton.keyEquivalent = ""
+        return alert.runModal() == .alertSecondButtonReturn
     }
 }

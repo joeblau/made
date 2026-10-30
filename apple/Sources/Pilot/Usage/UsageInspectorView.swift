@@ -31,7 +31,7 @@ struct UsageListView: View {
                     ProviderCard(
                         title: "Claude",
                         symbol: "BrandAnthropic",
-                        tint: .anthropicCoral,
+                        tint: AgenticUseModelPalette.providerColor(for: .claude),
                         cli: "claude",
                         state: store.anthropic,
                         enable: enableClaude,
@@ -40,7 +40,7 @@ struct UsageListView: View {
                     ProviderCard(
                         title: "Codex",
                         symbol: "BrandOpenAI",
-                        tint: .green,
+                        tint: AgenticUseModelPalette.providerColor(for: .codex),
                         cli: "codex",
                         state: store.openAI,
                         enable: enableCodex,
@@ -49,7 +49,7 @@ struct UsageListView: View {
                     ProviderCard(
                         title: "Kimi",
                         symbol: "BrandMoonshot",
-                        tint: .blue,
+                        tint: AgenticUseModelPalette.providerColor(for: .kimi),
                         cli: "kimi login",
                         state: store.moonshot,
                         enable: enableKimi,
@@ -58,7 +58,7 @@ struct UsageListView: View {
                     ProviderCard(
                         title: "Grok",
                         symbol: "BrandGrok",
-                        tint: .purple,
+                        tint: AgenticUseModelPalette.providerColor(for: .grok),
                         cli: "grok",
                         state: store.xAI,
                         enable: enableGrok,
@@ -67,7 +67,7 @@ struct UsageListView: View {
                     ProviderCard(
                         title: "Cursor",
                         symbol: "BrandCursor",
-                        tint: .teal,
+                        tint: AgenticUseModelPalette.providerColor(for: .cursor),
                         cli: "cursor",
                         signInMessage: "Not signed in. Sign in to the Cursor app, then refresh.",
                         state: store.anysphere,
@@ -141,6 +141,18 @@ enum UsageResetCountdown {
     }
 }
 
+enum UsageRetryCountdown {
+    static func text(until date: Date, now: Date) -> String {
+        let remaining = Int(ceil(date.timeIntervalSince(now)))
+        guard remaining > 0 else { return "Retrying usage update…" }
+        let hours = remaining / 3600
+        let minutes = (remaining % 3600) / 60
+        let seconds = remaining % 60
+        if hours > 0 { return "Retrying in \(hours)h \(minutes)m." }
+        return String(format: "Retrying in %dm %02ds.", minutes, seconds)
+    }
+}
+
 /// One provider's plan usage card. Renders per `ProviderState`.
 private struct ProviderCard: View {
     let title: String
@@ -173,7 +185,7 @@ private struct ProviderCard: View {
                 .foregroundStyle(tint)
             Text(title)
                 .font(.body.weight(.semibold))
-            if case .usage(let usage) = state, let plan = usage.planLabel {
+            if let plan = state.displayedUsage?.planLabel {
                 Text(plan)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(tint)
@@ -214,21 +226,41 @@ private struct ProviderCard: View {
         case .error(let message):
             setupPrompt(message: message)
 
-        case .usage(let usage):
-            if usage.windows.isEmpty && usage.credits == nil {
-                Text("No usage reported for this window.")
+        case .rateLimited(let deadline, let usage):
+            if let usage { usageContent(usage) }
+            Text(usage == nil
+                 ? "Usage updates temporarily rate limited."
+                 : "Usage updates temporarily rate limited. Showing last available usage.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(UsageRetryCountdown.text(until: deadline, now: context.date))
                     .font(.callout)
                     .foregroundStyle(.secondary)
-            } else {
-                VStack(spacing: 10) {
-                    ForEach(usage.windowsInDisplayOrder) { window in
-                        windowRow(window)
-                    }
+                    .monospacedDigit()
+            }
+
+        case .usage(let usage):
+            usageContent(usage)
+        }
+    }
+
+    @ViewBuilder
+    private func usageContent(_ usage: ProviderUsage) -> some View {
+        if usage.windows.isEmpty && usage.credits == nil {
+            Text("No usage reported for this window.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(spacing: 10) {
+                ForEach(usage.windowsInDisplayOrder) { window in
+                    windowRow(window)
                 }
-                if let credits = usage.credits, !credits.isEmpty {
-                    creditsRow(credits)
-                        .padding(.top, 4)
-                }
+            }
+            if let credits = usage.credits, !credits.isEmpty {
+                creditsRow(credits)
+                    .padding(.top, 4)
             }
         }
     }
@@ -355,10 +387,4 @@ private struct ProviderCard: View {
         default: .red
         }
     }
-}
-
-extension Color {
-    /// Anthropic's brand coral — the one provider here with a distinctive
-    /// official color, so the Claude card uses it instead of a generic orange.
-    static let anthropicCoral = Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
 }

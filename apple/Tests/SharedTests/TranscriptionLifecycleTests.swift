@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import AVFoundation
 import Testing
 @testable import Copilot
 
@@ -35,7 +36,7 @@ struct TranscriptionLifecycleTests {
         ) == .download)
     }
 
-    @Test("a complete cached model and tokenizer load while offline")
+    @Test("a complete cached model and vocabulary load while offline")
     func cachedStartupDoesNotRequireNetwork() throws {
         let fixture = try ModelCacheFixture()
         defer { fixture.remove() }
@@ -47,19 +48,20 @@ struct TranscriptionLifecycleTests {
         ) == .loadCached(entry))
     }
 
-    @Test("Argmax Hub root resolves to the expected tokenizer repository")
-    func tokenizerDownloadRoot() throws {
+    @Test("Parakeet cache is isolated from an existing Whisper download")
+    func legacyWhisperCacheIsNotReused() throws {
         let fixture = try ModelCacheFixture()
         defer { fixture.remove() }
-
-        let repositoryFromHubRoot = fixture.cache.tokenizerDownloadBase
-            .appendingPathComponent("models", isDirectory: true)
-            .appendingPathComponent("openai", isDirectory: true)
-            .appendingPathComponent("whisper-base", isDirectory: true)
-
-        #expect(fixture.cache.tokenizerDownloadBase == fixture.documents
-            .appendingPathComponent("huggingface", isDirectory: true))
-        #expect(repositoryFromHubRoot == fixture.cache.tokenizerFolder)
+        let legacy = fixture.documents.appendingPathComponent(
+            "huggingface/models/argmaxinc/whisperkit-coreml/openai_whisper-base")
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        for name in ["MelSpectrogram", "AudioEncoder", "TextDecoder"] {
+            try Data([1]).write(to: legacy.appendingPathComponent("\(name).mlmodelc"))
+        }
+        try fixture.cache.remove()
+        #expect(fixture.cache.validEntry == nil)
+        #expect(!fixture.cache.isComplete(.init(modelFolder: legacy)))
+        #expect(FileManager.default.fileExists(atPath: legacy.path))
     }
 
     @Test("cancelled downloads release the single-flight gate for an explicit retry")
@@ -74,37 +76,35 @@ struct TranscriptionLifecycleTests {
         #expect(retry)
     }
 
-    @Test("0.18 model layout migrates only with the Argmax tokenizer component")
-    func legacyCacheMigration() throws {
+    @Test("a complete Ultra cache includes all four models and the v3 vocabulary")
+    func completeParakeetCache() throws {
         let fixture = try ModelCacheFixture()
         defer { fixture.remove() }
 
-        #expect(fixture.cache.validEntry == WhisperModelCache.Entry(
-            modelFolder: fixture.model,
-            tokenizerFolder: fixture.tokenizer
+        #expect(fixture.cache.validEntry == SpeechModelCache.Entry(
+            modelFolder: fixture.model
         ))
         #expect(fixture.cache.storedBytes > 3)
     }
 
-    @Test("missing or corrupt tokenizer JSON invalidates an otherwise complete model")
-    func tokenizerValidity() throws {
-        let missing = try ModelCacheFixture(includeTokenizerConfig: false)
+    @Test("missing or corrupt vocabulary JSON invalidates an otherwise complete model")
+    func vocabularyValidity() throws {
+        let missing = try ModelCacheFixture(includeVocabulary: false)
         defer { missing.remove() }
         #expect(missing.cache.validEntry == nil)
 
-        let corrupt = try ModelCacheFixture(corruptTokenizer: true)
+        let corrupt = try ModelCacheFixture(corruptVocabulary: true)
         defer { corrupt.remove() }
         #expect(corrupt.cache.validEntry == nil)
     }
 
-    @Test("removing a cached model removes both CoreML and tokenizer repositories")
+    @Test("removing a cached model removes Core ML components and vocabulary")
     func removeCompleteCache() throws {
         let fixture = try ModelCacheFixture()
         defer { fixture.remove() }
         _ = fixture.cache.validEntry
         try fixture.cache.remove()
         #expect(!FileManager.default.fileExists(atPath: fixture.model.path))
-        #expect(!FileManager.default.fileExists(atPath: fixture.tokenizer.path))
         #expect(fixture.cache.validEntry == nil)
     }
 
@@ -114,8 +114,59 @@ struct TranscriptionLifecycleTests {
         defer { fixture.remove() }
         #expect(fixture.cache.validEntry == nil)
 
-        try Data([1]).write(to: fixture.model.appendingPathComponent("TextDecoder.mlmodelc"))
+        try fixture.writeComponent("Decoder")
         #expect(fixture.cache.validEntry != nil)
+    }
+
+    @Test("empty Core ML bundles and missing weights are rejected and removable")
+    func incompleteBundlesAreNotReady() throws {
+        let fixture = try ModelCacheFixture()
+        defer { fixture.remove() }
+        let weights = fixture.model.appendingPathComponent("Encoder.mlmodelc/weights/weight.bin")
+        try Data().write(to: weights)
+        #expect(fixture.cache.validEntry == nil)
+        #expect(fixture.cache.storedBytes > 0)
+        try FileManager.default.removeItem(at: weights)
+        #expect(fixture.cache.validEntry == nil)
+        try fixture.cache.remove()
+        #expect(fixture.cache.storedBytes == 0)
+    }
+
+    @Test("partial downloads remain visible and removable after a failed load")
+    func partialDownloadStorageState() async throws {
+        let fixture = try ModelCacheFixture(includeDecoder: false)
+        defer { fixture.remove() }
+        let service = TranscriptionService(
+            testingCache: fixture.cache,
+            modelLoader: { _, _ in throw TestFailure.unexpectedDownload },
+            permissionRequest: { false },
+            streamFactory: { _, _ in throw TestFailure.unexpectedDownload }
+        )
+        await waitUntil { service.hasStoredModel }
+        #expect(!service.hasCachedModel)
+        #expect(!(await service.loadModel()))
+        #expect(service.hasStoredModel)
+        #expect(service.cachedModelSize != "Not downloaded")
+        await service.removeCachedModel()
+        #expect(!service.hasStoredModel)
+        #expect(service.cachedModelSize == "Not downloaded")
+    }
+
+    @Test("audio handed to the decoder owns its samples after the tap is reused")
+    func microphoneBufferOwnership() throws {
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2))
+        let original = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 4))
+        original.frameLength = 4
+        for channel in 0..<2 {
+            for frame in 0..<4 { original.floatChannelData![channel][frame] = Float(channel * 4 + frame) }
+        }
+        let copy = try #require(copyTranscriptionBuffer(original))
+        original.floatChannelData![0][0] = 99
+        original.floatChannelData![1][3] = 99
+        #expect(copy.frameLength == 4)
+        #expect(copy.format == format)
+        #expect(copy.floatChannelData![0][0] == 0)
+        #expect(copy.floatChannelData![1][3] == 7)
     }
 
     @Test("service model loading is single-flight for concurrent callers")
@@ -184,6 +235,29 @@ struct TranscriptionLifecycleTests {
         await service.stop()
         #expect(!service.isTranscribing)
         #expect(stream.stopCount == 1)
+    }
+
+    @Test("live hypotheses replace displayed text before release and cannot overwrite final text")
+    func liveHypothesesUpdateDuringRecording() async throws {
+        let fixture = try ModelCacheFixture()
+        defer { fixture.remove() }
+        let updates = UpdateBox()
+        let service = makeService(fixture: fixture, updates: updates, finalize: { "git status --short" })
+        #expect(await service.start())
+        let publish = try #require(updates.update)
+        publish(TranscriptionStreamUpdate(isRecording: false, confirmedText: "", partialText: "git stash"))
+        await waitUntil { service.combinedText == "git stash" }
+        #expect(service.isTranscribing)
+        publish(TranscriptionStreamUpdate(isRecording: false, confirmedText: "", partialText: "git status"))
+        await waitUntil { service.combinedText == "git status" }
+        #expect(service.isTranscribing)
+
+        await service.stop()
+        #expect(service.combinedText == "git status --short")
+        publish(TranscriptionStreamUpdate(isRecording: false, confirmedText: "", partialText: "late preview"))
+        await Task.yield()
+        #expect(service.combinedText == "git status --short")
+        #expect(!service.isTranscribing)
     }
 
     @Test("release retains transcript callbacks still waiting to update the UI")
@@ -362,7 +436,7 @@ struct TranscriptionLifecycleTests {
         #expect(service.modelErrorMessage?.contains("Microphone access") == true)
     }
 
-    @Test("a normally returning Argmax stream is not mistaken for readiness")
+    @Test("a normally returning stream is not mistaken for readiness")
     func streamReturnBeforeReadiness() async throws {
         let fixture = try ModelCacheFixture()
         defer { fixture.remove() }
@@ -496,7 +570,7 @@ struct TranscriptionLifecycleTests {
                 guard case .loadCached(let cached) = preparation else {
                     throw TestFailure.unexpectedDownload
                 }
-                return TranscriptionLoadedModel(kit: nil, cacheEntry: cached)
+                return TranscriptionLoadedModel(models: nil, cacheEntry: cached)
             },
             permissionRequest: { await permission.value },
             streamFactory: { _, update in
@@ -573,7 +647,7 @@ struct TranscriptionLifecycleTests {
         // lands — so a gesture arriving right after the failure re-confirms
         // with the user instead of starting a silent download.
         try FileManager.default.removeItem(
-            at: fixture.tokenizer.appendingPathComponent("tokenizer.json")
+            at: fixture.model.appendingPathComponent(SpeechModelCache.vocabularyName)
         )
         #expect(!(await service.loadModel()))
         #expect(service.modelErrorMessage?.contains("incomplete") == true)
@@ -597,7 +671,7 @@ struct TranscriptionLifecycleTests {
                 guard case .loadCached(let cached) = preparation else {
                     throw TestFailure.unexpectedDownload
                 }
-                return TranscriptionLoadedModel(kit: nil, cacheEntry: cached)
+                return TranscriptionLoadedModel(models: nil, cacheEntry: cached)
             },
             permissionRequest: permission,
             streamFactory: { loaded, update in
@@ -636,18 +710,18 @@ private final class UpdateBox: @unchecked Sendable {
 }
 
 private actor ControlledModelLoader {
-    let entry: WhisperModelCache.Entry
+    let entry: SpeechModelCache.Entry
     private(set) var loadCount = 0
     private var releases: [CheckedContinuation<Void, Never>] = []
 
-    init(entry: WhisperModelCache.Entry) {
+    init(entry: SpeechModelCache.Entry) {
         self.entry = entry
     }
 
     func load() async throws -> TranscriptionLoadedModel {
         loadCount += 1
         await withCheckedContinuation { releases.append($0) }
-        return TranscriptionLoadedModel(kit: nil, cacheEntry: entry)
+        return TranscriptionLoadedModel(models: nil, cacheEntry: entry)
     }
 
     func waitForLoadCount(_ expected: Int) async {
@@ -835,48 +909,39 @@ private struct ModelCacheFixture {
     let root: URL
     let documents: URL
     let model: URL
-    let tokenizer: URL
-    let defaults: UserDefaults
 
-    var cache: WhisperModelCache {
-        WhisperModelCache(
-            defaults: defaults,
-            documentsURL: documents,
-            fileManager: .default
-        )
+    var cache: SpeechModelCache {
+        SpeechModelCache(documentsURL: documents)
     }
 
     init(
         includeDecoder: Bool = true,
-        includeTokenizerConfig: Bool = true,
-        corruptTokenizer: Bool = false
+        includeVocabulary: Bool = true,
+        corruptVocabulary: Bool = false
     ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("blau-transcription-tests-\(UUID().uuidString)", isDirectory: true)
         documents = root.appendingPathComponent("Documents", isDirectory: true)
-        model = documents
-            .appendingPathComponent("huggingface/models/argmaxinc/whisperkit-coreml", isDirectory: true)
-            .appendingPathComponent(WhisperModelCache.modelName, isDirectory: true)
-        tokenizer = documents
-            .appendingPathComponent("huggingface/models/openai/whisper-base", isDirectory: true)
+        model = documents.appendingPathComponent("speech-models", isDirectory: true)
+            .appendingPathComponent(SpeechModelCache.modelName, isDirectory: true)
         try FileManager.default.createDirectory(at: model, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: tokenizer, withIntermediateDirectories: true)
-        try Data([1]).write(to: model.appendingPathComponent("MelSpectrogram.mlmodelc"))
-        try Data([1]).write(to: model.appendingPathComponent("AudioEncoder.mlmodelc"))
-        if includeDecoder {
-            try Data([1]).write(to: model.appendingPathComponent("TextDecoder.mlmodelc"))
+        for name in SpeechModelCache.requiredModelNames where includeDecoder || name != "Decoder" {
+            try writeComponent(name)
         }
-        let tokenizerJSON = corruptTokenizer
-            ? "{}"
-            : #"{"model":{"type":"BPE","vocab":{},"merges":[]},"added_tokens":[]}"#
-        let tokenizerData = Data(tokenizerJSON.utf8)
-        try tokenizerData.write(to: tokenizer.appendingPathComponent("tokenizer.json"))
-        if includeTokenizerConfig {
-            try Data("{}".utf8).write(to: tokenizer.appendingPathComponent("tokenizer_config.json"))
+        if includeVocabulary {
+            let vocabulary = corruptVocabulary ? [:] : Dictionary(
+                uniqueKeysWithValues: (0..<8192).map { (String($0), "token\($0)") })
+            try JSONEncoder().encode(vocabulary).write(to: model.appendingPathComponent(SpeechModelCache.vocabularyName))
         }
-        let suite = "app.blau.tests.transcription.\(UUID().uuidString)"
-        defaults = UserDefaults(suiteName: suite)!
-        defaults.removePersistentDomain(forName: suite)
+    }
+
+    func writeComponent(_ name: String) throws {
+        let component = model.appendingPathComponent("\(name).mlmodelc", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: component.appendingPathComponent("weights"), withIntermediateDirectories: true)
+        for file in ["coremldata.bin", "model.mil", "weights/weight.bin"] {
+            try Data([1]).write(to: component.appendingPathComponent(file))
+        }
     }
 
     func remove() {

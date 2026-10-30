@@ -399,6 +399,41 @@ struct UsageProviderAdapterTests {
         #expect(retryAfter == 900)
     }
 
+    @Test("Retry-After accepts seconds and rejects invalid delays", arguments: [
+        ("900", TimeInterval(900)), (" 120 ", TimeInterval(120)), ("0", TimeInterval(0)),
+        ("-1", nil), ("nan", nil), ("inf", nil), ("", nil), ("later", nil),
+    ])
+    func retryAfterSeconds(value: String, expected: TimeInterval?) {
+        #expect(UsageHTTP.retryAfter(value) == expected)
+    }
+
+    @Test("Retry-After dates count down to the server deadline")
+    func retryAfterDate() {
+        let deadline = Date(timeIntervalSince1970: 1_445_412_480)
+        let header = "Wed, 21 Oct 2015 07:28:00 GMT"
+        #expect(UsageHTTP.retryAfter(header, now: deadline.addingTimeInterval(-900)) == 900)
+        #expect(UsageHTTP.retryAfter(header, now: deadline.addingTimeInterval(1)) == 0)
+        #expect(UsageHTTP.retryAfter(nil, now: deadline) == nil)
+    }
+
+    @Test("Claude passes HTTP-date retry hints through its request boundary")
+    func claudeRetryAfterDate() async {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        let stub = StubTransport(status: 429, headers: [
+            "Retry-After": formatter.string(from: Date().addingTimeInterval(900)),
+        ])
+        let result = await ClaudeUsageAdapter.fetch(session: Self.claudeSession, transport: await stub.transport)
+        guard case .rateLimited(let delay?) = result else {
+            Issue.record("Expected rateLimited with a retry delay, got \(result)")
+            return
+        }
+        #expect(delay > 890 && delay <= 900)
+        #expect(await stub.requests.count == 1)
+    }
+
     @Test("Rejected credentials name the CLI that re-authenticates each provider")
     func authenticationFailuresNameTheirCLI() async {
         let unauthorized = StubTransport(status: 401)

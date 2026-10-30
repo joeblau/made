@@ -5,6 +5,22 @@ import Testing
 @Suite("Usage credential consent")
 @MainActor
 struct UsageConsentTests {
+    private actor FetchSequence {
+        private var results: [ProviderFetch]
+        private(set) var calls = 0
+
+        init(_ results: [ProviderFetch]) { self.results = results }
+
+        func next() -> ProviderFetch {
+            calls += 1
+            guard !results.isEmpty else {
+                Issue.record("Unexpected extra usage request")
+                return .notSignedIn
+            }
+            return results.removeFirst()
+        }
+    }
+
     private actor FetchProbe {
         private var providers: [String] = []
 
@@ -176,7 +192,8 @@ struct UsageConsentTests {
 
         store.reload()
         await store.waitForCurrentLoad()
-        #expect(store.openAI == .error("Rate limited — backing off ~15m."))
+        let deadline = clock.addingTimeInterval(900)
+        #expect(store.openAI == .rateLimited(until: deadline, usage: nil))
 
         // Five minutes on, the two-minute spacing has expired and the
         // exponential backoff alone (5 minutes for one strike) would allow a
@@ -185,13 +202,156 @@ struct UsageConsentTests {
         store.reload()
         await store.waitForCurrentLoad()
         #expect(await probe.recordedProviders() == ["Codex"])
-        #expect(store.openAI == .error("Rate limited — backing off ~15m."))
+        #expect(store.openAI == .rateLimited(until: deadline, usage: nil))
 
         // Once the Retry-After window passes, the provider is fetched again.
         clock += 10 * 60
         store.reload()
         await store.waitForCurrentLoad()
         #expect(await probe.recordedProviders() == ["Codex", "Codex"])
+    }
+
+    @Test("Claude uses server retry hints without inflating or truncating them")
+    func claudeRetryHintsOverrideFallback() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: UsageConsent.claudeKey)
+        let sequence = FetchSequence([
+            .rateLimited(retryAfter: nil), .rateLimited(retryAfter: nil),
+            .rateLimited(retryAfter: 60), .rateLimited(retryAfter: 7200), .success(ProviderUsage()),
+        ])
+        var clock = Date(timeIntervalSince1970: 1_790_000_000)
+        let store = UsageStore(defaults: defaults, fetchers: .init(
+            claude: { await sequence.next() }, codex: { .notSignedIn },
+            cursor: { .notSignedIn }, grok: { .notSignedIn }, kimi: { .notSignedIn }
+        ), now: { clock })
+
+        for (index, delay) in [300.0, 600.0, 120.0, 7200.0].enumerated() {
+            store.reload()
+            await store.waitForCurrentLoad()
+            let deadline = clock.addingTimeInterval(delay)
+            #expect(store.anthropic == .rateLimited(until: deadline, usage: nil))
+            clock = deadline.addingTimeInterval(-1)
+            store.reload()
+            await store.waitForCurrentLoad()
+            #expect(await sequence.calls == index + 1)
+            clock = deadline
+        }
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(store.anthropic == .usage(ProviderUsage()))
+        #expect(await sequence.calls == 5)
+    }
+
+    @Test("Polling retries automatically at the countdown deadline", .timeLimit(.minutes(1)))
+    func automaticallyRetriesAtDeadline() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: UsageConsent.claudeKey)
+        let sequence = FetchSequence([.rateLimited(retryAfter: 300), .success(ProviderUsage())])
+        let requests = AsyncStream.makeStream(of: Void.self)
+        defer { requests.continuation.finish() }
+        var clock = Date(timeIntervalSince1970: 1_790_000_000)
+        let store = UsageStore(defaults: defaults, fetchers: .init(
+            claude: {
+                let result = await sequence.next()
+                requests.continuation.yield(())
+                return result
+            },
+            codex: { .notSignedIn }, cursor: { .notSignedIn }, grok: { .notSignedIn }, kimi: { .notSignedIn }
+        ), now: { clock })
+        defer { store.stop() }
+        store.start()
+        await store.waitForCurrentLoad()
+        var events = requests.stream.makeAsyncIterator()
+        _ = await events.next()
+
+        // Re-arm just before the deadline, then let the timer itself fetch.
+        // Advancing the injected clock avoids waiting five real minutes.
+        clock += 299.99
+        store.reload()
+        clock += 0.01
+        try #require(await events.next() != nil)
+        await store.waitForCurrentLoad()
+        #expect(await sequence.calls == 2)
+        #expect(store.anthropic == .usage(ProviderUsage()))
+    }
+
+    @Test("Fallback backoff caps at an hour and resets after recovery")
+    func fallbackBackoffResetsAfterSuccess() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: UsageConsent.claudeKey)
+        let sequence = FetchSequence(
+            Array(repeating: .rateLimited(retryAfter: nil), count: 6)
+                + [.success(ProviderUsage()), .rateLimited(retryAfter: .infinity)]
+        )
+        var clock = Date(timeIntervalSince1970: 1_790_000_000)
+        let store = UsageStore(defaults: defaults, fetchers: .init(
+            claude: { await sequence.next() }, codex: { .notSignedIn },
+            cursor: { .notSignedIn }, grok: { .notSignedIn }, kimi: { .notSignedIn }
+        ), now: { clock })
+
+        for delay in [300.0, 600.0, 1200.0, 2400.0, 3600.0, 3600.0] {
+            store.reload()
+            await store.waitForCurrentLoad()
+            clock += delay
+            #expect(store.anthropic == .rateLimited(until: clock, usage: nil))
+        }
+        store.reload()
+        await store.waitForCurrentLoad()
+        clock += 600
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(store.anthropic == .rateLimited(until: clock.addingTimeInterval(300), usage: ProviderUsage()))
+    }
+
+    @Test("Rate limits preserve usage across repeated failures, manual refresh, and stop/start")
+    func rateLimitPreservesUsageAndDeadline() async throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: UsageConsent.claudeKey)
+        defaults.set(true, forKey: UsageConsent.codexKey)
+        let usage = ProviderUsage(planLabel: "Max", windows: [
+            UsageWindow(id: "five_hour", name: "5-hour", utilization: 0.25, resetsAt: nil),
+        ])
+        let sequence = FetchSequence([
+            .success(usage), .rateLimited(retryAfter: 900), .rateLimited(retryAfter: 300), .success(usage),
+        ])
+        let codex = FetchProbe()
+        var clock = Date(timeIntervalSince1970: 1_790_000_000)
+        let store = UsageStore(defaults: defaults, fetchers: .init(
+            claude: { await sequence.next() }, codex: { await codex.record("Codex") },
+            cursor: { .notSignedIn }, grok: { .notSignedIn }, kimi: { .notSignedIn }
+        ), now: { clock })
+        defer { store.stop() }
+
+        store.start()
+        await store.waitForCurrentLoad()
+        clock += 600
+        store.reload()
+        await store.waitForCurrentLoad()
+        let deadline = clock.addingTimeInterval(900)
+        #expect(store.anthropic == .rateLimited(until: deadline, usage: usage))
+        #expect(store.anthropic.displayedUsage == usage)
+
+        store.stop()
+        clock += 600
+        store.start()
+        await store.waitForCurrentLoad()
+        #expect(await sequence.calls == 2)
+        #expect(await codex.recordedProviders().count == 3)
+        #expect(store.anthropic == .rateLimited(until: deadline, usage: usage))
+
+        clock = deadline
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(store.anthropic == .rateLimited(until: clock.addingTimeInterval(300), usage: usage))
+        clock += 300
+        store.reload()
+        await store.waitForCurrentLoad()
+        #expect(store.anthropic == .usage(usage))
+        #expect(await sequence.calls == 4)
     }
 
     @Test("Kimi credential access is independently opted in and revocable")

@@ -19,6 +19,32 @@ struct RunnersTests {
         #expect(org.settingsURL?.absoluteString == "https://github.com/organizations/example-org/settings/actions/runners")
     }
 
+    @Test("BLAU enterprise sources use the enterprise API and settings page")
+    func enterpriseRouting() throws {
+        let enterprise = try #require(RunnerScope.parse(" BLAU ", kind: .enterprise))
+        #expect(enterprise == RunnerScope(kind: .enterprise, name: "BLAU"))
+        #expect(enterprise.endpoint == "enterprises/blau/actions/runners?per_page=100")
+        #expect(enterprise.settingsURL?.absoluteString == "https://github.com/enterprises/blau/settings/actions/runners")
+        #expect(enterprise.id == RunnerScope.parse("blau", kind: .enterprise)?.id)
+        #expect(enterprise.id != RunnerScope.parse("BLAU", kind: .organization)?.id)
+        for input in ["", "../blau", "blau/actions", "blau?per_page=1", "blau#fragment", "bl au", "-blau"] {
+            #expect(RunnerScope.parse(input, kind: .enterprise) == nil)
+        }
+    }
+
+    @Test("Enterprise access failures explain the enterprise token scope", arguments: [403, 404])
+    func enterpriseAccessGuidance(status: Int) {
+        let result = ProcessRunResult(
+            termination: .exit(1), standardOutput: Data(), standardError: Data("HTTP \(status)".utf8),
+            standardOutputTruncated: false, standardErrorTruncated: false,
+            elapsed: .zero, redactedCommand: "gh api"
+        )
+        let message = RunnersAPI.message(for: ProcessRunnerError.nonZeroExit(result), scope: RunnerScope(kind: .enterprise, name: "BLAU"))
+        #expect(message.contains("manage_runners:enterprise"))
+        #expect(!message.contains("admin:org"))
+        #expect(!message.contains("Actions read"))
+    }
+
     @Test("Paginated responses combine runners and deduplicate moving page boundaries")
     func paginatedResponse() throws {
         let data = Data("""
@@ -73,7 +99,7 @@ struct RunnersStoreTests {
         store.add(repo)
         #expect(store.displayName(for: runner) == runner.name)
         let restored = RunnersStore(defaults: defaults)
-        #expect(restored.scopes.count == 2)
+        #expect(restored.scopes == [org, repo])
         #expect(restored.selectedScopeID == repo.id)
         restored.selectedScopeID = org.id
         #expect(restored.hardware(for: runner) == .macMini)
@@ -81,6 +107,90 @@ struct RunnersStoreTests {
         restored.remove(org)
         #expect(restored.selectedScopeID == repo.id)
         #expect(RunnersStore(defaults: defaults).scopes == [repo])
+    }
+
+    @Test("An empty fleet makes no runner requests", arguments: [false, true])
+    func emptyFleetDoesNotFetch(restored: Bool) async throws {
+        let suite = "RunnersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        if restored {
+            defaults.set(try JSONEncoder().encode([RunnerScope]()), forKey: "runners.scopes")
+        }
+        let probe = RunnerScopeFetchProbe()
+        let store = RunnersStore(defaults: defaults) { scope in await probe.fetch(scope) }
+        #expect(store.scopes.isEmpty)
+        #expect(store.selectedScope == nil)
+        await store.refreshSelected()
+        #expect(await probe.scopes.isEmpty)
+    }
+
+    @Test("Enterprise, organization, and repository sources are independently added, scanned, and restored")
+    func supportsAllSourceTypes() async throws {
+        let suite = "RunnersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let probe = RunnerScopeFetchProbe()
+        let store = RunnersStore(defaults: defaults) { scope in await probe.fetch(scope) }
+        let scopes = [
+            RunnerScope(kind: .enterprise, name: "BLAU"),
+            RunnerScope(kind: .organization, name: "bloxwap"),
+            RunnerScope(kind: .repository, name: "bloxwap/build"),
+        ]
+        for scope in scopes {
+            #expect(store.add(scope))
+            await store.refreshSelected()
+        }
+        #expect(await probe.scopes == scopes)
+        #expect(store.scopes == scopes)
+        let restored = RunnersStore(defaults: defaults)
+        #expect(restored.scopes == scopes)
+        #expect(restored.selectedScope == scopes.last)
+        #expect(!restored.add(RunnerScope(kind: .enterprise, name: "blau")))
+        #expect(restored.scopes == scopes)
+        #expect(restored.selectedScopeID == scopes.first?.id)
+    }
+
+    @Test("Existing Bloxwap and BLAU sources keep their selection and separate device customizations")
+    func savedSourcesAreUnchanged() throws {
+        let suite = "RunnersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let organization = RunnerScope(kind: .organization, name: "bloxwap")
+        let enterprise = RunnerScope(kind: .enterprise, name: "BLAU")
+        let scopes = [organization, enterprise, RunnerScope(kind: .repository, name: "bloxwap/build")]
+        let appearances = [
+            "\(organization.id):1": RunnerPresentation(name: "Organization Mac", hardware: .macMini),
+            "\(enterprise.id):2": RunnerPresentation(name: "Enterprise Mac", hardware: .macStudio),
+        ]
+        defaults.set(try JSONEncoder().encode(scopes), forKey: "runners.scopes")
+        defaults.set(organization.id, forKey: "runners.selectedScope")
+        defaults.set(try JSONEncoder().encode(appearances), forKey: "runners.presentations")
+
+        let store = RunnersStore(defaults: defaults)
+        #expect(store.scopes == scopes)
+        #expect(store.selectedScope == organization)
+        #expect(store.presentations == appearances)
+        store.selectedScopeID = enterprise.id
+        #expect(store.presentation(for: RunnersTests.runner()) == RunnerPresentation())
+        #expect(store.displayName(for: RunnersTests.runner(id: 2)) == "Enterprise Mac")
+    }
+
+    @Test("A removed enterprise is not automatically re-added")
+    func removedEnterpriseStaysRemoved() throws {
+        let suite = "RunnersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = RunnersStore(defaults: defaults)
+        let organization = RunnerScope(kind: .organization, name: "bloxwap")
+        let enterprise = RunnerScope(kind: .enterprise, name: "BLAU")
+        store.add(organization)
+        store.add(enterprise)
+        store.remove(enterprise)
+
+        let restored = RunnersStore(defaults: defaults)
+        #expect(restored.scopes == [organization])
+        #expect(restored.selectedScope == organization)
     }
 
     @Test("A failed refresh keeps the last successful runner status with an error")
@@ -118,6 +228,15 @@ struct RunnersStoreTests {
         await task.value
         #expect(store.snapshots[scope.id] == nil)
         #expect(store.refreshing.isEmpty)
+    }
+}
+
+private actor RunnerScopeFetchProbe {
+    private(set) var scopes: [RunnerScope] = []
+
+    func fetch(_ scope: RunnerScope) -> [GitHubRunner] {
+        scopes.append(scope)
+        return [RunnersTests.runner()]
     }
 }
 

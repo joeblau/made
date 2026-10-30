@@ -44,6 +44,8 @@ struct ChromiumRuntimePolicyProbeReport: Equatable, Sendable {
     let deniedAuthenticationURL: URL?
     let rejectedCertificateErrors: [Int]
     let rejectedCertificateURL: URL?
+    let approvedCertificateURL: URL?
+    let approvedCertificatePageTitle: String
     let hostileMessageSurvivorTitle: String
 }
 
@@ -680,7 +682,7 @@ enum ChromiumRuntimeProbe {
             delegate.deniedFileChooserRequests > 0
         }
 
-        try await ChromiumRuntimeTransportSecurityProbe.verifyRejections(
+        let approvedCertificatePageTitle = try await ChromiumRuntimeTransportSecurityProbe.verifyRejections(
             host: host,
             delegate: delegate,
             baseURL: baseURL,
@@ -748,6 +750,8 @@ enum ChromiumRuntimeProbe {
                 delegate.rejectedCertificateErrors,
             rejectedCertificateURL:
                 delegate.rejectedCertificateURLs.first,
+            approvedCertificateURL: delegate.approvedCertificateURLs.first,
+            approvedCertificatePageTitle: approvedCertificatePageTitle,
             hostileMessageSurvivorTitle: survivorTitle
         )
     }
@@ -1075,7 +1079,7 @@ private enum ChromiumRuntimeTransportSecurityProbe {
         baseURL: URL,
         invalidCertificateURL: URL,
         timeout: TimeInterval
-    ) async throws {
+    ) async throws -> String {
         host.loadURL(
             baseURL.appendingPathComponent("authentication-required")
         )
@@ -1093,7 +1097,7 @@ private enum ChromiumRuntimeTransportSecurityProbe {
             to: baseURL,
             timeout: timeout
         )
-        try await ChromiumRuntimeCertificateProbe.verifyRejection(
+        return try await ChromiumRuntimeCertificateProbe.verifyRejectionAndApproval(
             host: host,
             delegate: delegate,
             url: invalidCertificateURL,
@@ -1104,12 +1108,12 @@ private enum ChromiumRuntimeTransportSecurityProbe {
 
 @MainActor
 private enum ChromiumRuntimeCertificateProbe {
-    static func verifyRejection(
+    static func verifyRejectionAndApproval(
         host: ChromiumBrowserHostView,
         delegate: ChromiumRuntimeProbeDelegate,
         url: URL,
         timeout: TimeInterval
-    ) async throws {
+    ) async throws -> String {
         host.loadURL(url)
         do {
             try await ChromiumRuntimeProbe.wait(
@@ -1136,5 +1140,47 @@ private enum ChromiumRuntimeCertificateProbe {
             !host.isLoading
         }
         delegate.clearExpectedNavigationFailure()
+        guard let identity = delegate.lastCertificateIdentity,
+              identity.origin == ChromiumOrigin(url: url),
+              identity.origin.host == "127.0.0.1" else {
+            throw ChromiumRuntimeProbeError.invalidLifecycle(
+                "CEF did not supply the loopback fixture certificate for approval."
+            )
+        }
+        // Simulate approving exactly the certificate shown by the first,
+        // rejected attempt. Every other origin and certificate stays denied.
+        delegate.approvedCertificateIdentity = identity
+        defer { delegate.approvedCertificateIdentity = nil }
+        host.loadURL(url)
+        try await ChromiumRuntimeProbe.wait(
+            for: "loading the explicitly approved TLS fixture",
+            timeout: timeout,
+            delegates: [delegate]
+        ) {
+            delegate.approvedCertificateURLs.contains(url)
+                && delegate.lastURL == url && !host.isLoading
+        }
+        let title = "Cockpit Chromium approved certificate"
+        // OpenSSL's -www fixture responds with its s_server status page.
+        // Requiring its body prevents a Chromium error page from passing.
+        guard host.executeJavaScript(
+            """
+            if (document.body?.innerText.includes('s_server')) {
+                document.title = '\(title)';
+            }
+            """,
+            sourceURL: url,
+            line: 1
+        ) else {
+            throw ChromiumRuntimeProbeError.javaScriptRejected("approved TLS fixture")
+        }
+        try await ChromiumRuntimeProbe.wait(
+            for: "reading the approved TLS fixture response",
+            timeout: timeout,
+            delegates: [delegate]
+        ) {
+            delegate.lastTitle == title
+        }
+        return title
     }
 }

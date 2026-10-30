@@ -40,7 +40,7 @@ enum UsageHTTP {
         for (field, value) in headers { request.setValue(value, forHTTPHeaderField: field) }
         let (data, response) = try await transport(request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap { Double($0) }
+            let retryAfter = retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
             throw UsageFetchError.http(status: http.statusCode, retryAfter: retryAfter)
         }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -77,13 +77,25 @@ enum UsageHTTP {
             .data(using: .utf8)
         let (data, response) = try await transport(request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            let retryAfter = (http.value(forHTTPHeaderField: "Retry-After")).flatMap { Double($0) }
+            let retryAfter = retryAfter(http.value(forHTTPHeaderField: "Retry-After"))
             throw UsageFetchError.http(status: http.statusCode, retryAfter: retryAfter)
         }
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw UsageFetchError.malformed
         }
         return object
+    }
+
+    /// Retry-After can contain delay seconds or an HTTP date (RFC 9110 §10.2.3).
+    static func retryAfter(_ value: String?, now: Date = .now) -> TimeInterval? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
+            return nil
+        }
+        if let seconds = Double(value) {
+            return seconds.isFinite && seconds >= 0 ? seconds : nil
+        }
+        guard let date = UsageJSON.date(value) else { return nil }
+        return max(0, date.timeIntervalSince(now))
     }
 
     /// Turn a thrown fetch error into a `ProviderFetch`, routing 429s to the

@@ -5,6 +5,52 @@ import Testing
 @Suite("Walkie recording and delivery", .serialized)
 @MainActor
 struct CopilotWalkieTalkieTests {
+    @Test("live text renders during a hold and finalization, but only final text is sent")
+    func liveTranscriptPresentationAndDelivery() async throws {
+        let harness = WalkieHarness()
+        let controller = harness.makeController()
+        let workspaceID = UUID()
+        controller.beginRecording(workspaceID: workspaceID, allowRestrictedNetwork: false)
+        await harness.startEntered.wait()
+        #expect(controller.displayedTranscript(liveText: "old recording").isEmpty)
+        harness.startResult.resolve(true)
+        try await waitForWalkie { controller.phase == .recording && harness.startedRecordingID != nil }
+        let recordingID = try #require(harness.startedRecordingID)
+
+        #expect(controller.displayedTranscript(liveText: "git stash") == "git stash")
+        #expect(controller.displayedTranscript(liveText: "git status") == "git status")
+        #expect(controller.transcript.isEmpty)
+        #expect(harness.events == [.start(workspaceID, recordingID)])
+        controller.endRecording()
+        await harness.finishEntered.wait()
+        #expect(controller.displayedTranscript(liveText: "git status") == "git status")
+        controller.execute(workspaceID: workspaceID)
+        #expect(harness.events == [.start(workspaceID, recordingID)])
+
+        harness.finishResult.resolve("git status --short")
+        try await waitForWalkie { controller.phase == .idle }
+        #expect(controller.displayedTranscript(liveText: "late preview") == "git status --short")
+        #expect(harness.events == [
+            .start(workspaceID, recordingID), .stop(workspaceID, recordingID),
+            .speech(workspaceID, recordingID, "git status --short"), .execute(workspaceID, recordingID)
+        ])
+    }
+
+    @Test("release before microphone readiness never displays the previous live transcript")
+    func cancelledPreparationHidesLiveText() async throws {
+        let harness = WalkieHarness()
+        let controller = harness.makeController()
+        controller.beginRecording(workspaceID: nil, allowRestrictedNetwork: false)
+        await harness.startEntered.wait()
+        controller.endRecording()
+        await harness.finishEntered.wait()
+        #expect(controller.displayedTranscript(liveText: "previous recording").isEmpty)
+        harness.finishResult.resolve("previous recording")
+        try await waitForWalkie { controller.phase == .idle }
+        #expect(controller.displayedTranscript(liveText: "previous recording").isEmpty)
+        harness.startResult.resolve(false)
+    }
+
     @Test("Up waits for final transcription and executes the same recording exactly once")
     func deferredExecutionPreservesRecordingIdentity() async throws {
         let harness = WalkieHarness()

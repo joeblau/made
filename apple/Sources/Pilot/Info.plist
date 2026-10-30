@@ -40,7 +40,7 @@
 	<key>LSUIElement</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Cockpit listens for push-to-talk dictation from the Walkie app.</string>
+	<string>Cockpit uses the microphone when you allow audio capture in a browser preview.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Cockpit accesses an attached iPhone camera feed so its Device pane can preview, capture, and record the device screen.</string>
 	<key>NSLocalNetworkUsageDescription</key>

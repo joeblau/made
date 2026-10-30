@@ -5,6 +5,7 @@
  * background never receives pointer events.
  */
 import * as THREE from 'three';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 
 /**
  * Builds the scene inside `root` and starts its capped loop. Returns a truthy
@@ -28,6 +29,7 @@ export function initCockpit(root = document) {
   const colorTexture = (canvas) => {
     const texture = new THREE.CanvasTexture(canvas);
     texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     return texture;
   };
   const rand = (a, b) => a + Math.random() * (b - a);
@@ -43,6 +45,10 @@ export function initCockpit(root = document) {
     return null; // WebGL unavailable; the loader keeps the static fallback.
   }
   renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
   const scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0xcfe0ee, 9000, 42000);
@@ -58,11 +64,23 @@ export function initCockpit(root = document) {
 
   /* ============================== lights ============================== */
   const SUN_DIR = new THREE.Vector3(-0.42, 0.52, -0.74).normalize();
-  scene.add(new THREE.HemisphereLight(0xcfe2ff, 0x35383d, 0.9 * Math.PI));
-  const sun = new THREE.DirectionalLight(0xfff2dc, 1.55 * Math.PI);
-  sun.position.copy(SUN_DIR).multiplyScalar(60);
-  scene.add(sun);
-  scene.add(new THREE.AmbientLight(0x40464e, 0.35 * Math.PI));
+  scene.add(new THREE.HemisphereLight(0xcfe2ff, 0x292c30, 0.65 * Math.PI));
+  const sun = new THREE.DirectionalLight(0xfff2dc, 1.7 * Math.PI);
+  sun.position.copy(SUN_DIR).multiplyScalar(4);
+  sun.target.position.set(0, -0.3, -0.25);
+  sun.castShadow = true;
+  const shadowSize = Math.min(innerWidth, innerHeight) < 700 ? 1024 : 2048;
+  sun.shadow.mapSize.set(shadowSize, shadowSize);
+  Object.assign(sun.shadow.camera, { left: -1.25, right: 1.25, top: 1.1, bottom: -1.1, near: 0.5, far: 9 });
+  sun.shadow.camera.updateProjectionMatrix();
+  sun.shadow.bias = -0.00008;
+  sun.shadow.normalBias = 0.0015;
+  sun.shadow.radius = 2;
+  scene.add(sun, sun.target);
+  const canopyFill = new THREE.DirectionalLight(0xc7dcf3, 0.72 * Math.PI);
+  canopyFill.position.set(-1.8, 2.4, 2.8);
+  scene.add(canopyFill);
+  scene.add(new THREE.AmbientLight(0x333a44, 0.12 * Math.PI));
 
   /* ============================== sky dome ============================== */
   const skyMat = new THREE.ShaderMaterial({
@@ -95,6 +113,17 @@ export function initCockpit(root = document) {
       }`,
   });
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(32000, 40, 24), skyMat));
+
+  const environmentScene = new THREE.Scene();
+  const environmentDome = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMat.clone());
+  environmentScene.add(environmentDome);
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const environmentTarget = pmrem.fromScene(environmentScene, 0.035, 0.1, 100);
+  scene.environment = environmentTarget.texture;
+  scene.environmentIntensity = 0.7;
+  environmentDome.geometry.dispose();
+  environmentDome.material.dispose();
+  pmrem.dispose();
 
   /* sun glow sprite */
   (function () {
@@ -200,23 +229,53 @@ export function initCockpit(root = document) {
   scene.add(ground);
 
   /* ============================== cockpit materials ============================== */
+  function surfaceTexture(repeat, woven = false) {
+    const size = 256, c = cnv(size, size), g = c.getContext('2d');
+    const image = g.createImageData(size, size);
+    let seed = 0x6d2b79f5;
+    for (let i = 0; i < image.data.length; i += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      const value = 190 + (seed % 56);
+      image.data[i] = image.data[i + 1] = image.data[i + 2] = value;
+      image.data[i + 3] = 255;
+    }
+    g.putImageData(image, 0, 0);
+    if (woven) {
+      g.globalAlpha = 0.08;
+      g.strokeStyle = '#fff';
+      for (let i = 0; i < size; i += 4) {
+        g.beginPath(); g.moveTo(i, 0); g.lineTo(i, size); g.stroke();
+        g.beginPath(); g.moveTo(0, i); g.lineTo(size, i); g.stroke();
+      }
+    }
+    const texture = new THREE.CanvasTexture(c);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(repeat, repeat);
+    texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    return texture;
+  }
+  const paintGrain = surfaceTexture(3);
+  const fabricGrain = surfaceTexture(6, true);
   const M = {
-    panel: new THREE.MeshStandardMaterial({ color: 0x3a3e43, roughness: 0.95 }),
-    panelDark: new THREE.MeshStandardMaterial({ color: 0x2b2e32, roughness: 0.95 }),
-    bezel: new THREE.MeshStandardMaterial({ color: 0x121315, roughness: 0.5, metalness: 0.25 }),
-    pad: new THREE.MeshStandardMaterial({ color: 0x232528, roughness: 1 }),
-    frame: new THREE.MeshStandardMaterial({ color: 0x2b2e31, roughness: 0.6, metalness: 0.3 }),
-    wall: new THREE.MeshStandardMaterial({ color: 0x27292c, roughness: 1 }),
-    black: new THREE.MeshStandardMaterial({ color: 0x17191b, roughness: 1 }),
-    seat: new THREE.MeshStandardMaterial({ color: 0x141618, roughness: 1 }),
-    red: new THREE.MeshStandardMaterial({ color: 0xc63b22, roughness: 0.48, metalness: 0.08 }),
-    redDark: new THREE.MeshStandardMaterial({ color: 0x7e2620, roughness: 0.8 }),
-    strap: new THREE.MeshStandardMaterial({ color: 0x232629, roughness: 1 }),
+    panel: new THREE.MeshStandardMaterial({ color: 0x3c4145, roughness: 0.78, metalness: 0.16, roughnessMap: paintGrain, bumpMap: paintGrain, bumpScale: 0.00045, envMapIntensity: 0.65 }),
+    panelDark: new THREE.MeshStandardMaterial({ color: 0x292d31, roughness: 0.76, metalness: 0.18, roughnessMap: paintGrain, bumpMap: paintGrain, bumpScale: 0.0004, envMapIntensity: 0.65 }),
+    bezel: new THREE.MeshPhysicalMaterial({ color: 0x111315, roughness: 0.3, metalness: 0.55, clearcoat: 0.35, clearcoatRoughness: 0.22, bumpMap: paintGrain, bumpScale: 0.00015, envMapIntensity: 0.9 }),
+    pad: new THREE.MeshPhysicalMaterial({ color: 0x25282a, roughness: 0.9, sheen: 0.3, sheenColor: 0x555b61, sheenRoughness: 0.85, roughnessMap: fabricGrain, bumpMap: fabricGrain, bumpScale: 0.001 }),
+    frame: new THREE.MeshStandardMaterial({ color: 0x303337, roughness: 0.32, metalness: 0.72, roughnessMap: paintGrain, bumpMap: paintGrain, bumpScale: 0.00012, envMapIntensity: 1.05 }),
+    wall: new THREE.MeshStandardMaterial({ color: 0x27292c, roughness: 0.88, metalness: 0.08, roughnessMap: paintGrain, bumpMap: paintGrain, bumpScale: 0.0006 }),
+    black: new THREE.MeshStandardMaterial({ color: 0x151719, roughness: 0.76, metalness: 0.08, bumpMap: paintGrain, bumpScale: 0.00035 }),
+    seat: new THREE.MeshStandardMaterial({ color: 0x17191b, roughness: 0.94, roughnessMap: fabricGrain, bumpMap: fabricGrain, bumpScale: 0.0012 }),
+    red: new THREE.MeshPhysicalMaterial({ color: 0xb63325, roughness: 0.4, metalness: 0.04, clearcoat: 0.22, clearcoatRoughness: 0.38, bumpMap: paintGrain, bumpScale: 0.00035 }),
+    redDark: new THREE.MeshStandardMaterial({ color: 0x7e2620, roughness: 0.68, metalness: 0.15 }),
+    strap: new THREE.MeshStandardMaterial({ color: 0x282b2d, roughness: 0.9, roughnessMap: fabricGrain, bumpMap: fabricGrain, bumpScale: 0.0009 }),
+    metal: new THREE.MeshStandardMaterial({ color: 0x92999e, roughness: 0.28, metalness: 0.9, envMapIntensity: 1.2 }),
+    key: new THREE.MeshStandardMaterial({ color: 0x24282b, roughness: 0.48, metalness: 0.12, bumpMap: paintGrain, bumpScale: 0.00025 }),
   };
   const cp = new THREE.Group();
   aircraft.add(cp);
   function box(w, h, d, mat, x, y, z, rx, ry, rz) {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    const radius = Math.min(0.012, w * 0.22, h * 0.22, d * 0.22);
+    const m = new THREE.Mesh(new RoundedBoxGeometry(w, h, d, 2, radius), mat);
     m.position.set(x, y, z);
     if (rx) m.rotation.x = rx;
     if (ry) m.rotation.y = ry;
@@ -238,7 +297,10 @@ export function initCockpit(root = document) {
   const leftC = cnv(820, 606), rightC = cnv(820, 606), standC = cnv(200, 150), stripC = cnv(700, 56);
   const leftT = colorTexture(leftC), rightT = colorTexture(rightC),
     standT = colorTexture(standC), stripT = colorTexture(stripC);
-  const screenMat = (t) => new THREE.MeshBasicMaterial({ map: t });
+  const screenMat = (t) => new THREE.MeshPhysicalMaterial({
+    color: 0x343a3d, map: t, emissive: 0xffffff, emissiveMap: t, emissiveIntensity: 1.1,
+    roughness: 0.2, metalness: 0, clearcoat: 0.65, clearcoatRoughness: 0.16, envMapIntensity: 0.3,
+  });
 
   /* generic small switch-panel texture */
   function panelTexture(w, h) {
@@ -326,6 +388,47 @@ export function initCockpit(root = document) {
   box(0.82, 0.34, 0.035, M.bezel, 0, -0.245, -0.765, -0.12);
   plane(0.366, 0.272, screenMat(leftT), -0.193, -0.245, -0.7448, -0.12);
   plane(0.366, 0.272, screenMat(rightT), 0.193, -0.245, -0.7448, -0.12);
+  const displayHardware = new THREE.Group();
+  displayHardware.position.set(0, -0.245, -0.7448);
+  displayHardware.rotation.x = -0.12;
+  cp.add(displayHardware);
+  const keyGeometry = new RoundedBoxGeometry(0.028, 0.011, 0.009, 1, 0.002);
+  const displayKeys = new THREE.InstancedMesh(keyGeometry, M.key, 26);
+  const screwGeometry = new THREE.CylinderGeometry(0.004, 0.004, 0.0025, 12);
+  const bezelScrews = new THREE.InstancedMesh(screwGeometry, M.metal, 8);
+  const screwSlots = new THREE.InstancedMesh(new THREE.BoxGeometry(0.006, 0.001, 0.0008), M.black, 8);
+  const part = new THREE.Object3D();
+  let keyIndex = 0;
+  for (const center of [-0.193, 0.193]) {
+    for (let i = 0; i < 5; i++) {
+      part.position.set(center + (i - 2) * 0.071, -0.146, 0.005);
+      part.rotation.set(0, 0, 0);
+      part.updateMatrix();
+      displayKeys.setMatrixAt(keyIndex++, part.matrix);
+    }
+    for (const side of [-1, 1]) for (let i = 0; i < 4; i++) {
+      part.position.set(center + side * 0.192, (i - 1.5) * 0.058, 0.005);
+      part.rotation.set(0, 0, Math.PI / 2);
+      part.updateMatrix();
+      displayKeys.setMatrixAt(keyIndex++, part.matrix);
+    }
+  }
+  const screwPositions = [
+    [-0.397, -0.155], [0, -0.155], [0.397, -0.155],
+    [-0.397, 0.155], [0, 0.155], [0.397, 0.155],
+    [-0.397, 0], [0.397, 0],
+  ];
+  screwPositions.forEach(([x, y], i) => {
+    part.position.set(x, y, -0.0005);
+    part.rotation.set(Math.PI / 2, 0, 0);
+    part.updateMatrix();
+    bezelScrews.setMatrixAt(i, part.matrix);
+    part.position.z = 0.001;
+    part.rotation.set(0, 0, i * 0.83);
+    part.updateMatrix();
+    screwSlots.setMatrixAt(i, part.matrix);
+  });
+  displayHardware.add(displayKeys, bezelScrews, screwSlots);
   /* thin center divider */
   box(0.014, 0.30, 0.012, M.bezel, 0, -0.245, -0.746, -0.12);
   /* small panels either side of the big display */
@@ -373,6 +476,11 @@ export function initCockpit(root = document) {
   /* canopy side rails going aft */
   box(0.07, 0.06, 1.55, M.frame, -0.70, -0.09, -0.15, 0, -0.05);
   box(0.07, 0.06, 1.55, M.frame, 0.70, -0.09, -0.15, 0, 0.05);
+  for (const side of [-1, 1]) {
+    box(0.018, 0.012, 1.42, M.black, side * 0.658, -0.056, -0.15, 0, side * 0.05);
+    box(0.032, 0.014, 0.085, M.key, side * 0.66, -0.052, -0.38, 0, side * 0.05);
+    box(0.014, 0.012, 0.05, M.metal, side * 0.66, -0.038, -0.38, 0, side * 0.05);
+  }
   /* cockpit side walls */
   plane(2.2, 0.66, M.wall, -0.73, -0.46, -0.28, 0, Math.PI / 2);
   plane(2.2, 0.66, M.wall, 0.73, -0.46, -0.28, 0, -Math.PI / 2);
@@ -381,6 +489,48 @@ export function initCockpit(root = document) {
   box(0.30, 0.06, 0.92, M.panelDark, 0.50, -0.40, -0.05);
   plane(0.29, 0.90, new THREE.MeshStandardMaterial({ map: panelTexture(256, 512), roughness: 0.9 }), -0.50, -0.3695, -0.05, -Math.PI / 2);
   plane(0.29, 0.90, new THREE.MeshStandardMaterial({ map: panelTexture(256, 512), roughness: 0.9 }), 0.50, -0.3695, -0.05, -Math.PI / 2);
+  const consoleHardware = new THREE.Group();
+  const toggleBases = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.008, 0.009, 0.004, 16), M.metal, 8);
+  const toggleStems = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.0018, 0.0022, 0.024, 8), M.metal, 8);
+  const toggleTips = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.0035, 0.0045, 0.012, 10), M.black, 8);
+  let controlIndex = 0;
+  for (const side of [-1, 1]) for (let i = 0; i < 4; i++) {
+    const x = side * 0.50 + (i % 2 ? 0.065 : -0.065);
+    const z = -0.32 + Math.floor(i / 2) * 0.20;
+    part.rotation.set(0, 0, 0);
+    part.position.set(x, -0.3675, z);
+    part.updateMatrix();
+    toggleBases.setMatrixAt(controlIndex, part.matrix);
+    const lean = i % 2 ? 0.22 : -0.22;
+    part.rotation.set(lean, 0, 0);
+    part.position.set(x, -0.354, z + Math.sin(lean) * 0.011);
+    part.updateMatrix();
+    toggleStems.setMatrixAt(controlIndex, part.matrix);
+    part.position.set(x, -0.342, z + Math.sin(lean) * 0.026);
+    part.updateMatrix();
+    toggleTips.setMatrixAt(controlIndex++, part.matrix);
+  }
+  const knobs = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.015, 0.017, 0.018, 20), M.key, 4);
+  const knobRings = new THREE.InstancedMesh(new THREE.TorusGeometry(0.018, 0.0018, 6, 24), M.metal, 4);
+  const knobMarks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.002, 0.001, 0.011), M.metal, 4);
+  controlIndex = 0;
+  for (const side of [-1, 1]) for (let i = 0; i < 2; i++) {
+    const x = side * 0.50 + (i ? 0.06 : -0.06), z = 0.20 + i * 0.12;
+    part.position.set(x, -0.3605, z);
+    part.rotation.set(0, 0, 0);
+    part.updateMatrix();
+    knobs.setMatrixAt(controlIndex, part.matrix);
+    part.position.y = -0.3675;
+    part.rotation.x = Math.PI / 2;
+    part.updateMatrix();
+    knobRings.setMatrixAt(controlIndex, part.matrix);
+    part.position.y = -0.3508;
+    part.rotation.set(0, side * 0.45 + i * 0.7, 0);
+    part.updateMatrix();
+    knobMarks.setMatrixAt(controlIndex++, part.matrix);
+  }
+  consoleHardware.add(toggleBases, toggleStems, toggleTips, knobs, knobRings, knobMarks);
+  cp.add(consoleHardware);
 
   /* right side-stick (red grip) */
   const stick = new THREE.Group();
@@ -449,12 +599,17 @@ export function initCockpit(root = document) {
   /* canopy glass */
   (function () {
     const geo = new THREE.SphereGeometry(1, 48, 24, 0, Math.PI * 2, 0, 1.72);
-    const mat = new THREE.MeshPhongMaterial({
-      color: 0xbcd6ea,
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: 0xd2e4ef,
       transparent: true,
-      opacity: 0.085,
-      shininess: 90,
-      specular: 0x9db8d0,
+      opacity: 0.11,
+      roughness: 0.06,
+      metalness: 0,
+      clearcoat: 1,
+      clearcoatRoughness: 0.08,
+      ior: 1.46,
+      specularIntensity: 0.8,
+      envMapIntensity: 0.55,
       side: THREE.BackSide,
       depthWrite: false,
     });
@@ -463,6 +618,12 @@ export function initCockpit(root = document) {
     glass.position.set(0, -0.14, -0.05);
     cp.add(glass);
   })();
+
+  cp.traverse((object) => {
+    if (!object.isMesh) return;
+    object.castShadow = !object.material.transparent;
+    object.receiveShadow = true;
+  });
 
   /* ============================== flight state ============================== */
   const S = {

@@ -2,28 +2,61 @@ import Foundation
 
 struct RunnerScope: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, CaseIterable, Sendable {
-        case organization, repository
+        case enterprise, organization, repository
 
-        var title: String { self == .organization ? "Organization" : "Repository" }
-        var symbol: String { self == .organization ? "building.2" : "folder" }
+        var title: String {
+            switch self {
+            case .enterprise: "Enterprise"
+            case .organization: "Organization"
+            case .repository: "Repository"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .enterprise: "building.2.crop.circle"
+            case .organization: "building.2"
+            case .repository: "folder"
+            }
+        }
+
+        var inputPlaceholder: String {
+            switch self {
+            case .enterprise: "enterprise-slug"
+            case .organization: "organization-name"
+            case .repository: "owner/repository"
+            }
+        }
     }
 
     let kind: Kind
     let name: String
     var id: String { "\(kind.rawValue):\(name.lowercased())" }
     var endpoint: String {
-        "\(kind == .organization ? "orgs" : "repos")/\(name)/actions/runners?per_page=100"
+        let path: String
+        switch kind {
+        case .enterprise: path = "enterprises/\(name.lowercased())"
+        case .organization: path = "orgs/\(name)"
+        case .repository: path = "repos/\(name)"
+        }
+        return "\(path)/actions/runners?per_page=100"
     }
     var settingsURL: URL? {
-        let path = kind == .organization ? "organizations/\(name)/settings/actions/runners" : "\(name)/settings/actions/runners"
-        return URL(string: "https://github.com/\(path)")
+        let path: String
+        switch kind {
+        case .enterprise: path = "enterprises/\(name.lowercased())"
+        case .organization: path = "organizations/\(name)"
+        case .repository: path = name
+        }
+        return URL(string: "https://github.com/\(path)/settings/actions/runners")
     }
 
     static func parse(_ input: String, kind: Kind) -> RunnerScope? {
         let name = input.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = name.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count == (kind == .organization ? 1 : 2),
-              parts[0].range(of: "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$", options: .regularExpression) != nil else { return nil }
+        let ownerPattern = kind == .enterprise ? "^[A-Za-z0-9][A-Za-z0-9-]*$" : "^[A-Za-z0-9][A-Za-z0-9-]{0,38}$"
+        guard parts.count == (kind == .repository ? 2 : 1),
+              parts[0].range(of: ownerPattern, options: .regularExpression) != nil else { return nil }
         if kind == .repository {
             guard parts[1] != ".", parts[1] != "..",
                   parts[1].range(of: "^[A-Za-z0-9_.-]{1,100}$", options: .regularExpression) != nil else { return nil }

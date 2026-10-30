@@ -10,6 +10,7 @@ import SwiftUI
 /// stay in agreement as the range filter changes the visible series.
 struct AgenticUseDailyChartPanel: View {
     let snapshot: AgenticUseSnapshot
+    @Environment(\.uiZoom) private var uiZoom
 
     @State private var metric: Metric = .cost
     @State private var selection: Date?
@@ -32,30 +33,21 @@ struct AgenticUseDailyChartPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .scaledFont(size: 12, weight: .medium)
-                Spacer(minLength: 8)
-                Picker("Chart style", selection: $style) {
-                    ForEach(Style.allCases) { style in
-                        Text(style.rawValue).tag(style)
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    chartTitle
+                    Spacer(minLength: 8)
+                    chartControls
                 }
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-                .labelsHidden()
-                .fixedSize()
-                Picker("Metric", selection: $metric) {
-                    ForEach(Metric.allCases) { metric in
-                        Text(metric.rawValue.uppercased()).tag(metric)
-                    }
+                VStack(alignment: .leading, spacing: 8) {
+                    chartTitle
+                    chartControls
                 }
-                .pickerStyle(.segmented)
-                .controlSize(.small)
-                .labelsHidden()
-                .fixedSize()
             }
-            HStack {
+            HStack(spacing: 8) {
+                Text("Model")
+                    .scaledFont(size: 11)
+                    .foregroundStyle(.secondary)
                 Picker("Model", selection: $selectedModel) {
                     Text("All models").tag("")
                     ForEach(snapshot.modelTotals) { model in
@@ -63,11 +55,13 @@ struct AgenticUseDailyChartPanel: View {
                             .tag(model.model)
                     }
                 }
-                .fixedSize()
-                Spacer(minLength: 8)
-                Text("Select a model to inspect smaller values")
-                    .scaledFont(size: 10)
-                    .foregroundStyle(.secondary)
+                .labelsHidden()
+                .controlSize(.small)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 280)
+                .help(selectedModel.isEmpty ? "Select a model to inspect smaller values" : AgenticModel.displayName(for: selectedModel))
+                Spacer(minLength: 0)
             }
             if visibleModels.isEmpty && metric == .cost {
                 ContentUnavailableView(
@@ -77,6 +71,7 @@ struct AgenticUseDailyChartPanel: View {
                 )
                 .frame(minHeight: 220)
             } else {
+                legend
                 chart
             }
             if metric == .cost && snapshot.hasUnpricedModels {
@@ -97,6 +92,57 @@ struct AgenticUseDailyChartPanel: View {
     private var title: String {
         let unit = snapshot.range == .day ? "Hourly" : "Daily"
         return metric == .cost ? "\(unit) cost" : "\(unit) tokens"
+    }
+
+    private var chartTitle: some View {
+        Text(title)
+            .scaledFont(size: 12, weight: .medium)
+            .fixedSize()
+    }
+
+    private var chartControls: some View {
+        HStack(spacing: 8) {
+            Picker("Chart style", selection: $style) {
+                ForEach(Style.allCases) { style in
+                    Text(style.rawValue).tag(style)
+                }
+            }
+            Picker("Metric", selection: $metric) {
+                ForEach(Metric.allCases) { metric in
+                    Text(metric.rawValue).tag(metric)
+                }
+            }
+        }
+        .pickerStyle(.segmented)
+        .controlSize(.small)
+        .labelsHidden()
+        .fixedSize()
+    }
+
+    /// Charts' automatic legend can claim more width than the plot when many
+    /// long model names are present. Constrain each entry to an adaptive column.
+    private var legend: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 180 * uiZoom), spacing: 16, alignment: .leading)],
+            alignment: .leading, spacing: 8
+        ) {
+            ForEach(visibleModels, id: \.self) { model in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(AgenticUseModelPalette.color(for: model))
+                        .frame(width: 7, height: 7)
+                        .accessibilityHidden(true)
+                    Text(AgenticModel.displayName(for: model))
+                        .scaledFont(size: 11)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(AgenticModel.displayName(for: model))
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     // MARK: - Chart
@@ -137,7 +183,7 @@ struct AgenticUseDailyChartPanel: View {
             }
         }
         .chartForegroundStyleScale(domain: visibleModels.map(AgenticModel.displayName(for:)), range: seriesColors)
-        .chartLegend(position: .top, alignment: .leading, spacing: 8)
+        .chartLegend(.hidden)
         .chartXSelection(value: snappedSelection)
         .chartOverlay { proxy in
             // `chartXSelection` alone only responds to drag on macOS; hover

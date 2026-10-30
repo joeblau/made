@@ -164,6 +164,8 @@ enum TerminalFastCommandStore {
 }
 
 enum PersistentTerminalSession {
+    static var isAvailable: Bool { tmuxExecutablePath() != nil }
+
     /// One batched `list-panes -a` subprocess reports every pane's runtime at
     /// once, so all the sidebar gauges and tab badges polling in the same tick
     /// share a single tmux query instead of one `display-message` per session.

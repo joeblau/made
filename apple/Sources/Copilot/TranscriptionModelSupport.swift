@@ -10,7 +10,7 @@ enum TranscriptionNetworkStatus: Sendable, Equatable {
 }
 
 enum TranscriptionModelPreparation: Equatable {
-    case loadCached(WhisperModelCache.Entry)
+    case loadCached(SpeechModelCache.Entry)
     case download
 }
 
@@ -27,7 +27,7 @@ enum TranscriptionModelPreparationError: LocalizedError, Equatable {
         case .offline:
             "The speech model is not cached and the iPhone is offline. Connect to Wi-Fi and retry."
         case .expensiveNetwork:
-            "The speech model is about 150 MB. Connect to Wi-Fi or choose Use Cellular when you retry."
+            "The speech model is about 630 MB. Connect to Wi-Fi or choose Use Cellular when you retry."
         case .constrainedNetwork:
             "Low Data Mode is active. Connect to an unrestricted network or explicitly allow this download."
         }
@@ -36,7 +36,7 @@ enum TranscriptionModelPreparationError: LocalizedError, Equatable {
 
 struct TranscriptionDownloadPolicy {
     static func preparation(
-        cachedEntry: WhisperModelCache.Entry?,
+        cachedEntry: SpeechModelCache.Entry?,
         network: TranscriptionNetworkStatus,
         allowRestrictedNetwork: Bool
     ) throws -> TranscriptionModelPreparation {
@@ -91,129 +91,60 @@ final class TranscriptionNetworkObserver: @unchecked Sendable {
     }
 }
 
-/// Persists the exact variant folder returned by WhisperKit. The fallback path
-/// is the cache layout shared by WhisperKit 0.18 and Argmax OSS 1.0, allowing an
-/// existing model to migrate without another transfer.
-struct WhisperModelCache: @unchecked Sendable {
+/// Parakeet has its own cache; Whisper weights and tokenizer files cannot be reused.
+struct SpeechModelCache: @unchecked Sendable {
     struct Entry: Sendable, Equatable {
         let modelFolder: URL
-        let tokenizerFolder: URL
     }
 
-    static let modelName = "openai_whisper-base"
-    private static let pathKey = "transcription.cachedModelPath.v1"
-    private static let requiredModelNames = ["MelSpectrogram", "AudioEncoder", "TextDecoder"]
-    private static let requiredTokenizerJSONNames = ["tokenizer.json", "tokenizer_config.json"]
+    static let modelName = "parakeet-ultra-coreml"
+    static let displayName = "Parakeet v3 Ultra"
+    static let downloadSize = "About 630 MB"
+    static let requiredModelNames = ["Preprocessor", "Encoder", "Decoder", "JointDecisionv3"]
+    static let vocabularyName = "parakeet_vocab.json"
 
-    let defaults: UserDefaults
     let documentsURL: URL
     let fileManager: FileManager
 
-    init(
-        defaults: UserDefaults = .standard,
-        documentsURL: URL? = nil,
-        fileManager: FileManager = .default
-    ) {
-        self.defaults = defaults
+    init(documentsURL: URL? = nil, fileManager: FileManager = .default) {
         self.fileManager = fileManager
         self.documentsURL = documentsURL
             ?? fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
     }
 
-    var tokenizerFolder: URL {
-        modelsFolder
-            .appendingPathComponent("openai", isDirectory: true)
-            .appendingPathComponent("whisper-base", isDirectory: true)
-    }
-
-    /// Argmax treats this value as a Hugging Face cache root while downloading.
-    /// Its Hub client appends the `models` repository type before the repository
-    /// identifier, so this must remain the parent of `modelsFolder`.
-    /// Cached loads instead receive `Entry.tokenizerFolder`, the exact repository
-    /// folder, after its local JSON has been validated.
-    var tokenizerDownloadBase: URL {
-        documentsURL.appendingPathComponent("huggingface", isDirectory: true)
+    var modelFolder: URL {
+        documentsURL.appendingPathComponent("speech-models", isDirectory: true)
+            .appendingPathComponent(Self.modelName, isDirectory: true)
     }
 
     var validEntry: Entry? {
-        if let stored = defaults.string(forKey: Self.pathKey) {
-            let url = URL(fileURLWithPath: stored)
-            if isCompleteModel(at: url), isCompleteTokenizer(at: tokenizerFolder) {
-                return Entry(modelFolder: url, tokenizerFolder: tokenizerFolder)
-            }
-        }
-
-        let legacyCompatibleURL = modelsFolder
-            .appendingPathComponent("argmaxinc", isDirectory: true)
-            .appendingPathComponent("whisperkit-coreml", isDirectory: true)
-            .appendingPathComponent(Self.modelName, isDirectory: true)
-        guard isCompleteModel(at: legacyCompatibleURL),
-              isCompleteTokenizer(at: tokenizerFolder) else { return nil }
-        defaults.set(legacyCompatibleURL.path, forKey: Self.pathKey)
-        return Entry(modelFolder: legacyCompatibleURL, tokenizerFolder: tokenizerFolder)
+        let entry = Entry(modelFolder: modelFolder)
+        return isComplete(entry) ? entry : nil
     }
 
-    func remember(_ url: URL) {
-        defaults.set(url.path, forKey: Self.pathKey)
-    }
-
-    var storedBytes: Int64 {
-        guard let entry = validEntry else { return 0 }
-        return bytes(in: entry.modelFolder) + bytes(in: entry.tokenizerFolder)
-    }
+    // Count partial downloads too, so failed transfers can be removed in Settings.
+    var storedBytes: Int64 { bytes(in: modelFolder) }
 
     func remove() throws {
-        var firstError: Error?
-        let modelURL = defaults.string(forKey: Self.pathKey).map(URL.init(fileURLWithPath:))
-            ?? modelsFolder
-                .appendingPathComponent("argmaxinc", isDirectory: true)
-                .appendingPathComponent("whisperkit-coreml", isDirectory: true)
-                .appendingPathComponent(Self.modelName, isDirectory: true)
-        for url in [modelURL, tokenizerFolder] where fileManager.fileExists(atPath: url.path) {
-            do {
-                try fileManager.removeItem(at: url)
-            } catch {
-                firstError = firstError ?? error
-            }
-        }
-        defaults.removeObject(forKey: Self.pathKey)
-        if let firstError { throw firstError }
-    }
-
-    func isCompleteModel(at url: URL) -> Bool {
-        guard let enumerator = fileManager.enumerator(at: url, includingPropertiesForKeys: nil) else {
-            return false
-        }
-        var found: Set<String> = []
-        for case let item as URL in enumerator {
-            let name = item.deletingPathExtension().lastPathComponent
-            if Self.requiredModelNames.contains(name) {
-                found.insert(name)
-            }
-        }
-        return found.count == Self.requiredModelNames.count
-    }
-
-    func isCompleteTokenizer(at url: URL) -> Bool {
-        Self.requiredTokenizerJSONNames.allSatisfy { name in
-            let file = url.appendingPathComponent(name)
-            guard let data = try? Data(contentsOf: file), !data.isEmpty,
-                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return false
-            }
-            return name != "tokenizer.json" || object["model"] is [String: Any]
+        if fileManager.fileExists(atPath: modelFolder.path) {
+            try fileManager.removeItem(at: modelFolder)
         }
     }
 
     func isComplete(_ entry: Entry) -> Bool {
-        isCompleteModel(at: entry.modelFolder)
-            && entry.tokenizerFolder.standardizedFileURL == tokenizerFolder.standardizedFileURL
-            && isCompleteTokenizer(at: entry.tokenizerFolder)
-    }
-
-    private var modelsFolder: URL {
-        tokenizerDownloadBase
-            .appendingPathComponent("models", isDirectory: true)
+        guard entry.modelFolder.standardizedFileURL == modelFolder.standardizedFileURL else { return false }
+        for name in Self.requiredModelNames {
+            let component = modelFolder.appendingPathComponent("\(name).mlmodelc", isDirectory: true)
+            for file in ["coremldata.bin", "model.mil", "weights/weight.bin"] {
+                guard let values = try? component.appendingPathComponent(file)
+                    .resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                      values.isRegularFile == true, (values.fileSize ?? 0) > 0 else { return false }
+            }
+        }
+        guard let data = try? Data(contentsOf: modelFolder.appendingPathComponent(Self.vocabularyName)),
+              let vocabulary = try? JSONDecoder().decode([String: String].self, from: data) else { return false }
+        // Ultra uses the v3 vocabulary: every token before blank ID 8192 must exist.
+        return (0..<8192).allSatisfy { vocabulary[String($0)] != nil }
     }
 
     private func bytes(in root: URL) -> Int64 {

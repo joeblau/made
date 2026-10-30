@@ -25,9 +25,9 @@ struct RunnersView: View {
                 ContentUnavailableView {
                     Label("Your Runner Fleet", systemImage: "server.rack")
                 } description: {
-                    Text("Add an organization or repository to see its self-hosted runners.")
+                    Text("Add an enterprise, organization, or repository to see its self-hosted runners.")
                 } actions: {
-                    Button("Add Organization or Repository", systemImage: "plus") { showsAddScope = true }
+                    Button("Add Runner Source", systemImage: "plus") { showsAddScope = true }
                         .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -86,8 +86,8 @@ struct RunnersView: View {
                 }
             }
             Button { showsAddScope = true } label: { Image(systemName: "plus") }
-                .help("Add an organization or repository")
-                .accessibilityLabel("Add an organization or repository")
+                .help("Add an enterprise, organization, or repository")
+                .accessibilityLabel("Add a runner source")
         }
         .padding(12)
     }
@@ -275,7 +275,7 @@ private struct RunnerHardwareImage: View {
 private struct AddRunnerScopeSheet: View {
     let add: (RunnerScope) -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var kind: RunnerScope.Kind = .organization
+    @State private var kind: RunnerScope.Kind = .enterprise
     @State private var name = ""
     @FocusState private var isNameFocused: Bool
 
@@ -290,11 +290,13 @@ private struct AddRunnerScopeSheet: View {
             .pickerStyle(.segmented)
             VStack(alignment: .leading, spacing: 8) {
                 Text(kind.title).font(.subheadline.weight(.medium))
-                TextField(kind == .organization ? "organization-name" : "owner/repository", text: $name)
+                TextField(kind.inputPlaceholder, text: $name)
                     .textFieldStyle(.roundedBorder)
                     .focused($isNameFocused)
                     .onSubmit(submit)
-                Text("Uses your GitHub CLI account. You’ll need access to view this source’s self-hosted runners.")
+                Text(kind == .enterprise
+                     ? "Uses your GitHub CLI account. Enterprise runners need the manage_runners:enterprise token scope."
+                     : "Uses your GitHub CLI account. You’ll need access to view this source’s self-hosted runners.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             HStack {

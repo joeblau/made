@@ -420,6 +420,29 @@ jobs:
           grep -Fq \
             "releases/download/$RELEASE_TAG/made-${RELEASE_VERSION}-macOS.zip" \
             "$release_directory/appcast.xml"
+      # Create the installer after generate_appcast so Sparkle continues to
+      # select the versioned ZIP as its sole update enclosure.
+      - name: Package, sign, and notarize the disk image
+        shell: bash
+        run: |
+          image="$RUNNER_TEMP/apple-release/Cockpit.dmg"
+          apple/bin/package-macos-dmg.sh \
+            "$RUNNER_TEMP/Pilot-export/Cockpit.app" "$image"
+          codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$image"
+          codesign --verify --strict "$image"
+          xcrun notarytool submit "$image" \
+            --key "$APP_STORE_CONNECT_KEY_PATH" \
+            --key-id "$APP_STORE_CONNECT_KEY_ID" \
+            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --wait --timeout 45m
+          xcrun stapler staple "$image"
+          xcrun stapler validate "$image"
+          spctl --assess --type open --context context:primary-signature "$image"
+          (
+            cd "$RUNNER_TEMP/apple-release"
+            shasum -a 256 Cockpit.dmg > Cockpit.dmg.sha256
+            shasum -a 256 -c Cockpit.dmg.sha256
+          )
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos-release-${{ needs.release-metadata.outputs.version }}
@@ -592,8 +615,10 @@ jobs:
           cd "$RUNNER_TEMP/apple-release"
           asset="made-${RELEASE_VERSION}-macOS.zip"
           [[ -f "$asset" && -f "$asset.sha256" && -f appcast.xml ]]
-          [[ "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" == 3 ]]
+          [[ -f Cockpit.dmg && -f Cockpit.dmg.sha256 ]]
+          [[ "$(find . -maxdepth 1 -type f | wc -l | tr -d ' ')" == 5 ]]
           shasum -a 256 -c "$asset.sha256"
+          shasum -a 256 -c Cockpit.dmg.sha256
           grep -Fq 'sparkle:edSignature=' appcast.xml
       - name: Publish the tagged release
         shell: bash
@@ -608,12 +633,24 @@ jobs:
               "$RELEASE_TAG" >&2
             exit 1
           }
+          notes="$RUNNER_TEMP/install-notes.md"
+          cat > "$notes" <<'EOF'
+          Download **Cockpit.dmg**, open it, and drag **Cockpit.app** to **Applications**.
+          Launch Cockpit from Applications and follow the setup screen to approve
+          permissions and configure optional developer tools.
+
+          Requires **macOS 26 or later**. Includes Apple silicon and Intel support.
+          Existing installations can use **Cockpit > Check for Updates…**.
+          EOF
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --latest \
             --title "made $RELEASE_VERSION" \
             --generate-notes \
+            --notes-file "$notes" \
+            "$RUNNER_TEMP/apple-release/Cockpit.dmg" \
+            "$RUNNER_TEMP/apple-release/Cockpit.dmg.sha256" \
             "$RUNNER_TEMP/apple-release/made-${RELEASE_VERSION}-macOS.zip" \
             "$RUNNER_TEMP/apple-release/made-${RELEASE_VERSION}-macOS.zip.sha256" \
             "$RUNNER_TEMP/apple-release/appcast.xml"

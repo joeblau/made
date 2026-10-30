@@ -1,4 +1,5 @@
 import AppKit
+import Security
 import SwiftUI
 @preconcurrency import WebKit
 
@@ -125,6 +126,16 @@ struct WebViewRepresentable: NSViewRepresentable {
         Coordinator(state: state, targetTerminalPaneID: targetTerminalPaneID)
     }
 
+    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+        coordinator.invalidate()
+        nsView.stopLoading()
+        nsView.navigationDelegate = nil
+        nsView.configuration.userContentController.removeScriptMessageHandler(
+            forName: BrowserAnnotate.messageName,
+            contentWorld: BrowserAnnotate.contentWorld
+        )
+    }
+
     private var initialURL: URL? {
         if let pendingURL = state.pendingURL,
            pendingURL.scheme != "blau" {
@@ -141,6 +152,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         return URL(string: "https://\(trimmed)")
     }
 
+    @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler {
         let state: BrowserState
         let targetTerminalPaneID: @MainActor () -> UUID?
@@ -150,15 +162,129 @@ struct WebViewRepresentable: NSViewRepresentable {
         private var navStateObservations: [NSKeyValueObservation] = []
         private var pendingDestinations: [ObjectIdentifier: URL] = [:]
         private var annotateGrant: BrowserAnnotate.BridgeGrant?
+        private weak var observedWebView: WKWebView?
+        private var mainFrameURL: URL?
+        private var navigationGeneration = 0
+        private var certificateExceptions = BrowserCertificateExceptions()
+        private var isPresentingCertificateWarning = false
+        private let confirmCertificate: @MainActor (BrowserCertificateIdentity) -> Bool
 
-        init(state: BrowserState, targetTerminalPaneID: @escaping @MainActor () -> UUID?) {
+        init(
+            state: BrowserState,
+            targetTerminalPaneID: @escaping @MainActor () -> UUID?,
+            confirmCertificate: @escaping @MainActor (BrowserCertificateIdentity) -> Bool = BrowserCertificateWarning.confirm
+        ) {
             self.state = state
             self.targetTerminalPaneID = targetTerminalPaneID
+            self.confirmCertificate = confirmCertificate
         }
 
-        deinit {
+        isolated deinit {
             urlObservation?.invalidate()
             navStateObservations.forEach { $0.invalidate() }
+        }
+
+        func invalidate() {
+            navigationGeneration += 1
+            observedWebView = nil
+            mainFrameURL = nil
+            certificateExceptions.removeAll()
+            annotateGrant = nil
+            urlObservation?.invalidate()
+            urlObservation = nil
+            navStateObservations.forEach { $0.invalidate() }
+            navStateObservations = []
+        }
+
+        // MARK: - Certificate warnings
+
+        func trackMainFrameNavigation(to url: URL?) {
+            navigationGeneration += 1
+            mainFrameURL = url
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+        ) {
+            if navigationAction.targetFrame?.isMainFrame == true {
+                trackMainFrameNavigation(to: navigationAction.request.url)
+            }
+            decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, didReceiveServerRedirectForProvisionalNavigation navigation: WKNavigation!) {
+            trackMainFrameNavigation(to: webView.url)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            respondTo challenge: URLAuthenticationChallenge
+        ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+            let space = challenge.protectionSpace
+            guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+                  let trust = space.serverTrust else { return (.performDefaultHandling, nil) }
+            let generation = navigationGeneration
+            let requestID = state.navigationRequestID
+            let trusted = await Self.evaluate(trust)
+            if trusted == true { return (.performDefaultHandling, nil) }
+
+            var trustResult = SecTrustResultType.invalid
+            var components = URLComponents()
+            components.scheme = space.protocol
+            components.host = space.host
+            components.port = space.port > 0 ? space.port : nil
+            guard trusted == false,
+                  SecTrustGetTrustResult(trust, &trustResult) == errSecSuccess,
+                  trustResult == .recoverableTrustFailure,
+                  let certificates = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
+                  let leaf = certificates.first,
+                  let url = components.url,
+                  let identity = BrowserCertificateIdentity(url: url, certificateDER: SecCertificateCopyData(leaf) as Data),
+                  canContinueCertificate(identity, in: webView, generation: generation, requestID: requestID)
+            else { return (.cancelAuthenticationChallenge, nil) }
+
+            if !certificateExceptions.allows(identity) {
+                guard canPresentCertificateWarning(in: webView), !isPresentingCertificateWarning
+                else { return (.cancelAuthenticationChallenge, nil) }
+                isPresentingCertificateWarning = true
+                defer { isPresentingCertificateWarning = false }
+                guard confirmCertificate(identity),
+                      canContinueCertificate(identity, in: webView, generation: generation, requestID: requestID),
+                      canPresentCertificateWarning(in: webView)
+                else { return (.cancelAuthenticationChallenge, nil) }
+                certificateExceptions.allow(identity)
+            }
+            return (.useCredential, URLCredential(trust: trust))
+        }
+
+        private func canContinueCertificate(
+            _ identity: BrowserCertificateIdentity,
+            in webView: WKWebView,
+            generation: Int,
+            requestID: Int
+        ) -> Bool {
+            observedWebView === webView
+                && webView.navigationDelegate === self
+                && navigationGeneration == generation
+                && state.navigationRequestID == requestID
+                && mainFrameURL.flatMap(ChromiumOrigin.init(url:)) == identity.origin
+        }
+
+        private func canPresentCertificateWarning(in webView: WKWebView) -> Bool {
+            (webView as? BrowserWebView)?.isPaneSelected == true
+                && !webView.isHiddenOrHasHiddenAncestor
+                && webView.window?.isVisible == true
+        }
+
+        private static func evaluate(_ trust: SecTrust) async -> Bool? {
+            await withCheckedContinuation { continuation in
+                let status = SecTrustEvaluateAsyncWithError(trust, .main) { _, trusted, _ in
+                    continuation.resume(returning: trusted)
+                }
+                if status != errSecSuccess { continuation.resume(returning: nil) }
+            }
         }
 
         // MARK: - Browser Annotate
@@ -255,11 +381,12 @@ struct WebViewRepresentable: NSViewRepresentable {
         /// SPA navigations never hit the delegate callbacks that otherwise
         /// refresh them, which left Back/Forward stuck disabled.
         func observeURL(of webView: WKWebView) {
+            observedWebView = webView
             urlObservation?.invalidate()
             urlObservation = webView.observe(\.url, options: [.new, .initial]) { [weak self] webView, _ in
-                guard let self, let url = webView.url else { return }
-                let absolute = url.absoluteString
-                Task { @MainActor in
+                Task { @MainActor [weak self, weak webView] in
+                    guard let self, let webView, let url = webView.url else { return }
+                    let absolute = url.absoluteString
                     if self.state.urlText != absolute {
                         self.state.urlText = absolute
                     }
@@ -288,7 +415,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         func webView(
             _ webView: WKWebView,
             decidePolicyFor navigationResponse: WKNavigationResponse,
-            decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void
         ) {
             // Anything WebKit can't render inline (zip, dmg, pkg, raw images
             // when triggered via Save As, etc.) is converted to a download.

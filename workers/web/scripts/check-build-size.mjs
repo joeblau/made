@@ -7,7 +7,7 @@
  *              loader and must stay free of Three.js. Measured at 6,522 raw /
  *              3,182 gzip bytes.
  *   deferred - dynamic import() chunks: the decorative cockpit scene and
- *              optional interactions. Measured at 570,536 raw / 142,924 gzip.
+ *              optional interactions. Measured at 581,414 raw / 146,231 gzip.
  *
  * Thresholds leave roughly 10-15% headroom over the measured sizes (raw and
  * gzip -9 are both enforced). Modules no page references are reported but not

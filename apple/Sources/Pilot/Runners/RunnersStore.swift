@@ -30,9 +30,14 @@ enum RunnersAPI {
             return "Sign in to GitHub with gh auth login, then refresh."
         }
         if detail.contains("403") || detail.contains("404") {
-            return scope.kind == .organization
-                ? "Check the organization name and your GitHub access. Organization runners require admin access and the admin:org token scope, or Self-hosted runners read permission."
-                : "Check the repository name and your GitHub access. Repository runners require admin access and Actions read permission."
+            switch scope.kind {
+            case .enterprise:
+                return "Check the enterprise slug and your GitHub access. Enterprise runners require an OAuth token or classic personal access token with manage_runners:enterprise. Fine-grained tokens are not supported."
+            case .organization:
+                return "Check the organization name and your GitHub access. Organization runners require admin access and the admin:org token scope, or Self-hosted runners read permission."
+            case .repository:
+                return "Check the repository name and your GitHub access. Repository runners require admin access and Actions read permission."
+            }
         }
         return "Couldn’t load runners. Check your connection and GitHub CLI sign-in, then refresh."
     }

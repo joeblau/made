@@ -875,6 +875,20 @@ struct UsageReportingTests {
         #expect(!usage.windows.contains { $0.name == "Weekly (Haiku)" })
     }
 
+    @Test("Retry countdown updates across minute, hour, and expiry boundaries", arguments: [
+        (TimeInterval(-1), "Retrying usage update…"),
+        (TimeInterval(0), "Retrying usage update…"),
+        (TimeInterval(0.5), "Retrying in 0m 01s."),
+        (TimeInterval(59), "Retrying in 0m 59s."),
+        (TimeInterval(60), "Retrying in 1m 00s."),
+        (TimeInterval(51 * 60), "Retrying in 51m 00s."),
+        (TimeInterval(3600), "Retrying in 1h 0m."),
+    ])
+    func retryCountdown(remaining: TimeInterval, expected: String) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        #expect(UsageRetryCountdown.text(until: now.addingTimeInterval(remaining), now: now) == expected)
+    }
+
     @Test(
         "Reset countdown formats fixed boundaries",
         arguments: [

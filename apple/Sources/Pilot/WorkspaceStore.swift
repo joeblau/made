@@ -670,7 +670,14 @@ final class WorkspaceStore {
     }
 
     func addWorkspace() {
-        let workspace = Workspace(name: "Workspace \(workspaces.count + 1)")
+        addWorkspace(directory: nil)
+    }
+
+    func addWorkspace(directory: URL?) {
+        let workspace = Workspace(name: directory?.lastPathComponent ?? "Workspace \(workspaces.count + 1)")
+        if let directory {
+            workspace.panes.first?.currentDirectory = directory.path
+        }
         workspace.workspaceSortOrder = workspaces.count
         modelContext.insert(workspace)
         _ = modelContext.saveReporting()

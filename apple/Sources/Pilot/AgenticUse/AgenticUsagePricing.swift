@@ -104,7 +104,11 @@ enum AgenticUsagePricing {
         // Claude (Anthropic price sheet). Fable 5.1 and Mythos 5.1 bill cache
         // reads at 0.025x input ($0.25/M), not the usual 0.1x.
         "claude-opus-5-5": AgenticModelRate(input: 4, output: 20, cacheRead: 0.20, fastInput: 8, fastOutput: 40),
-        "claude-sonnet-5-5": AgenticModelRate(input: 2, output: 10),
+        "claude-sonnet-5-5": AgenticModelRate(input: 2, output: 10, cacheRead: 0.10),
+        "claude-haiku-5-5": AgenticModelRate(
+            input: 0.10, output: 0.50, cacheRead: 0.01,
+            contextTiers: [.init(threshold: 100_000, input: 0.50, output: 2.50, cacheRead: 0.05, cacheWrite: 0.625)]
+        ),
         "claude-opus-5": AgenticModelRate(input: 5.00, output: 25.00, fastInput: 10.00, fastOutput: 50.00),
         "claude-fable-5-1": AgenticModelRate(input: 10.00, output: 50.00, cacheRead: 0.25),
         "claude-mythos-5-1": AgenticModelRate(input: 10.00, output: 50.00, cacheRead: 0.25),
@@ -150,6 +154,12 @@ enum AgenticUsagePricing {
         "k3-256k": AgenticModelRate(input: 3, output: 15, cacheWrite: 3),
         "kimi-k3": AgenticModelRate(input: 3, output: 15, cacheWrite: 3),
         "moonshot-ai/kimi-k3": AgenticModelRate(input: 3, output: 15, cacheWrite: 3),
+        "k3.1-pro": AgenticModelRate(input: 2, output: 10, cacheRead: 0.20, cacheWrite: 2),
+        "kimi-k3.1-pro": AgenticModelRate(input: 2, output: 10, cacheRead: 0.20, cacheWrite: 2),
+        "moonshot-ai/kimi-k3.1-pro": AgenticModelRate(input: 2, output: 10, cacheRead: 0.20, cacheWrite: 2),
+        "k3.1-pro-highspeed": AgenticModelRate(input: 4, output: 20, cacheRead: 0.20, cacheWrite: 4),
+        "kimi-k3.1-pro-highspeed": AgenticModelRate(input: 4, output: 20, cacheRead: 0.20, cacheWrite: 4),
+        "moonshot-ai/kimi-k3.1-pro-highspeed": AgenticModelRate(input: 4, output: 20, cacheRead: 0.20, cacheWrite: 4),
         "kimi-for-coding": AgenticModelRate(input: 0.95, output: 4, cacheRead: 0.16),
         "kimi-k2.6": AgenticModelRate(input: 0.95, output: 4, cacheRead: 0.16),
         "kimi-k2.7-code": AgenticModelRate(input: 0.95, output: 4, cacheRead: 0.19),
@@ -292,6 +302,7 @@ actor AgenticPricingCatalog {
     private func result(warning: String?) -> Result {
         var rates = AgenticUsagePricing.rates
         if let cached { rates.merge(cached.rates) { _, refreshed in refreshed } }
+        Self.addRoutingAliases(to: &rates)
         return Result(rates: rates, fetchedAt: cached?.fetchedAt, warning: warning)
     }
 
@@ -359,7 +370,19 @@ actor AgenticPricingCatalog {
                 )
             }
         }
-        // Documented CLI routing names share the public model's rates.
+        addRoutingAliases(to: &rates)
+        return rates
+    }
+
+    /// Use exact public model identities, including models added to the live
+    /// catalog after this build. Never fuzzy-match a short id like `k3` to a
+    /// reseller's fast variant. Also run on restored caches so new alias rules
+    /// apply immediately, without waiting for the next catalog download.
+    private nonisolated static func addRoutingAliases(to rates: inout [String: AgenticModelRate]) {
+        for (model, rate) in Array(rates) where model.hasPrefix("kimi-k") {
+            rates[String(model.dropFirst("kimi-".count))] = rate
+            rates["moonshot-ai/" + model] = rate
+        }
         for (alias, publicID) in [
             "grok-4.7-build": "grok-4.7", "grok-4.6-build": "grok-4.6",
             "k3": "kimi-k3", "k3-256k": "kimi-k3", "moonshot-ai/kimi-k3": "kimi-k3",
@@ -367,7 +390,6 @@ actor AgenticPricingCatalog {
         ] {
             if let rate = rates[publicID] { rates[alias] = rate }
         }
-        return rates
     }
 
     private nonisolated static func number(_ value: Any?) -> Double? {
