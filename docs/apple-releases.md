@@ -5,7 +5,8 @@ on `main` into one coordinated Apple release:
 
 - Cockpit (the `Pilot` target) is built as a universal Chromium-enabled macOS
   app, signed with Developer ID, notarized, stapled, and attached to a GitHub
-  Release as a ZIP with a SHA-256 checksum and a signed Sparkle appcast.
+  Release as a disk image and ZIP, each with a SHA-256 checksum, and a signed
+  Sparkle appcast. The disk image is separately signed, notarized, and stapled.
 - Walkie, including Trigger, is uploaded to App Store Connect for TestFlight.
 - Kneeboard, including Kneeboard widgets, is uploaded to App Store Connect for
   TestFlight.
@@ -27,6 +28,57 @@ Identifiers & Profiles before the first release:
 - `app.blau.plotter.widgets`
 - the `group.app.blau.plotter` App Group, assigned to Plotter and
   PlotterWidgets
+
+## Installation and first launch
+
+The website's macOS download button opens the latest public app release. It
+remains usable before the first disk-image release; older releases supply a
+ZIP. Each new release includes `Cockpit.dmg`, containing `Cockpit.app`, an
+Applications shortcut, and installation instructions. The stable direct URL is
+`https://github.com/joeblau/made/releases/latest/download/Cockpit.dmg` once the
+first release with this asset is published. Never point the website at an
+asset that has not been published yet.
+
+Cockpit requires **macOS 26 or later** and ships for Apple silicon and Intel.
+Users drag the app to Applications, launch it there, and eject the disk image.
+End users do not need the repository, Bun, Homebrew, or Xcode to use the built-in
+terminal, editor, notes, and browser.
+
+First launch presents setup before restoring workspace views or starting
+companion discovery and automatic updates. Progress survives relaunches.
+Permissions and tools are optional; finishing with skipped items is remembered.
+**Cockpit > Set Up Cockpit…** and **Settings > General > Setup** reopen the flow.
+
+| Setup item | Behavior |
+| --- | --- |
+| Local Network | Explicit Bonjour probe, with denial and timeout states. Companion discovery starts only after setup completes and the user enables it. |
+| Accessibility | Explicit request for Walkie's mouse control; status refreshes on return from System Settings. |
+| Screen Recording | Explicit request for Kneeboard mirroring; background connections never request it. A relaunch may be needed. |
+| Camera and microphone | Current authorization is read without prompting; requests occur only on Enable. Denied access links to System Settings; restricted access stays disabled. |
+| Developer tools | Bounded checks for Git/CLT, tmux, authenticated GitHub CLI, installed iOS simulators, Android tools, and a running Docker engine. Missing tools have copyable commands and official instructions. |
+| Project folder | Native folder picker grants access up front and creates a workspace in that folder when setup finishes. |
+| Updates | Uses Sparkle's persisted automatic-check preference. The updater starts after setup. |
+
+Camera and audio-input entitlements are required by the hardened runtime and
+are included in the release signature. Website permissions remain scoped to
+their origin. Pairing fingerprints, USB trust, and Android debugging approvals
+must be approved for each actual device; setup does not preapprove them. macOS
+may also require new approval after access is revoked or system policy changes.
+No Full Disk Access or blanket Automation permission is required.
+
+Before tagging, run the normal CI lane and test a notarized build on a clean
+Mac user account: mount the DMG, copy to Applications, launch, allow and deny
+permissions, quit partway through setup, resume, finish with skipped items,
+relaunch without prompts, reopen setup, and pair a real companion. Verify both
+Apple silicon and Intel artifacts in the release gates. Local unsigned tests
+cannot validate Gatekeeper or persistent TCC grants.
+
+For a packaging-only smoke test, run
+`apple/bin/package-macos-dmg.sh /path/to/Cockpit.app /tmp/Cockpit.dmg`, then
+mount the image read-only and check the app, Applications link, and instructions.
+This does not sign or notarize a local build; the release workflow does both.
+
+## App Store Connect records
 
 Create App Store Connect app records for Walkie (`app.blau.copilot`) and
 Kneeboard (`app.blau.plotter`). Apple must know those top-level apps before a
@@ -108,6 +160,8 @@ release is explicitly marked as GitHub's latest release and publishes:
 
 - `made-<version>-macOS.zip`
 - `made-<version>-macOS.zip.sha256`
+- `Cockpit.dmg`
+- `Cockpit.dmg.sha256`
 - `appcast.xml`
 
 The appcast points at the immutable, versioned GitHub Release URL rather than a
@@ -116,6 +170,11 @@ feed with `SPARKLE_PRIVATE_KEY`; Cockpit verifies them with its embedded public
 key and verifies the Developer ID signature before installation. ChromiumKit
 support releases are explicitly prevented from replacing the semantic app
 release as GitHub's latest release.
+
+The disk image is created after appcast generation so the signed feed continues
+to select only the versioned ZIP. Checksums are generated after stapling, and
+publication requires all five assets. The release notes include installation
+steps and the minimum macOS version.
 
 The first release containing Sparkle must still be installed manually. Once
 that version is running, later semantic releases appear automatically and can

@@ -23,11 +23,13 @@
 		07F1B6AD12372EFBA3B98E9A /* AgenticUsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67A2B4718DE8059B84367B8 /* AgenticUsageStore.swift */; };
 		08CA454023B86BFAC8BC7CE1 /* PilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B802877FCCBEB9F318728CDD /* PilotApp.swift */; };
 		08DD49F5AAEFF7B638031970 /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */; };
+		094EF307CA9081D03EE059EC /* SetupPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA88105961B3F738C76B55DB /* SetupPresentationTests.swift */; };
 		0A48AE7E34524871F0A92274 /* CursorUsageHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */; };
 		0ABA4A2179B50C85A13C6EB6 /* PlotterUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6013148EE4B3B5AAC6B3719A /* PlotterUITests.swift */; };
 		0AF3B095E3BC4FFB592C5745 /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F894A09A33E9EAE02EB8CF /* Workspace.swift */; };
 		0B0AE5A89351AACCBF8EB97B /* PeerSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072174CC5D47F85E892E627D /* PeerSyncService.swift */; };
 		0B7F84855286079E2B55EDD5 /* PlotterSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE8192FB86073F87D8A875C3 /* PlotterSnapshotStore.swift */; };
+		0B9DA9C01CA6F536648DABE6 /* SetupProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E73674C4269EAED2D4745B /* SetupProgress.swift */; };
 		0BDF90EF029950F14DBDB482 /* BrowserWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CB8A07D158C045B6417EB3B /* BrowserWebView.swift */; };
 		0C41A7F3276A938EC20C25E7 /* SidebarSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 779D10CE98783ECA02B8C4A4 /* SidebarSelection.swift */; };
 		0C8B006D9F12128A982540DF /* BuildActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57D9D6571DE3AC6DF52DE6FC /* BuildActivityAttributes.swift */; };
@@ -93,6 +95,7 @@
 		302B87E49F9843DD1A17B320 /* VolumeScrollListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5EB900A2EB6CAB3FA405DAFA /* VolumeScrollListView.swift */; };
 		309F167165F512860CDE4107 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85260B5081A688BB7B0EDE3F /* SettingsView.swift */; };
 		30F82116C7ED24FED72FC0D6 /* NotesEditorTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47C38847F5E93CB5B1D87A04 /* NotesEditorTextView.swift */; };
+		31F2CB1B17A6D25B56004852 /* PilotSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57CF76500FC35A1C764A0C38 /* PilotSettingsView.swift */; };
 		32A949515CFDEE5352CDAE36 /* TrackpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AB56ABB04AB4C6982A8A253 /* TrackpadView.swift */; };
 		332CB8C7A2A44701A8E95386 /* CheckForSoftwareUpdatesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 156F3F81E7795278C2B8A61E /* CheckForSoftwareUpdatesView.swift */; };
 		345E33CD9766CD298899740F /* CopilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F576C8972BAC59C65A4821C /* CopilotApp.swift */; };
@@ -119,7 +122,7 @@
 		487E41C66441FF84A4E15B90 /* DockerStoreRefreshTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95C1CA5AF0F78C873A2C334B /* DockerStoreRefreshTests.swift */; };
 		4A5D59729900D0927AF96285 /* AirPlayPackagingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE3343627F7338D5F195BF54 /* AirPlayPackagingTests.swift */; };
 		4A6DC4558935C5CEF0082405 /* AgenticUseDailyChart.swift in Sources */ = {isa = PBXBuildFile; fileRef = 730CAADECFA121BB0719111E /* AgenticUseDailyChart.swift */; };
-		4B2E24563415777F48E0B39E /* WhisperKit in Frameworks */ = {isa = PBXBuildFile; productRef = BF0E310D1DFC93ED0BE1CB94 /* WhisperKit */; };
+		4B2E24563415777F48E0B39E /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = 295B93AD08DD4690FAC7179E /* FluidAudio */; };
 		4BA36EFA60662D0F8E788796 /* LocalServerProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 885D4FC05E8901CD6BFA9FFD /* LocalServerProbe.swift */; };
 		4BB43A4756AC6E2FA04A64B2 /* AndroidKeyMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1FE9203FCB2AFE2E08809A5 /* AndroidKeyMap.swift */; };
 		4BE5E14AE31D1048DD6ADD39 /* BuildActivityCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = E46022F32A94166FBB336CCB /* BuildActivityCard.swift */; };
@@ -156,6 +159,7 @@
 		5E5611D4617AA5572F61127D /* NoiseIKHandshake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119C8FFB6902A8C0B22BA479 /* NoiseIKHandshake.swift */; };
 		5FBFCDF3C6A93BD7D39F3A5E /* ChromiumArtifactManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F42CED0EEB679F1B3EE276E /* ChromiumArtifactManifestTests.swift */; };
 		5FC122F701FD126241B15160 /* BuildPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFFD07A583EDE7B539FED22D /* BuildPresentationTests.swift */; };
+		60C168421B8AB826DD68B426 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C70DF2A00B4BEBE0B12ABDDC /* SetupView.swift */; };
 		612BB6BE7C91E40898B07C0E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A8739E2A29A92AE8043B2A88 /* Assets.xcassets */; };
 		617D1D3C2E6AEFA720CEE80B /* TerminalAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA05E246368E9655194D3F73 /* TerminalAgent.swift */; };
 		620624BE841EF9BEC841BBF7 /* BuildElapsedTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B987ABD2F97F5D5DA70271D2 /* BuildElapsedTime.swift */; };
@@ -206,9 +210,11 @@
 		82A1EABA5075C9A5D7B5586D /* AndroidAVDCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D855A1DBD34E0C9043DBBF3B /* AndroidAVDCacheTests.swift */; };
 		82C0B8AA6FF2F07DABBF0A89 /* NotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9065A68503ECF45158B100B /* NotesView.swift */; };
 		82E18B22CDFD3D8F78658770 /* DockerHTTP.swift in Sources */ = {isa = PBXBuildFile; fileRef = E31BC7E4C70C121AFB598165 /* DockerHTTP.swift */; };
+		82FE4C55775067A7B0382928 /* ParakeetTranscriptionSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 064DCA582C0BA0F04F4A8D48 /* ParakeetTranscriptionSession.swift */; };
 		8301256CA24C603A73F3F4A1 /* RemoteDesktopKeyboardInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20BD0ECBEF38020DEA31A295 /* RemoteDesktopKeyboardInput.swift */; };
 		834D49C547CDE10B45C80604 /* UsageReportingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D973404A2A1D671B48713D3 /* UsageReportingTests.swift */; };
 		83B26B035BA0053614F29480 /* AndroidStreamRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 695D2F9C4723D52E73ABB61B /* AndroidStreamRecorder.swift */; };
+		84B98CDC6165F8BCA11E8BC7 /* SetupPermissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 388D18FFFF89A243816C1B1D /* SetupPermissions.swift */; };
 		854E59D441BA70DB5F4D5A10 /* CodeEditLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = C2A7EC318BFE6F60314AC3CC /* CodeEditLanguages */; };
 		85A425C02FD3FADAE5A8F818 /* SnapshotFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5EA3C5D4AAEA10EA9734D7C /* SnapshotFixtures.swift */; };
 		866347C63A0AD5857F628740 /* PreviewCanvasBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD3F2C3AA86E055D88F6A47A /* PreviewCanvasBackground.swift */; };
@@ -234,6 +240,7 @@
 		94C7B6F837C5EC62BF028695 /* MouseBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF74DA627D281896CA6280E /* MouseBridge.swift */; };
 		94E8164CDDCC436016E866A2 /* SnapshotWorkbench.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71E117602C645CA06C80D9B2 /* SnapshotWorkbench.swift */; };
 		96AF60125EA20ABCA2059AD1 /* ChromiumRealEngineSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 854F5C59C2F6EDF14C12B73F /* ChromiumRealEngineSmokeTests.swift */; };
+		9780C026569BB0775280BBA6 /* SetupTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41A7C535EF3B8D6621278079 /* SetupTests.swift */; };
 		982D03F1A0F0B6723133A689 /* CopilotUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4B1CB42E023D3F070FE75AD /* CopilotUITests.swift */; };
 		991827D4A2559E0B1BF072DA /* SimctlBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4683F17F6EB9C54A98EFB520 /* SimctlBridge.swift */; };
 		992FD2EC0C030866CF7BA91A /* ChromiumRuntimeProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7E6F64E494F4DE49EFD95B /* ChromiumRuntimeProbe.swift */; };
@@ -293,6 +300,7 @@
 		BB0B4D8C9B8B04EF66C07BAA /* PaneCyclingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B3ACA9A0F569FE71344FD94 /* PaneCyclingTests.swift */; };
 		BC4C9B2848B746FB5498412B /* RemoteDesktopGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A644070194904025F9F3EDF /* RemoteDesktopGroups.swift */; };
 		BC4F2ECD27A6CE38C62BC2F1 /* ChromiumBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEFA45E1D941D66C60C3DF7D /* ChromiumBrowserView.swift */; };
+		BD7C2CF23ED47C15D6C782BD /* SetupTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0F42623A4916C73A0346952 /* SetupTools.swift */; };
 		BDBBB6F2DF56BBE00318B110 /* Wingman Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 90278014728B63F7EB42304C /* Wingman Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BE0E3CA862BBE718B9492F0E /* ChromiumRuntimeProbeDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BFA776154894A6A8293BF75 /* ChromiumRuntimeProbeDelegate.swift */; };
 		BE11A4F9D05267AB244F2D85 /* RemoteScreenDiscoveryBackoffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D816D1023E74A8F6E3A27AB /* RemoteScreenDiscoveryBackoffTests.swift */; };
@@ -530,6 +538,7 @@
 		054B3286C64414670AD92A9A /* ChromiumProcessObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumProcessObserver.swift; sourceTree = "<group>"; };
 		05F65749197056761B9D8E8F /* PilotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PilotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0617D049D070BBCBD1AEE5BC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		064DCA582C0BA0F04F4A8D48 /* ParakeetTranscriptionSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetTranscriptionSession.swift; sourceTree = "<group>"; };
 		06860477F9E8DCA481E6C60D /* SecureChannelCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelCore.swift; sourceTree = "<group>"; };
 		070DEF0707E3D775E0143EA8 /* PinnedQuickJumpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedQuickJumpTests.swift; sourceTree = "<group>"; };
 		072174CC5D47F85E892E627D /* PeerSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerSyncService.swift; sourceTree = "<group>"; };
@@ -589,6 +598,7 @@
 		35C6BA77D947DC977F50CA82 /* AgenticUseView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseView.swift; sourceTree = "<group>"; };
 		364A99D5E241228A8E17E2A4 /* PilotEditorTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotEditorTheme.swift; sourceTree = "<group>"; };
 		385F4056FA9E8B1C1CA930AD /* NoteCaretAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteCaretAnchor.swift; sourceTree = "<group>"; };
+		388D18FFFF89A243816C1B1D /* SetupPermissions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupPermissions.swift; sourceTree = "<group>"; };
 		39138DED3FCC239CAB9C20B7 /* VolumeButtonGestureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeButtonGestureTests.swift; sourceTree = "<group>"; };
 		395E05EAD577069EA0423647 /* ConnectionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionState.swift; sourceTree = "<group>"; };
 		3D5870DE7B53D77258F4400D /* WorkspaceStore+Walkie.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceStore+Walkie.swift"; sourceTree = "<group>"; };
@@ -602,6 +612,7 @@
 		40864BFD3506A2C983170A72 /* WalkieWorkspaceSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalkieWorkspaceSyncTests.swift; sourceTree = "<group>"; };
 		40B01D6E68C9291C96542EAB /* BrowserFaviconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserFaviconView.swift; sourceTree = "<group>"; };
 		40B8E031A603C505CA1307D8 /* UsageProviderSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageProviderSupport.swift; sourceTree = "<group>"; };
+		41A7C535EF3B8D6621278079 /* SetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupTests.swift; sourceTree = "<group>"; };
 		41ED62C27A49FC9A43211C06 /* FileFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileFinder.swift; sourceTree = "<group>"; };
 		458E916CF174CE8E23102739 /* PlotterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterApp.swift; sourceTree = "<group>"; };
 		4648BA584E03882419D9E36E /* Copilot.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Copilot.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -631,6 +642,7 @@
 		553A35BBB5134886F77EA5F0 /* DockerContainerDecodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerContainerDecodingTests.swift; sourceTree = "<group>"; };
 		558B70C71B4C69DBF6C22A16 /* GhosttyMenuKeyEquivalentPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyMenuKeyEquivalentPolicy.swift; sourceTree = "<group>"; };
 		56BC610879B8BA6872DEB7DB /* BrowserPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserPaneView.swift; sourceTree = "<group>"; };
+		57CF76500FC35A1C764A0C38 /* PilotSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotSettingsView.swift; sourceTree = "<group>"; };
 		57D9D6571DE3AC6DF52DE6FC /* BuildActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildActivityAttributes.swift; sourceTree = "<group>"; };
 		58DB20A29ED93A7D1EE1CE0A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		5A5E1A4FAABADF61C36FDE3E /* ChromiumProcessObserverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumProcessObserverTests.swift; sourceTree = "<group>"; };
@@ -723,6 +735,7 @@
 		9F42CED0EEB679F1B3EE276E /* ChromiumArtifactManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumArtifactManifestTests.swift; sourceTree = "<group>"; };
 		A05EF8C2CD7538ADD56AE2E0 /* PeerSyncAuthentication.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerSyncAuthentication.swift; sourceTree = "<group>"; };
 		A0E0AC685082B8093A20DB18 /* AndroidDeviceSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidDeviceSession.swift; sourceTree = "<group>"; };
+		A0F42623A4916C73A0346952 /* SetupTools.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupTools.swift; sourceTree = "<group>"; };
 		A1BF64BD7C8B9FAE9409467D /* BrowserFaviconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserFaviconTests.swift; sourceTree = "<group>"; };
 		A241584504866AF2EDBDBD41 /* RemoteDesktopViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopViewer.swift; sourceTree = "<group>"; };
 		A34287C4931EBC63C2DCF06A /* CopilotWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = CopilotWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -740,6 +753,7 @@
 		A89C20B948283C5026686CE0 /* LandingSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandingSnapshotTests.swift; sourceTree = "<group>"; };
 		A9682086DB17E86C45637439 /* DeviceCaptureSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCaptureSession.swift; sourceTree = "<group>"; };
 		AA6C3C2EB63210A93CA8B501 /* SecureIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureIdentity.swift; sourceTree = "<group>"; };
+		AA88105961B3F738C76B55DB /* SetupPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupPresentationTests.swift; sourceTree = "<group>"; };
 		AB5231560EF50C6F842CED76 /* PlotterActivityController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterActivityController.swift; sourceTree = "<group>"; };
 		AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurePairingStore.swift; sourceTree = "<group>"; };
 		AD3BFD0B8D39B025F34E323F /* ReferenceH264AnnexBAssembler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReferenceH264AnnexBAssembler.swift; sourceTree = "<group>"; };
@@ -787,6 +801,7 @@
 		C5285BF549F96968D98F2D02 /* EncodedVideoSample.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncodedVideoSample.swift; sourceTree = "<group>"; };
 		C67A2B4718DE8059B84367B8 /* AgenticUsageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUsageStore.swift; sourceTree = "<group>"; };
 		C6F34939461E806B0772CD72 /* CodexUsageAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexUsageAdapter.swift; sourceTree = "<group>"; };
+		C70DF2A00B4BEBE0B12ABDDC /* SetupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
 		C85516EF30C4D4D9F5FCEC7A /* BuildLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildLiveActivity.swift; sourceTree = "<group>"; };
 		C88113B94930C4212D76BB8B /* BrowserAnnotate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserAnnotate.swift; sourceTree = "<group>"; };
 		C8E0F88AD215D877791905E2 /* RunnersStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnersStore.swift; sourceTree = "<group>"; };
@@ -840,6 +855,7 @@
 		E46022F32A94166FBB336CCB /* BuildActivityCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildActivityCard.swift; sourceTree = "<group>"; };
 		E575CF8C74D5CA4DD2834F94 /* BuildWorkflowRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildWorkflowRunTests.swift; sourceTree = "<group>"; };
 		E7FF06552F3744B76571236C /* SimulatorPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorPaneView.swift; sourceTree = "<group>"; };
+		E8E73674C4269EAED2D4745B /* SetupProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupProgress.swift; sourceTree = "<group>"; };
 		E9ACA8A4BE76545CC5012F33 /* DockerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerView.swift; sourceTree = "<group>"; };
 		EA21CE5F668A930A95245288 /* WorkspaceBranchStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceBranchStore.swift; sourceTree = "<group>"; };
 		EA551A7D6AED62412DEDB9E3 /* SignalingClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingClientTests.swift; sourceTree = "<group>"; };
@@ -902,7 +918,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4B2E24563415777F48E0B39E /* WhisperKit in Frameworks */,
+				4B2E24563415777F48E0B39E /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -997,6 +1013,8 @@
 				0A5F3573ECA214F122B1F094 /* RunnersTests.swift */,
 				469F7189628EC950A12BE1AB /* RuntimeTeardownTests.swift */,
 				BF418EA6C835E25C52FD6BB6 /* ScreenMirrorBitrateTests.swift */,
+				AA88105961B3F738C76B55DB /* SetupPresentationTests.swift */,
+				41A7C535EF3B8D6621278079 /* SetupTests.swift */,
 				D6AC3E6AD7492810963D3FBF /* TerminalAgentTests.swift */,
 				F8BBD45248A0E9BB55D36174 /* TerminalRuntimeCacheTests.swift */,
 				F068B533E482497628B96825 /* UsageConsentTests.swift */,
@@ -1190,6 +1208,7 @@
 				3F576C8972BAC59C65A4821C /* CopilotApp.swift */,
 				D0CC82C38AB58E2E91915D02 /* CopilotWalkieTalkie.swift */,
 				CE9B2428EEF2726A517AF98A /* Info.plist */,
+				064DCA582C0BA0F04F4A8D48 /* ParakeetTranscriptionSession.swift */,
 				1AB56ABB04AB4C6982A8A253 /* TrackpadView.swift */,
 				319966EF9B5B3C488FC91B04 /* TranscriptionModelSupport.swift */,
 				5EB900A2EB6CAB3FA405DAFA /* VolumeScrollListView.swift */,
@@ -1239,6 +1258,7 @@
 				5F74D9367520698B5B5170B0 /* PilotAppearanceReporter.swift */,
 				B15E14014170B486F5F41301 /* PilotApplication.mm */,
 				364A99D5E241228A8E17E2A4 /* PilotEditorTheme.swift */,
+				57CF76500FC35A1C764A0C38 /* PilotSettingsView.swift */,
 				46D01BA1950FB279D464ECC3 /* PilotWalkieDelivery.swift */,
 				7182ED8C2CFB3338C6E80FDB /* PilotWalkieInputState.swift */,
 				CD3F2C3AA86E055D88F6A47A /* PreviewCanvasBackground.swift */,
@@ -1280,6 +1300,7 @@
 				3B0FE0E3F4A2E645E2F85238 /* Docker */,
 				0ECE4A37B221AD8D284DE1B9 /* Runners */,
 				26917C8A3A67664A66ABE189 /* SecureMessaging */,
+				9A1CE14DA609FAF89A90A234 /* Setup */,
 				61148C7199DC1EC353FC7F23 /* Simulator */,
 				9C85E649DAB08D9AB714B13B /* Usage */,
 			);
@@ -1329,6 +1350,17 @@
 				F80B23B3E4C6E3094EA9E25C /* CursorUsageHistory.swift */,
 			);
 			path = AgenticUse;
+			sourceTree = "<group>";
+		};
+		9A1CE14DA609FAF89A90A234 /* Setup */ = {
+			isa = PBXGroup;
+			children = (
+				388D18FFFF89A243816C1B1D /* SetupPermissions.swift */,
+				E8E73674C4269EAED2D4745B /* SetupProgress.swift */,
+				A0F42623A4916C73A0346952 /* SetupTools.swift */,
+				C70DF2A00B4BEBE0B12ABDDC /* SetupView.swift */,
+			);
+			path = Setup;
 			sourceTree = "<group>";
 		};
 		9C85E649DAB08D9AB714B13B /* Usage */ = {
@@ -1729,7 +1761,7 @@
 			);
 			name = Copilot;
 			packageProductDependencies = (
-				BF0E310D1DFC93ED0BE1CB94 /* WhisperKit */,
+				295B93AD08DD4690FAC7179E /* FluidAudio */,
 			);
 			productName = Copilot;
 			productReference = 4648BA584E03882419D9E36E /* Copilot.app */;
@@ -1849,9 +1881,9 @@
 			packageReferences = (
 				97DF198FA0E5DBA016EE4ABF /* XCRemoteSwiftPackageReference "CodeEditLanguages" */,
 				0062AE51533490AC5AE80709 /* XCRemoteSwiftPackageReference "CodeEditSourceEditor" */,
+				C146DAB52D3E2A11460F8D1F /* XCRemoteSwiftPackageReference "FluidAudio" */,
 				01A3DCEDCADE0DD6FBC15771 /* XCRemoteSwiftPackageReference "royalvnc" */,
 				1FB937301919DF3DC82C3AE4 /* XCRemoteSwiftPackageReference "Sparkle" */,
-				19F79AB3C99081ABB3D77BA4 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */,
 				F19BF04DF5155306551F39EA /* XCLocalSwiftPackageReference "Packages/GhosttyKit" */,
 			);
 			preferredProjectObjectVersion = 77;
@@ -2123,6 +2155,7 @@
 				01C5649DD6261BC21A6C7BC3 /* PilotAppearanceReporter.swift in Sources */,
 				52F88A710A3780C924D7378C /* PilotApplication.mm in Sources */,
 				AA438D367553C3A1D274D4A4 /* PilotEditorTheme.swift in Sources */,
+				31F2CB1B17A6D25B56004852 /* PilotSettingsView.swift in Sources */,
 				FF0157FFB7DC8C3FA910FA0F /* PilotWalkieDelivery.swift in Sources */,
 				068EE933A47A8C6EEC20D00A /* PilotWalkieInputState.swift in Sources */,
 				866347C63A0AD5857F628740 /* PreviewCanvasBackground.swift in Sources */,
@@ -2152,6 +2185,10 @@
 				B06FF86605839B44B7A816D6 /* SecureMessagingView.swift in Sources */,
 				C4E33A0CF342BB5491808C1C /* SecurePairingStore.swift in Sources */,
 				C0109B11E0E3274753A4FD87 /* SettingsView.swift in Sources */,
+				84B98CDC6165F8BCA11E8BC7 /* SetupPermissions.swift in Sources */,
+				0B9DA9C01CA6F536648DABE6 /* SetupProgress.swift in Sources */,
+				BD7C2CF23ED47C15D6C782BD /* SetupTools.swift in Sources */,
+				60C168421B8AB826DD68B426 /* SetupView.swift in Sources */,
 				0C41A7F3276A938EC20C25E7 /* SidebarSelection.swift in Sources */,
 				D9164D6F5F01FB6822B66A0B /* SignalingClient.swift in Sources */,
 				991827D4A2559E0B1BF072DA /* SimctlBridge.swift in Sources */,
@@ -2376,6 +2413,8 @@
 				EE0B3A1D4CC379EE3CD383D5 /* RunnersTests.swift in Sources */,
 				2A507DF97966D339ADC42942 /* RuntimeTeardownTests.swift in Sources */,
 				D5AFF82CF7F4BF59940C6A9A /* ScreenMirrorBitrateTests.swift in Sources */,
+				094EF307CA9081D03EE059EC /* SetupPresentationTests.swift in Sources */,
+				9780C026569BB0775280BBA6 /* SetupTests.swift in Sources */,
 				E49FBE1E06701E4C67EDFD5D /* SnapshotCatalog.swift in Sources */,
 				85A425C02FD3FADAE5A8F818 /* SnapshotFixtures.swift in Sources */,
 				F3806913022DF5C96FC2D844 /* SnapshotSurfaces.swift in Sources */,
@@ -2438,6 +2477,7 @@
 				0766FA955D7727EC1A131D7F /* FrameProtocol.swift in Sources */,
 				12F1EDE40C3AA559A29C936D /* NoiseIKHandshake.swift in Sources */,
 				4D1F92AA9BC820F9B2AF22DF /* PacketCodec.swift in Sources */,
+				82FE4C55775067A7B0382928 /* ParakeetTranscriptionSession.swift in Sources */,
 				E204B43FE396DFBE6696D69F /* PeerSyncAuthentication.swift in Sources */,
 				B7083B08C98E8819C5485D26 /* PeerSyncReliableSend.swift in Sources */,
 				0B0AE5A89351AACCBF8EB97B /* PeerSyncService.swift in Sources */,
@@ -3061,10 +3101,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_INCLUDE_PATHS = (
-					"$(inherited)",
-					"$(BUILD_DIR)/../../swift-collections/build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
-				);
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
 				WATCHOS_DEPLOYMENT_TARGET = 26.0;
@@ -3245,10 +3281,6 @@
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
-				SWIFT_INCLUDE_PATHS = (
-					"$(inherited)",
-					"$(BUILD_DIR)/../../swift-collections/build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
-				);
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 6.0;
 				WATCHOS_DEPLOYMENT_TARGET = 26.0;
@@ -3476,10 +3508,6 @@
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_INCLUDE_PATHS = (
-					"$(inherited)",
-					"$(BUILD_DIR)/../../swift-collections/build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)",
-				);
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 6.0;
 				WATCHOS_DEPLOYMENT_TARGET = 26.0;
@@ -3747,14 +3775,6 @@
 				revision = 92d4427c73817d8f849bb289ff190aa4b40c44ea;
 			};
 		};
-		19F79AB3C99081ABB3D77BA4 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/argmaxinc/argmax-oss-swift.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.0.0;
-			};
-		};
 		1FB937301919DF3DC82C3AE4 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/sparkle-project/Sparkle.git";
@@ -3771,9 +3791,22 @@
 				version = 0.1.20;
 			};
 		};
+		C146DAB52D3E2A11460F8D1F /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.17.7;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		295B93AD08DD4690FAC7179E /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C146DAB52D3E2A11460F8D1F /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
+		};
 		8A4B097559F1F3BAEC1B3370 /* RoyalVNCKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 01A3DCEDCADE0DD6FBC15771 /* XCRemoteSwiftPackageReference "royalvnc" */;
@@ -3793,11 +3826,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 1FB937301919DF3DC82C3AE4 /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
-		};
-		BF0E310D1DFC93ED0BE1CB94 /* WhisperKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 19F79AB3C99081ABB3D77BA4 /* XCRemoteSwiftPackageReference "argmax-oss-swift" */;
-			productName = WhisperKit;
 		};
 		C2A7EC318BFE6F60314AC3CC /* CodeEditLanguages */ = {
 			isa = XCSwiftPackageProductDependency;

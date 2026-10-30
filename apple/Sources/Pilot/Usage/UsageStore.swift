@@ -80,6 +80,7 @@ final class UsageStore {
 
     private var loadTask: Task<Void, Never>?
     private var pollTimer: Timer?
+    private var retryTimer: Timer?
     private var activeProviders: Set<Provider> = []
     private let defaults: UserDefaults
     private let fetchers: Fetchers
@@ -114,16 +115,19 @@ final class UsageStore {
 
     /// Begin (or restart) periodic refresh. Safe to call repeatedly.
     func start() {
-        reload()
-        guard pollTimer == nil else { return }
-        pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { _ in
-            Task { @MainActor in self.reload() }
+        if pollTimer == nil {
+            pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.reload() }
+            }
         }
+        reload()
     }
 
     func stop() {
         pollTimer?.invalidate()
         pollTimer = nil
+        retryTimer?.invalidate()
+        retryTimer = nil
         loadTask?.cancel()
         loadTask = nil
         isLoading = false
@@ -142,6 +146,29 @@ final class UsageStore {
         if let until = blockedUntil[provider], now < until { return false }
         if let last = lastAttempt[provider], now.timeIntervalSince(last) < Self.minSpacing { return false }
         return true
+    }
+
+    /// Retry at the displayed deadline instead of waiting for the next ten-minute poll.
+    private func scheduleRetry() {
+        retryTimer?.invalidate()
+        retryTimer = nil
+        guard pollTimer != nil else { return }
+        let current = now()
+        let enabled: [Provider: Bool] = [
+            .anthropic: UsageConsent.isClaudeEnabled(defaults: defaults),
+            .openAI: UsageConsent.isCodexEnabled(defaults: defaults),
+            .anysphere: UsageConsent.isCursorEnabled(defaults: defaults),
+            .xAI: UsageConsent.isGrokEnabled(defaults: defaults),
+            .moonshot: UsageConsent.isKimiEnabled(defaults: defaults),
+        ]
+        guard let deadline = blockedUntil
+            .filter({ enabled[$0.key] == true && $0.value > current })
+            .map(\.value).min() else { return }
+        retryTimer = Timer.scheduledTimer(
+            withTimeInterval: deadline.timeIntervalSince(current), repeats: false
+        ) { [weak self] _ in
+            Task { @MainActor in self?.reload() }
+        }
     }
 
     /// Detect sessions and fetch providers that aren't spaced-out or backed-off.
@@ -171,28 +198,29 @@ final class UsageStore {
         let doKimi = kimiEnabled && mayFetch(.moonshot, now: now)
         if doAnthropic {
             lastAttempt[.anthropic] = now
-            if case .usage = anthropic {} else { anthropic = .loading }
+            if anthropic.displayedUsage == nil { anthropic = .loading }
         }
         if doOpenAI {
             lastAttempt[.openAI] = now
-            if case .usage = openAI {} else { openAI = .loading }
+            if openAI.displayedUsage == nil { openAI = .loading }
         }
         if doCursor {
             lastAttempt[.anysphere] = now
-            if case .usage = anysphere {} else { anysphere = .loading }
+            if anysphere.displayedUsage == nil { anysphere = .loading }
         }
         if doGrok {
             lastAttempt[.xAI] = now
-            if case .usage = xAI {} else { xAI = .loading }
+            if xAI.displayedUsage == nil { xAI = .loading }
         }
         if doKimi {
             lastAttempt[.moonshot] = now
-            if case .usage = moonshot {} else { moonshot = .loading }
+            if moonshot.displayedUsage == nil { moonshot = .loading }
         }
 
         // Nothing to do this tick — everything is spaced-out or backed-off.
         guard doAnthropic || doOpenAI || doCursor || doGrok || doKimi else {
             isLoading = false
+            scheduleRetry()
             return
         }
 
@@ -272,32 +300,26 @@ final class UsageStore {
             let strikes = (rateLimitStrikes[provider] ?? 0) + 1
             rateLimitStrikes[provider] = strikes
             let delay = Self.backoffDelay(strikes: strikes, retryAfter: retryAfter)
-            blockedUntil[provider] = now().addingTimeInterval(delay)
-            if case .usage = previous { return previous } // keep showing last data
-            return .error("Rate limited — backing off ~\(Int((delay / 60).rounded()))m.")
+            let deadline = now().addingTimeInterval(delay)
+            blockedUntil[provider] = deadline
+            return .rateLimited(until: deadline, usage: previous.displayedUsage)
 
         case .failure(let message):
-            if case .usage = previous { return previous }
+            blockedUntil[provider] = nil
+            if let usage = previous.displayedUsage { return .usage(usage) }
             return .error(message)
 
         case .skipped:
             // Spaced-out or backed-off this tick; keep whatever we last showed.
-            if case .usage = previous { return previous }
-            let current = now()
-            if let until = blockedUntil[provider], current < until {
-                let remaining = Int((until.timeIntervalSince(current) / 60).rounded(.up))
-                return .error("Rate limited — retrying in ~\(max(1, remaining))m.")
-            }
             return previous
         }
     }
 
-    /// Exponential backoff, honoring a server `Retry-After` when longer.
+    /// Use the server's deadline when supplied, with exponential backoff as a fallback.
     private static func backoffDelay(strikes: Int, retryAfter: TimeInterval?) -> TimeInterval {
-        let exponential = min(backoffBase * pow(2, Double(max(0, strikes - 1))), backoffCap)
-        if let retryAfter, retryAfter > 0 {
-            return min(max(retryAfter, exponential), backoffCap)
+        if let retryAfter, retryAfter.isFinite, retryAfter >= 0 {
+            return max(retryAfter, minSpacing)
         }
-        return exponential
+        return min(backoffBase * pow(2, Double(max(0, strikes - 1))), backoffCap)
     }
 }

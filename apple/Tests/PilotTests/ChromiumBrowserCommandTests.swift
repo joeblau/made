@@ -275,6 +275,137 @@ struct ChromiumBrowserCommandTests {
 }
 
 @MainActor
+@Suite("Chromium certificate warnings")
+struct ChromiumCertificateWarningTests {
+    private let certificate = Data("local-device-certificate".utf8)
+    private let url = URL(string: "https://glkvm01.local/")!
+
+    private func attach(
+        _ coordinator: ChromiumBrowserView.Coordinator,
+        host: FakeChromiumBrowserHost,
+        active: Bool = true,
+        selected: Bool = true
+    ) {
+        coordinator.attach(
+            host, navigationRequestID: 0, inspectorToggleRequestID: 0,
+            findRequestID: 0, stopFindingRequestID: 0, printRequestID: 0, savePageRequestID: 0,
+            initialURL: url, zoom: 1, isActive: active, isSelected: selected
+        )
+    }
+
+    @Test("An explicit approval resumes the request and is tied to the certificate")
+    func explicitApproval() {
+        let state = BrowserState(engine: .chromium)
+        var prompts = 0
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {}, confirmCertificate: { _ in
+            prompts += 1
+            return true
+        })
+        let host = FakeChromiumBrowserHost()
+        attach(coordinator, host: host)
+
+        for _ in 0..<2 {
+            #expect(coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: certificate, isVisible: { true }))
+        }
+        #expect(prompts == 1)
+        #expect(coordinator.shouldAllowCertificateError(
+            -202, url: url, certificateDER: Data("changed-certificate".utf8), isVisible: { true }
+        ))
+        #expect(prompts == 2)
+    }
+
+    @Test("Cancel does not create an exception")
+    func cancellation() {
+        let state = BrowserState(engine: .chromium)
+        var prompts = 0
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {}, confirmCertificate: { _ in
+            prompts += 1
+            return false
+        })
+        let host = FakeChromiumBrowserHost()
+        attach(coordinator, host: host)
+        for _ in 0..<2 {
+            #expect(!coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: certificate, isVisible: { true }))
+        }
+        #expect(prompts == 2)
+    }
+
+    @Test("Unrelated origins, fatal errors, and invisible panes cannot prompt")
+    func ineligibleChallenges() {
+        let state = BrowserState(engine: .chromium)
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {}, confirmCertificate: { _ in
+            Issue.record("This certificate challenge must not prompt")
+            return true
+        })
+        let host = FakeChromiumBrowserHost()
+        attach(coordinator, host: host)
+        for otherURL in ["https://other.local/", "https://glkvm01.local:8443/", "http://glkvm01.local/"] {
+            #expect(!coordinator.shouldAllowCertificateError(
+                -202, url: URL(string: otherURL)!, certificateDER: certificate, isVisible: { true }
+            ))
+        }
+        #expect(!coordinator.shouldAllowCertificateError(-206, url: url, certificateDER: certificate, isVisible: { true }))
+        #expect(!coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: certificate, isVisible: { false }))
+        #expect(!coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: Data(), isVisible: { true }))
+        attach(coordinator, host: host, selected: false)
+        #expect(!coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: certificate, isVisible: { true }))
+        attach(coordinator, host: host, active: false)
+        #expect(!coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: certificate, isVisible: { true }))
+    }
+
+    @Test("Navigating or closing while the warning is open invalidates approval", arguments: [false, true])
+    func staleApproval(closes: Bool) {
+        let state = BrowserState(engine: .chromium)
+        var duringPrompt: (() -> Void)?
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {}, confirmCertificate: { _ in
+            duringPrompt?()
+            return true
+        })
+        let host = FakeChromiumBrowserHost()
+        attach(coordinator, host: host)
+        duringPrompt = {
+            if closes { coordinator.close() } else { state.requestNavigationCommand("https://other.local/") }
+        }
+        #expect(!coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: certificate, isVisible: { true }))
+        duringPrompt = nil
+    }
+
+    @Test("A pane hidden while the warning is open cannot approve")
+    func hiddenDuringPrompt() {
+        let state = BrowserState(engine: .chromium)
+        var visible = true
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {}, confirmCertificate: { _ in
+            visible = false
+            return true
+        })
+        let host = FakeChromiumBrowserHost()
+        attach(coordinator, host: host)
+        #expect(!coordinator.shouldAllowCertificateError(-202, url: url, certificateDER: certificate, isVisible: { visible }))
+    }
+
+    @Test("A late failure from an earlier certificate request does not cover the current page")
+    func ignoresStaleFailure() {
+        let state = BrowserState(engine: .chromium)
+        let container = ChromiumBrowserContainerView()
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {})
+        coordinator.container = container
+        let host = FakeChromiumBrowserHost()
+        attach(coordinator, host: host)
+        coordinator.handleNavigationFailure(NSError(domain: "ChromiumKit", code: -202, userInfo: [
+            NSURLErrorFailingURLErrorKey: URL(string: "https://previous.local/")!,
+        ]))
+        #expect(container.runtimeState == .ready)
+        #expect(state.isLoading)
+
+        coordinator.handleNavigationFailure(NSError(domain: "ChromiumKit", code: -202, userInfo: [
+            NSURLErrorFailingURLErrorKey: url,
+        ]))
+        #expect(container.runtimeState == .navigationFailed)
+        #expect(!state.isLoading)
+    }
+}
+
+@MainActor
 private final class FakeChromiumBrowserHost: ChromiumBrowserHosting {
     enum Event: Equatable {
         case command(BrowserControllerCommand)

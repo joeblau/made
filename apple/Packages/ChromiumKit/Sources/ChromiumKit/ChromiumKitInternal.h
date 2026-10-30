@@ -57,6 +57,9 @@ FOUNDATION_EXTERN NSError *ChromiumKitUnavailableError(void);
                            percentComplete:(NSInteger)percentComplete
                                      state:(ChromiumDownloadState)state;
 - (void)cefDidRejectAuthenticationForURL:(nullable NSURL *)URL;
+- (BOOL)cefShouldAllowCertificateError:(NSInteger)errorCode
+                                forURL:(NSURL *)URL
+                        certificateDER:(NSData *)certificateDER;
 - (void)cefDidRejectCertificateError:(NSInteger)errorCode
                               forURL:(nullable NSURL *)URL;
 - (void)cefDidRejectClientCertificateForHost:(NSString *)host

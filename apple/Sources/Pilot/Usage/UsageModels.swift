@@ -70,5 +70,13 @@ enum ProviderState: Equatable, Sendable {
     case loading
     case notSignedIn
     case usage(ProviderUsage)
+    case rateLimited(until: Date, usage: ProviderUsage?)
     case error(String)
+
+    var displayedUsage: ProviderUsage? {
+        switch self {
+        case .usage(let usage), .rateLimited(_, let usage?): usage
+        default: nil
+        }
+    }
 }

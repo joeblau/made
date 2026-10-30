@@ -22,6 +22,9 @@ final class ChromiumRuntimeProbeDelegate:
     private(set) var deniedAuthenticationURLs: [URL] = []
     private(set) var rejectedCertificateErrors: [Int] = []
     private(set) var rejectedCertificateURLs: [URL] = []
+    private(set) var lastCertificateIdentity: BrowserCertificateIdentity?
+    private(set) var approvedCertificateURLs: [URL] = []
+    var approvedCertificateIdentity: BrowserCertificateIdentity?
     private(set) var historyStateChangeCount = 0
     private(set) var lastCanGoBack = false
     var allowsIntentionalRendererCrash = false
@@ -150,6 +153,26 @@ final class ChromiumRuntimeProbeDelegate:
             if let url {
                 deniedAuthenticationURLs.append(url)
             }
+        }
+    }
+
+    @objc(chromiumBrowserHostView:shouldAllowCertificateError:forURL:certificateDER:)
+    nonisolated func chromiumBrowserHostView(
+        _ browserView: ChromiumBrowserHostView,
+        shouldAllowCertificateError errorCode: Int,
+        for url: URL,
+        certificateDER: Data
+    ) -> Bool {
+        MainActor.assumeIsolated {
+            _ = browserView
+            _ = errorCode
+            guard let identity = BrowserCertificateIdentity(url: url, certificateDER: certificateDER) else {
+                return false
+            }
+            lastCertificateIdentity = identity
+            guard identity == approvedCertificateIdentity else { return false }
+            approvedCertificateURLs.append(url)
+            return true
         }
     }
 

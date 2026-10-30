@@ -3,10 +3,9 @@ import SwiftUI
 /// Fixed model-to-color mapping shared by the chart color scale, legend,
 /// hero list, and breakdown table.
 ///
-/// Each provider owns one hue family — Claude orange, Codex blue, Grok
-/// purple, Kimi green, Cursor teal — and each model gets its own shade
-/// of that hue, iPhone-storage-bar style: the flagship model takes the
-/// deepest, most saturated step and adjacent models alternate lightness. Color
+/// Each provider uses a standard system color — Claude orange, Codex green,
+/// Kimi purple, Grok red, Cursor blue — and each model gets its own shade.
+/// The flagship uses the system accent; adjacent models alternate lightness. Color
 /// follows the canonical model id — never chart order — so a model keeps its
 /// shade when the range filter changes which series are visible. Gray is
 /// reserved for unknown models and always travels with the "unpriced" badge,
@@ -18,13 +17,19 @@ enum AgenticUseModelPalette {
         // Newly discovered priced models also get a stable provider color.
         let index = family.firstIndex(of: canonicalModel)
             ?? (canonicalModel.utf8.reduce(0) { ($0 * 31 + Int($1)) % 16 } + family.count)
-        return shade(hue: hue(for: provider), step: index)
+        if index == 0 { return providerColor(for: provider) }
+        return shade(provider: provider, step: index)
     }
 
-    /// The provider's flagship (deepest) shade — used to tint its brand mark so
-    /// the glyph matches the top of that provider's stacked bar.
+    /// Standard system accent, shared by brand marks and Plan Usage cards.
     static func providerColor(for provider: AgenticProvider) -> Color {
-        shade(hue: hue(for: provider), step: 0)
+        switch provider {
+        case .claude: .orange
+        case .codex: .green
+        case .kimi: .purple
+        case .grok: .red
+        case .cursor: .blue
+        }
     }
 
     /// Which provider's hue family a canonical model id belongs to.
@@ -49,30 +54,20 @@ enum AgenticUseModelPalette {
         AgenticModel.presentationOrder.filter { Self.provider(for: $0) == provider }
     }
 
-    /// Base hue (degrees) per provider.
-    private static func hue(for provider: AgenticProvider) -> Double {
-        switch provider {
-        case .claude: 27
-        case .codex: 214
-        case .cursor: 185
-        case .grok: 275
-        case .kimi: 138
-        }
-    }
-
     /// Alternate high-contrast shades instead of spreading tiny increments
     /// across the entire catalog. The busiest adjacent models must remain
     /// distinguishable even when a provider has many older models.
-    private static func shade(hue degrees: Double, step: Int) -> Color {
-        let shades: [(saturation: Double, brightness: Double)] = [
-            (0.92, 0.82), (0.38, 1.00), (0.72, 0.96), (0.52, 0.72),
-        ]
-        let shade = shades[step % shades.count]
-        let hueOffset = Double(step / shades.count) * 6
-        return Color(
-            hue: (degrees + hueOffset) / 360,
-            saturation: shade.saturation,
-            brightness: shade.brightness
-        )
+    private static func shade(provider: AgenticProvider, step: Int) -> Color {
+        let color = providerColor(for: provider)
+        let cycle = Double(step / 4) * 0.035
+        let white: Double
+        let black: Double
+        switch step % 4 {
+        case 0: (white, black) = (0, min(0.22, cycle))
+        case 1: (white, black) = (min(0.7, 0.42 + cycle), 0)
+        case 2: (white, black) = (min(0.34, 0.18 + cycle), 0)
+        default: (white, black) = (0, min(0.45, 0.25 + cycle))
+        }
+        return color.mix(with: white > 0 ? .white : .black, by: max(white, black))
     }
 }

@@ -216,11 +216,13 @@ struct PilotPaneNavigationCommands: Commands {
 @main
 struct PilotApp: App {
     let modelContainer: ModelContainer
-    /// Sparkle's standard updater controller. Starting it here schedules the
-    /// automatic background checks (per the user's Sparkle preference) and
-    /// powers the Settings → General "Check for Updates…" button.
+    /// Construct without starting so update UI cannot interrupt first-run
+    /// setup. Starting after setup honors Sparkle's persisted preference.
     private let updaterController: SPUStandardUpdaterController
 
+    @State private var setupProgress: SetupProgress
+    @State private var didStartServices = false
+    @AppStorage(SetupProgress.companionsKey) private var companionsEnabled = false
     @State private var store: WorkspaceStore
     @State private var extensionWorkspaceController: ExtensionWorkspaceController
     @State private var peerDeviceStatus = DeviceStatus()
@@ -254,8 +256,11 @@ struct PilotApp: App {
 
     init() {
         let isRunningTests = ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
+        self._setupProgress = State(initialValue: SetupProgress(
+            bypass: isRunningTests || UserDefaults.standard.bool(forKey: "demoMode")
+        ))
         updaterController = SPUStandardUpdaterController(
-            startingUpdater: !isRunningTests,
+            startingUpdater: false,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
@@ -292,7 +297,12 @@ struct PilotApp: App {
             )
         }
         self.modelContainer = container
-        let store = WorkspaceStore(modelContext: container.mainContext)
+        let preferences = isRunningTests ? UserDefaults(suiteName: "app.blau.pilot.test-host")! : .standard
+        let store = WorkspaceStore(
+            modelContext: container.mainContext,
+            workspaceGroups: WorkspaceGroups(defaults: preferences),
+            defaults: preferences
+        )
         // Demo mode (screenshots/UITests): launch arg pair ["-demoMode", "YES"]
         // sets the "demoMode" UserDefaults bool. When on, seed representative
         // workspaces so the sidebar/layout looks intentional with no live peer.
@@ -529,15 +539,27 @@ struct PilotApp: App {
 
     var body: some Scene {
         Window("Cockpit", id: PilotWindowID.main) {
-            ContentView(
-                store: store,
-                syncService: syncService,
-                peerDeviceStatus: peerDeviceStatus,
-                localAudioOutput: headphoneDetector.audioOutput,
-                isPlotterConnected: plotterClientCount > 0,
-                remoteInkModel: remoteInkModel,
-                isPeerRecording: walkieInput.isRecording
-            )
+            Group {
+                if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil {
+                    // Hosted tests mount their own views. Do not start the live
+                    // workspace, terminal, or account pollers behind those views.
+                    Color.clear
+                } else if setupProgress.needsInitialSetup {
+                    SetupView(progress: setupProgress, updater: updaterController.updater) { directory in
+                        if let directory { store.addWorkspace(directory: directory) }
+                    }
+                } else {
+                    ContentView(
+                        store: store,
+                        syncService: syncService,
+                        peerDeviceStatus: peerDeviceStatus,
+                        localAudioOutput: headphoneDetector.audioOutput,
+                        isPlotterConnected: plotterClientCount > 0,
+                        remoteInkModel: remoteInkModel,
+                        isPeerRecording: walkieInput.isRecording
+                    )
+                }
+            }
                 .environment(\.uiZoom, uiZoom)
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 // Report Pilot's light/dark appearance to connected Plotters so
@@ -551,19 +573,22 @@ struct PilotApp: App {
                 .onChange(of: uiZoom) { _, newValue in
                     GhosttyRuntime.shared.userZoomFactor = newValue
                 }
-                .task {
+                .task(id: setupProgress.needsInitialSetup) {
                     GhosttyRuntime.shared.userZoomFactor = uiZoom
                     // Skip services that prompt for permissions when XCTest is host-running us.
-                    guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+                    guard !setupProgress.needsInitialSetup, !didStartServices,
+                          !UserDefaults.standard.bool(forKey: "demoMode"),
+                          ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+                    didStartServices = true
+                    try? updaterController.updater.start()
                     RepositoryPollingEnvironmentMonitor.shared.start()
-                    _ = MouseBridge.shared.ensurePermissions()
                     headphoneDetector.start()
-                    setupSync()
                     actionWatcher.start(store: store)
                     buildPush.onUpdate = { run in syncService.send(.buildRunUpdate(run)) }
-                    buildPush.restore()
+                    if companionsEnabled { buildPush.restore() }
                     frameSender.onClientCountChanged = { clientCount in
                         Task { @MainActor in
+                            guard companionsEnabled else { return }
                             let wasConnected = plotterClientCount > 0
                             plotterClientCount = clientCount
                             // Only capture the screen — which lights up the macOS
@@ -602,7 +627,23 @@ struct PilotApp: App {
                     // capture begins on the first connected client (see
                     // onClientCountChanged) so the macOS screen-sharing indicator
                     // isn't lit whenever Pilot is merely running.
-                    frameSender.start()
+                    if companionsEnabled {
+                        setupSync()
+                        frameSender.start()
+                    }
+                }
+                .onChange(of: companionsEnabled) { _, enabled in
+                    guard didStartServices else { return }
+                    if enabled {
+                        setupSync()
+                        frameSender.start()
+                    } else {
+                        buildPush.stop()
+                        syncService.stop()
+                        frameSender.stop()
+                        screenMirror.stop()
+                        plotterClientCount = 0
+                    }
                 }
                 .onChange(of: headphoneDetector.audioOutput) {
                     sendLocalDeviceStatus()
@@ -690,9 +731,13 @@ struct PilotApp: App {
                 }
         }
         .modelContainer(modelContainer)
-        // A roomier default for the sidebar + panes + inspector layout. Only
-        // applies to a fresh window; a restored window keeps its saved frame.
-        .defaultSize(width: 1440, height: 920)
+        // Setup uses a compact window; workspaces keep their roomier default.
+        // Content bounds also keep a restored workspace frame from stretching setup.
+        .defaultSize(
+            width: setupProgress.needsInitialSetup ? SetupView.windowSize.width : 1440,
+            height: setupProgress.needsInitialSetup ? SetupView.windowSize.height : 920
+        )
+        .windowResizability(.contentSize)
         .defaultLaunchBehavior(PilotWindowLaunchPolicy.defaultBehavior(for: PilotWindowID.main))
         .commands {
             PilotWindowCommands()
@@ -700,6 +745,7 @@ struct PilotApp: App {
             PilotPaneNavigationCommands()
             CommandGroup(after: .appInfo) {
                 CheckForSoftwareUpdatesView(updater: updaterController.updater)
+                OpenSetupButton().disabled(setupProgress.needsInitialSetup)
             }
 
             // New Terminal / New Browser as real main-menu commands. As toolbar
@@ -784,7 +830,14 @@ struct PilotApp: App {
         }
 
         Window(PilotWindowID.extendoTitle, id: PilotWindowID.extendo) {
-            ExtensionWindowView(store: store, controller: extensionWorkspaceController)
+            Group {
+                if setupProgress.needsInitialSetup {
+                    Text("Finish setup in the main Cockpit window to open your workspaces.")
+                        .padding(32)
+                } else {
+                    ExtensionWindowView(store: store, controller: extensionWorkspaceController)
+                }
+            }
                 .environment(\.uiZoom, uiZoom)
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
                 .background {
@@ -810,6 +863,15 @@ struct PilotApp: App {
             // here too duplicated the Window-menu entries.
             PilotExtensionWorkspaceCommands(store: store)
         }
+
+        Window("Set Up Cockpit", id: "setup") {
+            SetupWindowView(progress: setupProgress, updater: updaterController.updater) { directory in
+                if let directory { store.addWorkspace(directory: directory) }
+            }
+        }
+        .defaultSize(width: SetupView.windowSize.width, height: SetupView.windowSize.height)
+        .defaultLaunchBehavior(.suppressed)
+        .windowResizability(.contentSize)
 
         // Standard macOS Settings window (⌘,). A thin, extensible shell; the
         // first real use is peer key sharing (#51), which drops into the
@@ -977,7 +1039,10 @@ struct PilotApp: App {
     }
 
     private func setupSync() {
-        guard !didSetupSync else { return }
+        guard !didSetupSync else {
+            syncService.start()
+            return
+        }
         didSetupSync = true
 
         secureIdentity.send = { syncService.send($0) }
@@ -1076,121 +1141,6 @@ struct PilotApp: App {
     private func sendLocalDeviceStatus() {
         let status = DeviceStatus(audioOutput: headphoneDetector.audioOutput)
         syncService.send(.deviceStatus(status))
-    }
-}
-
-/// Pilot's Settings window contents (⌘,). A source-list shell — sections on the
-/// left, detail on the right — matching the modern macOS/Xcode settings layout.
-/// "General" reuses the shared `SettingsSections` (Identity & Keys + About);
-/// "Usage" connects the AI usage APIs. The selected section is backed by
-/// `AppStorage` so the inspector's Usage empty-state can deep-link straight here.
-private struct PilotSettingsView: View {
-    @AppStorage(SettingsTab.storageKey) private var selectedTab = SettingsTab.general
-    @State private var searchText = ""
-
-    let updater: SPUUpdater
-
-    var body: some View {
-        NavigationSplitView {
-            VStack(spacing: 0) {
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
-                }
-                .padding(.horizontal, 9)
-                .frame(height: 30)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-
-                List(selection: sidebarSelection) {
-                    if matchesSearch("General identity keys about version updates") {
-                        Label("General", systemImage: "gearshape")
-                            .tag(SettingsTab.general)
-                    }
-                    if matchesSearch("Usage Claude Codex Kimi Grok") {
-                        Label("Usage", systemImage: "chart.bar.xaxis")
-                            .tag(SettingsTab.usage)
-                    }
-                }
-                .listStyle(.sidebar)
-            }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
-            .toolbar(removing: .sidebarToggle)
-        } detail: {
-            detail
-                .frame(maxWidth: 980)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 760, idealWidth: 920, minHeight: 520, idealHeight: 680)
-    }
-
-    /// Bridges the non-optional `AppStorage` string to `List`'s optional selection.
-    private var sidebarSelection: Binding<String?> {
-        Binding(get: { selectedTab }, set: { selectedTab = $0 ?? SettingsTab.general })
-    }
-
-    private func matchesSearch(_ terms: String) -> Bool {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return query.isEmpty || terms.localizedCaseInsensitiveContains(query)
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        switch selectedTab {
-        case SettingsTab.usage:
-            UsageSettingsView(showsPageHeader: true)
-                .formStyle(.grouped)
-        default:
-            Form {
-                PilotSettingsPageHeader(
-                    title: "General",
-                    subtitle: "Manage Cockpit identity, pairing, and app information.",
-                    systemImage: "gearshape.fill",
-                    tint: .blue
-                )
-                Section("Updates") {
-                    Button("Check for Updates…") {
-                        updater.checkForUpdates()
-                    }
-                }
-                SettingsSections()
-                ChromiumDiagnosticsSettingsSection()
-            }
-            .formStyle(.grouped)
-        }
-    }
-}
-
-struct PilotSettingsPageHeader: View {
-    let title: String
-    let subtitle: String
-    let systemImage: String
-    let tint: Color
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: systemImage)
-                .font(.system(size: 34, weight: .medium))
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(tint)
-                .frame(width: 68, height: 68)
-                .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 16))
-
-            Text(title)
-                .font(.system(size: 26, weight: .bold))
-
-            Text(subtitle)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 22)
     }
 }
 

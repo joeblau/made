@@ -25,11 +25,6 @@ settings:
     SWIFT_VERSION: "6.0"
     ENABLE_USER_SCRIPT_SANDBOXING: true
     DEVELOPMENT_TEAM: K78G42H4U2
-    # Work around XcodeGen/Xcode's iOS SwiftPM integration losing Jinja's
-    # transitive OrderedCollections module search path.
-    SWIFT_INCLUDE_PATHS:
-      - "$(inherited)"
-      - "$(BUILD_DIR)/../../swift-collections/build/$(CONFIGURATION)$(EFFECTIVE_PLATFORM_NAME)"
 
 packages:
   GhosttyKit:
@@ -37,9 +32,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle.git
     exactVersion: "2.9.5"
-  WhisperKit:
-    url: https://github.com/argmaxinc/argmax-oss-swift.git
-    from: "1.0.0"
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio.git
+    exactVersion: "0.17.7"
   CodeEditSourceEditor:
     url: https://github.com/CodeEditApp/CodeEditSourceEditor.git
     exactVersion: "0.15.2"
@@ -156,7 +151,7 @@ targets:
     sources:
       - Sources/Pilot
       - path: Sources/Shared
-        # Audio capture + Whisper transcription live on Copilot now —
+        # Audio capture + Parakeet transcription live on Copilot now —
         # Pilot just receives the finished text over the sync channel.
         excludes:
           - "TranscriptionService.swift"
@@ -346,8 +341,8 @@ targets:
       - target: CopilotWidgets
         embed: true
       - target: Wingman Watch App
-      - package: WhisperKit
-        product: WhisperKit
+      - package: FluidAudio
+        product: FluidAudio
 
   CopilotWidgets:
     type: app-extension
@@ -376,7 +371,7 @@ targets:
       - Sources/PlotterShared
       - path: Sources/Shared
         # Plotter mirrors + draws over the sync channel; it has no audio
-        # capture, so the Whisper-backed transcription service is excluded.
+        # capture, so the Parakeet-backed transcription service is excluded.
         excludes:
           - "TranscriptionService.swift"
     dependencies:

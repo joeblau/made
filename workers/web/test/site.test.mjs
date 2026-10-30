@@ -42,13 +42,13 @@ test('the built landing page renders every product section and download', async 
   assert.match(html, /macOS 26\+/);
   assert.match(html, /data-theme-toggle/);
   assert.match(html, /src="\/made\/theme-init\.js"/);
-  assert.equal((html.match(/data-theme-picture/g) ?? []).length, 12, 'desktop and mobile product images follow the selected theme');
-  assert.equal((html.match(/data-appearance="dark"/g) ?? []).length, 12);
+  assert.equal((html.match(/data-theme-picture/g) ?? []).length, 15, 'desktop and mobile product images follow the selected theme');
+  assert.equal((html.match(/data-appearance="dark"/g) ?? []).length, 15);
   assert.doesNotMatch(html, /title="Coming soon"/);
 });
 
 test('every selected native capture ships in both appearances', async () => {
-  const scenes = ['workspace', 'editor', 'browser', 'device', 'actions', 'runners', 'agentic-use'];
+  const scenes = ['workspace', 'editor', 'browser', 'device', 'actions', 'runners', 'agentic-use', 'docker', 'remote-desktop', 'tasks'];
   for (const scene of scenes) {
     for (const appearance of ['light', 'dark']) {
       const path = `${dist}screenshots/cockpit/cockpit-${scene}-${appearance}.png`;

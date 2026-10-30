@@ -50,6 +50,17 @@ final class CopilotWalkieTalkie {
         self.isConnected = isConnected
     }
 
+    /// Live hypotheses are display-only. Delivery and execution always use the
+    /// finalized transcript returned by finish(), including while sending it.
+    func displayedTranscript(liveText: String) -> String {
+        switch phase {
+        case .idle: transcript
+        case .preparing: ""
+        case .recording: liveText
+        case .finishing: recording?.didStart == true ? liveText : ""
+        }
+    }
+
     func beginRecording(workspaceID: UUID?, allowRestrictedNetwork: Bool) {
         guard phase == .idle, executionTask == nil else { return }
         let attempt = Recording(workspaceID: workspaceID)

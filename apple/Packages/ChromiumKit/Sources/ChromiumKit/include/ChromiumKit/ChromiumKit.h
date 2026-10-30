@@ -145,6 +145,13 @@ typedef NS_ENUM(NSInteger, ChromiumDownloadState) {
                           state:(ChromiumDownloadState)state;
 - (void)chromiumBrowserHostView:(ChromiumBrowserHostView *)browserView
  didRejectAuthenticationForURL:(nullable NSURL *)URL;
+/// Called only for recoverable certificate errors. Returning YES continues
+/// this request; absent delegates reject it. Approval must be explicitly
+/// scoped to this origin and the supplied leaf certificate.
+- (BOOL)chromiumBrowserHostView:(ChromiumBrowserHostView *)browserView
+    shouldAllowCertificateError:(NSInteger)errorCode
+                         forURL:(NSURL *)URL
+                 certificateDER:(NSData *)certificateDER;
 - (void)chromiumBrowserHostView:(ChromiumBrowserHostView *)browserView
      didRejectCertificateError:(NSInteger)errorCode
                          forURL:(nullable NSURL *)URL;

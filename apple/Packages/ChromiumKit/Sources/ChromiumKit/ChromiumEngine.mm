@@ -7,6 +7,7 @@
 #if defined(BLAU_CHROMIUM_CEF_ENABLED) && BLAU_CHROMIUM_CEF_ENABLED
 
 #import <crt_externs.h>
+#include "include/cef_request_context.h"
 
 namespace chromiumkit {
 
@@ -334,6 +335,14 @@ void EngineCore::FinishShutdown() {
 
 void ChromiumApp::OnContextInitialized() {
     CEF_REQUIRE_UI_THREAD();
+    CefRefPtr<CefRequestContext> context = CefRequestContext::GetGlobalContext();
+    if (!context) return;
+    // Chrome persists certificate exceptions in the profile. Clear them at
+    // launch so a previous approval cannot silently authorize a new session.
+    // In the pinned CEF implementation this runs synchronously on the UI
+    // thread once the global context is initialized, before ContextReady()
+    // permits any managed browser to be created or open a connection.
+    context->ClearCertificateExceptions(nullptr);
     engine_->ContextReady();
 }
 

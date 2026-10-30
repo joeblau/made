@@ -148,7 +148,7 @@ struct ContentView: View {
                 prepareSpeechModel(allowRestrictedNetwork: true)
             }
         } message: {
-            Text("On-device transcription requires an approximately 150 MB model. It is downloaded only once and cached on this iPhone. After it finishes, hold Volume Down again to record.")
+            Text("On-device transcription requires Parakeet v3 Ultra (about 630 MB). It is downloaded only once and cached on this iPhone. After it finishes, hold Volume Down again to record.")
         }
         .alert("Transcription unavailable", isPresented: Binding(
             get: { transcription.modelErrorMessage != nil },
@@ -264,11 +264,11 @@ struct ContentView: View {
                 case .idle:
                     if let message = walkie.statusMessage { Text(message) }
                 }
+                let text = walkie.displayedTranscript(liveText: transcription.combinedText)
+                if !text.isEmpty || walkie.phase == .recording {
+                    WalkieTranscriptView(text: text, isRecording: walkie.phase == .recording)
+                }
                 if walkie.phase == .idle, !walkie.transcript.isEmpty {
-                    Text(walkie.transcript)
-                        .font(.caption)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
                     ShareLink("Copy or Share Transcript", item: walkie.transcript)
                         .font(.caption)
                 }
@@ -437,10 +437,10 @@ private struct SpeechModelStorageView: View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("Model", value: "Whisper base")
-                    LabeledContent("Download size", value: "About 150 MB")
+                    LabeledContent("Model", value: SpeechModelCache.displayName)
+                    LabeledContent("Download size", value: SpeechModelCache.downloadSize)
                     LabeledContent("Stored", value: transcription.cachedModelSize)
-                    if transcription.hasCachedModel || transcription.isModelLoaded {
+                    if transcription.hasStoredModel || transcription.isModelLoaded {
                         Button("Remove Download", role: .destructive) {
                             Task { await transcription.removeCachedModel() }
                         }
@@ -457,6 +457,11 @@ private struct SpeechModelStorageView: View {
                     Text("On-device Speech Model")
                 } footer: {
                     Text("The model stays on this iPhone and transcription audio is processed on-device.")
+                }
+                Section("Model Credits") {
+                    Text("Parakeet Ultra by Moondream, based on NVIDIA Parakeet v3. Core ML conversion and quantization by Fluid Inference.")
+                    Link("Model and attribution", destination: URL(string: "https://huggingface.co/FluidInference/parakeet-ultra-coreml")!)
+                    Link("CC BY 4.0 license", destination: URL(string: "https://creativecommons.org/licenses/by/4.0/")!)
                 }
             }
             .navigationTitle("Speech Storage")
@@ -559,4 +564,37 @@ private struct TabSwitcherBar: View {
 #Preview {
     ContentView(syncService: PeerSyncService(role: .browser, displayName: "Preview"),
                watchDelegate: PhoneSessionDelegate())
+}
+
+/// Keeps the newest words visible without expanding the workspace list inset.
+struct WalkieTranscriptView: View {
+    let text: String
+    let isRecording: Bool
+    @ScaledMetric(relativeTo: .body) private var transcriptHeight = 96.0
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    if text.isEmpty && isRecording {
+                        Text("Listening…")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text(text)
+                            .textSelection(.enabled)
+                            .accessibilityIdentifier("walkie.transcript")
+                    }
+                    Color.clear.frame(height: 1).id("transcriptEnd")
+                }
+                .font(.body)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: transcriptHeight)
+            .defaultScrollAnchor(.bottom)
+            .defaultScrollAnchor(.top, for: .alignment)
+            .onChange(of: text) {
+                proxy.scrollTo("transcriptEnd", anchor: .bottom)
+            }
+        }
+    }
 }

@@ -375,6 +375,63 @@ struct AgenticUsageProviderTests {
         #expect(result.rates["claude-opus-5-5"] != nil)
     }
 
+    @Test("Kimi short names use the exact public model, with independent highspeed cache prices")
+    func kimiExactRoutingPrices() throws {
+        let standard = record(model: "k3", input: 1_000_000, cacheRead: 1_000_000, output: 1_000_000)
+        let publicID = record(model: "moonshot-ai/kimi-k3", input: 1_000_000, cacheRead: 1_000_000, output: 1_000_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: standard)) - 18.30) < 1e-9)
+        #expect(AgenticUsagePricing.cost(of: standard) == AgenticUsagePricing.cost(of: publicID))
+        let pro = record(model: "k3.1-pro", input: 1_000_000, cacheRead: 1_000_000, output: 1_000_000)
+        let highspeed = record(model: "k3.1-pro-highspeed", input: 1_000_000, cacheRead: 1_000_000, output: 1_000_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: pro)) - 12.20) < 1e-9)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: highspeed)) - 24.20) < 1e-9)
+        #expect(AgenticUsagePricing.rate(for: "k3-max") == nil)
+    }
+
+    @Test("Future Kimi routing names inherit catalog rates without matching reseller variants")
+    func kimiCatalogRoutingPrices() throws {
+        let data = Data("""
+        {"moonshotai":{"models":{
+          "kimi-k9":{"cost":{"input":2,"output":10,"cache_read":0.2,"cache_write":2}},
+          "kimi-k9-highspeed":{"cost":{"input":4,"output":20,"cache_read":0.2,"cache_write":4}}
+        }},"fireworks":{"models":{
+          "kimi-k9-fast":{"cost":{"input":99,"output":99,"cache_read":99}}
+        }}}
+        """.utf8)
+        let rates = try AgenticPricingCatalog.decode(data)
+        #expect(rates["k9"] == rates["kimi-k9"])
+        #expect(rates["moonshot-ai/kimi-k9"] == rates["kimi-k9"])
+        #expect(rates["k9-highspeed"]?.cacheReadPerMillionUSD == 0.2)
+        #expect(rates["k9"]?.inputPerMillionUSD == 2)
+        #expect(rates["kimi-k9-fast"] == nil)
+    }
+
+    @Test("Existing catalog caches gain new Kimi alias rules while offline")
+    func cachedKimiRoutingPrices() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let date = Date(timeIntervalSince1970: 1_000)
+        let rate = AgenticModelRate(input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2)
+        let cached = AgenticPricingCatalog.Snapshot(
+            fetchedAt: date, reviewedDate: AgenticUsagePricing.reviewedDate, rates: ["kimi-k9": rate]
+        )
+        try JSONEncoder().encode(cached).write(to: url)
+        let catalog = AgenticPricingCatalog(cacheURL: url, fetch: { throw URLError(.notConnectedToInternet) })
+        let result = await catalog.load(now: date.addingTimeInterval(1))
+        #expect(result.rates["k9"] == rate)
+        #expect(result.rates["moonshot-ai/kimi-k9"] == rate)
+    }
+
+    @Test("Claude 5.5 fallback cache and prompt-length pricing match published rates")
+    func claude55FallbackPrices() throws {
+        let sonnet = record(model: "claude-sonnet-5-5", cacheRead: 1_000_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: sonnet)) - 0.10) < 1e-9)
+        let boundary = record(model: "claude-haiku-5-5", input: 100_000, output: 1_000)
+        let large = record(model: "claude-haiku-5-5", input: 1, cacheRead: 100_000, output: 1_000)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: boundary)) - 0.0105) < 1e-9)
+        #expect(try abs(#require(AgenticUsagePricing.cost(of: large)) - 0.0075005) < 1e-9)
+    }
+
     @Test("Files beyond the former 512MB limit retain usage after oversized lines")
     func streamsLargeFiles() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

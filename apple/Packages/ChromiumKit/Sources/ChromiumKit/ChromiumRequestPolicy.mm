@@ -1,8 +1,8 @@
 // Fail-closed request policy: navigation, popups, external protocols,
 // permissions, downloads, context menus, file choosers, authentication, and
 // certificates. Decisions go to Pilot's delegate where a typed method exists
-// and fail closed otherwise; authentication challenges and certificate errors
-// are always rejected and only reported.
+// and fail closed otherwise. Authentication challenges are rejected; only
+// recoverable certificate errors can continue after explicit delegate approval.
 //
 // Thread contract: UI-thread callbacks run on main. OnProtocolExecution runs
 // on the CEF IO thread and touches no Objective-C state; GetAuthCredentials
@@ -468,8 +468,43 @@ bool BrowserClient::OnCertificateError(CefRefPtr<CefBrowser> browser,
                                        CefRefPtr<CefSSLInfo> ssl_info,
                                        CefRefPtr<CefCallback> callback) {
     CEF_REQUIRE_UI_THREAD();
-    [host_ cefDidRejectCertificateError:cert_error
-                                 forURL:NSURLFromCef(request_url)];
+    if (closing_ || !IsCurrent(browser)) return false;
+    ChromiumBrowserHostView *host = host_;
+    NSURL *URL = NSURLFromCef(request_url);
+    const bool recoverable_error =
+        cert_error == ERR_CERT_COMMON_NAME_INVALID ||
+        cert_error == ERR_CERT_DATE_INVALID ||
+        cert_error == ERR_CERT_AUTHORITY_INVALID;
+    constexpr uint32_t recoverable_statuses =
+        CERT_STATUS_COMMON_NAME_INVALID | CERT_STATUS_DATE_INVALID |
+        CERT_STATUS_AUTHORITY_INVALID;
+    // CEF reserves bits 16...31 for non-error information. Check every error
+    // bit, including unknown ones, so a concurrent revocation or weak-key
+    // failure cannot be overridden by a more familiar primary error code.
+    constexpr uint32_t certificate_error_mask = 0xFFFF;
+    const uint32_t status = ssl_info ? ssl_info->GetCertStatus() : 0;
+    if (callback && ssl_info && recoverable_error && URL.host.length > 0 &&
+        [URL.scheme.lowercaseString isEqualToString:@"https"] &&
+        (status & recoverable_statuses) != 0 &&
+        (status & certificate_error_mask & ~recoverable_statuses) == 0) {
+        CefRefPtr<CefX509Certificate> certificate =
+            ssl_info->GetX509Certificate();
+        CefRefPtr<CefBinaryValue> encoded =
+            certificate ? certificate->GetDEREncoded() : nullptr;
+        const size_t size = encoded ? encoded->GetSize() : 0;
+        if (size > 0) {
+            NSMutableData *data = [NSMutableData dataWithLength:size];
+            if (encoded->GetData(data.mutableBytes, size, 0) == size &&
+                [host cefShouldAllowCertificateError:cert_error
+                                                forURL:URL
+                                        certificateDER:[data copy]] &&
+                !closing_ && IsCurrent(browser) && host_ == host) {
+                callback->Continue();
+                return true;
+            }
+        }
+    }
+    [host cefDidRejectCertificateError:cert_error forURL:URL];
     return false;
 }
 

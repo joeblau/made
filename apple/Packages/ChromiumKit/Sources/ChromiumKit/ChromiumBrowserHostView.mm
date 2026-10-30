@@ -262,6 +262,20 @@ using namespace chromiumkit;
             didRejectAuthenticationForURL:URL];
     }
 }
+- (BOOL)cefShouldAllowCertificateError:(NSInteger)errorCode
+                                forURL:(NSURL *)URL
+                        certificateDER:(NSData *)certificateDER {
+    if (self.closeDelivered || !URL || certificateDER.length == 0) return NO;
+    id<ChromiumBrowserHostViewDelegate> delegate = self.delegate;
+    SEL selector =
+        @selector(chromiumBrowserHostView:shouldAllowCertificateError:
+                                      forURL:certificateDER:);
+    return [delegate respondsToSelector:selector] &&
+        [delegate chromiumBrowserHostView:self
+              shouldAllowCertificateError:errorCode
+                                   forURL:URL
+                           certificateDER:certificateDER];
+}
 - (void)cefDidRejectCertificateError:(NSInteger)errorCode
                               forURL:(NSURL *)URL {
     id<ChromiumBrowserHostViewDelegate> delegate = self.delegate;

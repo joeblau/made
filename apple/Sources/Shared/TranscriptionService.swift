@@ -1,14 +1,15 @@
 import Foundation
 import Observation
-@preconcurrency import WhisperKit
+import FluidAudio
+@preconcurrency import AVFoundation
 
 #if canImport(AVFAudio)
 import AVFAudio
 #endif
 
-struct TranscriptionLoadedModel: @unchecked Sendable {
-    let kit: WhisperKit?
-    let cacheEntry: WhisperModelCache.Entry
+struct TranscriptionLoadedModel: Sendable {
+    let models: AsrModels?
+    let cacheEntry: SpeechModelCache.Entry
 }
 
 struct TranscriptionStreamUpdate: Sendable {
@@ -189,11 +190,11 @@ final class TranscriptionService: @unchecked Sendable {
     private var streamStopCompletion: TranscriptionStopCompletion?
     private var audioSessionGeneration: Int?
 
-    private var validatedCacheEntry: WhisperModelCache.Entry?
+    private var validatedCacheEntry: SpeechModelCache.Entry?
     private var cacheRefreshTask: Task<Void, Never>?
     private var cacheRefreshGeneration = 0
 
-    private let modelCache: WhisperModelCache
+    private let modelCache: SpeechModelCache
     private let networkStatusProvider: @Sendable () -> TranscriptionNetworkStatus
     private let modelLoader: ModelLoader
     private let permissionRequest: @Sendable () async -> Bool
@@ -202,26 +203,29 @@ final class TranscriptionService: @unchecked Sendable {
     private let deactivateAudioSession: @MainActor @Sendable () -> Void
 
     init() {
-        let cache = WhisperModelCache()
+        // Keep transcript-bearing SDK debug messages out of application logs.
+        AppLogger.minimumLevel = .warning
+        AppLogger.mirrorsToConsole = false
+        let cache = SpeechModelCache()
         let networkObserver = TranscriptionNetworkObserver()
         modelCache = cache
         networkStatusProvider = { networkObserver.status }
         modelLoader = { preparation, progress in
-            try await Self.loadWhisperModel(
+            try await Self.loadParakeetModel(
                 preparation: preparation,
                 cache: cache,
                 progress: progress
             )
         }
-        permissionRequest = { await AudioProcessor.requestRecordPermission() }
-        streamFactory = Self.makeWhisperStream
+        permissionRequest = { await AVAudioApplication.requestRecordPermission() }
+        streamFactory = Self.makeParakeetStream
         activateAudioSession = Self.activateRecordingAudioSession
         deactivateAudioSession = Self.deactivateRecordingAudioSession
         refreshCachedModelState()
     }
 
     init(
-        testingCache: WhisperModelCache,
+        testingCache: SpeechModelCache,
         networkStatus: TranscriptionNetworkStatus = .unmetered,
         modelLoader: @escaping ModelLoader,
         permissionRequest: @escaping @Sendable () async -> Bool,
@@ -240,9 +244,10 @@ final class TranscriptionService: @unchecked Sendable {
     }
 
     /// Memoized by `refreshCachedModelState()`. Validating the cache walks the
-    /// ~150 MB model folder and parses multi-MB tokenizer JSON, and the
+    /// model folder and parses its vocabulary, and the
     /// volume-hold gesture path reads these synchronously at gesture time.
     private(set) var hasCachedModel = false
+    private(set) var hasStoredModel = false
     private(set) var cachedModelSize = "Not downloaded"
 
     var networkStatus: TranscriptionNetworkStatus { networkStatusProvider() }
@@ -255,7 +260,7 @@ final class TranscriptionService: @unchecked Sendable {
         let cache = modelCache
         cacheRefreshTask = Task.detached(priority: .utility) { [weak self] in
             let entry = cache.validEntry
-            let storedBytes = entry == nil ? 0 : cache.storedBytes
+            let storedBytes = cache.storedBytes
             await self?.finishCacheRefresh(
                 entry: entry,
                 storedBytes: storedBytes,
@@ -265,19 +270,20 @@ final class TranscriptionService: @unchecked Sendable {
     }
 
     private func finishCacheRefresh(
-        entry: WhisperModelCache.Entry?,
+        entry: SpeechModelCache.Entry?,
         storedBytes: Int64,
         generation: Int
     ) {
         guard generation == cacheRefreshGeneration else { return }
         validatedCacheEntry = entry
         hasCachedModel = entry != nil
+        hasStoredModel = storedBytes > 0
         cachedModelSize = storedBytes > 0
             ? ByteCountFormatter.string(fromByteCount: storedBytes, countStyle: .file)
             : "Not downloaded"
     }
 
-    private func resolveCachedEntry() async -> WhisperModelCache.Entry? {
+    private func resolveCachedEntry() async -> SpeechModelCache.Entry? {
         if let task = cacheRefreshTask { await task.value }
         return validatedCacheEntry
     }
@@ -377,6 +383,8 @@ final class TranscriptionService: @unchecked Sendable {
             modelLoadingFraction = nil
             modelCancellationRequested = false
             modelCancellationMessage = nil
+            // Include partial downloads in storage controls after failure/cancellation.
+            refreshCachedModelState()
         }
 
         if modelCancellationRequested {
@@ -395,14 +403,13 @@ final class TranscriptionService: @unchecked Sendable {
                 // instead of silently starting the download.
                 validatedCacheEntry = nil
                 hasCachedModel = false
-                refreshCachedModelState()
                 return false
             }
-            modelCache.remember(loaded.cacheEntry.modelFolder)
             loadedModel = loaded
             isModelLoaded = true
             validatedCacheEntry = loaded.cacheEntry
             hasCachedModel = true
+            hasStoredModel = true
             if cachedModelSize == "Not downloaded" {
                 // A just-loaded model has a size on disk; show a provisional
                 // value so an open storage sheet never renders
@@ -410,8 +417,6 @@ final class TranscriptionService: @unchecked Sendable {
                 // detached re-walk formats the real size.
                 cachedModelSize = "Calculating…"
             }
-            // Recompute the stored-size string off the main actor.
-            refreshCachedModelState()
             return true
         case .failure(let error):
             if error is CancellationError {
@@ -426,7 +431,6 @@ final class TranscriptionService: @unchecked Sendable {
                     // background re-walk.
                     validatedCacheEntry = nil
                     hasCachedModel = false
-                    refreshCachedModelState()
                 }
             }
             return false
@@ -451,7 +455,7 @@ final class TranscriptionService: @unchecked Sendable {
         modelLoadingFraction = fraction.isFinite ? min(max(fraction, 0), 1) : nil
         modelLoadingProgress = fraction.isFinite && fraction > 0
             ? "Downloading speech model… \(Int(fraction * 100))%"
-            : "Downloading speech model (about 150 MB)…"
+            : "Downloading speech model (about 630 MB)…"
     }
 
     func cancelModelLoad(message: String = "Speech model download was cancelled.") {
@@ -709,155 +713,53 @@ final class TranscriptionService: @unchecked Sendable {
         [finalText, partialText]
             .filter { !$0.isEmpty }
             .joined(separator: " ")
-            .replacingOccurrences(of: "Waiting for speech...", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func loadWhisperModel(
+    private nonisolated static func loadParakeetModel(
         preparation: TranscriptionModelPreparation,
-        cache: WhisperModelCache,
+        cache: SpeechModelCache,
         progress: @escaping @Sendable (Progress) -> Void
     ) async throws -> TranscriptionLoadedModel {
-        let modelFolder: URL
-        let tokenizerFolder: URL
+        let entry: SpeechModelCache.Entry
         switch preparation {
-        case .loadCached(let entry):
-            guard cache.isComplete(entry) else { throw TranscriptionServiceError.incompleteCache }
-            // This API parses only local files and never performs a Hub request.
-            // Doing it first prevents WhisperKit's tokenizer loader from silently
-            // falling back upstream for a corrupt cache.
-            _ = try await AutoTokenizerWrapper.from(modelFolder: entry.tokenizerFolder)
-            guard cache.isComplete(entry) else { throw TranscriptionServiceError.incompleteCache }
-            modelFolder = entry.modelFolder
-            tokenizerFolder = entry.tokenizerFolder
+        case .loadCached(let cached):
+            entry = cached
         case .download:
-            modelFolder = try await WhisperKit.download(
-                variant: WhisperModelCache.modelName,
-                progressCallback: progress
+            try await ModelHub.download(
+                .parakeetUltra,
+                to: cache.modelFolder.deletingLastPathComponent(),
+                progressHandler: { update in
+                    let value = Progress(totalUnitCount: 1000)
+                    // ModelHub reserves half its progress range for subsequent
+                    // model loading. This call downloads only compiled components.
+                    value.completedUnitCount = Int64(min(max(update.fractionCompleted * 2, 0), 1) * 1000)
+                    progress(value)
+                }
             )
-            try Task.checkCancellation()
-            tokenizerFolder = cache.tokenizerDownloadBase
+            entry = SpeechModelCache.Entry(modelFolder: cache.modelFolder)
         }
-
-        let kit = try await WhisperKit(
-            WhisperKitConfig(
-                model: WhisperModelCache.modelName,
-                modelFolder: modelFolder.path,
-                tokenizerFolder: tokenizerFolder,
-                verbose: false,
-                logLevel: .none,
-                prewarm: true,
-                load: true,
-                download: false
-            )
-        )
         try Task.checkCancellation()
-
-        let entry = WhisperModelCache.Entry(
-            modelFolder: modelFolder,
-            tokenizerFolder: cache.tokenizerFolder
-        )
-        guard cache.isComplete(entry), kit.tokenizer != nil else {
-            throw TranscriptionServiceError.incompleteCache
-        }
-        return TranscriptionLoadedModel(kit: kit, cacheEntry: entry)
+        guard cache.isComplete(entry) else { throw TranscriptionServiceError.incompleteCache }
+        // loadLocal fails locally for damaged files and never falls back to a download.
+        // Core ML compilation/loading is kept off the main actor.
+        let models = try await Task.detached(priority: .userInitiated) {
+            try AsrModels.loadLocal(from: entry.modelFolder, version: .ultra)
+        }.value
+        try Task.checkCancellation()
+        return TranscriptionLoadedModel(models: models, cacheEntry: entry)
     }
 
-    private static func makeWhisperStream(
+    private static func makeParakeetStream(
         loaded: TranscriptionLoadedModel,
         update: @escaping @Sendable (TranscriptionStreamUpdate) -> Void
     ) throws -> TranscriptionStreamHandle {
-        guard let kit = loaded.kit, let tokenizer = kit.tokenizer else {
-            throw TranscriptionServiceError.incompleteCache
-        }
-
-        let options = DecodingOptions(
-            verbose: false,
-            task: .transcribe,
-            language: "en",
-            temperatureFallbackCount: 3,
-            sampleLength: 224,
-            usePrefillPrompt: true,
-            skipSpecialTokens: true,
-            withoutTimestamps: false,
-            clipTimestamps: [0]
-        )
-
-        let transcriber = AudioStreamTranscriber(
-            audioEncoder: kit.audioEncoder,
-            featureExtractor: kit.featureExtractor,
-            segmentSeeker: kit.segmentSeeker,
-            textDecoder: kit.textDecoder,
-            tokenizer: tokenizer,
-            audioProcessor: kit.audioProcessor,
-            decodingOptions: options,
-            requiredSegmentsForConfirmation: 2,
-            silenceThreshold: 0.3,
-            compressionCheckWindow: 60,
-            useVAD: true,
-            stateChangeCallback: { [loaded] _, state in
-                guard let kit = loaded.kit else { return }
-                // Argmax flips `State.isRecording` immediately before it asks
-                // AVAudioEngine to start. Require the default processor's engine
-                // to be running as well, so a synchronous engine-start failure
-                // cannot briefly masquerade as a ready microphone.
-                let recordingIsReady: Bool
-                if let processor = kit.audioProcessor as? AudioProcessor {
-                    recordingIsReady = state.isRecording && processor.audioEngine?.isRunning == true
-                } else {
-                    recordingIsReady = state.isRecording
-                }
-                let confirmed = state.confirmedSegments
-                    .map(\.text).joined(separator: " ")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let unconfirmed = state.unconfirmedSegments
-                    .map(\.text).joined(separator: " ")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                let current = state.currentText
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "Waiting for speech...", with: "")
-                update(TranscriptionStreamUpdate(
-                    isRecording: recordingIsReady,
-                    confirmedText: confirmed,
-                    partialText: [unconfirmed, current]
-                        .filter { !$0.isEmpty }
-                        .joined(separator: " ")
-                ))
-            }
-        )
-
+        guard let models = loaded.models else { throw TranscriptionServiceError.incompleteCache }
+        let microphone = ParakeetMicrophone(models: models, update: update)
         return TranscriptionStreamHandle(
-            run: {
-                do {
-                    try await transcriber.startStreamTranscription()
-                } catch {
-                    await transcriber.stopStreamTranscription()
-                    throw error
-                }
-                // A cancellation can arrive while Argmax is awaiting its own
-                // permission check. Always stop any engine it started late.
-                await transcriber.stopStreamTranscription()
-            },
-            stop: { await transcriber.stopStreamTranscription() },
-            finalize: { [loaded] in
-                guard let kit = loaded.kit else {
-                    throw TranscriptionServiceError.incompleteCache
-                }
-                // Argmax's stream stop does not flush the final audio. Its
-                // realtime decoder also skips buffers of one second or less.
-                // Decode the captured recording after the streaming task has
-                // exited so short utterances and the last words are included.
-                // The service owns the loaded-model wrapper and serializes
-                // these decoders before allowing another recording to start.
-                let samples = Array(kit.audioProcessor.audioSamples)
-                guard !samples.isEmpty,
-                      kit.audioProcessor.relativeEnergy.contains(where: { $0 > 0.3 }) else {
-                    return ""
-                }
-                let results = try await kit.transcribe(audioArray: samples, decodeOptions: options)
-                return results.map(\.text).joined(separator: " ")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
+            run: { try await microphone.run() },
+            stop: { await microphone.stop() },
+            finalize: { try await microphone.finalize() }
         )
     }
 
@@ -893,4 +795,128 @@ private extension TranscriptionModelPreparation {
         if case .loadCached = self { return true }
         return false
     }
+}
+
+/// Owns one recording. A new sliding-window decoder is created per hold because
+/// FluidAudio's input stream is closed permanently by finish().
+@MainActor
+private final class ParakeetMicrophone {
+    private let update: @Sendable (TranscriptionStreamUpdate) -> Void
+    private let session: ParakeetTranscriptionSession
+    private let engine = AVAudioEngine()
+    private var input: AsyncThrowingStream<TranscriptionAudioBuffer, Error>.Continuation?
+    private var forwardingTask: Task<Void, Error>?
+    private var updatesTask: Task<Void, Never>?
+    private var hasTap = false
+    private var isStopped = false
+    private var captureError: Error?
+
+    init(models: AsrModels, update: @escaping @Sendable (TranscriptionStreamUpdate) -> Void) {
+        session = ParakeetTranscriptionSession(models: models)
+        self.update = update
+    }
+
+    func run() async throws {
+        do {
+            try Task.checkCancellation()
+            try await session.start()
+            let updates = await session.transcriptionUpdates
+            try Task.checkCancellation()
+            guard !isStopped else { throw CancellationError() }
+            updatesTask = Task { [session, update] in
+                for await _ in updates {
+                    guard !Task.isCancelled else { break }
+                    update(TranscriptionStreamUpdate(
+                        isRecording: false,
+                        confirmedText: "",
+                        partialText: await session.currentText
+                    ))
+                }
+            }
+
+            let (buffers, continuation) = AsyncThrowingStream<TranscriptionAudioBuffer, Error>.makeStream()
+            input = continuation
+            forwardingTask = Task { [session] in
+                // This task is drained, not cancelled, on release. Every captured
+                // buffer must reach the decoder before finish() flushes the tail.
+                for try await buffer in buffers { try await session.append(buffer) }
+            }
+            let node = engine.inputNode
+            let format = node.outputFormat(forBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                throw ParakeetMicrophoneError.invalidInputFormat
+            }
+            node.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+                guard buffer.frameLength > 0 else { return }
+                // AVAudioEngine reuses tap memory after this callback returns.
+                guard let copy = copyTranscriptionBuffer(buffer) else {
+                    continuation.finish(throwing: ParakeetMicrophoneError.bufferCopyFailed)
+                    return
+                }
+                continuation.yield(TranscriptionAudioBuffer(pcm: copy))
+            }
+            hasTap = true
+            engine.prepare()
+            try engine.start()
+            // Readiness is published only after the microphone actually starts.
+            update(TranscriptionStreamUpdate(isRecording: true, confirmedText: "", partialText: ""))
+            try await forwardingTask?.value
+        } catch {
+            captureError = error
+            await stop()
+            await session.cancel()
+            throw error
+        }
+    }
+
+    func stop() async {
+        isStopped = true
+        engine.stop()
+        if hasTap {
+            engine.inputNode.removeTap(onBus: 0)
+            hasTap = false
+        }
+        input?.finish()
+        input = nil
+        _ = try? await forwardingTask?.value
+        forwardingTask = nil
+        updatesTask?.cancel()
+        await updatesTask?.value
+        updatesTask = nil
+    }
+
+    func finalize() async throws -> String {
+        do {
+            if let captureError { throw captureError }
+            return try await session.finish()
+        } catch {
+            await session.cancel()
+            throw error
+        }
+    }
+}
+
+private enum ParakeetMicrophoneError: LocalizedError {
+    case invalidInputFormat
+    case bufferCopyFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidInputFormat: "The microphone has no available audio input."
+        case .bufferCopyFailed: "Could not retain the microphone audio for transcription."
+        }
+    }
+}
+
+/// Returns owned PCM storage so asynchronous decoding never reads reused tap memory.
+nonisolated func copyTranscriptionBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+    guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return nil }
+    copy.frameLength = buffer.frameLength
+    let source = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: buffer.audioBufferList))
+    let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+    for (input, output) in zip(source, destination) {
+        guard let from = input.mData, let to = output.mData else { return nil }
+        memcpy(to, from, Int(input.mDataByteSize))
+    }
+    return copy
 }

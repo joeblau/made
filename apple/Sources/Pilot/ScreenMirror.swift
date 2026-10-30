@@ -67,11 +67,6 @@ enum ScreenMirrorWindowSelectionPolicy {
 final class ScreenMirror {
     /// True once a capture stream is actively running.
     private(set) var isRunning = false
-    /// Whether we've already triggered the Screen Recording permission prompt
-    /// this launch. Gates the prompt to once so a denied/unsettled grant can't
-    /// turn the capture-retry into an every-2-seconds nag.
-    private var didRequestScreenAccess = false
-
     private let sender: FrameSender
     private var stream: SCStream?
     /// AppKit window number for the live Pilot workspace surface. A companion
@@ -157,19 +152,12 @@ final class ScreenMirror {
     // MARK: - Capture setup
 
     private func beginCapture() async {
-        // `SCShareableContent` is what pops the Screen Recording prompt. The old
-        // catch/retry below re-entered it every 2s, so a single unsettled (or
-        // denied) permission decision became an endless nag. Preflight the grant
-        // *without* prompting, and only ever prompt through the capture API once
-        // per launch.
-        guard CGPreflightScreenCaptureAccess() || !didRequestScreenAccess else {
-            // Not granted, and we've already shown the prompt once this launch —
-            // don't ask again. A later grant takes effect on the next attempt
-            // (Plotter reconnect / relaunch).
+        // A companion connecting in the background must never trigger a system
+        // prompt. Request access explicitly in Set Up Cockpit instead.
+        guard CGPreflightScreenCaptureAccess() else {
             isRunning = false
             return
         }
-        didRequestScreenAccess = true
 
         do {
             // Prompts the first time if not yet granted; silent once granted.

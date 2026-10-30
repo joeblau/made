@@ -156,6 +156,9 @@
                            percentComplete:(NSInteger)percentComplete
                                      state:(ChromiumDownloadState)state {}
 - (void)cefDidRejectAuthenticationForURL:(NSURL *)URL {}
+- (BOOL)cefShouldAllowCertificateError:(NSInteger)errorCode
+                                forURL:(NSURL *)URL
+                        certificateDER:(NSData *)certificateDER { return NO; }
 - (void)cefDidRejectCertificateError:(NSInteger)errorCode
                               forURL:(NSURL *)URL {}
 - (void)cefDidRejectClientCertificateForHost:(NSString *)host
