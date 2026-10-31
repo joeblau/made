@@ -18,6 +18,7 @@ final class MirrorModel {
     private(set) var statusText = "Idle"
     private(set) var annotationStatusText = "Annotation idle"
     private(set) var frameCount = 0
+    private(set) var isCockpitConnected = false
     private(set) var videoSize: CGSize = .zero
     private(set) var pairingRequest: FrameLinkPairingRequest?
 
@@ -44,6 +45,10 @@ final class MirrorModel {
 
     private let receiver = FrameReceiver()
     private let renderer = HEVCMirrorRenderer()
+    private let dashboardStore = DashboardSnapshotStore(appGroup: PlotterSnapshotStore.appGroupID)
+    let dashboardActivities = DashboardActivityController(urlScheme: PlotterDashboardRoute.urlScheme)
+    private(set) var dashboardSnapshots = PlotterDashboardSnapshots()
+    private(set) var dashboardError: String?
 
     /// Loss-tracking state for periodic link feedback (driven on the main
     /// actor from decoded sample frameIDs).
@@ -70,6 +75,9 @@ final class MirrorModel {
     private var lastSnapshotNudgeHash: Int?
 
     init() {
+        dashboardSnapshots = PlotterDashboardSnapshots(store: dashboardStore)
+        dashboardActivities.restore()
+        updateDashboardActivities(for: Set(DashboardFamily.allCases))
         receiver.onPacket = { [weak self] packet in
             self?.handle(packet)
         }
@@ -88,6 +96,7 @@ final class MirrorModel {
         }
         receiver.onConnectedChanged = { [weak self] connected in
             Task { @MainActor in
+                self?.isCockpitConnected = connected
                 // Drop Pilot's appearance on disconnect so Plotter returns to
                 // its own system light/dark setting.
                 if !connected { self?.pilotColorScheme = nil }
@@ -253,6 +262,9 @@ final class MirrorModel {
         Task { @MainActor [weak self] in
             guard let self else { return }
             switch packet {
+            case .dashboard(let envelope):
+                self.applyDashboard(envelope)
+                return
             case .annotationAck(let seq):
                 self.acknowledgeAnnotation(seq)
                 return
@@ -271,6 +283,68 @@ final class MirrorModel {
                 break
             }
             self.renderer.handle(packet)
+        }
+    }
+
+    private func applyDashboard(_ envelope: DashboardSnapshotEnvelope) {
+        let updated = dashboardSnapshots.apply(envelope)
+        guard !updated.isEmpty else { return }
+
+        var persistenceErrors: [String] = []
+        for family in DashboardFamily.allCases where updated.contains(family) {
+            do {
+                try persistDashboard(family)
+            } catch {
+                persistenceErrors.append("\(family.title): \(error.localizedDescription)")
+                plotterMirrorLog.error("dashboard: failed to persist \(family.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+            reloadDashboardTimeline(family)
+        }
+        dashboardError = persistenceErrors.isEmpty ? nil : persistenceErrors.joined(separator: "\n")
+        updateDashboardActivities(for: updated)
+    }
+
+    private func updateDashboardActivities(for families: Set<DashboardFamily>) {
+        let snapshots = dashboardSnapshots
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if families.contains(.actions), let actions = snapshots.actions {
+                await self.dashboardActivities.updateActions(actions)
+            }
+            if families.contains(.usage), let usage = snapshots.usage {
+                await self.dashboardActivities.updateUsage(usage)
+            }
+            if families.contains(.runners), let runners = snapshots.runners {
+                await self.dashboardActivities.updateRunners(runners)
+            }
+        }
+    }
+
+    private func persistDashboard(_ family: DashboardFamily) throws {
+        switch family {
+        case .actions:
+            if let snapshot = dashboardSnapshots.actions {
+                try dashboardStore.write(snapshot, for: family)
+            }
+        case .usage:
+            if let snapshot = dashboardSnapshots.usage {
+                try dashboardStore.write(snapshot, for: family)
+            }
+        case .runners:
+            if let snapshot = dashboardSnapshots.runners {
+                try dashboardStore.write(snapshot, for: family)
+            }
+        }
+    }
+
+    private func reloadDashboardTimeline(_ family: DashboardFamily) {
+        switch family {
+        case .actions:
+            WidgetCenter.shared.reloadTimelines(ofKind: DashboardWidgetKind.actions)
+        case .usage:
+            WidgetCenter.shared.reloadTimelines(ofKind: DashboardWidgetKind.usage)
+        case .runners:
+            WidgetCenter.shared.reloadTimelines(ofKind: DashboardWidgetKind.runners)
         }
     }
 
@@ -416,6 +490,8 @@ private final class HEVCMirrorRenderer {
             displayLayer?.flushAndRemoveImage()
         case .sample(let sample):
             enqueue(sample)
+        case .dashboard:
+            break
         case .annotation:
             break
         case .annotationAck:

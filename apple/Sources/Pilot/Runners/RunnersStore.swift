@@ -63,13 +63,17 @@ final class RunnersStore {
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let fetch: @Sendable (RunnerScope) async throws -> [GitHubRunner]
+    @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private var pollTask: Task<Void, Never>?
 
     init(
         defaults: UserDefaults = .standard,
+        now: @escaping () -> Date = Date.init,
         fetch: @escaping @Sendable (RunnerScope) async throws -> [GitHubRunner] = { try await RunnersAPI.fetch($0) }
     ) {
         self.defaults = defaults
         self.fetch = fetch
+        self.now = now
         let stored = defaults.data(forKey: "runners.scopes")
             .flatMap { try? JSONDecoder().decode([RunnerScope].self, from: $0) } ?? []
         var seen: Set<String> = []
@@ -83,7 +87,22 @@ final class RunnersStore {
             .flatMap { try? JSONDecoder().decode([String: RunnerPresentation].self, from: $0) } ?? [:]
     }
 
+    convenience init(
+        defaults: UserDefaults = .standard,
+        fetch: @escaping @Sendable (RunnerScope) async throws -> [GitHubRunner]
+    ) {
+        self.init(defaults: defaults, now: Date.init, fetch: fetch)
+    }
+
     var selectedScope: RunnerScope? { scopes.first { $0.id == selectedScopeID } }
+    var dashboardScope: RunnerScope? {
+        if selectedScope?.kind == .enterprise { return selectedScope }
+        return scopes.first { $0.kind == .enterprise }
+    }
+    var dashboardSnapshot: RunnersDashboardSnapshot? {
+        guard let dashboardScope else { return nil }
+        return DashboardProjection.runners(scope: dashboardScope, snapshot: snapshots[dashboardScope.id])
+    }
     var snapshot: Snapshot { selectedScopeID.flatMap { snapshots[$0] } ?? Snapshot() }
     var isRefreshing: Bool { selectedScopeID.map { refreshing.contains($0) } ?? false }
     var visibleRunners: [GitHubRunner] {
@@ -114,9 +133,38 @@ final class RunnersStore {
         persistScopes()
     }
 
+    func start() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.refreshVisibleScopes()
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
+        }
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
     func refreshSelected() async {
         guard let scope = selectedScope else { return }
         await refresh(scope)
+    }
+
+    func refreshDashboard() async {
+        guard let scope = dashboardScope else { return }
+        await refresh(scope)
+    }
+
+    private func refreshVisibleScopes() async {
+        let dashboardScope = self.dashboardScope
+        if let dashboardScope { await refresh(dashboardScope) }
+        if let selectedScope, selectedScope.id != dashboardScope?.id {
+            await refresh(selectedScope)
+        }
     }
 
     func refresh(_ scope: RunnerScope) async {
@@ -127,7 +175,7 @@ final class RunnersStore {
             let runners = try await fetch(scope)
             try Task.checkCancellation()
             guard scopes.contains(where: { $0.id == scope.id }) else { return }
-            snapshots[scope.id] = Snapshot(runners: runners, updatedAt: Date())
+            snapshots[scope.id] = Snapshot(runners: runners, updatedAt: now())
         } catch {
             guard !Task.isCancelled, scopes.contains(where: { $0.id == scope.id }) else { return }
             var previous = snapshots[scope.id] ?? Snapshot()

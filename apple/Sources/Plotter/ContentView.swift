@@ -5,6 +5,8 @@ import UIKit
 
 struct ContentView: View {
     var mirror: MirrorModel
+    @State private var showsDashboard = false
+    @State private var dashboardFamily = DashboardFamily.actions
 
     var body: some View {
         ZStack {
@@ -28,9 +30,26 @@ struct ContentView: View {
                 SettingsButton()
                     .font(.title2)
                     .tint(.white)
+                Button {
+                    showsDashboard = true
+                } label: {
+                    Image(systemName: "square.grid.2x2")
+                }
+                .font(.title2)
+                .tint(.white)
+                .help("Dashboard")
+                .accessibilityLabel("Dashboard")
                 ConnectionStatusBadge(mirror: mirror)
             }
             .padding()
+        }
+        .sheet(isPresented: $showsDashboard) {
+            PlotterDashboardView(mirror: mirror, selectedFamily: $dashboardFamily)
+        }
+        .onOpenURL { url in
+            guard let route = PlotterDashboardRoute(url: url) else { return }
+            dashboardFamily = route.family
+            showsDashboard = true
         }
         .alert(
             mirror.pairingRequest?.isKeyChange == true

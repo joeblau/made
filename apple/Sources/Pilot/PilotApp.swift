@@ -246,7 +246,11 @@ struct PilotApp: App {
     @State private var lastRemoteInputSurface: WorkspacePaneSurface = .main
     @State private var didSetupSync = false
     /// Badges background workspaces when their GitHub Actions complete.
-    @State private var actionWatcher = WorkspaceActionWatcher()
+    @State private var actionWatcher: WorkspaceActionWatcher
+    @State private var usageStore: UsageStore
+    @State private var agenticUseStore: AgenticUsageStore
+    @State private var runnersStore: RunnersStore
+    @State private var dashboardPublisher: DashboardPublisher
     @State private var buildPush = BuildPushCoordinator()
     /// Auto-generated identity key, auto-exchanged with Copilot over the
     /// encrypted channel (issue #51).
@@ -318,9 +322,32 @@ struct PilotApp: App {
                 onMembershipChange: { store.extensionWorkspaceMembershipDidChange() }
             )
         )
+        let actionWatcher = WorkspaceActionWatcher()
+        let usageStore = UsageStore(defaults: preferences)
+        let agenticUseStore = AgenticUsageStore(defaults: preferences)
+        let runnersStore = RunnersStore(defaults: preferences)
+        let dashboardPublisher = DashboardPublisher(
+            actionWatcher: actionWatcher,
+            usageStore: usageStore,
+            agenticUsageStore: agenticUseStore,
+            runnersStore: runnersStore,
+            defaults: preferences
+        )
+        self._actionWatcher = State(initialValue: actionWatcher)
+        self._usageStore = State(initialValue: usageStore)
+        self._agenticUseStore = State(initialValue: agenticUseStore)
+        self._runnersStore = State(initialValue: runnersStore)
+        self._dashboardPublisher = State(initialValue: dashboardPublisher)
         let sender = FrameSender()
+        dashboardPublisher.onEnvelopeChange = { envelope in
+            sender.send(.dashboard(envelope))
+        }
         self._frameSender = State(initialValue: sender)
-        self._screenMirror = State(initialValue: ScreenMirror(sender: sender))
+        let screenMirror = ScreenMirror(sender: sender)
+        screenMirror.onClientConnected = { [weak dashboardPublisher] in
+            dashboardPublisher?.republish()
+        }
+        self._screenMirror = State(initialValue: screenMirror)
     }
 
     /// If another Pilot process is already running, bring it forward and exit
@@ -556,12 +583,16 @@ struct PilotApp: App {
                         localAudioOutput: headphoneDetector.audioOutput,
                         isPlotterConnected: plotterClientCount > 0,
                         remoteInkModel: remoteInkModel,
-                        isPeerRecording: walkieInput.isRecording
+                        isPeerRecording: walkieInput.isRecording,
+                        usageStore: usageStore,
+                        agenticUseStore: agenticUseStore,
+                        runnersStore: runnersStore
                     )
                 }
             }
                 .environment(\.uiZoom, uiZoom)
                 .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+                .onOpenURL(perform: openDashboard)
                 // Report Pilot's light/dark appearance to connected Plotters so
                 // they can match it; fires on connect and whenever the Mac's
                 // appearance changes.
@@ -584,6 +615,10 @@ struct PilotApp: App {
                     RepositoryPollingEnvironmentMonitor.shared.start()
                     headphoneDetector.start()
                     actionWatcher.start(store: store)
+                    usageStore.start()
+                    agenticUseStore.start()
+                    runnersStore.start()
+                    dashboardPublisher.start()
                     buildPush.onUpdate = { run in syncService.send(.buildRunUpdate(run)) }
                     if companionsEnabled { buildPush.restore() }
                     frameSender.onClientCountChanged = { clientCount in
@@ -835,7 +870,11 @@ struct PilotApp: App {
                     Text("Finish setup in the main Cockpit window to open your workspaces.")
                         .padding(32)
                 } else {
-                    ExtensionWindowView(store: store, controller: extensionWorkspaceController)
+                    ExtensionWindowView(
+                        store: store,
+                        controller: extensionWorkspaceController,
+                        usageStore: usageStore
+                    )
                 }
             }
                 .environment(\.uiZoom, uiZoom)
@@ -1112,30 +1151,46 @@ struct PilotApp: App {
             var summaries: [WorkspaceSummary]?
             var selectedID: UUID?
             var runs: [BuildWorkflowRun]?
+            var dashboard: DashboardSnapshotEnvelope?
         }
         let lastBroadcast = LastBroadcast()
         Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             Task { @MainActor in
                 guard syncService.isConnected else {
                     lastBroadcast.summaries = nil
+                    lastBroadcast.selectedID = nil
+                    lastBroadcast.runs = nil
+                    lastBroadcast.dashboard = nil
                     return
                 }
                 let summaries = store.syncSummaries
                 let selectedID = store.selectedSyncWorkspaceID
                 let runs = actionWatcher.recentRuns
+                let dashboard = dashboardPublisher.envelope
                 guard summaries != lastBroadcast.summaries
-                        || selectedID != lastBroadcast.selectedID || runs != lastBroadcast.runs else { return }
+                        || selectedID != lastBroadcast.selectedID
+                        || runs != lastBroadcast.runs
+                        || dashboard != lastBroadcast.dashboard else { return }
                 lastBroadcast.summaries = summaries
                 lastBroadcast.selectedID = selectedID
                 lastBroadcast.runs = runs
+                lastBroadcast.dashboard = dashboard
                 let state = WorkspaceState(
                     workspaces: summaries,
                     selectedWorkspaceID: selectedID,
-                    workflowRuns: runs
+                    workflowRuns: runs,
+                    actionsDashboard: dashboard.actions,
+                    usageDashboard: dashboard.usage,
+                    runnersDashboard: dashboard.runners
                 )
                 syncService.send(.workspaceState(state))
             }
         }
+    }
+
+    private func openDashboard(_ url: URL) {
+        guard DashboardDeepLink.open(url, store: store) else { return }
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func sendLocalDeviceStatus() {

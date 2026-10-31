@@ -12,6 +12,7 @@ struct UsageSettingsView: View {
     @AppStorage(UsageConsent.cursorKey) private var cursorEnabled = false
     @AppStorage(UsageConsent.grokKey) private var grokEnabled = false
     @AppStorage(UsageConsent.kimiKey) private var kimiEnabled = false
+    @AppStorage(UsageDashboardSharing.preferenceKey) private var dashboardSharing = false
     @State private var claudeSignedIn: Bool?
     @State private var codexSignedIn: Bool?
     @State private var cursorSignedIn: Bool?
@@ -116,6 +117,12 @@ struct UsageSettingsView: View {
             }
 
             Section {
+                Toggle("Share AI Usage on Lock Screen and Companions", isOn: $dashboardSharing)
+            } footer: {
+                Text("Shares only aggregate estimated cost, token totals, and plan utilization with widgets and paired companions. Raw usage records, logs, and session identifiers are never included. Turning this off removes published usage snapshots.")
+            }
+
+            Section {
                 EmptyView()
             } footer: {
                 Text("All providers are disabled by default. Cockpit does not read auth files, query Keychain, or make usage requests until you enable that provider. Cockpit keeps no token store of its own; the only credentials it ever writes are Grok's and Kimi's rotated tokens, back into each CLI's own credential file.")
@@ -127,6 +134,9 @@ struct UsageSettingsView: View {
         .onChange(of: cursorEnabled) { consentChanged() }
         .onChange(of: grokEnabled) { consentChanged() }
         .onChange(of: kimiEnabled) { consentChanged() }
+        .onChange(of: dashboardSharing) {
+            NotificationCenter.default.post(name: UsageDashboardSharing.changedNotification, object: nil)
+        }
     }
 
     @ViewBuilder

@@ -636,11 +636,11 @@ struct ExtensionWorkspaceSyncState: Hashable {
 struct ExtensionWindowView: View {
     @Bindable var store: WorkspaceStore
     @Bindable var controller: ExtensionWorkspaceController
+    var usageStore: UsageStore
     @Environment(\.openWindow) private var openWindow
 
     @State private var gitStore = RepositoryStore()
     @State private var tasksStore = GitHubTasksStore()
-    @State private var usageStore = UsageStore()
     @State private var isDrawingActive = false
     @AppStorage("extension.inspector.width") private var inspectorWidth = 280.0
 
@@ -817,11 +817,7 @@ struct ExtensionWindowView: View {
             syncInspectorRepo(activeInspectorRepoPath)
         }
         .task(id: isUsagePresented) {
-            if isUsagePresented {
-                usageStore.start()
-            } else {
-                usageStore.stop()
-            }
+            if isUsagePresented { usageStore.reload() }
         }
         .onChange(of: source?.id) {
             isDrawingActive = false
@@ -836,7 +832,6 @@ struct ExtensionWindowView: View {
             ExtensionWindowVisibility.shared.isVisible = false
             gitStore.stopWatching()
             tasksStore.load(directory: nil)
-            usageStore.stop()
             controller.suspend()
         }
     }

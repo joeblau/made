@@ -2,16 +2,8 @@ import SwiftUI
 
 struct RunnersView: View {
     @Bindable var store: RunnersStore
-    @Environment(\.scenePhase) private var scenePhase
     @State private var showsAddScope = false
     @State private var editingRunner: GitHubRunner?
-    @State private var refreshRevision = 0
-
-    private struct PollIdentity: Hashable {
-        let scopeID: String?
-        let active: Bool
-        let revision: Int
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,7 +29,7 @@ struct RunnersView: View {
         .sheet(isPresented: $showsAddScope) {
             AddRunnerScopeSheet { scope in
                 store.add(scope)
-                refreshRevision += 1
+                Task { await store.refresh(scope) }
             }
         }
         .sheet(item: $editingRunner) { runner in
@@ -47,12 +39,9 @@ struct RunnersView: View {
                 }
             }
         }
-        .task(id: PollIdentity(scopeID: store.selectedScopeID, active: scenePhase == .active, revision: refreshRevision)) {
-            guard scenePhase == .active, store.selectedScope != nil else { return }
-            while !Task.isCancelled {
-                await store.refreshSelected()
-                do { try await Task.sleep(for: .seconds(30)) } catch { return }
-            }
+        .task { await store.refreshSelected() }
+        .onChange(of: store.selectedScopeID) {
+            Task { await store.refreshSelected() }
         }
     }
 
@@ -137,7 +126,7 @@ struct RunnersView: View {
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
 
             if store.isRefreshing { ProgressView().controlSize(.small) }
-            Button { refreshRevision += 1 } label: { Image(systemName: "arrow.clockwise") }
+            Button { Task { await store.refreshSelected() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.plain)
                 .disabled(store.isRefreshing)
                 .help("Refresh runners")
@@ -153,7 +142,7 @@ struct RunnersView: View {
                 if store.snapshot.updatedAt != nil { Text("Showing the last successful refresh.").foregroundStyle(.secondary) }
             }
             Spacer()
-            Button("Retry") { refreshRevision += 1 }.disabled(store.isRefreshing)
+            Button("Retry") { Task { await store.refreshSelected() } }.disabled(store.isRefreshing)
         }
         .font(.subheadline)
         .padding(12)

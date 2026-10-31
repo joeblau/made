@@ -25,7 +25,6 @@ struct AgenticUseView: View {
             }
         }
         .onAppear { store.start() }
-        .onDisappear { store.stop() }
         .onReceive(NotificationCenter.default.publisher(for: UsageConsent.changedNotification)) { _ in
             store.rescan()
         }

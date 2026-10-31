@@ -4,7 +4,18 @@ import WidgetKit
 
 @main
 struct CopilotWidgets: WidgetBundle {
-    var body: some Widget { BuildLiveActivity() }
+    private static let appGroup = "group.app.blau.copilot"
+    private static let urlScheme = "walkie"
+
+    var body: some Widget {
+        BuildLiveActivity()
+        ActionsDashboardWidget(appGroup: Self.appGroup, urlScheme: Self.urlScheme)
+        UsageDashboardWidget(appGroup: Self.appGroup, urlScheme: Self.urlScheme)
+        RunnersDashboardWidget(appGroup: Self.appGroup, urlScheme: Self.urlScheme)
+        ActionsDashboardLiveActivity()
+        UsageDashboardLiveActivity()
+        RunnersDashboardLiveActivity()
+    }
 }
 
 struct BuildLiveActivity: Widget {
