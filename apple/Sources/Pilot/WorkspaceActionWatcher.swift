@@ -32,6 +32,7 @@ struct ActionCompletionTracker {
 @MainActor
 final class WorkspaceActionWatcher {
     private(set) var workflowRuns: [UUID: [BuildWorkflowRun]] = [:]
+    private(set) var lastSuccessfulFetchAt: Date?
 
     var recentRuns: [BuildWorkflowRun] {
         // Multiple worktrees can advertise the same GitHub attempt.
@@ -125,6 +126,12 @@ final class WorkspaceActionWatcher {
                     self.fetchTasks[wsID] = nil
                     if case .success(let snapshot) = result {
                         self.workflowRuns[wsID] = snapshot.runs
+                        let checkedAt = snapshot.runs.map(\.state.checkedAt).max()
+                            ?? Date().timeIntervalSince1970
+                        let previous = self.lastSuccessfulFetchAt?.timeIntervalSince1970 ?? -.infinity
+                        if previous < checkedAt {
+                            self.lastSuccessfulFetchAt = Date(timeIntervalSince1970: checkedAt)
+                        }
                         // Cadence changes take effect immediately rather than
                         // waiting for the next tick, so a run starting shortens
                         // the wait and the last one finishing ends the fast poll.

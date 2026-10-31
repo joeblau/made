@@ -11,8 +11,8 @@ DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-builds}"
 PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
 
 case "$SUITE" in
-  pilot|shared|all) ;;
-  *) echo "Usage: apple/bin/test.sh [pilot|shared|all]" >&2; exit 2 ;;
+  pilot|shared|plotter|all) ;;
+  *) echo "Usage: apple/bin/test.sh [pilot|shared|plotter|all]" >&2; exit 2 ;;
 esac
 
 # Result bundles from earlier runs persist in the shared derived data; only
@@ -68,8 +68,31 @@ shared() {
     CODE_SIGNING_ALLOWED=NO
 }
 
+plotter() {
+  local udid="${IPAD_SIMULATOR_UDID:-}"
+  if [[ -z "$udid" ]]; then
+    command -v jq >/dev/null || { echo "jq is required to select a simulator." >&2; exit 1; }
+    udid="$(xcrun simctl list devices available --json | jq -r '
+      [.devices[] | .[] | select(.isAvailable == true and (.name | startswith("iPad")))]
+      | (map(select(.state == "Booted")) + .)
+      | first.udid // empty
+    ')"
+  fi
+  [[ -n "$udid" ]] || { echo "No available iPad simulator; set IPAD_SIMULATOR_UDID." >&2; exit 1; }
+  DISABLE_SWIFTLINT=1 xcodebuild test -quiet \
+    -project "$PROJECT" \
+    -scheme PlotterTests \
+    -destination "platform=iOS Simulator,id=$udid" \
+    -derivedDataPath "$DERIVED_ROOT/Plotter" \
+    -clonedSourcePackagesDirPath "$PACKAGES" \
+    -onlyUsePackageVersionsFromResolvedFile \
+    -skipPackagePluginValidation \
+    CODE_SIGNING_ALLOWED=NO
+}
+
 case "$SUITE" in
   pilot) pilot ;;
   shared) shared ;;
-  all) pilot; shared ;;
+  plotter) plotter ;;
+  all) pilot; shared; plotter ;;
 esac

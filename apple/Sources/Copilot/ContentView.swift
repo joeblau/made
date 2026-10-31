@@ -20,7 +20,11 @@ struct ContentView: View {
     let syncService: PeerSyncService
     let watchDelegate: PhoneSessionDelegate
     let buildMonitor: BuildActivityController
+    @ObservedObject var dashboardActivities: DashboardActivityController
+    @State private var dashboard: CopilotDashboardModel
     @State private var showBuildMonitor = false
+    @State private var showDashboard = false
+    @State private var dashboardFamily = DashboardFamily.actions
     /// When true, the view seeds representative fixture content and skips
     /// the live sync/transcription setup so screenshots render without a
     /// Pilot peer. Defaults to the launch-arg-driven UserDefaults flag.
@@ -41,11 +45,14 @@ struct ContentView: View {
 
     init(syncService: PeerSyncService, watchDelegate: PhoneSessionDelegate,
          buildMonitor: BuildActivityController = BuildActivityController(),
+         dashboardActivities: DashboardActivityController,
          demoMode: Bool = UserDefaults.standard.bool(forKey: "demoMode")) {
         self.syncService = syncService
         self.watchDelegate = watchDelegate
         self.buildMonitor = buildMonitor
+        self.dashboardActivities = dashboardActivities
         self.demoMode = demoMode
+        _dashboard = State(initialValue: CopilotDashboardModel(activities: dashboardActivities))
         let transcription = TranscriptionService()
         _transcription = State(initialValue: transcription)
         _walkie = State(initialValue: CopilotWalkieTalkie(
@@ -72,6 +79,9 @@ struct ContentView: View {
             .toolbar {
                 deviceToolbar
                 ToolbarItem(placement: .topBarLeading) {
+                    Button("Dashboard", systemImage: "square.grid.2x2") { showDashboard = true }
+                }
+                ToolbarItem(placement: .topBarLeading) {
                     Button("Builds", systemImage: "hammer") { showBuildMonitor = true }
                 }
             }
@@ -86,10 +96,29 @@ struct ContentView: View {
         .sheet(isPresented: $showBuildMonitor) {
             BuildMonitorView(monitor: buildMonitor, connected: isPeerConnected)
         }
+        .sheet(isPresented: $showDashboard) {
+            CopilotDashboardView(
+                model: dashboard,
+                activities: dashboardActivities,
+                connected: isPeerConnected,
+                selectedFamily: $dashboardFamily
+            )
+        }
         .onOpenURL { url in
-            if url.scheme == "walkie", url.host == "build" { showBuildMonitor = true }
+            switch CopilotDeepLink(url: url) {
+            case .build:
+                showDashboard = false
+                showBuildMonitor = true
+            case .dashboard(let family):
+                dashboardFamily = family
+                showBuildMonitor = false
+                showDashboard = true
+            case nil:
+                break
+            }
         }
         .task {
+            dashboard.restoreActivities()
             guard !demoMode else {
                 seedDemoState()
                 return
@@ -112,7 +141,10 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) {
             if scenePhase != .active { walkie.interrupt() }
-            if scenePhase == .active { buildMonitor.connected() }
+            if scenePhase == .active {
+                buildMonitor.connected()
+                dashboard.restoreActivities()
+            }
         }
         .onDisappear { walkie.interrupt() }
         .overlay(alignment: .top) {
@@ -392,6 +424,11 @@ struct ContentView: View {
                 workspaces = state.workspaces
                 selectedID = selectionState.receive(state)
                 buildMonitor.receive(state.workflowRuns ?? [])
+                dashboard.receive(
+                    actions: state.actionsDashboard,
+                    usage: state.usageDashboard,
+                    runners: state.runnersDashboard
+                )
             case .buildRunUpdate(let run):
                 buildMonitor.receive(run)
             case .deviceKey(let announce):
@@ -562,8 +599,11 @@ private struct TabSwitcherBar: View {
 }
 
 #Preview {
-    ContentView(syncService: PeerSyncService(role: .browser, displayName: "Preview"),
-               watchDelegate: PhoneSessionDelegate())
+    ContentView(
+        syncService: PeerSyncService(role: .browser, displayName: "Preview"),
+        watchDelegate: PhoneSessionDelegate(),
+        dashboardActivities: DashboardActivityController(urlScheme: "walkie")
+    )
 }
 
 /// Keeps the newest words visible without expanding the workspace list inset.

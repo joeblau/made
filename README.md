@@ -112,9 +112,11 @@ bun run ci
 bin/check-docs.sh
 ```
 
-`apple/bin/test.sh pilot` runs only the macOS suite and
-`apple/bin/test.sh shared` runs only the iOS Simulator suite. Set
-`IOS_SIMULATOR_UDID` to select an installed iPhone simulator. The scripts pin
+`apple/bin/test.sh pilot` runs only the macOS suite,
+`apple/bin/test.sh shared` runs only the Walkie iOS Simulator suite, and
+`apple/bin/test.sh plotter` runs only the Kneeboard iPad Simulator suite. Set
+`IOS_SIMULATOR_UDID` or `IPAD_SIMULATOR_UDID` to select an installed simulator
+for the corresponding mobile suite. The scripts pin
 `Package.resolved`, disable signing, and build the Debug configuration. They
 share one derived-data directory per scheme under `BLAU_DERIVED_DATA`
 (default `$TMPDIR/blau-builds`), so `test.sh` after `build-ci.sh` can reuse

@@ -104,6 +104,36 @@ final class FrameProtocolTests: XCTestCase {
         XCTAssertEqual(roundtrip(.pong(UInt64.max)), .pong(UInt64.max))
     }
 
+    func testDashboardRoundtripUsesTagEleven() {
+        let envelope = DashboardSnapshotEnvelope(
+            actions: ActionsDashboardSnapshot(updatedAt: 123, runs: [])
+        )
+        let encoded = FrameProtocol.encode(.dashboard(envelope))
+        XCTAssertEqual(encoded.first, 11)
+        guard case .dashboard(let decoded)? = FrameProtocol.decode(encoded) else {
+            return XCTFail("expected dashboard")
+        }
+        XCTAssertEqual(decoded, envelope)
+    }
+
+    func testDashboardRejectsMalformedJSONAndEnforcesPayloadBoundary() {
+        var exactBoundary = Data([11])
+        exactBoundary.append(Data("{}".utf8))
+        exactBoundary.append(Data(repeating: 0x20, count: FrameProtocol.maxDashboardBytes - 2))
+        XCTAssertEqual(exactBoundary.count, FrameProtocol.maxDashboardBytes + 1)
+        guard case .dashboard(let decoded)? = FrameProtocol.decode(exactBoundary) else {
+            return XCTFail("expected an exactly bounded dashboard payload to decode")
+        }
+        XCTAssertEqual(decoded, DashboardSnapshotEnvelope())
+
+        var oversized = exactBoundary
+        oversized.append(0x20)
+        XCTAssertNil(FrameProtocol.decode(oversized))
+        XCTAssertNil(FrameProtocol.decode(Data([11])))
+        XCTAssertNil(FrameProtocol.decode(Data([11]) + Data("{".utf8)))
+        XCTAssertNil(FrameProtocol.decode(Data([11]) + Data("null".utf8)))
+    }
+
     func testAnnotationRoundtrips() {
         let drawing = AnnotationDrawing(strokes: [
             AnnotationStroke(

@@ -202,12 +202,12 @@ struct ContentView: View {
     /// transcription itself runs on the iPhone now — Pilot only paints
     /// the "listening" indicator and pastes the finished text.
     var isPeerRecording: Bool
+    var usageStore: UsageStore
+    var agenticUseStore: AgenticUsageStore
+    var runnersStore: RunnersStore
     @State private var gitStore = RepositoryStore()
     @State private var tasksStore = GitHubTasksStore()
-    @State private var usageStore = UsageStore()
     @State private var dockerStore = DockerStore()
-    @State private var agenticUseStore = AgenticUsageStore()
-    @State private var runnersStore = RunnersStore()
     @State private var branchStore = WorkspaceBranchStore()
     @State private var isDrawingActive = false
     @AppStorage("sidebar.pinnedExpanded") private var pinnedSectionExpanded = true
@@ -414,7 +414,6 @@ struct ContentView: View {
             syncSelectedWorkspaceRootPath()
             syncInspectorRepo(activeInspectorRepoPath)
             focusSelectedWorkspaceTerminal()
-            usageStore.start()
             branchStore.refresh(branchTargets(in: workspaces), force: true)
         }
         // A checkout happens in a terminal pane, so re-read when the workspace
@@ -434,10 +433,7 @@ struct ContentView: View {
             syncInspectorTab(tab)
         }
         .onAppear { installNotesToggleMonitor() }
-        .onDisappear {
-            removeNotesToggleMonitor()
-            usageStore.stop()
-        }
+        .onDisappear { removeNotesToggleMonitor() }
         .onReceive(NotificationCenter.default.publisher(for: .pilotPersistenceSaveFailed)) { notification in
             let operation = notification.userInfo?["operation"] as? String ?? "Saving Cockpit data"
             let message = notification.userInfo?["message"] as? String ?? "Unknown persistence error"
@@ -1079,7 +1075,10 @@ private enum ContentViewPreviewData {
         localAudioOutput: nil,
         isPlotterConnected: false,
         remoteInkModel: RemoteInkModel(),
-        isPeerRecording: false
+        isPeerRecording: false,
+        usageStore: UsageStore(),
+        agenticUseStore: AgenticUsageStore(),
+        runnersStore: RunnersStore()
     )
     .modelContainer(ContentViewPreviewData.container)
 }

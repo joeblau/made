@@ -205,6 +205,7 @@ final class PhoneSessionDelegate: NSObject, WCSessionDelegate, UNUserNotificatio
 @main
 struct CopilotApp: App {
     @State private var buildMonitor = BuildActivityController()
+    @StateObject private var dashboardActivities: DashboardActivityController
     @State private var syncService = PeerSyncService(
         role: .browser,
         displayName: UIDevice.current.name
@@ -216,7 +217,8 @@ struct CopilotApp: App {
             ContentView(
                 syncService: syncService,
                 watchDelegate: phoneSessionDelegate,
-                buildMonitor: buildMonitor
+                buildMonitor: buildMonitor,
+                dashboardActivities: dashboardActivities
             )
             .task {
                 phoneSessionDelegate.syncService = syncService
@@ -225,6 +227,9 @@ struct CopilotApp: App {
     }
 
     init() {
+        _dashboardActivities = StateObject(
+            wrappedValue: DashboardActivityController(urlScheme: "walkie")
+        )
         let delegate = PhoneSessionDelegate()
         _phoneSessionDelegate = State(initialValue: delegate)
 
