@@ -125,6 +125,8 @@ jobs:
           bash apple/bin/test-cockpit-build.sh
       - name: Validate application icons
         run: apple/bin/app-icon-tool.swift validate
+      - name: Verify runner fleet model provenance
+        run: apple/bin/fetch-runner-model.sh verify
       - name: Verify generated Xcode project
         run: |
           apple/bin/install-xcodegen.sh generate --spec apple/project.yml --project apple

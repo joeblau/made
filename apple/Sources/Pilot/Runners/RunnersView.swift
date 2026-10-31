@@ -4,7 +4,7 @@ struct RunnersView: View {
     @Bindable var store: RunnersStore
     @State private var showsAddScope = false
     @State private var editingRunner: GitHubRunner?
-    @AppStorage("runners.layout") private var layout: RunnerLayout = .compact
+    @AppStorage("runners.layout") private var layout: RunnerLayout = .fleet
 
     var body: some View {
         VStack(spacing: 0) {
@@ -134,7 +134,7 @@ struct RunnersView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            .help("Switch between compact tiles and detailed cards")
+            .help("Switch between the 3D fleet, compact tiles, and detailed cards")
 
             if store.isRefreshing { ProgressView().controlSize(.small) }
             Button { Task { await store.refreshSelected() } } label: { Image(systemName: "arrow.clockwise") }
@@ -178,6 +178,17 @@ struct RunnersView: View {
         } else if store.visibleRunners.isEmpty {
             ContentUnavailableView.search(text: store.searchText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if layout == .fleet {
+            RunnerFleetView(
+                runners: store.visibleRunners,
+                scopeName: store.selectedScope?.name ?? "",
+                name: store.displayName(for:),
+                hardware: store.hardware(for:),
+                edit: { editingRunner = $0 }
+            )
+            .overlay(alignment: .bottomLeading) {
+                updatedFootnote.padding(16).environment(\.colorScheme, .dark)
+            }
         } else {
             ScrollView {
                 LazyVGrid(
@@ -190,21 +201,25 @@ struct RunnersView: View {
                         switch layout {
                         case .compact:
                             RunnerTile(runner: runner, name: name, hardware: hardware) { editingRunner = runner }
-                        case .cards:
+                        case .cards, .fleet:
                             RunnerCard(runner: runner, name: name, hardware: hardware) { editingRunner = runner }
                         }
                     }
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
-                if let updatedAt = store.snapshot.updatedAt {
-                    TimelineView(.periodic(from: .now, by: 30)) { _ in
-                        Text("Updated \(Date().timeIntervalSince(updatedAt) < 60 ? "just now" : RelativeTime.string(from: updatedAt)) · Refreshes every 30s")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.bottom, 16)
-                    }
-                }
+                updatedFootnote.padding(.bottom, 16)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var updatedFootnote: some View {
+        if let updatedAt = store.snapshot.updatedAt {
+            TimelineView(.periodic(from: .now, by: 30)) { _ in
+                Text("Updated \(Date().timeIntervalSince(updatedAt) < 60 ? "just now" : RelativeTime.string(from: updatedAt)) · Refreshes every 30s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -319,7 +334,7 @@ private struct RunnerTile: View {
     }
 }
 
-private struct RunnerDetailsPopover: View {
+struct RunnerDetailsPopover: View {
     let runner: GitHubRunner
     let name: String
     let hardware: RunnerHardware
@@ -376,10 +391,11 @@ private struct RunnerStatusBadge: View {
 }
 
 private enum RunnerLayout: String, CaseIterable {
-    case compact, cards
+    case fleet, compact, cards
 
     var title: String {
         switch self {
+        case .fleet: "3D Fleet"
         case .compact: "Compact"
         case .cards: "Cards"
         }
@@ -387,6 +403,7 @@ private enum RunnerLayout: String, CaseIterable {
 
     var symbol: String {
         switch self {
+        case .fleet: "cube"
         case .compact: "square.grid.3x3"
         case .cards: "square.grid.2x2"
         }
