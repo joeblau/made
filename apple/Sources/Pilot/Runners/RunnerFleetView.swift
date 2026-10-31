@@ -38,10 +38,10 @@ struct RunnerFleetView: View {
         .overlay(alignment: .topLeading) { detailsAnchor }
         .environment(\.colorScheme, .dark)
         .task(id: hover) {
-            guard let hover else {
-                showsDetails = false
-                return
-            }
+            // Close first: a presented popover keeps its original anchor even
+            // when the anchor view moves, so it would point at the previous runner.
+            showsDetails = false
+            guard let hover else { return }
             // Clicks open immediately; hovering waits so crossing the fleet doesn't flash popovers.
             if !hover.isClick { try? await Task.sleep(for: .milliseconds(450)) }
             if !Task.isCancelled { showsDetails = true }
@@ -111,6 +111,7 @@ struct RunnerFleetView: View {
                 .frame(width: 1, height: 1)
                 .padding(.leading, hover.point.x)
                 .padding(.top, hover.point.y)
+                .id(hover.id)
                 .popover(isPresented: $showsDetails, arrowEdge: .top) {
                     RunnerDetailsPopover(runner: runner, name: name(runner), hardware: hardware(runner))
                         .environment(\.colorScheme, .dark)

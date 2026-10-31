@@ -28,7 +28,21 @@ enum MacMiniModel {
         let statusLight = light.clone()
         light.removeFromParentNode()
         guard let body = merged(scene.rootNode) else { return nil }
+        polishAluminum(body)
         return Template(body: SCNNode(geometry: body), statusLight: statusLight)
+    }
+
+    /// Apple's AR file is tuned for neutral AR lighting; under the fleet's dark
+    /// studio it reads flat gray. A warmer, smoother finish catches the key and
+    /// rim lights the way the mockup's champagne-silver cases do.
+    private static func polishAluminum(_ geometry: SCNGeometry) {
+        for material in geometry.materials {
+            guard let color = (material.diffuse.contents as? NSColor)?.usingColorSpace(.deviceRGB),
+                  abs(color.redComponent - 0.66) < 0.05, abs(color.blueComponent - 0.69) < 0.05 else { continue }
+            material.diffuse.contents = NSColor(red: 0.86, green: 0.82, blue: 0.78, alpha: 1)
+            material.metalness.contents = 1.0
+            material.roughness.contents = 0.16
+        }
     }
 
     /// The status light is the only tiny flat disc on the front face. Apple's
@@ -171,7 +185,7 @@ final class RunnerFleetScene {
     static let fieldOfView: Float = 18
     /// Hit tests use this category so floor glows don't widen a runner's hover area.
     static let pickableCategory = 1 << 1
-    static let background = NSColor(red: 0.035, green: 0.04, blue: 0.055, alpha: 1)
+    static let background = NSColor(red: 0.03, green: 0.035, blue: 0.06, alpha: 1)
 
     let scene = SCNScene()
     let cameraNode = SCNNode()
@@ -193,7 +207,7 @@ final class RunnerFleetScene {
     init() {
         scene.background.contents = Self.background
         scene.lightingEnvironment.contents = FleetTextures.environment()
-        scene.lightingEnvironment.intensity = 0.8
+        scene.lightingEnvironment.intensity = 2.0
         scene.fogColor = Self.background
         scene.fogStartDistance = 1_000
         scene.fogEndDistance = 2_400
@@ -204,23 +218,36 @@ final class RunnerFleetScene {
         camera.zFar = 6_000
         camera.wantsHDR = true
         camera.bloomIntensity = 1.4
-        camera.bloomThreshold = 0.9
+        camera.bloomThreshold = 1.05
         camera.bloomBlurRadius = 10
         camera.wantsExposureAdaptation = false
+        // A touch of grading and vignette gives the product-shot depth of the mockup.
+        camera.contrast = 0.12
+        camera.saturation = 1.15
+        camera.vignettingIntensity = 0.35
+        camera.vignettingPower = 1.2
         cameraNode.camera = camera
         scene.rootNode.addChildNode(cameraNode)
 
-        let key = SCNNode()
-        key.light = SCNLight()
-        key.light?.type = .directional
-        key.light?.intensity = 1_400
-        key.simdEulerAngles = SIMD3(-0.9, -0.35, 0)
-        scene.rootNode.addChildNode(key)
+        // Warm key from above the camera and a faint navy fill; the cool edge
+        // highlights come from the environment so they never tint the lids.
+        scene.rootNode.addChildNode(Self.light(.directional, intensity: 1_100, color: NSColor(red: 1, green: 0.94, blue: 0.86, alpha: 1), angles: SIMD3(-0.95, -0.3, 0)))
+        scene.rootNode.addChildNode(Self.light(.ambient, intensity: 90, color: NSColor(red: 0.3, green: 0.36, blue: 0.6, alpha: 1), angles: .zero))
 
         scene.rootNode.addChildNode(makeFloor())
         scene.rootNode.addChildNode(fleetNode)
         buildHub()
         applyCamera()
+    }
+
+    private static func light(_ type: SCNLight.LightType, intensity: CGFloat, color: NSColor, angles: SIMD3<Float>) -> SCNNode {
+        let node = SCNNode()
+        node.light = SCNLight()
+        node.light?.type = type
+        node.light?.intensity = intensity
+        node.light?.color = color
+        node.simdEulerAngles = angles
+        return node
     }
 
     // MARK: Fleet
@@ -761,8 +788,8 @@ enum FleetTextures {
         cached("shadow", size: 128) { context, size in
             context.setFillColor(CGColor(gray: 1, alpha: 1))
             context.fill(CGRect(x: 0, y: 0, width: size, height: size))
-            let colors = [CGColor(gray: 0.15, alpha: 1), CGColor(gray: 0.5, alpha: 1), CGColor(gray: 1, alpha: 1)] as CFArray
-            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceGray(), colors: colors, locations: [0, 0.55, 1]) else { return }
+            let colors = [CGColor(gray: 0.04, alpha: 1), CGColor(gray: 0.35, alpha: 1), CGColor(gray: 1, alpha: 1)] as CFArray
+            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceGray(), colors: colors, locations: [0, 0.6, 1]) else { return }
             let center = CGPoint(x: size / 2, y: size / 2)
             context.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: size / 2, options: [])
         }
@@ -777,16 +804,34 @@ enum FleetTextures {
         }
     }
 
-    /// A dim studio: bright softbox overhead, dark floor, so the aluminium reads as metal.
+    /// A dark studio built around what each face reflects from the fleet
+    /// camera's 30° pitch: lids mirror the sky about 30° up, so a warm band
+    /// there gives them the champagne sheen; fronts mirror about 30° down, so a
+    /// neutral band lifts them; thin cool strips on the horizon catch the edges.
     static func environment() -> CGImage? {
-        // Equirectangular (2:1); SceneKit ignores square environment images.
-        cached("environment", width: 512, height: 256) { context, width, height in
-            let colors = [CGColor(gray: 0.06, alpha: 1), CGColor(gray: 0.22, alpha: 1), CGColor(gray: 0.6, alpha: 1), CGColor(gray: 0.85, alpha: 1)] as CFArray
-            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceGray(), colors: colors, locations: [0, 0.48, 0.6, 1]) else { return }
+        // Equirectangular (2:1), y up from the bottom; SceneKit ignores square images.
+        cached("environment", width: 1_024, height: 512) { context, width, height in
+            let base = [
+                CGColor(red: 0.01, green: 0.012, blue: 0.02, alpha: 1), CGColor(red: 0.04, green: 0.045, blue: 0.07, alpha: 1),
+                CGColor(red: 0.08, green: 0.085, blue: 0.11, alpha: 1),
+            ] as CFArray
+            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: base, locations: [0, 0.5, 1]) else { return }
             context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: height), options: [])
-            context.setFillColor(CGColor(gray: 1, alpha: 1))
-            for x in stride(from: 0, to: width, by: width / 4) {
-                context.fill(CGRect(x: x + width * 0.05, y: height * 0.7, width: width * 0.12, height: height * 0.16))
+            func band(_ low: CGFloat, _ high: CGFloat, _ bottom: CGColor, _ top: CGColor) {
+                let colors = [bottom, top] as CFArray
+                guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) else { return }
+                context.saveGState()
+                context.clip(to: CGRect(x: 0, y: height * low, width: width, height: height * (high - low)))
+                context.drawLinearGradient(gradient, start: CGPoint(x: 0, y: height * low), end: CGPoint(x: 0, y: height * high), options: [])
+                context.restoreGState()
+            }
+            band(0.25, 0.43, CGColor(red: 0.12, green: 0.12, blue: 0.13, alpha: 1), CGColor(red: 0.34, green: 0.32, blue: 0.3, alpha: 1))
+            band(0.58, 0.8, CGColor(red: 0.5, green: 0.46, blue: 0.4, alpha: 1), CGColor(red: 0.8, green: 0.74, blue: 0.65, alpha: 1))
+            band(0.86, 0.96, CGColor(red: 0.45, green: 0.43, blue: 0.4, alpha: 1), CGColor(red: 0.6, green: 0.58, blue: 0.55, alpha: 1))
+            let strips: [(CGFloat, CGFloat, CGFloat)] = [(0.25, 0.45, 1), (0.6, 0.35, 1), (0.2, 0.7, 1), (0.3, 0.5, 1)]
+            for (index, color) in strips.enumerated() {
+                context.setFillColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
+                context.fill(CGRect(x: width * (CGFloat(index) / 4 + 0.05), y: height * 0.47, width: width * 0.15, height: height * 0.05))
             }
         }
     }

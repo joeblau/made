@@ -14,13 +14,17 @@ checked in so the app never downloads assets at runtime.
   127 × 50 × 127 mm), front face toward +z.
 
 `apple/bin/fetch-runner-model.sh` is the single authority for the URL and hash.
-CI runs `apple/bin/fetch-runner-model.sh verify`; `fetch` re-downloads the file
-and refuses to install it unless the hash matches. If Apple replaces the file,
+`apple/bin/build-ci.sh`, and so CI, runs `apple/bin/fetch-runner-model.sh
+verify`; `fetch` re-downloads the file and refuses to install it unless the
+hash matches. If Apple replaces the file,
 update the URL and hash together in one reviewed commit and re-run the fleet
 model tests.
 
-At runtime Cockpit flattens the model into one shared template so each runner
-costs a handful of draw calls. Apple's export scrambles node names, so the
+At runtime Cockpit merges the model's meshes by material into one shared
+template, so each runner costs about 19 draw calls instead of 74. SceneKit's
+`flattenedClone()` cannot do this: it returns an empty geometry for the file's
+multi-channel polygon elements. The aluminium is re-tuned warmer and glossier
+for the fleet's dark studio lighting. Apple's export scrambles node names, so the
 status light is located by geometry: the only tiny flat disc on the front face.
 `RunnerFleetTests` fails if the bundled model stops yielding exactly one.
 
