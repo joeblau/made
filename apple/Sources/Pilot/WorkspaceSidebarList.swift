@@ -8,6 +8,7 @@ struct WorkspaceSidebarList<WorkspaceRow: View>: View {
     @Binding var pinnedExpanded: Bool
     @Binding var workspacesExpanded: Bool
     let onRenameGroup: (WorkspaceGroup) -> Void
+    let onNewWorkspaceInGroup: (WorkspaceGroup) -> Void
     @ViewBuilder var workspaceRow: (Workspace) -> WorkspaceRow
 
     var body: some View {
@@ -59,7 +60,12 @@ struct WorkspaceSidebarList<WorkspaceRow: View>: View {
                         }
                     case .group(let id):
                         if let group = store.workspaceGroups.group(id) {
-                            WorkspaceGroupSidebarRow(group: group, store: store) { onRenameGroup(group) }
+                            WorkspaceGroupSidebarRow(
+                                group: group,
+                                store: store,
+                                onRename: { onRenameGroup(group) },
+                                onNewWorkspace: { onNewWorkspaceInGroup(group) }
+                            )
                         }
                     case .emptyGroup(let id):
                         Text("Drop workspaces here")

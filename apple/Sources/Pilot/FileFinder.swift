@@ -83,7 +83,7 @@ final class FileFinder {
     /// Directory names skipped wholesale during the non-git filesystem walk.
     /// Build artifacts, dependency caches, and VCS metadata — none of which the
     /// user wants to open by hand.
-    nonisolated private static let skippedDirectories: Set<String> = [
+    nonisolated static let skippedDirectories: Set<String> = [
         ".git", "node_modules", ".build", "build", "DerivedData", "Pods",
         ".next", "dist", "out", "target", ".venv", "venv", "__pycache__",
         ".swiftpm", "vendor", "Carthage", ".gradle", ".idea", ".cache",
@@ -521,7 +521,7 @@ final class FileFinder {
     /// /private/… paths, so the walk's `prefix` must match — otherwise the
     /// `hasPrefix` check fails and every relativePath collapses to its basename.
     /// `git -C` works fine with the resolved path.
-    private nonisolated static func normalize(_ root: String) -> String {
+    nonisolated static func normalize(_ root: String) -> String {
         let expanded = (root as NSString).expandingTildeInPath
         let url = URL(fileURLWithPath: expanded, isDirectory: true)
         // `resolvingSymlinksInPath()` preserves the spelling of /var on recent
