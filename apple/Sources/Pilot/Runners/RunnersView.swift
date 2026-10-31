@@ -267,42 +267,34 @@ private struct RunnerTile: View {
     @State private var showsDetails = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            RunnerHardwareImage(hardware: hardware, size: 24)
-                .frame(width: 38, height: 38)
-                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
-                .overlay(alignment: .bottomTrailing) {
-                    Circle()
-                        .fill(runner.state.color)
-                        .frame(width: 9, height: 9)
-                        .padding(2)
-                        .background(Color(nsColor: .windowBackgroundColor), in: Circle())
-                        .offset(x: 3, y: 3)
-                }
-            VStack(alignment: .leading, spacing: 2) {
+        HStack(spacing: 14) {
+            RunnerHardwareImage(hardware: hardware, size: 30)
+                .frame(width: 50, height: 50)
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 7) {
                 Text(name)
-                    .font(.callout.weight(.medium))
+                    .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text(runner.state.rawValue)
-                    .font(.caption)
-                    .foregroundStyle(runner.state.color)
+                HStack(spacing: 8) {
+                    RunnerStatusBadge(state: runner.state)
+                    Spacer(minLength: 0)
+                    // Sits beside the badge so the name keeps the full width.
+                    Button(action: openEditor) { Image(systemName: "pencil") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .opacity(isHovering ? 1 : 0)
+                        .help("Edit device name and hardware image")
+                        .accessibilityLabel("Edit \(name)")
+                }
             }
-            Spacer(minLength: 0)
-            // Keep the button's space reserved so names don't reflow on hover.
-            Button(action: openEditor) { Image(systemName: "pencil") }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .opacity(isHovering ? 1 : 0)
-                .help("Edit device name and hardware image")
-                .accessibilityLabel("Edit \(name)")
         }
         .opacity(runner.state == .offline ? 0.6 : 1)
-        .padding(8)
+        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(isHovering ? 0.1 : 0.055), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.secondary.opacity(0.12)))
-        .contentShape(RoundedRectangle(cornerRadius: 10))
+        .background(Color.secondary.opacity(isHovering ? 0.1 : 0.055), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.12)))
+        .contentShape(RoundedRectangle(cornerRadius: 14))
         .onHover { isHovering = $0 }
         .task(id: isHovering) {
             guard isHovering else {
@@ -400,8 +392,8 @@ private enum RunnerLayout: String, CaseIterable {
         }
     }
 
-    var minimumWidth: CGFloat { self == .compact ? 168 : 240 }
-    var spacing: CGFloat { self == .compact ? 8 : 16 }
+    var minimumWidth: CGFloat { self == .compact ? 236 : 240 }
+    var spacing: CGFloat { self == .compact ? 12 : 16 }
 }
 
 private struct RunnerHardwareImage: View {
