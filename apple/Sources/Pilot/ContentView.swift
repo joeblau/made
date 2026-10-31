@@ -221,6 +221,8 @@ struct ContentView: View {
     @State private var isGroupNamePresented = false
     @State private var editingGroupID: UUID?
     @State private var groupName = ""
+    @State private var newWorkspaceRequest: NewWorkspaceRequest?
+    @State private var newWorkspaceFinder = DirectoryFinder()
 
     var body: some View {
         let activeInspectorRepoPath = isInspectorPresentedForSelectedWorkspace ? selectedWorkspaceRootPath : nil
@@ -238,6 +240,9 @@ struct ContentView: View {
                     editingGroupID = group.id
                     groupName = group.name
                     isGroupNamePresented = true
+                },
+                onNewWorkspaceInGroup: { group in
+                    newWorkspaceRequest = NewWorkspaceRequest(groupID: group.id)
                 },
                 workspaceRow: workspaceRow
             )
@@ -274,12 +279,22 @@ struct ContentView: View {
                 }
                 .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            .sheet(item: $newWorkspaceRequest) { request in
+                NewWorkspaceSheet(finder: newWorkspaceFinder) { directory in
+                    store.addWorkspace(directory: directory)
+                    if let groupID = request.groupID, let workspace = store.selectedWorkspace {
+                        store.moveWorkspace(workspace, toGroup: groupID)
+                    }
+                }
+            }
             .navigationSplitViewColumnWidth(min: 180, ideal: 220)
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Menu {
-                        Button(action: store.addWorkspace) {
-                            Label("New Workspace", systemImage: "rectangle.on.rectangle")
+                        Button {
+                            newWorkspaceRequest = NewWorkspaceRequest()
+                        } label: {
+                            Label("New Workspace…", systemImage: "rectangle.on.rectangle")
                         }
                         Button {
                             editingGroupID = nil
