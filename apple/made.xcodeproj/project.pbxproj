@@ -3227,9 +3227,13 @@
 		5D85CA67AB8DD7A2F9ABDB30 /* Chromium */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ARCHS = "arm64 x86_64";
 				CODE_SIGN_ENTITLEMENTS = Sources/PilotWidgets/PilotWidgets.entitlements;
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Sources/PilotWidgets/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -3238,6 +3242,7 @@
 					"@executable_path/../../../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
+				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.pilot.widgets;
 				PRODUCT_NAME = PilotWidgets;
 				SDKROOT = macosx;

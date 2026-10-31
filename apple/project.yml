@@ -338,6 +338,15 @@ targets:
         INFOPLIST_FILE: Sources/PilotWidgets/Info.plist
         CODE_SIGN_ENTITLEMENTS: Sources/PilotWidgets/PilotWidgets.entitlements
         SKIP_INSTALL: true
+      configs:
+        # Embedded in the Chromium Pilot bundle, so it follows the same
+        # reviewed signing policy validate-chromium-archive.sh enforces.
+        Chromium:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS: false
+          ENABLE_HARDENED_RUNTIME: true
+          ARCHS: "arm64 x86_64"
+          ONLY_ACTIVE_ARCH: false
 
   Copilot:
     type: application
