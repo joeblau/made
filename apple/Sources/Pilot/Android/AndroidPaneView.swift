@@ -438,6 +438,7 @@ final class AndroidCaptureHostView: NSView {
     private let session: AndroidDeviceSession
     private var classifier = AndroidGestureClassifier()
     private var pressed = false
+    private var screenDrag = DeviceScreenDragGesture()
     private var lastNormalized: (Double, Double)?
 
     init(session: AndroidDeviceSession) {
@@ -495,6 +496,10 @@ final class AndroidCaptureHostView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        // ⌘-drag drags the screen image out instead of touching the device.
+        if screenDrag.press(at: event.locationInWindow, modifiers: event.modifierFlags, requiresCommand: true) {
+            return
+        }
         guard let point = normalized(for: event) else { return }
         pressed = true
         lastNormalized = point
@@ -502,6 +507,17 @@ final class AndroidCaptureHostView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if screenDrag.isTracking {
+            if screenDrag.drag(to: event.locationInWindow) {
+                DeviceScreenDrag.begin(
+                    from: self,
+                    event: event,
+                    frame: DeviceScreenDrag.displayedFrame(of: session.displayLayer),
+                    name: "android"
+                )
+            }
+            return
+        }
         guard pressed else { return }
         let point = normalized(for: event) ?? lastNormalized
         if let point {
@@ -511,6 +527,10 @@ final class AndroidCaptureHostView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if screenDrag.isTracking {
+            screenDrag.release()
+            return
+        }
         guard pressed else { return }
         pressed = false
         let point = normalized(for: event) ?? lastNormalized
