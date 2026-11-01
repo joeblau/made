@@ -36,7 +36,7 @@ final class SecureIdentity {
         }
         // Auto-generate (or load) our key, and recall any previously synced peer.
         self.localPublicKey = DeviceIdentity.publicKeyBase64()
-        self.peerPublicKey = DeviceIdentity.peerPublicKeyBase64()
+        self.peerPublicKey = Self.storedPeerPublicKey()
     }
 
     /// Broadcast our public key to the connected peer. Safe to call repeatedly
@@ -58,7 +58,15 @@ final class SecureIdentity {
 
     /// Reload the pin after an explicit pairing decision stored it.
     func refreshPeer() {
-        peerPublicKey = DeviceIdentity.peerPublicKeyBase64()
+        peerPublicKey = Self.storedPeerPublicKey()
+    }
+
+    /// The pairing store reports "no peer" as an empty string. Treat that as
+    /// unpaired so Settings shows "Waiting to sync…" instead of a "Synced"
+    /// badge over a blank key.
+    private static func storedPeerPublicKey() -> String? {
+        guard let key = DeviceIdentity.peerPublicKeyBase64(), !key.isEmpty else { return nil }
+        return key
     }
 
     /// Generate a fresh identity key and push it to the peer.

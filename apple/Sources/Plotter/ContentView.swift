@@ -8,6 +8,11 @@ struct ContentView: View {
     @State private var showsDashboard = false
     @State private var showsSettings = false
     @State private var dashboardFamily = DashboardFamily.actions
+    /// How far the corner-adapted safe area reaches past the plain safe area
+    /// on each edge, measured by the UIKit mirror view. When the app runs in
+    /// a resizable window, the leading value clears the iPadOS window
+    /// controls (close, minimize, tile) at top-leading.
+    @State private var cornerInsets = EdgeInsets()
 
     var body: some View {
         ZStack {
@@ -17,8 +22,15 @@ struct ContentView: View {
             // A single transformable container holds BOTH the video layer and
             // the PencilKit canvas, so pinch-zoom/pan moves them together and
             // annotation strokes stay pixel-aligned with the mirrored window.
-            ZoomableMirrorView(mirror: mirror)
-                .ignoresSafeArea()
+            // The PencilKit tool picker is a system palette above the app's
+            // windows; hide it while a sheet covers the mirror so it never
+            // floats over (and clips) the sheet's content.
+            ZoomableMirrorView(
+                mirror: mirror,
+                isCovered: showsDashboard || showsSettings,
+                onCornerInsetsChange: { cornerInsets = $0 }
+            )
+            .ignoresSafeArea()
 
             // Frame-count / status reads live in their own view so the 60fps
             // diagnostic ticks don't re-render the canvas or video reps.
@@ -46,9 +58,7 @@ struct ContentView: View {
             // Sheets are presented from the ZStack, so they keep the system
             // appearance.
             .environment(\.colorScheme, .dark)
-            // Matches the UIKit annotation toolbar's 12pt inset on the
-            // trailing side, so both clusters share one edge (LAY-3).
-            .padding(LiquidGlassMetrics.Spacing.small)
+            .padding(FloatingChromeMetrics.clusterPadding(cornerInsets: cornerInsets))
         }
         .sheet(isPresented: $showsSettings) {
             SettingsScreen()
@@ -101,6 +111,38 @@ enum FloatingChromeMetrics {
     /// The same limit for the UIKit side.
     static let maximumContentSizeCategory = UIContentSizeCategory.accessibilityLarge
 
+    /// Circles in the leading SwiftUI cluster (Settings, Dashboard, status).
+    static let clusterControlCount = 3
+
+    /// Width of the leading SwiftUI cluster for a given circle size; the
+    /// UIKit toolbar uses it to tell whether both clusters fit on one row.
+    static func clusterWidth(controlSide: CGFloat) -> CGFloat {
+        let count = CGFloat(clusterControlCount)
+        return count * controlSide + (count - 1) * LiquidGlassMetrics.Spacing.xSmall
+    }
+
+    /// The leading cluster's inset from the safe area. Normally the 12pt that
+    /// matches the UIKit annotation toolbar on the trailing side, so both
+    /// clusters share one edge (LAY-3). Where the corner-adapted safe area
+    /// reaches farther in (a resizable window's controls at top-leading),
+    /// the cluster starts at that region's edge instead, exactly as the
+    /// toolbar does on its side. Full screen, the region only rounds off the
+    /// display corner (about 9pt), which the 12pt already clears, so the
+    /// cluster stays put.
+    ///
+    /// SwiftUI's `containerCornerOffset` / `containerCornerInsets` do not
+    /// report the window controls here, so `cornerInsets` comes from UIKit
+    /// (``ZoomableMirrorUIView/cornerInsets``).
+    static func clusterPadding(cornerInsets: EdgeInsets) -> EdgeInsets {
+        let inset = LiquidGlassMetrics.Spacing.small
+        return EdgeInsets(
+            top: max(inset, cornerInsets.top),
+            leading: max(inset, cornerInsets.leading),
+            bottom: inset,
+            trailing: inset
+        )
+    }
+
     /// `value` scaled like `.title3` for `traits`, rounded to whole points
     /// so circle edges stay crisp. Matches `@ScaledMetric(relativeTo: .title3)`
     /// rounded the same way.
@@ -123,6 +165,8 @@ private struct FloatingControlCluster: View {
     var body: some View {
         let controlSide = scaledControlSide.rounded()
         GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // `FloatingChromeMetrics.clusterWidth` mirrors this row (count
+            // and spacing) so the UIKit toolbar can make room for it.
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 // Same "•••" entry as the shared `SettingsButton`, but the
                 // sheet is presented outside this cluster's pinned-dark
@@ -254,6 +298,11 @@ private struct SearchingOverlay: View {
 /// PencilKit canvas, and the pinch/pan gestures) into SwiftUI.
 private struct ZoomableMirrorView: UIViewRepresentable {
     var mirror: MirrorModel
+    /// True while a sheet is presented over the mirror.
+    var isCovered = false
+    /// Receives how far the corner-adapted safe area extends past the plain
+    /// safe area on each edge (see ``ZoomableMirrorUIView/cornerInsets``).
+    var onCornerInsetsChange: (EdgeInsets) -> Void = { _ in }
 
     func makeUIView(context: Context) -> ZoomableMirrorUIView {
         let view = ZoomableMirrorUIView()
@@ -274,6 +323,7 @@ private struct ZoomableMirrorView: UIViewRepresentable {
         view.onClear = {
             mirror.sendAnnotation(.clear)
         }
+        view.onCornerInsetsChange = onCornerInsetsChange
         // Apply undo/clear commands that originate on Pilot to this canvas (the
         // authoritative drawing); the resulting change echoes back to Pilot.
         mirror.onRemoteAnnotation = { [weak view] message in
@@ -290,6 +340,8 @@ private struct ZoomableMirrorView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ZoomableMirrorUIView, context: Context) {
+        uiView.onCornerInsetsChange = onCornerInsetsChange
+        uiView.setToolPickerHidden(isCovered)
         if mirror.isDemoMode {
             uiView.videoSize = mirror.videoSize
             uiView.applyDemoContent(image: mirror.demoImage)
@@ -357,6 +409,10 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// changes (see `updateToolbarButtonSizes()`).
     private var toolbarButtonWidthConstraints: [NSLayoutConstraint] = []
     private var toolbarButtonHeightConstraints: [NSLayoutConstraint] = []
+    /// The toolbar's preferred top (12pt below the safe area, level with the
+    /// SwiftUI cluster); moved down a row by `updateToolbarRow()` when the
+    /// window is too narrow for both clusters side by side.
+    private var toolbarTopConstraint: NSLayoutConstraint?
 
     /// Shown above the (empty) video layer only in demo mode; rides the same
     /// zoom/pan transform so seeded annotation strokes stay aligned.
@@ -365,6 +421,8 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     private var hasSeededDemoStrokes = false
 
     private var toolPicker: PKToolPicker?
+    /// Whether ``setToolPickerHidden(_:)`` currently has the picker hidden.
+    private var isToolPickerCovered = false
 
     /// One completed stroke was added — sent incrementally so each line is a
     /// discrete entry on Pilot's undo stack.
@@ -375,6 +433,15 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// drawing so Pilot resyncs.
     var onResync: ((PKDrawing, CGRect) -> Void)?
     var onClear: (() -> Void)?
+    /// The corner-adapted safe area changed; receives ``cornerInsets``.
+    var onCornerInsetsChange: ((EdgeInsets) -> Void)?
+
+    /// The safe area adapted (horizontally) to the window's corners, so
+    /// floating controls clear the iPadOS window controls in a resizable
+    /// window. The annotation toolbar is constrained inside it.
+    private static let cornerAdaptedSafeArea = UIView.LayoutRegion.safeArea(cornerAdaptation: .horizontal)
+    /// Last value delivered to `onCornerInsetsChange`, to report only changes.
+    private var reportedCornerInsets: EdgeInsets?
 
     /// Stroke count at the last delivered change, to classify the next one as an
     /// add / undo / resync.
@@ -426,6 +493,8 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     }
 
     override func layoutSubviews() {
+        // Before the constraint pass, so the toolbar lands in its row now.
+        updateToolbarRow()
         super.layoutSubviews()
         // The content view fills us; the affine transform handles zoom/pan.
         contentView.frame = bounds
@@ -434,12 +503,51 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         canvasView.frame = contentView.bounds
         remapDrawingForCurrentLayoutIfNeeded()
         applyTransform()
+        reportCornerInsetsIfChanged()
         // Seed demo strokes once we actually have a non-zero canvas to map
         // them into (layout has run and videoSize is known).
         if isDemoMode, !hasSeededDemoStrokes, videoSize != .zero,
            canvasView.bounds.width > 0 {
             seedDemoStrokes()
             hasSeededDemoStrokes = true
+        }
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
+    }
+
+    /// How far the corner-adapted safe area extends past the plain safe area
+    /// on each edge, in layout direction. The SwiftUI cluster already honors
+    /// the plain safe area, so it only needs this difference: about 66pt at
+    /// top-leading in a resizable window (the window controls), and only the
+    /// ~9pt display-corner rounding when the window fills the screen.
+    var cornerInsets: EdgeInsets {
+        let adapted = directionalEdgeInsets(for: Self.cornerAdaptedSafeArea)
+        let plain = NSDirectionalEdgeInsets(
+            top: safeAreaInsets.top,
+            leading: effectiveUserInterfaceLayoutDirection == .rightToLeft ? safeAreaInsets.right : safeAreaInsets.left,
+            bottom: safeAreaInsets.bottom,
+            trailing: effectiveUserInterfaceLayoutDirection == .rightToLeft ? safeAreaInsets.left : safeAreaInsets.right
+        )
+        return EdgeInsets(
+            top: max(0, adapted.top - plain.top),
+            leading: max(0, adapted.leading - plain.leading),
+            bottom: max(0, adapted.bottom - plain.bottom),
+            trailing: max(0, adapted.trailing - plain.trailing)
+        )
+    }
+
+    /// Delivers ``cornerInsets`` after a layout pass that changed them. The
+    /// callback updates SwiftUI state, so it is deferred out of layout.
+    private func reportCornerInsetsIfChanged() {
+        guard window != nil else { return }
+        let insets = cornerInsets
+        guard insets != reportedCornerInsets else { return }
+        reportedCornerInsets = insets
+        DispatchQueue.main.async { [weak self] in
+            self?.onCornerInsetsChange?(insets)
         }
     }
 
@@ -527,6 +635,17 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         installToolPicker(for: canvasView)
     }
 
+    /// Hides the tool picker while SwiftUI presents a sheet over the mirror,
+    /// and restores it (with the canvas as first responder) afterwards. Acts
+    /// only on cover/uncover transitions, so routine `updateUIView` passes
+    /// never fight the picker's own state.
+    func setToolPickerHidden(_ hidden: Bool) {
+        guard hidden != isToolPickerCovered, let toolPicker else { return }
+        isToolPickerCovered = hidden
+        toolPicker.setVisible(!hidden, forFirstResponder: canvasView)
+        if !hidden { canvasView.becomeFirstResponder() }
+    }
+
     private func installToolPicker(for canvasView: PKCanvasView) {
         let picker = PKToolPicker()
         picker.addObserver(canvasView)
@@ -588,13 +707,29 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
 
         // The toolbar stays fixed (not inside the transformable content view).
         addSubview(toolbarGlass)
+        let cornerSafeArea = layoutGuide(for: Self.cornerAdaptedSafeArea)
+        let toolbarTop = toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LiquidGlassMetrics.Spacing.small)
+        toolbarTopConstraint = toolbarTop
+        let toolbarTrailing = toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -LiquidGlassMetrics.Spacing.small)
+        toolbarTop.priority = .defaultHigh
+        toolbarTrailing.priority = .defaultHigh
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: toolbarGlass.contentView.topAnchor),
             toolbar.bottomAnchor.constraint(equalTo: toolbarGlass.contentView.bottomAnchor),
             toolbar.leadingAnchor.constraint(equalTo: toolbarGlass.contentView.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: toolbarGlass.contentView.trailingAnchor),
-            toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LiquidGlassMetrics.Spacing.small),
-            toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -LiquidGlassMetrics.Spacing.small)
+            // 12pt inside the safe area, matching the SwiftUI cluster, but
+            // never outside the corner-adapted safe area: if a window corner
+            // ever carries chrome on this side, the toolbar moves clear of it
+            // (the same rule as `FloatingChromeMetrics.clusterPadding`). The
+            // window controls sit top-leading today, so this side normally
+            // only sees the ~9pt corner rounding, which the 12pt clears.
+            toolbarTop,
+            toolbarTrailing,
+            toolbarGlass.topAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.topAnchor, constant: LiquidGlassMetrics.Spacing.small),
+            toolbarGlass.topAnchor.constraint(greaterThanOrEqualTo: cornerSafeArea.topAnchor),
+            toolbarGlass.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -LiquidGlassMetrics.Spacing.small),
+            toolbarGlass.trailingAnchor.constraint(lessThanOrEqualTo: cornerSafeArea.trailingAnchor)
         ])
 
         updateToolbarButtonSizes()
@@ -602,6 +737,7 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
             [UITraitPreferredContentSizeCategory.self]
         ) { [weak self] (_: UIVisualEffectView, _: UITraitCollection) in
             self?.updateToolbarButtonSizes()
+            self?.setNeedsLayout()
         }
     }
 
@@ -613,6 +749,32 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         let height = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseControlSide, for: traits)
         toolbarButtonWidthConstraints.forEach { $0.constant = width }
         toolbarButtonHeightConstraints.forEach { $0.constant = height }
+    }
+
+    /// Keeps the annotation toolbar level with the SwiftUI cluster when both
+    /// fit across the window, and otherwise drops it to a second row just
+    /// below the cluster. A narrow resizable window at the larger Dynamic
+    /// Type sizes cannot hold both rows side by side, and the cluster also
+    /// steps in past the window controls there; without this the two
+    /// clusters overlap.
+    private func updateToolbarRow() {
+        guard let toolbarTopConstraint else { return }
+        let traits = toolbarGlass.traitCollection
+        let side = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseControlSide, for: traits)
+        let buttonWidth = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseToolbarButtonWidth, for: traits)
+        let toolbarWidth = CGFloat(toolbar.arrangedSubviews.count) * buttonWidth
+            + toolbar.directionalLayoutMargins.leading + toolbar.directionalLayoutMargins.trailing
+        let clusterPadding = FloatingChromeMetrics.clusterPadding(cornerInsets: cornerInsets)
+        let spacing = LiquidGlassMetrics.Spacing.small
+        let needed = clusterPadding.leading + FloatingChromeMetrics.clusterWidth(controlSide: side)
+            + spacing + toolbarWidth + spacing
+        let available = bounds.width - safeAreaInsets.left - safeAreaInsets.right
+        let top = needed <= available
+            ? spacing
+            : clusterPadding.top + side + LiquidGlassMetrics.Spacing.xSmall
+        if toolbarTopConstraint.constant != top {
+            toolbarTopConstraint.constant = top
+        }
     }
 
     /// Empties this canvas and tells Pilot to clear too (`onClear` sends a single

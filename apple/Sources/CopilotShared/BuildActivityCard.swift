@@ -35,7 +35,11 @@ struct BuildActivityCard: View {
                             .contentTransition(.opacity)
                     }
                     Spacer(minLength: 4)
-                    BuildElapsedTime(state: state)
+                    // Queued runs have no clock; the status text already
+                    // reads "Queued", so the trailing slot stays empty.
+                    if state.startedAt != nil {
+                        BuildElapsedTime(state: state)
+                    }
                 }
                 .font(.caption)
             }

@@ -24,14 +24,24 @@ public struct ActionsDashboardWidgetView: View {
                     let failedCount = snapshot.runs.filter(\.isFailure).count
                     // Totals stay neutral; a state color appears only when that
                     // state is present, and matches the run-row glyph colors.
-                    HStack(spacing: 8) {
+                    let runs = DashboardMetric(value: snapshot.runs.count, label: "Runs")
+                    let active = DashboardMetric(value: activeCount, label: "Active", tint: activeCount > 0 ? .blue : nil)
+                    let failed = DashboardMetric(value: failedCount, label: "Failed", tint: failedCount > 0 ? .red : nil)
+                    if family == .systemSmall {
                         // A small widget has room for two labeled columns; the
                         // run total is the one that can go.
-                        if family != .systemSmall {
-                            DashboardMetric(value: snapshot.runs.count, label: "Runs")
+                        HStack(spacing: 8) { active; failed }
+                    } else {
+                        // One row of columns while every label fits; at
+                        // accessibility sizes, wrap to a grid instead of
+                        // truncating a label.
+                        ViewThatFits(in: .horizontal) {
+                            DashboardMetricColumns(spacing: 8) { runs; active; failed }
+                            Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
+                                GridRow { runs; active }
+                                GridRow { failed }
+                            }
                         }
-                        DashboardMetric(value: activeCount, label: "Active", tint: activeCount > 0 ? .blue : nil)
-                        DashboardMetric(value: failedCount, label: "Failed", tint: failedCount > 0 ? .red : nil)
                     }
                     ForEach(snapshot.runs.prefix(rowLimit), id: \.id) { run in
                         DashboardRunRow(run: run, detail: DashboardRowDetail(family))
@@ -158,13 +168,19 @@ public struct RunnersDashboardWidgetView: View {
                     let offline = DashboardMetric(value: snapshot.offlineCount, label: "Offline", tint: snapshot.offlineCount > 0 ? .red : nil)
                     // Four columns don't fit a small widget without wrapping
                     // "Offline"; use a 2 x 2 grid there instead.
+                    // The same grid takes over in wider families once the
+                    // labels no longer fit one row (accessibility sizes).
+                    let grid = Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
+                        GridRow { fleet; idle }
+                        GridRow { busy; offline }
+                    }
                     if family == .systemSmall {
-                        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 2) {
-                            GridRow { fleet; idle }
-                            GridRow { busy; offline }
-                        }
+                        grid
                     } else {
-                        HStack(spacing: 12) { fleet; idle; busy; offline }
+                        ViewThatFits(in: .horizontal) {
+                            DashboardMetricColumns(spacing: 12) { fleet; idle; busy; offline }
+                            grid
+                        }
                     }
                     ForEach(snapshot.runners.prefix(rowLimit), id: \.id) { runner in
                         DashboardRunnerRow(runner: runner, detail: DashboardRowDetail(family))
@@ -429,21 +445,24 @@ private struct DashboardWidgetFrame<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            // The family glyph joins the accent group so tinted and vibrant
-            // rendering modes keep one colored anchor per widget.
-            HStack(spacing: 4) {
-                Image(systemName: systemImage)
-                    .foregroundStyle(tint)
-                    .widgetAccentable()
-                Text(title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
+            if family == .systemSmall {
+                titleLabel
+            } else {
                 // Wider families carry freshness in the header, trailing, so
                 // the vertical space goes to rows instead of a footer line.
-                if family != .systemSmall {
-                    freshness
-                        .layoutPriority(1)
+                // When both no longer fit on one line (accessibility sizes in
+                // the in-app dashboards), freshness drops below the title
+                // instead of truncating the title away (HIER-3).
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 4) {
+                        titleLabel
+                        Spacer(minLength: 8)
+                        freshness
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        titleLabel
+                        freshness
+                    }
                 }
             }
             content
@@ -451,6 +470,19 @@ private struct DashboardWidgetFrame<Content: View>: View {
             if family == .systemSmall {
                 freshness
             }
+        }
+    }
+
+    /// The family glyph joins the accent group so tinted and vibrant
+    /// rendering modes keep one colored anchor per widget.
+    private var titleLabel: some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .widgetAccentable()
+            Text(title)
+                .font(.headline)
+                .lineLimit(1)
         }
     }
 
@@ -499,6 +531,41 @@ private struct DashboardMetric: View {
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Equal-width metric columns, laid out like an `HStack` of
+/// `.frame(maxWidth: .infinity)` cells. Unlike that stack, its ideal width is
+/// what equal columns really need (widest cell × count), so the
+/// `ViewThatFits` around it switches to the grid before any label truncates.
+private struct DashboardMetricColumns: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let gaps = spacing * CGFloat(subviews.count - 1)
+        let widest = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+        let needed = widest * CGFloat(subviews.count) + gaps
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? needed
+        let column = columnWidth(in: width, count: subviews.count)
+        let height = subviews.map { $0.sizeThatFits(ProposedViewSize(width: column, height: nil)).height }.max() ?? 0
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let column = columnWidth(in: bounds.width, count: subviews.count)
+        for (index, subview) in subviews.enumerated() {
+            subview.place(
+                at: CGPoint(x: bounds.minX + CGFloat(index) * (column + spacing), y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: column, height: bounds.height)
+            )
+        }
+    }
+
+    private func columnWidth(in width: CGFloat, count: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        return max(0, (width - spacing * CGFloat(count - 1)) / CGFloat(count))
     }
 }
 
@@ -554,26 +621,26 @@ private struct DashboardRunRow: View {
     let detail: DashboardRowDetail
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: run.systemImage)
-                .foregroundStyle(run.dashboardTint)
-                .frame(width: 16)
-                // Speaks the status when the visible status text is hidden.
-                .accessibilityLabel(run.label)
-                .accessibilityHidden(detail != .hidden)
-            DashboardRowText(
-                title: run.workflow.isEmpty ? "Workflow" : run.workflow,
-                subtitle: "\(run.repository) · \(run.branch)",
-                detail: detail
-            )
-            Spacer(minLength: 4)
-            // In a small widget the status glyph alone carries the state so
-            // the workflow name keeps the width.
-            if detail != .hidden {
-                Text(run.label)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        DashboardRowFit(detail: detail) { showsSubtitle in
+            HStack(spacing: 8) {
+                DashboardRowGlyph(systemName: run.systemImage, tint: run.dashboardTint)
+                    // Speaks the status when the visible status text is hidden.
+                    .accessibilityLabel(run.label)
+                    .accessibilityHidden(detail != .hidden)
+                DashboardRowText(
+                    title: run.workflow.isEmpty ? "Workflow" : run.workflow,
+                    subtitle: showsSubtitle ? "\(run.repository) · \(run.branch)" : nil,
+                    detail: detail
+                )
+                Spacer(minLength: 4)
+                // In a small widget the status glyph alone carries the state so
+                // the workflow name keeps the width.
+                if detail != .hidden {
+                    Text(run.label)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
         }
     }
@@ -584,21 +651,23 @@ private struct DashboardProviderRow: View {
     let detail: DashboardRowDetail
 
     var body: some View {
-        HStack(spacing: 8) {
-            DashboardRowText(
-                title: provider.name.isEmpty ? "Provider" : provider.name,
-                subtitle: utilizationText,
-                detail: detail
-            )
-            Spacer(minLength: 4)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(DashboardFormat.cost(provider.estimatedCost))
-                    .font(.caption)
-                    .monospacedDigit()
-                if detail == .stacked {
-                    Text(DashboardFormat.tokens(provider.totalTokens))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+        DashboardRowFit(detail: detail) { showsSubtitle in
+            HStack(spacing: 8) {
+                DashboardRowText(
+                    title: provider.name.isEmpty ? "Provider" : provider.name,
+                    subtitle: showsSubtitle ? utilizationText : nil,
+                    detail: detail
+                )
+                Spacer(minLength: 4)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(DashboardFormat.cost(provider.estimatedCost))
+                        .font(.caption)
+                        .monospacedDigit()
+                    if detail == .stacked {
+                        Text(DashboardFormat.tokens(provider.totalTokens))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -620,20 +689,59 @@ private struct DashboardRunnerRow: View {
     let detail: DashboardRowDetail
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: runner.systemImage)
-                .foregroundStyle(runner.dashboardTint)
-                .frame(width: 16)
-            DashboardRowText(
-                title: runner.name.isEmpty ? "Runner \(runner.id)" : runner.name,
-                subtitle: runner.operatingSystem.isEmpty ? nil : runner.operatingSystem,
-                detail: detail
-            )
-            Spacer(minLength: 4)
-            Text(runner.label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+        DashboardRowFit(detail: detail) { showsSubtitle in
+            HStack(spacing: 8) {
+                DashboardRowGlyph(systemName: runner.systemImage, tint: runner.dashboardTint)
+                DashboardRowText(
+                    title: runner.name.isEmpty ? "Runner \(runner.id)" : runner.name,
+                    subtitle: showsSubtitle && !runner.operatingSystem.isEmpty ? runner.operatingSystem : nil,
+                    detail: detail
+                )
+                Spacer(minLength: 4)
+                Text(runner.label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+    }
+}
+
+/// A row's state glyph, fitted into a square that scales with the row text.
+/// Wide symbols (`gearshape.2`) shrink to the column instead of spilling into
+/// the title, so every row's title starts on the same edge at every Dynamic
+/// Type size.
+private struct DashboardRowGlyph: View {
+    let systemName: String
+    let tint: Color
+    @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 16
+
+    var body: some View {
+        Image(systemName: systemName)
+            .resizable()
+            .scaledToFit()
+            .foregroundStyle(tint)
+            .frame(width: side, height: side)
+    }
+}
+
+/// Lays out a whole row with its subtitle, and for ``DashboardRowDetail/inline``
+/// rows falls back to the title alone when the full row no longer fits on one
+/// line (long names, accessibility sizes). Measuring the complete row, rather
+/// than the title text inside it, keeps the subtitle from being squeezed to a
+/// bare ellipsis beside the trailing status.
+private struct DashboardRowFit<Row: View>: View {
+    let detail: DashboardRowDetail
+    @ViewBuilder let row: (_ showsSubtitle: Bool) -> Row
+
+    var body: some View {
+        if detail == .inline {
+            ViewThatFits(in: .horizontal) {
+                row(true)
+                row(false)
+            }
+        } else {
+            row(true)
         }
     }
 }

@@ -29,7 +29,11 @@ struct BuildLiveActivity: Widget {
                     Label(context.state.label, systemImage: context.state.symbol).foregroundStyle(context.state.buildTint)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    BuildElapsedTime(state: context.state)
+                    // The leading label already reads "Queued" before a run
+                    // starts; show the clock only once there is one.
+                    if context.state.startedAt != nil {
+                        BuildElapsedTime(state: context.state)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 4) {

@@ -9,16 +9,32 @@ struct BuildMonitorView: View {
         NavigationStack {
             List {
                 if let followed = monitor.followedRun {
-                    Section("Following") {
-                        runDetails(followed)
-                        if !followed.state.isComplete && followed.state.staleDate < Date() {
-                            Label("Updates delayed. Check that Cockpit is awake and online.", systemImage: "wifi.slash")
-                                .font(.footnote).foregroundStyle(.secondary)
+                    Section {
+                        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
+                            runDetails(followed)
+                            if !followed.state.isComplete && followed.state.staleDate < Date() {
+                                Label("Updates delayed. Check that Cockpit is awake and online.", systemImage: "wifi.slash")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            // Same glass capsule as Follow Build: stopping is
+                            // reversible (follow again any time), so it stays
+                            // neutral rather than destructive red (BTN-1, COL-4).
+                            Button("Stop Following", systemImage: "stop.circle") {
+                                Task { await monitor.stop() }
+                            }
+                            .buttonStyle(.glass)
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.small)
                         }
-                        Button("Stop Following", role: .destructive) { Task { await monitor.stop() } }
+                        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                    } header: {
+                        Text("Following")
+                    } footer: {
+                        // Monitor status rides the section it describes
+                        // instead of a separate boxed section (LAY-1).
+                        if let message = monitor.message { Text(message) }
                     }
-                }
-                if let message = monitor.message {
+                } else if let message = monitor.message {
                     Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 }
                 Section {
@@ -51,6 +67,10 @@ struct BuildMonitorView: View {
                             }
                         }
                         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                        // Separators start at the row's text edge, not at
+                        // whichever label (status, Follow Build) the List
+                        // picks, so every divider lines up.
+                        .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] }
                     }
                 } header: {
                     Text("Workflow runs")
@@ -65,6 +85,9 @@ struct BuildMonitorView: View {
             .animation(LiquidGlassMetrics.spring, value: monitor.followedRun?.id)
             .animation(LiquidGlassMetrics.spring, value: monitor.runs.map(\.id))
             .navigationTitle("Builds")
+            // Inline like Walkie's other sheets (Dashboard, Settings, Speech
+            // Storage) so every sheet shares one header treatment.
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
@@ -74,17 +97,24 @@ struct BuildMonitorView: View {
             Text(run.workflow).font(.headline)
             Text("\(run.repository) · \(run.branch)").font(.subheadline).foregroundStyle(.secondary)
             HStack {
-                Label {
-                    Text(run.state.label)
-                } icon: {
+                // A plain glyph + text pair rather than a Label: inside a List,
+                // Label reserves the row-icon column, which parks the status
+                // text a wide gap away from its own glyph (LAY-5).
+                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     // Same state color as the Live Activity card, so runs
                     // scan by glyph shape and color before text (HIER-3).
                     Image(systemName: run.state.symbol)
                         .foregroundStyle(run.state.buildTint)
                         .contentTransition(.symbolEffect(.replace))
+                        .accessibilityHidden(true)
+                    Text(run.state.label)
                 }
                 Spacer()
-                BuildElapsedTime(state: run.state)
+                // A queued run has no clock yet; its status label already
+                // says "Queued", so don't repeat it on the trailing edge.
+                if run.state.startedAt != nil {
+                    BuildElapsedTime(state: run.state)
+                }
             }
             .font(.caption)
             Link("View on GitHub", destination: run.url).font(.caption)

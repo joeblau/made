@@ -16,10 +16,12 @@ struct CopilotDashboardView: View {
                 // Live Activity control with its status and explanation.
                 VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xLarge) {
                     // System segmented picker: a capsule glass control on 26+.
+                    // Segment names come from the shared family titles, so they
+                    // match the card headers, widgets, and Kneeboard.
                     Picker("Dashboard", selection: $selectedFamily) {
-                        Text("Actions").tag(DashboardFamily.actions)
-                        Text("Usage").tag(DashboardFamily.usage)
-                        Text("Runners").tag(DashboardFamily.runners)
+                        ForEach(DashboardFamily.allCases, id: \.self) { family in
+                            Text(family.title).tag(family)
+                        }
                     }
                     .pickerStyle(.segmented)
 
@@ -109,8 +111,11 @@ struct CopilotDashboardView: View {
                 Text(isActive ? "Stop Live Activity" : "Start Live Activity")
                     .frame(maxWidth: .infinity)
             }
-            // The screen's one primary action: full-width prominent glass.
-            .buttonStyle(.glassProminent)
+            // Start is the sheet's one primary action (full-width prominent
+            // glass); Stop is a reversible toggle, so it drops to neutral
+            // glass, matching Kneeboard's dashboard (BTN-1, COL-4).
+            .liquidGlassButtonStyle(prominent: !isActive)
+            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .disabled(isUpdatingActivity || (!isActive && !hasSelectedSnapshot))
 
