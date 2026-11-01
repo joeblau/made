@@ -156,6 +156,23 @@ Decided: controls inside glass panels, sheets, and popovers are glass, following
 - Every text input is now Liquid Glass. The Cockpit text-entry alerts (New/Rename Workspace Group, Rename Group) became `TextPromptSheet`, a glass sheet with a persistent label, a glass field, glass Cancel, and a prominent Create/Save button. Cockpit Secure Messaging and the Runners Edit Device sheet use stacked labels with glass fields. The only plain fields are the URL bar, Fast Command, and quick open, which already sit inside a glass toolbar capsule or a glass palette.
 - PilotTests: the TLS fixture imported its PKCS#12 identity into the login keychain, where the ACL was pinned to one build's cdhash. Every rebuilt test host then blocked on keychain consent, which stalled Network.framework and cascaded into all 15 Docker, TLS, remote-desktop, and WebKit failures. With `kSecImportToMemoryOnly`, the full suite passes: PilotTests 813/0, SharedTests 208/0, PlotterTests 4/0.
 
+### Cockpit real-glass visual pass (macOS 26 VM)
+
+Cockpit was run with `-demoMode YES` inside a tart macOS 26.6 VM. The guest window server renders real Liquid Glass, and the screen was read over VNC, so no host Screen Recording grant was needed. Every major surface was captured in light and dark, about 75 captures, then reviewed by a second, independent reviewer. Each fix was confirmed in a fresh capture.
+
+- Systemic (brief-3, LAY-4): macOS 26 draws glass and bordered buttons, pop-up pickers, and segmented pickers as squared rounded rectangles unless `buttonBorderShape(.capsule)` is set. The compat glass button styles now apply the capsule shape, and so does the root of `ContentView`. Icon circles keep their innermost `.circle`.
+- `GlassChipScroller`: horizontal glass chip strips (Notes tabs, Remote Desktop groups, Runners sources) no longer clip the glass shadow into a hard gray rectangle in light mode.
+- Contrast (TYPE-3): the Remote Desktop "Empty Slot" label goes from 2:1 to 6.3:1, and the browser start-page hint from 1.9:1 to 5.9:1.
+- Device, Simulator, and Android panes: empty-state actions stack in narrow panes instead of truncating ("Open Cam…").
+- Agentic Use: the header stays pinned at the top in empty, failed, and scanning states.
+- Runners: no lone `+` in an empty scope strip.
+- New Workspace: no full-width separators.
+- `TextPromptSheet`: the placeholder is now a bare example (FORM-2).
+- Inspector PRs, Actions, and Tasks: a failed `gh` read reads as "Couldn't Load …", with a plain-language cause and one Retry (MOT-6, HIER-2). "No open pull requests" appears only after a successful empty read. A failed poll keeps the last good list.
+- Copy: "Cockpit talks to…" (it said Pilot).
+
+Not reachable in the VM: populated data states (no agent logs, container engine, or gh auth in the guest), live device and simulator streams, a live remote-desktop session, and the Chromium find bar.
+
 ### Open items from round 1 (resolved above unless noted)
 
 - Glass buttons sit inside floating glass panels in the RemoteComputerPicker (Close, Connect, Open Local Network Settings) and the Chromium find popover. This matches how system popovers and sheets behave on 26, but it is technically glass on glass. Simplifying it would mean the panel buttons use pressable or plain styles, which works against brief item 1. This needs a product decision.
