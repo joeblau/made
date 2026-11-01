@@ -572,10 +572,6 @@ class GhosttyMetalView: NSView, CALayerDelegate {
         return super.becomeFirstResponder()
     }
 
-    override func resignFirstResponder() -> Bool {
-        return super.resignFirstResponder()
-    }
-
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         configureWindowObservers()
@@ -605,11 +601,15 @@ class GhosttyMetalView: NSView, CALayerDelegate {
 
     func setPresentationActive(_ isActive: Bool) {
         isPresentationActive = isActive
-        isHidden = !isActive
-
         if isActive {
+            if isHidden { isHidden = false }
             requestSurfaceGeometryRefresh()
         } else {
+            // An in-window hide waits one main-queue turn: hiding a focused view inside `updateNSView`
+            // rebuilds the key view loop mid-update and AttributeGraph cycles forever (narrow-window hang).
+            if window == nil { isHidden = true } else if !isHidden {
+                DispatchQueue.main.async { [weak self] in if self?.isPresentationActive == false { self?.isHidden = true } }
+            }
             pendingGeometryRefresh = false
             pendingSurfaceResize?.cancel()
             pendingSurfaceResize = nil
