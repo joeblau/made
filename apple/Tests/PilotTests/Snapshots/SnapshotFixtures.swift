@@ -143,18 +143,32 @@ final class SnapshotFixtures {
     }
 
     private static func makeHistory() -> AgenticUseSnapshot {
-        let models: [(AgenticProvider, String)] = [(.claude, "claude-opus-5-5"), (.codex, "gpt-6.1-sol"),
-                                                   (.cursor, "cursor/claude-opus-5-5"), (.kimi, "k3"), (.grok, "grok-4")]
+        // (provider, model, relative volume, cache-write share). Sixty days so
+        // the 30-day capture has a previous window for its KPI deltas.
+        let models: [(AgenticProvider, String, Double, Double)] = [
+            (.claude, "claude-opus-5-5", 1.0, 0.04), (.claude, "claude-sonnet-5-5", 0.45, 0.04),
+            (.claude, "claude-fable-5-1", 0.08, 0.03), (.codex, "gpt-6.1-sol", 0.7, 0),
+            (.codex, "gpt-6-astra", 0.25, 0), (.cursor, "cursor/claude-opus-5-5", 0.3, 0.02),
+            (.kimi, "k3", 0.18, 0.05), (.kimi, "kimi-for-coding", 0.1, 0), (.grok, "grok-4.7", 0.12, 0),
+        ]
         var records: [AgenticUsageRecord] = []
-        for day in 0..<30 {
+        for day in 0..<60 {
+            // Gentle weekly rhythm, a little heavier in the earlier window,
+            // and one Claude-led spike for the insight card.
+            let rhythm = Double((day * 7) % 11 + 4) / 8
+            let era = day >= 30 ? 1.25 : 1
             for (index, model) in models.enumerated() {
-                let weight = (day * 7 + index * 3) % 13 + 3
+                let spike = day == 6 && model.0 == .claude ? 3.2 : 1
+                let volume = rhythm * era * spike * model.2 * Double((day + index * 5) % 6 + 7) / 9
+                let input = Int(volume * 2_400_000)
                 records.append(AgenticUsageRecord(
                     provider: model.0, dedupKey: "demo-\(day)-\(index)", model: model.1,
-                    timestamp: date.addingTimeInterval(-Double(day) * 86_400), inputTokens: weight * 22_000,
-                    cacheWriteTokens: weight * 8_000, cacheWrite1hTokens: 0, cacheReadTokens: weight * 350_000,
-                    outputTokens: weight * 5_000, thinkingTokens: nil, isFast: false,
-                    nativeCostUSD: Double(weight) * Double(5 - index) * 0.19
+                    timestamp: date.addingTimeInterval(-Double(day) * 86_400),
+                    inputTokens: Int(Double(input) * 0.06),
+                    cacheWriteTokens: Int(Double(input) * model.3), cacheWrite1hTokens: 0,
+                    cacheReadTokens: Int(Double(input) * (0.94 - model.3) * 10),
+                    outputTokens: Int(Double(input) * 0.035), thinkingTokens: nil, isFast: false,
+                    nativeCostUSD: nil
                 ))
             }
         }

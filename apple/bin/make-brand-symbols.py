@@ -38,7 +38,7 @@ BRANDS = [
     ("anthropic.svg", "BrandAnthropic", "anthropic", None, "Anthropic logomark. " + SIMPLE),
     ("openai.svg", "BrandOpenAI", "openai", None, "OpenAI logomark. " + SIMPLE),
     ("moonshotai.svg", "BrandMoonshot", "moonshot", None, "Moonshot AI logomark. " + SIMPLE),
-    ("xai.svg", "BrandGrok", "grok", "evenodd", "Grok / xAI logomark. " + LOBE),
+    ("grok.svg", "BrandGrok", "grok", "evenodd", "Grok logomark. " + LOBE),
     ("cursor.svg", "BrandCursor", "cursor", None, "Cursor logomark. " + SIMPLE),
 ]
 
@@ -63,6 +63,13 @@ def tokenize(d):
             while i < len(d) and d[i] in " ,\t\n\r":
                 i += 1
                 nm = NUM.match(d, i)
+            # Arc large-arc/sweep flags are single 0/1 characters and may be
+            # written without separators ("0 00-1.8-1"), so never read them
+            # as part of a longer number.
+            if cmd in "Aa" and len(nums) % 7 in (3, 4) and i < len(d) and d[i] in "01":
+                nums.append(float(d[i]))
+                i += 1
+                continue
             if not nm or (nm.group() in ("", ".", "+", "-")):
                 break
             nums.append(float(nm.group()))

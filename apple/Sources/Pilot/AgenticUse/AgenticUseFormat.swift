@@ -43,4 +43,29 @@ enum AgenticUseFormat {
     static func multiple(_ ratio: Double) -> String {
         ratio.formatted(.number.precision(.fractionLength(1))) + "x"
     }
+
+    /// Signed relative change for KPI deltas: "28%" (direction carried by
+    /// the arrow glyph, not the sign). `nil` when there is no baseline.
+    static func relativeChange(current: Double, previous: Double) -> Double? {
+        guard previous > 0 else { return nil }
+        return (current - previous) / previous
+    }
+
+    /// Compact money for prose: "$17.2K", "$412".
+    static func compactCost(_ value: Double) -> String {
+        axisCost(value)
+    }
+
+    /// Unsigned magnitude for a delta badge: "28%", or ">999%" past the cap
+    /// so a near-zero baseline can't print an absurd figure.
+    static func deltaPercent(_ change: Double) -> String {
+        let magnitude = abs(change)
+        if magnitude >= 9.99 { return ">999%" }
+        return magnitude.formatted(.percent.precision(.fractionLength(magnitude < 0.1 ? 1 : 0)))
+    }
+
+    /// Percentage-point change for rates: "3.1 pts".
+    static func deltaPoints(_ change: Double) -> String {
+        (abs(change) * 100).formatted(.number.precision(.fractionLength(1))) + " pts"
+    }
 }
