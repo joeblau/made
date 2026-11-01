@@ -80,19 +80,43 @@ struct AgenticUseDailyChartPanel: View {
 
     // MARK: - Header
 
+    private static let titleUnits = ["Hourly", "Daily", "Weekly"]
+
     private var title: String {
         let unit = switch (snapshot.range.bucketUnit, effectiveGranularity) {
         case (.hour, _): "Hourly"
         case (_, .weekly): "Weekly"
         default: "Daily"
         }
-        return "\(unit) \(metric == .savings ? "Cache Savings" : metric.rawValue)"
+        return Self.title(unit: unit, metric: metric)
+    }
+
+    private static func title(unit: String, metric: Metric) -> String {
+        "\(unit) \(metric == .savings ? "Cache Savings" : metric.rawValue)"
+    }
+
+    /// Holds the width of the longest possible title, so the segmented picker
+    /// beside it stays put when the metric, range, or granularity changes. A
+    /// title sized to fit moved the picker up to 68pt, out from under the
+    /// pointer that had just clicked it.
+    private var titleLabel: some View {
+        ZStack(alignment: .leading) {
+            ForEach(Self.titleUnits, id: \.self) { unit in
+                ForEach(Metric.allCases) { candidate in
+                    Text(Self.title(unit: unit, metric: candidate)).hidden()
+                }
+            }
+            .accessibilityHidden(true)
+            Text(title)
+        }
+        .agenticUseCardTitle()
+        .fixedSize()
     }
 
     private var header: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                Text(title).agenticUseCardTitle().fixedSize()
+                titleLabel
                 metricPicker
                 Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
                 trailingControls
@@ -232,14 +256,6 @@ struct AgenticUseDailyChartPanel: View {
                 RuleMark(x: .value("Date", selected, unit: bucketUnit))
                     .foregroundStyle(.primary.opacity(0.55))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                    .annotation(
-                        position: .top,
-                        alignment: .leading,
-                        spacing: 8,
-                        overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))
-                    ) {
-                        tooltip(for: selected, cells: cells)
-                    }
                 if style == .area {
                     ForEach(stackTops(at: selected, cells: cells), id: \.provider) { top in
                         PointMark(
@@ -262,18 +278,39 @@ struct AgenticUseDailyChartPanel: View {
             // `chartXSelection` alone only responds to drag on macOS; hover
             // is the expected tooltip gesture, so feed the same binding.
             GeometryReader { geometry in
-                Color.clear.onContinuousHover { phase in
-                    switch phase {
-                    case .active(let location):
-                        guard let plotFrame = proxy.plotFrame else { return }
-                        let frame = geometry[plotFrame]
-                        guard frame.contains(location) else {
+                ZStack(alignment: .topLeading) {
+                    Color.clear.onContinuousHover { phase in
+                        switch phase {
+                        case .active(let location):
+                            guard let plotFrame = proxy.plotFrame else { return }
+                            let frame = geometry[plotFrame]
+                            guard frame.contains(location) else {
+                                setSelection(nil)
+                                return
+                            }
+                            setSelection(proxy.value(atX: location.x - frame.minX, as: Date.self))
+                        case .ended:
                             setSelection(nil)
-                            return
                         }
-                        setSelection(proxy.value(atX: location.x - frame.minX, as: Date.self))
-                    case .ended:
-                        setSelection(nil)
+                    }
+                    // The tooltip lives in the overlay, not in a chart
+                    // annotation: Swift Charts flattens annotation content,
+                    // so glass there rendered as a faint empty box with no
+                    // text. Here it is an ordinary view with a real backdrop.
+                    if let selected, let plotFrame = proxy.plotFrame,
+                       let ruleX = ruleX(for: selected, proxy: proxy) {
+                        let frame = geometry[plotFrame]
+                        let x = frame.minX + ruleX
+                        let opensTrailing = x < frame.midX
+                        tooltip(for: selected, cells: cells)
+                            .fixedSize()
+                            .alignmentGuide(.leading) { size in
+                                opensTrailing
+                                    ? -(x + LiquidGlassMetrics.Spacing.xSmall)
+                                    : size.width - (x - LiquidGlassMetrics.Spacing.xSmall)
+                            }
+                            .alignmentGuide(.top) { _ in -frame.minY }
+                            .allowsHitTesting(false)
                     }
                 }
             }
@@ -287,15 +324,26 @@ struct AgenticUseDailyChartPanel: View {
             AxisMarks(position: .leading, values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine().foregroundStyle(.quaternary)
                 AxisValueLabel {
+                    // No extra `.secondary`: the axis label already draws in
+                    // a secondary style, and dimming it again left the y
+                    // labels at about 1.9:1 against the card (TYPE-3).
                     if let number = value.as(Double.self) {
                         Text(axisLabel(for: number))
                             .agenticUseFont(.caption)
-                            .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
                 }
             }
         }
+    }
+
+    /// The rule's x within the plot area. Marks with a date `unit` sit at the
+    /// middle of their bucket, so the tooltip anchors there too.
+    private func ruleX(for bucket: Date, proxy: ChartProxy) -> CGFloat? {
+        guard let start = proxy.position(forX: bucket) else { return nil }
+        guard let end = Calendar.current.date(byAdding: bucketUnit, value: 1, to: bucket),
+              let endX = proxy.position(forX: end) else { return start }
+        return (start + endX) / 2
     }
 
     /// Cumulative stack heights at one bucket, in stacking order — where the

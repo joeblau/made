@@ -308,18 +308,27 @@ private struct DockerContainerRow: View {
             }
 
             // The actions keep their layout slot while busy, and the spinner
-            // sits over it, so the ports column never jumps mid-action.
-            actions
-                .opacity(isBusy ? 0 : (revealsActions ? 1 : 0.001))
-                .disabled(isBusy)
-                .accessibilityHidden(isBusy)
-                .overlay(alignment: .trailing) {
-                    if isBusy {
-                        ProgressView()
-                            .controlSize(.mini)
-                            .accessibilityLabel("Working")
-                    }
+            // sits over it, so the ports column never jumps mid-action. The
+            // slot is always as wide as the longest action set, so a stopped
+            // row (two actions) ends its ports where a running row (three)
+            // does instead of one button further right.
+            ZStack(alignment: .trailing) {
+                actionButtons(Self.widestActions, placeholder: true)
+                    .hidden()
+                    .disabled(true)
+                    .accessibilityHidden(true)
+                actionButtons(availableActions)
+                    .opacity(isBusy ? 0 : (revealsActions ? 1 : 0.001))
+                    .disabled(isBusy)
+                    .accessibilityHidden(isBusy)
+            }
+            .overlay(alignment: .trailing) {
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .accessibilityLabel("Working")
                 }
+            }
         }
         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
         .contentShape(Rectangle())
@@ -353,17 +362,17 @@ private struct DockerContainerRow: View {
     /// Icon-only glass circles, one control size across the Docker surface.
     /// Remove carries no destructive role or red tint here: it only asks, and
     /// the danger color waits for the confirmation dialog (COL-4, MODAL-1).
-    private var actions: some View {
+    private func actionButtons(_ actions: [DockerContainerAction], placeholder: Bool = false) -> some View {
         CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                ForEach(availableActions, id: \.self) { action in
+                ForEach(actions, id: \.self) { action in
                     Button {
                         perform(action)
                     } label: {
                         Label(action.label, systemImage: action.systemImage)
                     }
                     .compatGlassIconButton(controlSize: .small)
-                    .focused($focusedAction, equals: action)
+                    .focused($focusedAction, equals: placeholder ? nil : action)
                     .help(action.label)
                 }
             }
@@ -373,6 +382,9 @@ private struct DockerContainerRow: View {
     /// Starting a running container or stopping a stopped one are both no-ops;
     /// only offer what will actually do something.
     private var availableActions: [DockerContainerAction] {
-        container.state.isRunning ? [.stop, .restart, .remove] : [.start, .remove]
+        container.state.isRunning ? Self.widestActions : [.start, .remove]
     }
+
+    /// The longest action set; it sizes every row's action slot.
+    private static let widestActions: [DockerContainerAction] = [.stop, .restart, .remove]
 }

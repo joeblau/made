@@ -158,7 +158,9 @@ struct AgenticUseUnpricedBadge: View {
     var body: some View {
         Text("unpriced")
             .agenticUseFont(.caption, weight: .semibold)
-            .foregroundStyle(.orange)
+            // Orange text on its own orange wash measures about 2:1 (TYPE-3);
+            // the wash keeps the warning hue and the word stays primary.
+            .foregroundStyle(.primary)
             .padding(.horizontal, LiquidGlassMetrics.Spacing.xxSmall)
             .padding(.vertical, 2)
             .background(Color.orange.opacity(0.15), in: Capsule())

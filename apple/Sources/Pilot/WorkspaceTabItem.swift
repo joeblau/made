@@ -108,7 +108,10 @@ private struct TerminalAgentBadge: View {
             if let agent {
                 Text(agent.displayName)
                     .scaledFont(size: 10, weight: .semibold)
-                    .foregroundStyle(Color.accentColor)
+                    // The wash carries the accent; the word stays primary,
+                    // because accent text on its own 15% wash measures about
+                    // 2:1 (TYPE-3), like the runner status badges.
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.accentColor.opacity(0.15), in: Capsule())

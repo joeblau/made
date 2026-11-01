@@ -108,8 +108,13 @@ struct RunnersView: View {
 
     private var summaryCounts: some View {
         HStack(spacing: 16) {
-            Text("\(store.snapshot.runners.count) runners")
+            // While filtering, the headline says how many cards match, so it
+            // never reads "12 runners" over a grid of four.
+            Text(store.visibleRunners.count == store.snapshot.runners.count
+                 ? "\(store.snapshot.runners.count) runners"
+                 : "\(store.visibleRunners.count) of \(store.snapshot.runners.count) runners")
                 .font(.headline)
+                .contentTransition(.numericText())
             ForEach(GitHubRunner.State.allCases, id: \.rawValue) { state in
                 let count = store.snapshot.runners.filter { $0.state == state }.count
                 HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
@@ -266,14 +271,17 @@ private struct RunnerCard: View {
                 Text([runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text(runner.labels.map(\.name).joined(separator: " · "))
+            Text(runner.labelLine)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .frame(height: 32, alignment: .topLeading)
                 .help(runner.labels.map(\.name).joined(separator: ", "))
             HStack {
-                Text(runner.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                // The GitHub name only adds information once the runner is renamed (HIER-2).
+                if name != runner.name {
+                    Text(runner.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
                 Button(action: edit) { Label("Edit \(name)", systemImage: "pencil") }
                     .compatGlassIconButton(controlSize: .small)
@@ -298,12 +306,21 @@ private struct RunnerTile: View {
     let hardware: RunnerHardware
     let edit: () -> Void
     @State private var isHovering = false
+    @State private var isHoveringEdit = false
     @State private var showsDetails = false
+
+    /// The details popover is transient, so while it is open the next click
+    /// only dismisses it. It stays closed while the pointer is on the edit
+    /// button, or that button could never be clicked after a short dwell.
+    private var wantsDetails: Bool { isHovering && !isHoveringEdit }
 
     var body: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.small) {
             RunnerHardwareImage(hardware: hardware, size: 32)
                 .runnerThumbnail(size: 48, cornerRadius: RunnerSurface.tileThumbnailRadius)
+                // Only the image dims for an offline runner; dimming the whole
+                // tile took the secondary "Offline" badge to about 2:1 (TYPE-3).
+                .opacity(runner.state == .offline ? 0.6 : 1)
             VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text(name)
                     .font(.callout.weight(.semibold))
@@ -315,12 +332,12 @@ private struct RunnerTile: View {
                     // Sits beside the badge so the name keeps the full width.
                     Button(action: openEditor) { Label("Edit \(name)", systemImage: "pencil") }
                         .compatGlassIconButton(controlSize: .small)
+                        .onHover { isHoveringEdit = $0 }
                         .opacity(isHovering ? 1 : 0)
                         .help("Edit device name and hardware image")
                 }
             }
         }
-        .opacity(runner.state == .offline ? 0.6 : 1)
         .padding(RunnerSurface.tilePadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
@@ -331,8 +348,8 @@ private struct RunnerTile: View {
         .onHover { isHovering = $0 }
         // Hover wash and the edit control fade rather than snap (BTN-5).
         .animation(LiquidGlassMetrics.stateChange, value: isHovering)
-        .task(id: isHovering) {
-            guard isHovering else {
+        .task(id: wantsDetails) {
+            guard wantsDetails else {
                 showsDetails = false
                 return
             }
@@ -380,7 +397,7 @@ struct RunnerDetailsPopover: View {
                 if !runner.labels.isEmpty {
                     GridRow {
                         Text("Labels").foregroundStyle(.secondary)
-                        Text(runner.labels.map(\.name).joined(separator: " · "))
+                        Text(runner.labelLine)
                             .font(.caption.monospaced())
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -404,9 +421,16 @@ private struct RunnerStatusBadge: View {
     let state: GitHubRunner.State
 
     var body: some View {
-        Label(state.rawValue, systemImage: state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
+        // The dot carries the state color; the word stays primary, because
+        // green or orange text on its own 12% wash measured about 2:1 (TYPE-3).
+        Label {
+            Text(state.rawValue)
+        } icon: {
+            Image(systemName: state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
+                .foregroundStyle(state.color)
+        }
             .font(.caption.weight(.medium))
-            .foregroundStyle(state.color)
+            .foregroundStyle(.primary)
             .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
             .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
             .background(state.color.opacity(0.12), in: Capsule())
@@ -609,6 +633,18 @@ private struct RunnerDetailsSheet: View {
                 .accessibilityHidden(true)
             control()
         }
+    }
+}
+
+private extension GitHubRunner {
+    /// Labels as one wrapping line. Hyphenated labels ("mac-mini") never
+    /// break at their hyphen, and each separator stays with the label before
+    /// it, so a wrap lands between labels instead of mid-label or before a
+    /// dangling "·".
+    var labelLine: String {
+        labels
+            .map { $0.name.replacingOccurrences(of: "-", with: "-\u{2060}") }
+            .joined(separator: "\u{00A0}· ")
     }
 }
 

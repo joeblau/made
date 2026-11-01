@@ -234,8 +234,15 @@ struct RemoteDesktopView: View {
                 .font(.callout)
                 .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
                 .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-                .background(isSelected
-                    ? Color.accentColor.opacity(0.15) : Color(nsColor: .windowBackgroundColor))
+                // The selection tint is translucent, so it sits on the opaque
+                // window background; on its own it composited over the black
+                // grid and left the title and menu unreadable in light mode.
+                .background {
+                    ZStack {
+                        Color(nsColor: .windowBackgroundColor)
+                        if isSelected { Color.accentColor.opacity(0.15) }
+                    }
+                }
                 .animation(LiquidGlassMetrics.stateChange, value: isSelected)
                 .contentShape(Rectangle())
                 .onTapGesture { store.selectedRemoteConnectionID = id }
@@ -394,7 +401,11 @@ private struct RemoteConnectionPane: View {
     private func connectForm(error: String?) -> some View {
         GeometryReader { geometry in
             ScrollView {
-                connectFormContents(error: error)
+                // A quarter tile on a laptop display is too short for the full
+                // form, which pushed the Connect button below the fold. Below
+                // that height the decorative icon goes and the group gaps
+                // tighten so the primary action stays visible (BTN-1).
+                connectFormContents(error: error, compact: geometry.size.height < Self.fullFormMinHeight)
                     .padding(LiquidGlassMetrics.Spacing.medium)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: geometry.size.height)
@@ -406,15 +417,20 @@ private struct RemoteConnectionPane: View {
     /// Width of the connect form's single column.
     private static let formWidth: CGFloat = 280
 
+    /// Tile height below which the connect form drops its icon header.
+    private static let fullFormMinHeight: CGFloat = 500
+
     /// Connect form spacing follows FORM-5: label → field 8, between field
     /// groups 20, final group → submit 24. Every field keeps a persistent
     /// label above it; placeholders are instructions only (FORM-1/FORM-2).
-    private func connectFormContents(error: String?) -> some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.xLarge) {
+    private func connectFormContents(error: String?, compact: Bool) -> some View {
+        VStack(spacing: compact ? LiquidGlassMetrics.Spacing.medium : LiquidGlassMetrics.Spacing.xLarge) {
             VStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                Image(systemName: "display")
-                    .font(.largeTitle.weight(.light))
-                    .foregroundStyle(.tertiary)
+                if !compact {
+                    Image(systemName: "display")
+                        .font(.largeTitle.weight(.light))
+                        .foregroundStyle(.tertiary)
+                }
 
                 VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     Text(connection.displayTitle)
@@ -425,7 +441,7 @@ private struct RemoteConnectionPane: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.large) {
+            VStack(alignment: .leading, spacing: compact ? LiquidGlassMetrics.Spacing.medium : LiquidGlassMetrics.Spacing.large) {
                 fieldGroup("Username", detail: "Optional") {
                     TextField("Username", text: Bindable(connection).username, prompt: Text("Enter username"))
                         .liquidGlassField()

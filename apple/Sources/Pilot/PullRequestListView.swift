@@ -819,38 +819,22 @@ struct ActionsListView: View {
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
                         InspectorMetadataSeparator()
+                        // One line, middle-truncated: wrapping split branch
+                        // names at hyphens in a narrow inspector.
                         Text(action.headBranch)
                             .font(.system(.subheadline, design: .monospaced))
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
 
-                    HStack(spacing: 4) {
-                        Text(String(action.headSha.prefix(7)))
-                            .font(.system(.subheadline, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        // Hash • user • duration • time ago.
-                        if !action.actor.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(action.actor)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        if !action.duration.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(action.duration)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize()
-                        }
-                        if !action.elapsed.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(action.elapsed)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                    // Hash • user • duration • time ago on one line when it
+                    // fits. At the inspector's narrow width the actor drops
+                    // out rather than truncating both it and the age to
+                    // "monal…" / "2 hour…"; the age always reads in full.
+                    ViewThatFits(in: .horizontal) {
+                        actionMetadata(action, showsActor: true)
+                        actionMetadata(action, showsActor: false)
                     }
                 }
 
@@ -861,6 +845,34 @@ struct ActionsListView: View {
         .buttonStyle(.liquidGlassPressable(cornerRadius: InspectorCardMetrics.cornerRadius))
         .disabled(action.url.isEmpty)
         .help(action.url.isEmpty ? "" : "Open on GitHub")
+    }
+
+    private func actionMetadata(_ action: GitAction, showsActor: Bool) -> some View {
+        HStack(spacing: 4) {
+            // A short hash is never wrapped or truncated.
+            Text(String(action.headSha.prefix(7)))
+                .font(.system(.subheadline, design: .monospaced))
+                .fixedSize()
+            if showsActor, !action.actor.isEmpty {
+                InspectorMetadataSeparator()
+                Text(action.actor)
+                    .font(.subheadline)
+                    .fixedSize()
+            }
+            if !action.duration.isEmpty {
+                InspectorMetadataSeparator()
+                Text(action.duration)
+                    .font(.subheadline)
+                    .fixedSize()
+            }
+            if !action.elapsed.isEmpty {
+                InspectorMetadataSeparator()
+                Text(action.elapsed)
+                    .font(.subheadline)
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(.secondary)
     }
 
     private func openActionInBrowser(_ action: GitAction) {

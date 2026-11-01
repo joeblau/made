@@ -209,9 +209,11 @@ private struct ProviderCard: View {
             Text(title)
                 .font(.body.weight(.semibold))
             if let plan = state.displayedUsage?.planLabel {
+                // Brand-colored text on its own 15% wash measured about 2.2:1 in
+                // light mode; the wash keeps the brand cue (TYPE-3).
                 Text(plan)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
                     .padding(.vertical, 2)
                     .background(tint.opacity(0.15), in: Capsule())
@@ -296,9 +298,12 @@ private struct ProviderCard: View {
                 Text(window.name)
                     .font(.callout.weight(.medium))
                 Spacer()
+                // Primary text, not the bar's brand tint: orange, green, and
+                // yellow figures on the light card measured 1.6–2.5:1
+                // (TYPE-3). Only the critical red, at semibold, keeps color.
                 Text("\(Int((window.utilization * 100).rounded()))%")
                     .font(.system(.callout, design: .rounded, weight: .semibold))
-                    .foregroundStyle(barColor(window.utilization))
+                    .foregroundStyle(isCritical(window.utilization) ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
             }
             ProgressView(value: min(max(window.utilization, 0), 1))
                 .progressViewStyle(.linear)
@@ -430,11 +435,12 @@ private struct ProviderCard: View {
         .accessibilityLabel("Loading usage")
     }
 
+    /// The bar keeps the provider's color until the window is nearly spent.
+    /// A yellow middle tier read as calmer than Claude's orange brand (a 78%
+    /// window looked safer than a 62% one), so there are two states only.
     private func barColor(_ utilization: Double) -> Color {
-        switch utilization {
-        case ..<0.75: tint
-        case ..<0.9: .yellow
-        default: .red
-        }
+        isCritical(utilization) ? .red : tint
     }
+
+    private func isCritical(_ utilization: Double) -> Bool { utilization >= 0.9 }
 }

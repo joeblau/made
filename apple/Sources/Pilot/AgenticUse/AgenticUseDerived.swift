@@ -167,9 +167,20 @@ struct AgenticTokenFlowGraph: Equatable {
         let providers = providerTokens
             .map { Node(id: .provider($0.key), tokens: $0.value.tokens, cost: $0.value.cost) }
             .sorted { $0.tokens > $1.tokens }
-        var models = kept.map { total in
-            Node(id: .model(total.model), tokens: total.tokens, cost: total.cost)
+        // Models sit in provider order, largest first within a provider, so
+        // provider-to-model ribbons never cross. Ranked globally, a Codex model
+        // between two Claude models pulled ribbons across each other.
+        var providerRank: [AgenticProvider: Int] = [:]
+        for (index, node) in providers.enumerated() {
+            if case .provider(let provider) = node.id { providerRank[provider] = index }
         }
+        var models = kept.enumerated()
+            .sorted { lhs, rhs in
+                let lhsRank = providerRank[lhs.element.provider] ?? .max
+                let rhsRank = providerRank[rhs.element.provider] ?? .max
+                return lhsRank == rhsRank ? lhs.offset < rhs.offset : lhsRank < rhsRank
+            }
+            .map { Node(id: .model($0.element.model), tokens: $0.element.tokens, cost: $0.element.cost) }
         if let other = modelSums[.otherModels] {
             models.append(Node(id: .otherModels, tokens: other.tokens, cost: other.cost))
         }

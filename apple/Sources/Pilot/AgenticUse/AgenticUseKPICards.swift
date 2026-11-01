@@ -186,6 +186,8 @@ struct AgenticUseKPIMetric: Identifiable {
 private struct AgenticUseKPICard: View {
     let metric: AgenticUseKPIMetric
 
+    private static let sparklineHeight: CGFloat = 32
+
     var body: some View {
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             Text(metric.title)
@@ -209,9 +211,12 @@ private struct AgenticUseKPICard: View {
                         anchorsAtZero: metric.anchorsAtZero
                     )
                     .frame(minWidth: 44, maxWidth: 110)
-                    .frame(height: 32)
+                    .frame(height: Self.sparklineHeight)
                 }
             }
+            // A card without a sparkline (one bucket of cache data) keeps the
+            // row height, so its caption lines up with its neighbors' captions.
+            .frame(minHeight: Self.sparklineHeight, alignment: .bottom)
         }
         .agenticUseCard()
         .help(metric.help)

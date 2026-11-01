@@ -378,6 +378,16 @@ private struct ChipBody: View {
 
     @State private var isHovered = false
 
+    /// On macOS the hierarchical `.fill.tertiary` turns vibrant inside glass
+    /// and sidebar materials and composited as a near-black hole under a
+    /// hovered inspector card in dark mode. A plain primary tint lifts in
+    /// dark and dims in light, like the system's own row hover.
+    #if os(macOS)
+    private static var wash: some ShapeStyle { Color.primary.opacity(0.08) }
+    #else
+    private static var wash: some ShapeStyle { .fill.tertiary }
+    #endif
+
     var body: some View {
         let isPressed = configuration.isPressed
         configuration.label
@@ -463,12 +473,22 @@ private struct HoverHighlight<S: Shape>: View {
 
     @State private var isHovered = false
 
+    /// On macOS the hierarchical `.fill.tertiary` turns vibrant inside glass
+    /// and sidebar materials and composited as a near-black hole under a
+    /// hovered inspector card in dark mode. A plain primary tint lifts in
+    /// dark and dims in light, like the system's own row hover.
+    #if os(macOS)
+    private static var wash: some ShapeStyle { Color.primary.opacity(0.08) }
+    #else
+    private static var wash: some ShapeStyle { .fill.tertiary }
+    #endif
+
     var body: some View {
         let isPressed = configuration.isPressed
         configuration.label
             .contentShape(shape)
             .background {
-                shape.fill(.fill.tertiary)
+                shape.fill(Self.wash)
                     .opacity(showsHighlight && (isHovered || isPressed) ? 1 : 0)
             }
             .opacity(isPressed ? 0.8 : 1)
