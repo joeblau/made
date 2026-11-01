@@ -64,32 +64,15 @@ struct WirelessDeviceView: View {
         VStack(spacing: 0) {
             // The header floats on the dark stage, so it renders in the dark
             // scheme in both appearances (COL-2). Its two secondary actions
-            // are neighboring capsule glass buttons (BTN-1).
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                // A narrow pane drops to a shorter title, then to the glyph,
-                // instead of wrapping the headline onto two lines.
-                ViewThatFits(in: .horizontal) {
-                    Label("Wireless Device", systemImage: "airplay.video")
-                    Label("Wireless", systemImage: "airplay.video")
-                    Image(systemName: "airplay.video")
-                        .accessibilityLabel("Wireless Device")
-                }
-                .font(.headline)
-                .lineLimit(1)
-                Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
-                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        Button("Use USB", action: useUSB)
-                            .compatGlassButtonStyle()
-                        if session.status != .stopped {
-                            Button("Stop") { session.stop() }
-                                .compatGlassButtonStyle()
-                        }
-                    }
-                    .buttonBorderShape(.capsule)
-                    .controlSize(.small)
-                }
-                .fixedSize()
+            // are neighboring glass buttons (BTN-1). A narrow pane steps down
+            // a whole row at a time: shorter title, then the glyph alone,
+            // then icon-only buttons, so nothing clips at the pane edge.
+            ViewThatFits(in: .horizontal) {
+                header(title: "Wireless Device", iconOnlyButtons: false)
+                header(title: "Wireless", iconOnlyButtons: false)
+                header(title: nil, iconOnlyButtons: false)
+                header(title: nil, iconOnlyButtons: true)
+                header(title: nil, iconOnlyButtons: true, showsGlyph: false)
             }
             .padding(LiquidGlassMetrics.Spacing.small)
             .environment(\.colorScheme, .dark)
@@ -99,8 +82,85 @@ struct WirelessDeviceView: View {
                     WirelessDeviceVideoView(renderer: renderer)
                         .opacity(session.status == .streaming ? 1 : 0)
                 }
-                if session.status != .streaming { instructions }
+                if session.status != .streaming {
+                    Group {
+                        if instructionsWidth < DevicePaneMessage<EmptyView>.compactWidth {
+                            compactInstructions
+                        } else {
+                            instructions
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { instructionsWidth = $0 }
+                }
             }
+        }
+    }
+
+    @State private var instructionsWidth: CGFloat = .infinity
+
+    /// One full header row. `title` nil shows only the glyph (still named for
+    /// VoiceOver); `iconOnlyButtons` turns the actions into circular icon
+    /// buttons that keep their names in `.help` and the accessibility label.
+    /// `showsGlyph` false is the last resort for a sliver-wide pane: just the
+    /// two icon buttons.
+    private func header(title: String?, iconOnlyButtons: Bool, showsGlyph: Bool = true) -> some View {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            if showsGlyph {
+                Group {
+                    if let title {
+                        Label(title, systemImage: "airplay.video")
+                    } else {
+                        Image(systemName: "airplay.video")
+                            .accessibilityLabel("Wireless Device")
+                    }
+                }
+                .font(.headline)
+                .lineLimit(1)
+                .fixedSize()
+            }
+            Spacer(minLength: showsGlyph ? LiquidGlassMetrics.Spacing.xSmall : 0)
+            CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    headerButton("Use USB", systemImage: "cable.connector", iconOnly: iconOnlyButtons, action: useUSB)
+                    if session.status != .stopped {
+                        headerButton("Stop", systemImage: "stop.fill", iconOnly: iconOnlyButtons) {
+                            session.stop()
+                        }
+                    }
+                }
+                .controlSize(.small)
+            }
+            .fixedSize()
+        }
+        // No `.fixedSize()` on the row: the Spacer stretches it across the
+        // pane, while `ViewThatFits` still compares each row's ideal width.
+    }
+
+    @ViewBuilder
+    private func headerButton(
+        _ title: String,
+        systemImage: String,
+        iconOnly: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        if iconOnly {
+            Button(action: action) {
+                // A fixed glyph box so both circles match: `cable.connector`
+                // is narrower than `stop.fill`.
+                Label {
+                    Text(title)
+                } icon: {
+                    Image(systemName: systemImage)
+                        .frame(width: 14, height: 14)
+                }
+            }
+            .compatGlassIconButton(controlSize: .small)
+            .help(title)
+        } else {
+            Button(title, action: action)
+                .compatGlassButtonStyle()
+                .buttonBorderShape(.capsule)
         }
     }
 
@@ -125,7 +185,10 @@ struct WirelessDeviceView: View {
             case .waiting, .pairing:
                 Text("Mirror Your iPhone or iPad").font(.headline)
                 Text("On the same Wi-Fi network, open Control Center → Screen Mirroring and choose:")
+                // The name the user picks in Screen Mirroring shrinks rather
+                // than breaking inside a word ("Cockpi / t F78D").
                 Text(session.receiverName).font(.title2.bold()).textSelection(.enabled)
+                    .lineLimit(1).minimumScaleFactor(0.5)
                 if case .pairing(let code) = session.status {
                     Text("Enter this code on your device")
                     Text(code)
@@ -156,8 +219,73 @@ struct WirelessDeviceView: View {
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
         .uiZoomedDynamicType()
-        .padding(LiquidGlassMetrics.Spacing.xxLarge)
+        // A narrow pane trades the stage margin for text width, so the
+        // receiver name ("Cockpit F78D") fits whole instead of losing the
+        // suffix that tells receivers apart.
+        .padding(instructionsWidth < 240 ? LiquidGlassMetrics.Spacing.small : LiquidGlassMetrics.Spacing.xxLarge)
         .frame(maxWidth: 480)
+    }
+
+    /// A pane too narrow for the instructions' words (a narrow window that
+    /// can't give every pane its floor) keeps the glyph, the pairing code the
+    /// user has to type, and icon-only actions; the full text moves to the
+    /// tooltip and VoiceOver label instead of breaking mid-word.
+    private var compactInstructions: some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
+            Image(systemName: "airplay.video")
+                .font(.title2)
+                .symbolEffect(.pulse, isActive: isListening)
+                .accessibilityHidden(true)
+            switch session.status {
+            case .starting:
+                ProgressView().controlSize(.small)
+            case .pairing(let code):
+                Text(code)
+                    .font(.title2.monospaced().weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.4)
+                    .textSelection(.enabled)
+            case .failed:
+                compactActionButton("Try Again", systemImage: "arrow.clockwise")
+            case .stopped:
+                compactActionButton("Start Wireless Sharing", systemImage: "play.fill")
+            case .waiting, .streaming:
+                EmptyView()
+            }
+        }
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .uiZoomedDynamicType()
+        .padding(LiquidGlassMetrics.Spacing.xSmall)
+        .help(compactInstructionsText)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(compactInstructionsText)
+    }
+
+    private func compactActionButton(_ title: String, systemImage: String) -> some View {
+        Button { session.start() } label: {
+            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+        }
+        .compatGlassProminentButtonStyle()
+        .buttonBorderShape(.circle)
+        .help(title)
+    }
+
+    private var compactInstructionsText: String {
+        switch session.status {
+        case .starting:
+            "Starting wireless sharing…"
+        case .waiting:
+            "Mirror Your iPhone or iPad. On the same Wi-Fi network, open Control Center → Screen Mirroring and choose \(session.receiverName)."
+        case .pairing(let code):
+            "Choose \(session.receiverName) in Screen Mirroring and enter code \(code) on your device."
+        case .failed(let message):
+            "Wireless Sharing Stopped. \(message)"
+        case .stopped:
+            "Wireless Sharing Is Off"
+        case .streaming:
+            ""
+        }
     }
 
     private var isListening: Bool {
