@@ -2,16 +2,9 @@ import SwiftUI
 
 struct RunnersView: View {
     @Bindable var store: RunnersStore
-    @Environment(\.scenePhase) private var scenePhase
     @State private var showsAddScope = false
     @State private var editingRunner: GitHubRunner?
-    @State private var refreshRevision = 0
-
-    private struct PollIdentity: Hashable {
-        let scopeID: String?
-        let active: Bool
-        let revision: Int
-    }
+    @AppStorage("runners.layout") private var layout: RunnerLayout = .fleet
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,7 +30,7 @@ struct RunnersView: View {
         .sheet(isPresented: $showsAddScope) {
             AddRunnerScopeSheet { scope in
                 store.add(scope)
-                refreshRevision += 1
+                Task { await store.refresh(scope) }
             }
         }
         .sheet(item: $editingRunner) { runner in
@@ -47,12 +40,9 @@ struct RunnersView: View {
                 }
             }
         }
-        .task(id: PollIdentity(scopeID: store.selectedScopeID, active: scenePhase == .active, revision: refreshRevision)) {
-            guard scenePhase == .active, store.selectedScope != nil else { return }
-            while !Task.isCancelled {
-                await store.refreshSelected()
-                do { try await Task.sleep(for: .seconds(30)) } catch { return }
-            }
+        .task { await store.refreshSelected() }
+        .onChange(of: store.selectedScopeID) {
+            Task { await store.refreshSelected() }
         }
     }
 
@@ -136,8 +126,18 @@ struct RunnersView: View {
             .frame(maxWidth: 200)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
 
+            Picker("Layout", selection: $layout) {
+                ForEach(RunnerLayout.allCases, id: \.self) { layout in
+                    Label(layout.title, systemImage: layout.symbol).labelStyle(.iconOnly).tag(layout)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("Switch between the 3D fleet, compact tiles, and detailed cards")
+
             if store.isRefreshing { ProgressView().controlSize(.small) }
-            Button { refreshRevision += 1 } label: { Image(systemName: "arrow.clockwise") }
+            Button { Task { await store.refreshSelected() } } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.plain)
                 .disabled(store.isRefreshing)
                 .help("Refresh runners")
@@ -153,7 +153,7 @@ struct RunnersView: View {
                 if store.snapshot.updatedAt != nil { Text("Showing the last successful refresh.").foregroundStyle(.secondary) }
             }
             Spacer()
-            Button("Retry") { refreshRevision += 1 }.disabled(store.isRefreshing)
+            Button("Retry") { Task { await store.refreshSelected() } }.disabled(store.isRefreshing)
         }
         .font(.subheadline)
         .padding(12)
@@ -178,27 +178,48 @@ struct RunnersView: View {
         } else if store.visibleRunners.isEmpty {
             ContentUnavailableView.search(text: store.searchText)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if layout == .fleet {
+            RunnerFleetView(
+                runners: store.visibleRunners,
+                scopeName: store.selectedScope?.name ?? "",
+                name: store.displayName(for:),
+                hardware: store.hardware(for:),
+                edit: { editingRunner = $0 }
+            )
+            .overlay(alignment: .bottomLeading) {
+                updatedFootnote.padding(16).environment(\.colorScheme, .dark)
+            }
         } else {
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: 16)], spacing: 16) {
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: layout.minimumWidth), spacing: layout.spacing)],
+                    spacing: layout.spacing
+                ) {
                     ForEach(store.visibleRunners) { runner in
-                        RunnerCard(
-                            runner: runner,
-                            name: store.displayName(for: runner),
-                            hardware: store.hardware(for: runner)
-                        ) { editingRunner = runner }
+                        let name = store.displayName(for: runner)
+                        let hardware = store.hardware(for: runner)
+                        switch layout {
+                        case .compact:
+                            RunnerTile(runner: runner, name: name, hardware: hardware) { editingRunner = runner }
+                        case .cards, .fleet:
+                            RunnerCard(runner: runner, name: name, hardware: hardware) { editingRunner = runner }
+                        }
                     }
                 }
                 .padding(.horizontal, 20)
                 .padding(.bottom, 20)
-                if let updatedAt = store.snapshot.updatedAt {
-                    TimelineView(.periodic(from: .now, by: 30)) { _ in
-                        Text("Updated \(Date().timeIntervalSince(updatedAt) < 60 ? "just now" : RelativeTime.string(from: updatedAt)) · Refreshes every 30s")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(.bottom, 16)
-                    }
-                }
+                updatedFootnote.padding(.bottom, 16)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var updatedFootnote: some View {
+        if let updatedAt = store.snapshot.updatedAt {
+            TimelineView(.periodic(from: .now, by: 30)) { _ in
+                Text("Updated \(Date().timeIntervalSince(updatedAt) < 60 ? "just now" : RelativeTime.string(from: updatedAt)) · Refreshes every 30s")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -217,12 +238,7 @@ private struct RunnerCard: View {
                     .frame(width: 64, height: 64)
                     .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
                 Spacer()
-                Label(runner.state.rawValue, systemImage: runner.state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(runner.state.color)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 5)
-                    .background(runner.state.color.opacity(0.12), in: Capsule())
+                RunnerStatusBadge(state: runner.state)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(name).font(.headline).lineLimit(1).help(name)
@@ -255,8 +271,151 @@ private struct RunnerCard: View {
     }
 }
 
+/// Image, name, and status only, so a large fleet fits on one screen. The
+/// remaining card details appear in a popover after a short hover.
+private struct RunnerTile: View {
+    let runner: GitHubRunner
+    let name: String
+    let hardware: RunnerHardware
+    let edit: () -> Void
+    @State private var isHovering = false
+    @State private var showsDetails = false
+
+    var body: some View {
+        HStack(spacing: 14) {
+            RunnerHardwareImage(hardware: hardware, size: 30)
+                .frame(width: 50, height: 50)
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 7) {
+                Text(name)
+                    .font(.callout.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                HStack(spacing: 8) {
+                    RunnerStatusBadge(state: runner.state)
+                    Spacer(minLength: 0)
+                    // Sits beside the badge so the name keeps the full width.
+                    Button(action: openEditor) { Image(systemName: "pencil") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                        .opacity(isHovering ? 1 : 0)
+                        .help("Edit device name and hardware image")
+                        .accessibilityLabel("Edit \(name)")
+                }
+            }
+        }
+        .opacity(runner.state == .offline ? 0.6 : 1)
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(isHovering ? 0.1 : 0.055), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.12)))
+        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .onHover { isHovering = $0 }
+        .task(id: isHovering) {
+            guard isHovering else {
+                showsDetails = false
+                return
+            }
+            // A delay keeps the popover from flashing while the pointer crosses the grid.
+            try? await Task.sleep(for: .milliseconds(450))
+            if !Task.isCancelled { showsDetails = true }
+        }
+        .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
+            RunnerDetailsPopover(runner: runner, name: name, hardware: hardware)
+        }
+        .contextMenu { Button("Edit Device…", action: openEditor) }
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: "Edit Device", openEditor)
+    }
+
+    private func openEditor() {
+        showsDetails = false
+        edit()
+    }
+}
+
+struct RunnerDetailsPopover: View {
+    let runner: GitHubRunner
+    let name: String
+    let hardware: RunnerHardware
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                RunnerHardwareImage(hardware: hardware)
+                    .frame(width: 56, height: 56)
+                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(name).font(.headline).lineLimit(2)
+                    RunnerStatusBadge(state: runner.state)
+                }
+            }
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+                detailRow("Hardware", hardware.title)
+                detailRow("Platform", [runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))
+                if name != runner.name { detailRow("Runner", runner.name) }
+                if !runner.labels.isEmpty {
+                    GridRow {
+                        Text("Labels").foregroundStyle(.secondary)
+                        Text(runner.labels.map(\.name).joined(separator: " · "))
+                            .font(.caption.monospaced())
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .font(.caption)
+        }
+        .padding(16)
+        .frame(width: 300, alignment: .leading)
+    }
+
+    private func detailRow(_ title: String, _ value: String) -> some View {
+        GridRow {
+            Text(title).foregroundStyle(.secondary)
+            Text(value).textSelection(.enabled)
+        }
+    }
+}
+
+private struct RunnerStatusBadge: View {
+    let state: GitHubRunner.State
+
+    var body: some View {
+        Label(state.rawValue, systemImage: state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(state.color)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(state.color.opacity(0.12), in: Capsule())
+    }
+}
+
+private enum RunnerLayout: String, CaseIterable {
+    case fleet, compact, cards
+
+    var title: String {
+        switch self {
+        case .fleet: "3D Fleet"
+        case .compact: "Compact"
+        case .cards: "Cards"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .fleet: "cube"
+        case .compact: "square.grid.3x3"
+        case .cards: "square.grid.2x2"
+        }
+    }
+
+    var minimumWidth: CGFloat { self == .compact ? 236 : 240 }
+    var spacing: CGFloat { self == .compact ? 12 : 16 }
+}
+
 private struct RunnerHardwareImage: View {
     let hardware: RunnerHardware
+    var size: CGFloat = 38
 
     var body: some View {
         Group {
@@ -267,7 +426,7 @@ private struct RunnerHardwareImage: View {
             }
         }
         .foregroundStyle(.primary)
-        .frame(width: 38, height: 38)
+        .frame(width: size, height: size)
         .accessibilityLabel(hardware.title)
     }
 }

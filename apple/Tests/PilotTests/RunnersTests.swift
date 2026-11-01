@@ -229,6 +229,84 @@ struct RunnersStoreTests {
         #expect(store.snapshots[scope.id] == nil)
         #expect(store.refreshing.isEmpty)
     }
+
+    @Test("Dashboard uses only the selected enterprise or the first enterprise fallback")
+    func dashboardEnterpriseSelectionAndFleetBounds() async throws {
+        let suite = "RunnersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let organization = RunnerScope(kind: .organization, name: "private-org")
+        let firstEnterprise = RunnerScope(kind: .enterprise, name: "first-enterprise")
+        let selectedEnterprise = RunnerScope(kind: .enterprise, name: "selected-enterprise")
+        let fleet = (0..<105).map { index in
+            GitHubRunner(
+                id: index + 1,
+                name: "runner-\(index + 1)",
+                os: "macos",
+                status: index < 5 ? "offline" : "online",
+                busy: index >= 5 && index.isMultiple(of: 2),
+                labels: []
+            )
+        }
+        let updatedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = RunnersStore(defaults: defaults, now: { updatedAt }) { _ in fleet }
+        store.add(organization)
+        store.add(firstEnterprise)
+        store.add(selectedEnterprise)
+
+        await store.refreshDashboard()
+        var snapshot = try #require(store.dashboardSnapshot)
+        #expect(snapshot.enterpriseName == selectedEnterprise.name)
+        #expect(snapshot.enterpriseID == selectedEnterprise.id)
+        #expect(snapshot.totalCount == 105)
+        #expect(snapshot.idleCount == 50)
+        #expect(snapshot.busyCount == 50)
+        #expect(snapshot.offlineCount == 5)
+        #expect(snapshot.runners.count == 100)
+        #expect(snapshot.updatedAt == updatedAt.timeIntervalSince1970)
+        #expect(!snapshot.enterpriseID.contains(organization.name))
+
+        store.selectedScopeID = organization.id
+        await store.refreshDashboard()
+        snapshot = try #require(store.dashboardSnapshot)
+        #expect(snapshot.enterpriseName == firstEnterprise.name)
+        #expect(snapshot.enterpriseID == firstEnterprise.id)
+        #expect(!snapshot.enterpriseID.contains(organization.name))
+    }
+
+    @Test("No configured enterprise produces no dashboard or runner request")
+    func dashboardRequiresEnterprise() async throws {
+        let suite = "RunnersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let probe = RunnerScopeFetchProbe()
+        let store = RunnersStore(defaults: defaults) { scope in await probe.fetch(scope) }
+        store.add(RunnerScope(kind: .organization, name: "private-org"))
+        store.add(RunnerScope(kind: .repository, name: "private-org/private-repo"))
+
+        await store.refreshDashboard()
+        #expect(store.dashboardSnapshot == nil)
+        #expect(await probe.scopes.isEmpty)
+    }
+
+    @Test("A failed enterprise poll preserves its last-good dashboard timestamp")
+    func dashboardFreshnessSurvivesFailure() async throws {
+        let suite = "RunnersTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let probe = RunnerRefreshProbe()
+        var clock = Date(timeIntervalSince1970: 1_800_000_000)
+        let store = RunnersStore(defaults: defaults, now: { clock }) { _ in try await probe.fetch() }
+        store.add(RunnerScope(kind: .enterprise, name: "enterprise"))
+
+        await store.refreshDashboard()
+        let first = try #require(store.dashboardSnapshot)
+        clock += 300
+        await store.refreshDashboard()
+        let lastGood = try #require(store.dashboardSnapshot)
+        #expect(lastGood.updatedAt == first.updatedAt)
+        #expect(lastGood.runners == first.runners)
+    }
 }
 
 private actor RunnerScopeFetchProbe {

@@ -20,6 +20,7 @@ public enum FrameProtocol {
     public static let maxSampleBytes = 32 * 1_024 * 1_024
     public static let maxJPEGBytes = 16 * 1_024 * 1_024
     public static let maxAnnotationBytes = 1 * 1_024 * 1_024
+    public static let maxDashboardBytes = 512 * 1_024
 
     // MARK: - Models
 
@@ -136,6 +137,7 @@ public enum FrameProtocol {
         /// returns the nonce in ``pong`` over the authenticated stream.
         case ping(UInt64)
         case pong(UInt64)
+        case dashboard(DashboardSnapshotEnvelope)
         /// Legacy JPEG frame. Decoded for backward compatibility only.
         case jpeg(Data)
     }
@@ -153,6 +155,7 @@ public enum FrameProtocol {
         case appearance = 8
         case ping = 9
         case pong = 10
+        case dashboard = 11
         // Note: there is no tag for jpeg. A tagless / unknown-tag payload is
         // treated as a legacy raw JPEG by ``decode(_:)``.
     }
@@ -230,6 +233,12 @@ public enum FrameProtocol {
         case .pong(let nonce):
             var payload = Data([Kind.pong.rawValue])
             appendUInt64(nonce, to: &payload)
+            return payload
+        case .dashboard(let envelope):
+            guard let encoded = try? JSONEncoder().encode(envelope),
+                  encoded.count <= maxDashboardBytes else { return Data() }
+            var payload = Data([Kind.dashboard.rawValue])
+            payload.append(encoded)
             return payload
         case .jpeg(let jpeg):
             return jpeg.count <= maxJPEGBytes ? jpeg : Data()
@@ -318,6 +327,13 @@ public enum FrameProtocol {
             return payload.count == 9 ? .ping(readUInt64(from: payload, offset: 1)) : nil
         case .pong:
             return payload.count == 9 ? .pong(readUInt64(from: payload, offset: 1)) : nil
+        case .dashboard:
+            guard (2...(maxDashboardBytes + 1)).contains(payload.count),
+                  let envelope = try? JSONDecoder().decode(
+                    DashboardSnapshotEnvelope.self,
+                    from: slice(payload, 1, payload.count)
+                  ) else { return nil }
+            return .dashboard(envelope)
         }
     }
 

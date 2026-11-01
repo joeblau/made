@@ -132,6 +132,12 @@ struct AgenticUseStats: Sendable, Equatable {
     let cacheSavingsMultiple: Double?
 }
 
+struct AgenticProviderTotal: Sendable, Equatable {
+    let provider: AgenticProvider
+    let estimatedCost: Double
+    let totalTokens: Int
+}
+
 /// Everything the dashboard renders for one (records, range) pair.
 struct AgenticUseSnapshot: Sendable, Equatable {
     let range: AgenticUseRange
@@ -139,6 +145,7 @@ struct AgenticUseSnapshot: Sendable, Equatable {
     let interval: DateInterval
     /// Actual cost of the range, USD (the hero number).
     let totalCostUSD: Double
+    let providerTotals: [AgenticProviderTotal]
     /// Sorted by cost descending (display order for lists).
     let modelTotals: [AgenticModelTotal]
     /// Canonical models present, in fixed presentation order — build the
@@ -194,6 +201,7 @@ final class AgenticUsageStore {
     private(set) var scanWarning: String?
     /// Informational freshness for cached Cursor history, separate from errors.
     private(set) var cursorLastUpdated: Date?
+    private(set) var lastUpdatedAt: Date?
 
     var range: AgenticUseRange {
         didSet {
@@ -284,7 +292,7 @@ final class AgenticUsageStore {
         }
     }
 
-    /// Cancel all work. Leaving the section leaves nothing running.
+    /// Cancel all work. The app owns the lifecycle so dashboard publication can continue while the section is hidden.
     func stop() {
         isRunning = false
         loadTask?.cancel()
@@ -406,6 +414,7 @@ final class AgenticUsageStore {
     ) {
         hasLoadedOnce = true
         isRefreshing = false
+        lastUpdatedAt = Date()
         // Cursor history can change even when every local log is unchanged.
         let cursorRecords = UsageConsent.isCursorEnabled(defaults: defaults) ? cursorResult.records : []
         cursorLastUpdated = UsageConsent.isCursorEnabled(defaults: defaults) && cursorResult.isStale
@@ -513,6 +522,7 @@ final class AgenticUsageStore {
         }
 
         var byModel: [String: ModelBucket] = [:]
+        var byProvider: [AgenticProvider: (cost: Double, tokens: Int)] = [:]
         var byChartBucket: [Date: [String: (cost: Double, tokens: Int)]] = [:]
         var byDay: [Date: (cost: Double, tokens: Int)] = [:]
         var activeDays: Set<Date> = []
@@ -546,6 +556,10 @@ final class AgenticUsageStore {
             }
             model.tokens += tokens
             byModel[record.model] = model
+            var provider = byProvider[record.provider, default: (0, 0)]
+            provider.cost += cost ?? 0
+            provider.tokens += tokens
+            byProvider[record.provider] = provider
 
             let day = calendar.startOfDay(for: record.timestamp)
             activeDays.insert(day)
@@ -664,10 +678,17 @@ final class AgenticUsageStore {
             cacheSavingsMultiple: baselineCost > 0 ? savings / baselineCost : nil
         )
 
+        let providerTotals = AgenticProvider.allCases.compactMap { provider in
+            byProvider[provider].map {
+                AgenticProviderTotal(provider: provider, estimatedCost: $0.cost, totalTokens: $0.tokens)
+            }
+        }
+
         return AgenticUseSnapshot(
             range: range,
             interval: interval,
             totalCostUSD: totalCost,
+            providerTotals: providerTotals,
             modelTotals: modelTotals,
             modelOrder: modelOrder,
             modelDisplayNames: displayNames,

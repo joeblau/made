@@ -29,6 +29,15 @@ enum UsageConsent {
     }
 }
 
+enum UsageDashboardSharing {
+    static let preferenceKey = "usage.dashboardSharing"
+    static let changedNotification = Notification.Name("app.blau.pilot.usage-dashboard-sharing-changed")
+
+    static func isEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: preferenceKey)
+    }
+}
+
 /// Pulls **plan usage, reset windows, and credits** for Claude, Codex, Cursor,
 /// Grok, and Kimi by reusing the local CLI/app OAuth sessions (see
 /// `UsageSessions`) and calling each provider's own usage endpoint — no admin
@@ -99,18 +108,54 @@ final class UsageStore {
     private static let backoffBase: TimeInterval = 300           // 5 min
     private static let backoffCap: TimeInterval = 3600           // 1 hour
 
-    private enum Provider: CaseIterable { case anthropic, openAI, anysphere, xAI, moonshot }
+    enum Provider: CaseIterable { case anthropic, openAI, anysphere, xAI, moonshot }
     /// When a provider was last actually hit (for min-spacing).
     private var lastAttempt: [Provider: Date] = [:]
     /// When a rate-limited provider may be hit again.
     private var blockedUntil: [Provider: Date] = [:]
     /// Consecutive 429 count per provider (drives the exponential backoff).
     private var rateLimitStrikes: [Provider: Int] = [:]
+    private(set) var providerUpdatedAt: [Provider: Date] = [:]
 
     init(defaults: UserDefaults = .standard, fetchers: Fetchers = .live, now: @escaping () -> Date = Date.init) {
         self.defaults = defaults
         self.fetchers = fetchers
         self.now = now
+    }
+
+    var dashboardProviders: [UsageProviderProjection] {
+        [
+            UsageProviderProjection(
+                id: AgenticProvider.claude.rawValue,
+                name: AgenticProvider.claude.displayName,
+                state: anthropic,
+                updatedAt: providerUpdatedAt[.anthropic]
+            ),
+            UsageProviderProjection(
+                id: AgenticProvider.codex.rawValue,
+                name: AgenticProvider.codex.displayName,
+                state: openAI,
+                updatedAt: providerUpdatedAt[.openAI]
+            ),
+            UsageProviderProjection(
+                id: AgenticProvider.cursor.rawValue,
+                name: AgenticProvider.cursor.displayName,
+                state: anysphere,
+                updatedAt: providerUpdatedAt[.anysphere]
+            ),
+            UsageProviderProjection(
+                id: AgenticProvider.grok.rawValue,
+                name: AgenticProvider.grok.displayName,
+                state: xAI,
+                updatedAt: providerUpdatedAt[.xAI]
+            ),
+            UsageProviderProjection(
+                id: AgenticProvider.kimi.rawValue,
+                name: AgenticProvider.kimi.displayName,
+                state: moonshot,
+                updatedAt: providerUpdatedAt[.moonshot]
+            ),
+        ]
     }
 
     /// Begin (or restart) periodic refresh. Safe to call repeatedly.
@@ -179,11 +224,26 @@ final class UsageStore {
         let cursorEnabled = UsageConsent.isCursorEnabled(defaults: defaults)
         let grokEnabled = UsageConsent.isGrokEnabled(defaults: defaults)
         let kimiEnabled = UsageConsent.isKimiEnabled(defaults: defaults)
-        if !claudeEnabled { anthropic = .disabled }
-        if !codexEnabled { openAI = .disabled }
-        if !cursorEnabled { anysphere = .disabled }
-        if !grokEnabled { xAI = .disabled }
-        if !kimiEnabled { moonshot = .disabled }
+        if !claudeEnabled {
+            anthropic = .disabled
+            providerUpdatedAt[.anthropic] = nil
+        }
+        if !codexEnabled {
+            openAI = .disabled
+            providerUpdatedAt[.openAI] = nil
+        }
+        if !cursorEnabled {
+            anysphere = .disabled
+            providerUpdatedAt[.anysphere] = nil
+        }
+        if !grokEnabled {
+            xAI = .disabled
+            providerUpdatedAt[.xAI] = nil
+        }
+        if !kimiEnabled {
+            moonshot = .disabled
+            providerUpdatedAt[.moonshot] = nil
+        }
 
         // Multiple view lifecycle events can request a refresh together when
         // the inspector is presented. Keep the in-flight load: cancelling it
@@ -289,11 +349,13 @@ final class UsageStore {
         case .success(let usage):
             rateLimitStrikes[provider] = 0
             blockedUntil[provider] = nil
+            providerUpdatedAt[provider] = now()
             return .usage(usage)
 
         case .notSignedIn:
             rateLimitStrikes[provider] = 0
             blockedUntil[provider] = nil
+            providerUpdatedAt[provider] = nil
             return .notSignedIn
 
         case .rateLimited(let retryAfter):

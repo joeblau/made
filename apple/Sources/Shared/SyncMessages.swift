@@ -291,6 +291,9 @@ struct WorkspaceState: Codable, Sendable {
     let selectedWorkspaceID: UUID?
     // Optional so older companions can still exchange workspace snapshots.
     var workflowRuns: [BuildWorkflowRun]? = nil
+    var actionsDashboard: ActionsDashboardSnapshot? = nil
+    var usageDashboard: UsageDashboardSnapshot? = nil
+    var runnersDashboard: RunnersDashboardSnapshot? = nil
 }
 
 struct SelectWorkspace: Codable, Sendable {
