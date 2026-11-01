@@ -7,6 +7,7 @@ DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-builds}"
 PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
 
 "$APPLE_ROOT/bin/app-icon-tool.swift" validate
+"$APPLE_ROOT/bin/fetch-runner-model.sh" verify
 
 build() {
   local scheme="$1"
