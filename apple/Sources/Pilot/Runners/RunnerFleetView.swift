@@ -106,16 +106,19 @@ struct RunnerFleetView: View {
     @ViewBuilder
     private var detailsAnchor: some View {
         if let hover, let runner = runners.first(where: { $0.id == hover.id }) {
-            // Padding, not offset: popovers anchor to the layout frame.
+            // The popover attaches to the 1-point view itself, then padding moves
+            // that view into place. Attached after the padding, it anchored to the
+            // whole padded rectangle and pointed halfway between the corner and
+            // the runner. Offset wouldn't work: popovers follow the layout frame.
             Color.clear
                 .frame(width: 1, height: 1)
-                .padding(.leading, hover.point.x)
-                .padding(.top, hover.point.y)
-                .id(hover.id)
                 .popover(isPresented: $showsDetails, arrowEdge: .top) {
                     RunnerDetailsPopover(runner: runner, name: name(runner), hardware: hardware(runner))
                         .environment(\.colorScheme, .dark)
                 }
+                .padding(.leading, hover.point.x)
+                .padding(.top, hover.point.y)
+                .id(hover.id)
         }
     }
 }
