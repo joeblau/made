@@ -44,6 +44,9 @@ struct PlotterSnapshotWidget: Widget {
         .configurationDisplayName("Kneeboard Mirror")
         .description("The latest screen from the connected Mac.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        // The mirrored frame is the content; let it run edge to edge and
+        // inset only the status line.
+        .contentMarginsDisabled()
     }
 }
 
@@ -53,32 +56,47 @@ struct PlotterSnapshotView: View {
     private var connected: Bool { entry.status?.isConnected ?? false }
 
     var body: some View {
-        ZStack {
-            if let data = entry.imageData, let image = UIImage(data: data) {
-                Image(uiImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } else {
-                ContentUnavailablePlaceholder()
+        // A flexible clear frame owns the layout so an aspect-fill frame is
+        // cropped to the widget instead of widening it (which pushed the
+        // status line past the leading edge).
+        Color.clear
+            .overlay {
+                if let data = entry.imageData, let image = UIImage(data: data) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .widgetAccentedRenderingMode(.accentedDesaturated)
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    ContentUnavailablePlaceholder()
+                }
             }
-
-            VStack {
-                Spacer()
-                HStack(spacing: 5) {
+            .clipped()
+            .overlay(alignment: .bottomLeading) {
+                HStack(spacing: 4) {
                     Circle()
-                        .fill(connected ? Color.green : Color.secondary)
-                        .frame(width: 7, height: 7)
+                        .fill(connected ? Color.green : Color.white.opacity(0.6))
+                        .frame(width: 8, height: 8)
+                        .widgetAccentable()
                     Text(statusLine)
                         .font(.caption2)
+                        .fontWeight(.medium)
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                    Spacer()
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.black.opacity(0.45))
+                .padding(.horizontal, 16)
+                .padding(.top, 24)
+                .padding(.bottom, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                // Gradient scrim keeps the white caption legible over any
+                // mirrored frame without a hard-edged band (COL-6).
+                .background {
+                    LinearGradient(
+                        colors: [.black.opacity(0), .black.opacity(0.7)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                }
             }
-        }
     }
 
     private var statusLine: String {
@@ -94,14 +112,15 @@ private struct ContentUnavailablePlaceholder: View {
     var body: some View {
         ZStack {
             Color.black
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 Image(systemName: "display")
                     .font(.title2)
-                    .foregroundStyle(.secondary)
+                    .widgetAccentable()
                 Text("No mirror yet")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
+            // Always light-on-black: the container is a fixed dark stage.
+            .foregroundStyle(.white.opacity(0.6))
         }
     }
 }

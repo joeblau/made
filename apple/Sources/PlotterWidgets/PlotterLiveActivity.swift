@@ -8,6 +8,9 @@ struct PlotterLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: PlotterActivityAttributes.self) { context in
             lockScreen(context.state)
+                // The tint is a fixed dark stage for the mirror thumbnail, so
+                // the text must resolve light-on-dark in either system mode.
+                .environment(\.colorScheme, .dark)
                 .activityBackgroundTint(.black.opacity(0.85))
                 .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
@@ -41,7 +44,7 @@ struct PlotterLiveActivity: Widget {
     private func lockScreen(_ state: PlotterActivityAttributes.ContentState) -> some View {
         HStack(spacing: 12) {
             thumbnail(side: 52)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(state.title.isEmpty ? "Kneeboard" : state.title)
                     .font(.headline)
                 Text(stateLine(state))
@@ -61,9 +64,9 @@ struct PlotterLiveActivity: Widget {
                 .resizable()
                 .aspectRatio(contentMode: .fill)
                 .frame(width: side * 1.6, height: side)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         } else {
-            RoundedRectangle(cornerRadius: 6)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(.gray.opacity(0.3))
                 .frame(width: side * 1.6, height: side)
                 .overlay(Image(systemName: "display").foregroundStyle(.secondary))
@@ -73,7 +76,7 @@ struct PlotterLiveActivity: Widget {
     private func statusDot(_ connected: Bool) -> some View {
         Circle()
             .fill(connected ? Color.green : Color.secondary)
-            .frame(width: 9, height: 9)
+            .frame(width: 8, height: 8)
     }
 
     private func stateLine(_ state: PlotterActivityAttributes.ContentState) -> String {

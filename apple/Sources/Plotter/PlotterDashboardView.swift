@@ -17,9 +17,11 @@ struct PlotterDashboardView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    connectionStatus
-                    familyPicker
+                VStack(alignment: .leading, spacing: 24) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        connectionStatus
+                        familyPicker
+                    }
                     TimelineView(.periodic(from: .now, by: 60)) { context in
                         dashboardPanel(at: context.date)
                     }
@@ -39,7 +41,9 @@ struct PlotterDashboardView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    // Neutral glass close control; the sheet's one prominent
+                    // action is Start Live Activity (BTN-1).
+                    Button(role: .close) { dismiss() }
                 }
             }
         }
@@ -47,19 +51,24 @@ struct PlotterDashboardView: View {
     }
 
     private var connectionStatus: some View {
-        Label(
-            mirror.isCockpitConnected || mirror.isDemoMode
-                ? "Connected to Cockpit · Local aggregate updates"
-                : "Local aggregate updates · Waiting for Cockpit",
-            systemImage: mirror.isCockpitConnected || mirror.isDemoMode
-                ? "laptopcomputer.and.arrow.down"
-                : "laptopcomputer.slash"
-        )
+        let connected = mirror.isCockpitConnected || mirror.isDemoMode
+        // Green marks only the state glyph; the sentence stays secondary text
+        // so it keeps body contrast on the grouped background.
+        return Label {
+            Text(
+                connected
+                    ? "Connected to Cockpit · Local aggregate updates"
+                    : "Local aggregate updates · Waiting for Cockpit"
+            )
+            .foregroundStyle(.secondary)
+        } icon: {
+            Image(systemName: connected ? "laptopcomputer.and.arrow.down" : "laptopcomputer.slash")
+                .foregroundStyle(connected ? Color.green : Color.secondary)
+        }
         .font(.subheadline)
-        .foregroundStyle(mirror.isCockpitConnected || mirror.isDemoMode ? .green : .secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel(
-            mirror.isCockpitConnected || mirror.isDemoMode
+            connected
                 ? "Connected to Cockpit. Local aggregate updates."
                 : "Waiting for Cockpit. Local aggregate updates."
         )
@@ -89,7 +98,7 @@ struct PlotterDashboardView: View {
                         Label("No runs reported", systemImage: "tray")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal)
+                            .padding([.horizontal, .bottom], 16)
                     }
                 } else {
                     ContentUnavailableView {
@@ -108,7 +117,7 @@ struct PlotterDashboardView: View {
                         Label("No provider summaries", systemImage: "tray")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal)
+                            .padding([.horizontal, .bottom], 16)
                     }
                 } else {
                     ContentUnavailableView {
@@ -127,7 +136,7 @@ struct PlotterDashboardView: View {
                         Label("No runners in the sample", systemImage: "tray")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .padding(.horizontal)
+                            .padding([.horizontal, .bottom], 16)
                     }
                 } else {
                     ContentUnavailableView {
@@ -138,10 +147,18 @@ struct PlotterDashboardView: View {
                 }
             }
         }
-        .padding(20)
+        // The shared activity cards carry their own 16pt inset (they also
+        // render on the Lock Screen), so the panel adds only 4pt to land the
+        // content on the same 20pt edge as the Live Activity panel below.
+        .padding(4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Self.panelFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
+
+    /// Grouped-content surface: white over the gray grouped background in
+    /// light mode, an elevated gray over black in dark mode. Plain
+    /// `.background` is black-on-black in dark mode and the panels vanish.
+    private static let panelFill = Color(.secondarySystemGroupedBackground)
 
     private var activityControls: some View {
         let isActive = activities.activeFamilies.contains(selectedFamily)
@@ -173,8 +190,10 @@ struct PlotterDashboardView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isActive ? .red : .accentColor)
+            // Start is the sheet's one primary action; Stop is a reversible,
+            // non-destructive toggle, so it drops to neutral glass, not red.
+            .modifier(LiveActivityButtonStyle(isPrimary: !isActive))
+            .controlSize(.large)
             .disabled(isChangingActivity || (!isActive && !hasSelectedSnapshot))
             if !isActive && !hasSelectedSnapshot {
                 Text("Start becomes available after the first \(selectedFamily.title) snapshot arrives.")
@@ -183,7 +202,7 @@ struct PlotterDashboardView: View {
             }
         }
         .padding(20)
-        .background(.background, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Self.panelFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     @ViewBuilder
@@ -228,6 +247,19 @@ struct PlotterDashboardView: View {
             }
         } catch {
             // DashboardActivityController publishes the actionable error.
+        }
+    }
+}
+
+/// Liquid Glass button tiers for the Live Activity toggle (BTN-1).
+private struct LiveActivityButtonStyle: ViewModifier {
+    let isPrimary: Bool
+
+    func body(content: Content) -> some View {
+        if isPrimary {
+            content.buttonStyle(.glassProminent)
+        } else {
+            content.buttonStyle(.glass)
         }
     }
 }
