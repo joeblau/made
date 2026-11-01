@@ -21,9 +21,12 @@ public struct ActionsDashboardLiveActivity: Widget {
                     ActionsDashboardActivityCard(projection: context.state, isStale: context.isStale)
                 }
             } compactLeading: {
+                // Same family tint as the minimal view and keyline.
                 Image(systemName: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.blue)
             } compactTrailing: {
                 Text("\(context.state.activeCount) active")
+                    .monospacedDigit()
             } minimal: {
                 Image(systemName: context.state.failureCount > 0 ? "xmark.circle.fill" : "arrow.triangle.2.circlepath")
                     .foregroundStyle(context.state.failureCount > 0 ? .red : .blue)
@@ -58,8 +61,10 @@ public struct UsageDashboardLiveActivity: Widget {
                     .foregroundStyle(context.state.hasUnpricedModels ? .orange : .purple)
             } compactTrailing: {
                 Text(DashboardFormat.cost(context.state.estimatedCost))
+                    .monospacedDigit()
             } minimal: {
                 Image(systemName: "sparkles")
+                    .foregroundStyle(.purple)
             }
             .widgetURL(context.attributes.deepLink)
             .keylineTint(.purple)
@@ -88,8 +93,10 @@ public struct RunnersDashboardLiveActivity: Widget {
                 }
             } compactLeading: {
                 Image(systemName: "server.rack")
+                    .foregroundStyle(.blue)
             } compactTrailing: {
                 Text("\(context.state.idleCount)/\(context.state.totalCount)")
+                    .monospacedDigit()
             } minimal: {
                 Image(systemName: context.state.offlineCount > 0 ? "xmark.circle.fill" : "server.rack")
                     .foregroundStyle(context.state.offlineCount > 0 ? .red : .blue)

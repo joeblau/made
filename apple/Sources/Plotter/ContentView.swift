@@ -23,25 +23,27 @@ struct ContentView: View {
             // diagnostic ticks don't re-render the canvas or video reps.
             SearchingOverlay(mirror: mirror)
         }
-        // Settings gear + Pilot (Mac) connection status, top-left. Clears the
-        // annotation toolbar (undo/clear/reset), which sits top-trailing.
+        // Settings + Dashboard + Pilot (Mac) connection status, top-left. Clears
+        // the annotation toolbar (undo/clear/reset), which sits top-trailing.
+        // Both float over the mirror as Liquid Glass controls; the container
+        // lets the neighboring glass shapes blend into one cluster.
         .overlay(alignment: .topLeading) {
-            HStack(spacing: 10) {
-                SettingsButton()
-                    .font(.title2)
-                    .tint(.white)
-                Button {
-                    showsDashboard = true
-                } label: {
-                    Image(systemName: "square.grid.2x2")
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    SettingsButton()
+                    Button {
+                        showsDashboard = true
+                    } label: {
+                        Image(systemName: "square.grid.2x2")
+                    }
+                    .help("Dashboard")
+                    .accessibilityLabel("Dashboard")
+                    ConnectionStatusBadge(mirror: mirror)
                 }
-                .font(.title2)
-                .tint(.white)
-                .help("Dashboard")
-                .accessibilityLabel("Dashboard")
-                ConnectionStatusBadge(mirror: mirror)
+                .font(.title3)
+                .buttonStyle(GlassCircleButtonStyle())
             }
-            .padding()
+            .padding(12)
         }
         .sheet(isPresented: $showsDashboard) {
             PlotterDashboardView(mirror: mirror, selectedFamily: $dashboardFamily)
@@ -72,6 +74,26 @@ struct ContentView: View {
     }
 }
 
+/// System `.glass` circle buttons with a fixed glyph box, so symbols of
+/// different heights (the ellipsis vs. the grid) produce identical circles.
+/// A primitive style so it also reaches the shared `SettingsButton`.
+private struct GlassCircleButtonStyle: PrimitiveButtonStyle {
+    /// With the regular control size this yields a 48pt circle, matching the
+    /// connection badge and the UIKit annotation toolbar capsule.
+    static let glyphSide: CGFloat = 34
+
+    func makeBody(configuration: Configuration) -> some View {
+        Button(role: configuration.role) {
+            configuration.trigger()
+        } label: {
+            configuration.label
+                .frame(width: Self.glyphSide, height: Self.glyphSide)
+        }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+    }
+}
+
 /// Laptop (Pilot/Mac) connection indicator: green once we're receiving the
 /// mirror, dim otherwise. Isolated into its own view so the per-frame
 /// `frameCount` updates only re-render this small badge — not the video or
@@ -81,11 +103,12 @@ private struct ConnectionStatusBadge: View {
 
     var body: some View {
         let connected = mirror.frameCount > 0
-        Image(systemName: "laptopcomputer")
-            .font(.title2)
-            .foregroundStyle(connected ? Color.green : Color.white.opacity(0.5))
-            .padding(8)
-            .background(.black.opacity(0.42), in: Capsule())
+        // A status readout, not a button: same circular glass footprint as the
+        // neighboring controls, with green reserved for the connected signal.
+        Image(systemName: connected ? "laptopcomputer" : "laptopcomputer.slash")
+            .foregroundStyle(connected ? Color.green : Color.secondary)
+            .frame(width: 48, height: 48)
+            .glassEffect(.regular.interactive(), in: Circle())
             .help(connected ? "Connected to Cockpit" : "Searching for Cockpit")
             .accessibilityLabel(connected ? "Connected to Cockpit" : "Not connected to Cockpit")
             .contextMenu {
@@ -111,6 +134,9 @@ private struct SearchingOverlay: View {
             } actions: {
                 ProgressView()
             }
+            // The mirror stage is always black (a video surface), so the
+            // placeholder must stay light-on-dark regardless of system mode.
+            .environment(\.colorScheme, .dark)
         }
     }
 }
@@ -218,6 +244,8 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     private let videoView = SampleBufferVideoView()
     let canvasView = PKCanvasView()
     private let toolbar = UIStackView()
+    /// Liquid Glass platter the annotation toolbar floats on.
+    private let toolbarGlass = UIVisualEffectView()
 
     /// Shown above the (empty) video layer only in demo mode; rides the same
     /// zoom/pan transform so seeded annotation strokes stay aligned.
@@ -397,27 +425,34 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
 
     private func setupToolbar() {
         toolbar.axis = .horizontal
-        toolbar.spacing = 10
+        toolbar.spacing = 0
         toolbar.alignment = .center
         toolbar.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.backgroundColor = UIColor.black.withAlphaComponent(0.42)
-        toolbar.layer.cornerRadius = 18
         toolbar.isLayoutMarginsRelativeArrangement = true
-        toolbar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12)
+        toolbar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
 
-        let undoButton = button(systemName: "arrow.uturn.backward") { [weak self] in
+        // Floating controls over the mirror use interactive Liquid Glass in a
+        // capsule, matching the SwiftUI settings cluster on the leading side.
+        let glass = UIGlassEffect(style: .regular)
+        glass.isInteractive = true
+        toolbarGlass.effect = glass
+        toolbarGlass.cornerConfiguration = .capsule()
+        toolbarGlass.translatesAutoresizingMaskIntoConstraints = false
+        toolbarGlass.contentView.addSubview(toolbar)
+
+        let undoButton = button(systemName: "arrow.uturn.backward", label: "Undo") { [weak self] in
             self?.canvasView.undoManager?.undo()
         }
-        let clearButton = button(systemName: "trash") { [weak self] in
+        let clearButton = button(systemName: "trash", label: "Clear Annotations") { [weak self] in
             self?.clearCanvas()
         }
         // Close: clears the canvas and dismisses the drawing pane on Pilot. The
         // remote-ink overlay on Pilot is shown only while ink is present, so the
         // `.clear` that `clearCanvas()` sends both empties and closes it.
-        let closeButton = button(systemName: "xmark") { [weak self] in
+        let closeButton = button(systemName: "xmark", label: "Close Drawing") { [weak self] in
             self?.clearCanvas()
         }
-        let resetZoomButton = button(systemName: "arrow.up.left.and.arrow.down.right") { [weak self] in
+        let resetZoomButton = button(systemName: "arrow.up.left.and.arrow.down.right", label: "Reset Zoom") { [weak self] in
             self?.resetZoom()
         }
         toolbar.addArrangedSubview(resetZoomButton)
@@ -426,10 +461,14 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         toolbar.addArrangedSubview(closeButton)
 
         // The toolbar stays fixed (not inside the transformable content view).
-        addSubview(toolbar)
+        addSubview(toolbarGlass)
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 12),
-            toolbar.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12)
+            toolbar.topAnchor.constraint(equalTo: toolbarGlass.contentView.topAnchor),
+            toolbar.bottomAnchor.constraint(equalTo: toolbarGlass.contentView.bottomAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: toolbarGlass.contentView.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: toolbarGlass.contentView.trailingAnchor),
+            toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 12),
+            toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12)
         ])
     }
 
@@ -447,13 +486,19 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         onClear?()
     }
 
-    private func button(systemName: String, action: @escaping () -> Void) -> UIButton {
+    /// A 44pt icon button for the glass toolbar: Dynamic Type symbol sizing,
+    /// a label-colored glyph that adapts with the glass, a spoken name, and
+    /// pointer hover on iPad trackpads.
+    private func button(systemName: String, label: String, action: @escaping () -> Void) -> UIButton {
         let button = UIButton(type: .system)
         button.setImage(UIImage(systemName: systemName), for: .normal)
-        button.tintColor = .white
+        button.setPreferredSymbolConfiguration(UIImage.SymbolConfiguration(textStyle: .title3), forImageIn: .normal)
+        button.tintColor = .label
+        button.accessibilityLabel = label
+        button.isPointerInteractionEnabled = true
         button.addAction(UIAction { _ in action() }, for: .touchUpInside)
-        button.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
         return button
     }
 
