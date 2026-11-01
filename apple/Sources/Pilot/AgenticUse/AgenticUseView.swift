@@ -19,8 +19,8 @@ struct AgenticUseView: View {
                     .scaledFont(size: 11)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
             }
         }
         .onAppear { store.start() }
@@ -32,13 +32,12 @@ struct AgenticUseView: View {
     // MARK: - Header bar
 
     private var headerBar: some View {
-        HStack(spacing: 10) {
-            Text("Agentic Use")
-                .scaledFont(size: 13, weight: .semibold)
-
+        // The window toolbar already titles the page, so the bar leads with the
+        // date range instead of repeating "Agentic Use".
+        HStack(spacing: 8) {
             if let interval = store.snapshot?.interval {
                 Text((interval.start..<interval.end).formatted(.interval.month(.abbreviated).day()))
-                    .scaledFont(size: 12)
+                    .scaledFont(size: 12, weight: .medium)
                     .foregroundStyle(.secondary)
             }
 
@@ -70,7 +69,7 @@ struct AgenticUseView: View {
             .foregroundStyle(.secondary)
             .help("Refresh usage and pricing")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
 
@@ -90,8 +89,10 @@ struct AgenticUseView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss warning")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.1))
     }
@@ -102,8 +103,7 @@ struct AgenticUseView: View {
     private var content: some View {
         switch store.phase {
         case .idle:
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            scanningState(scanned: 0, total: 0)
         case .scanning(let scanned, let total):
             scanningState(scanned: scanned, total: total)
         case .empty:
@@ -118,8 +118,7 @@ struct AgenticUseView: View {
                     dashboard(snapshot)
                 }
             } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                scanningState(scanned: 0, total: 0)
             }
         }
     }
@@ -146,7 +145,7 @@ struct AgenticUseView: View {
             if total > 0 {
                 Text("\(scanned.formatted()) of \(total.formatted()) files")
                     .scaledFont(size: 11)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
@@ -158,10 +157,9 @@ struct AgenticUseView: View {
         ContentUnavailableView {
             Label("No Usage Data", systemImage: "chart.line.uptrend.xyaxis")
         } description: {
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
                 Text("No usage was found for Claude Code, Codex, Cursor, Grok, or Kimi.")
                 Text("Run an agent session, or enable Cursor usage in Settings.")
-                    .foregroundStyle(.tertiary)
             }
         } actions: {
             Button("Rescan") { store.rescan() }
@@ -173,7 +171,11 @@ struct AgenticUseView: View {
         ContentUnavailableView {
             Label("Nothing in This Range", systemImage: "calendar.badge.exclamationmark")
         } description: {
-            Text("No usage recorded in the last \(rangeDescription). Try a wider range.")
+            Text("No usage recorded in the last \(rangeDescription).")
+        } actions: {
+            if store.range != .all {
+                Button("Show All History") { store.range = .all }
+            }
         }
     }
 
@@ -199,19 +201,24 @@ struct AgenticUseView: View {
 
 // MARK: - Shared card chrome
 
+/// Dashboard spacing and type tokens. Spacing sits on the 4pt grid; text uses
+/// five sizes — display (KPI values), title (card headings), body, meta, and
+/// caption (axis labels and footnotes).
+enum AgenticUseLayout {
+    static let cardPadding: CGFloat = 16
+    static let cardRadius: CGFloat = 12
+}
+
 extension View {
-    /// The dashboard's card treatment: the inspector's `.quaternary` fill
-    /// plus a hairline edge so adjacent cards stay separate in dark mode.
-    func agenticUseCard(minHeight: CGFloat? = nil, padding inset: CGFloat = 14) -> some View {
+    /// The dashboard's card treatment: a quiet `.quaternary` fill, no border.
+    /// The 12pt gaps between cards separate them; a hairline on every card
+    /// made the page read as border soup.
+    func agenticUseCard(minHeight: CGFloat? = nil, padding inset: CGFloat = AgenticUseLayout.cardPadding) -> some View {
         padding(inset)
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
             .background(
-                .quaternary.opacity(0.4),
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+                .quaternary.opacity(0.5),
+                in: RoundedRectangle(cornerRadius: AgenticUseLayout.cardRadius, style: .continuous)
             )
     }
 
@@ -288,16 +295,18 @@ struct AgenticUseDashboard: View {
     /// Costs are estimates; keep the pricing source and any unpriced gap
     /// visible on the page rather than buried in a tooltip.
     private var footnote: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             Text("Costs are API-equivalent estimates at published per-token rates. \(pricingStatus).")
             if snapshot.hasUnpricedModels {
                 Text("* Partial total: \(AgenticUseFormat.tokens(snapshot.unpricedTokens)) tokens have no published rate.")
                     .foregroundStyle(.orange)
             }
         }
-        .scaledFont(size: 10)
-        .foregroundStyle(.tertiary)
+        // Secondary, not tertiary: the pricing caveat is content and has to
+        // pass contrast at this size.
+        .scaledFont(size: 11)
+        .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 2)
+        .padding(.horizontal, 4)
     }
 }

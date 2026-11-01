@@ -1,5 +1,74 @@
 # Design review — made (blau.app web + Pilot/Walkie/Kneeboard apps)
 
+## 2026-10-31 — Cockpit Agentic Use dashboard
+
+Scope: the Agentic Use tab as redesigned in #310 (`apple/Sources/Pilot/AgenticUse/*View*`,
+KPI cards, daily chart, Token Flow, Provider Breakdown, Top Models, Insights).
+Reviewed against the zandesign check catalog. The catalog targets React; checks were
+applied to SwiftUI equivalents. Visual pass: `capture-pilot-scenes.py --scenes agentic-use`
+at 1440×960 in light and dark, before and after the fixes. Interactive flows (hover
+tooltips, legend isolation, popovers) were not exercised.
+
+### Verdict
+
+The data design is strong; the chrome around it was not. Every panel carried a fill
+*and* a hairline, Token Flow added fifteen outlined chips, and the insights were cards
+inside a card — the page read as border soup. Five rainbow sparklines reused the
+provider hues, so decoration looked like data. Stripping chrome and neutralizing the
+decoration lets the provider colors and the red/green deltas carry the meaning.
+
+### Findings
+
+| ID | Check | Where | Finding | Fix (applied unless noted) |
+|---|---|---|---|---|
+| P0-1 | TYPE-3 | `AgenticUseView` footnote, KPI fallback caption, scan count, empty-state hint | Pricing caveat at 10pt `.tertiary` (~26% alpha) fails 4.5:1 | `.secondary`, footnote 10→11pt |
+| P1-1 | LAY-2 | `agenticUseCard`, `nodeChrome`, Top Models rows | Fill + 1px border on every card and flow node; divider under every table row | Borders removed; one header rule in Top Models; spacing separates rows |
+| P1-2 | LAY-1 / LAY-4 | `AgenticUseInsightsView` | Insight cards (radius 9) nested in a card (radius 10, 14 padding) | Inner surfaces removed; insights grouped by 16pt spacing |
+| P1-3 | HIER-2 | Header bar | "Agentic Use" repeated under the identical window title, at a smaller size than card titles | Header leads with the date range |
+| P1-4 | HIER-2 | Daily chart legend vs Provider Breakdown | Same share-of-cost percentages shown twice on one screen | **Not applied** — product decision (see below) |
+| P1-5 | MOT-5 | `AgenticUseView.content` `.idle` / loaded-without-snapshot | Bare spinner as the whole loading UI | Reuses the labelled scanning state; skeleton still recommended |
+| P2-1 | Outside catalog / COL-3 | KPI sparklines | Green/blue/purple/yellow/teal tints collide with Codex/Cursor/Kimi identity colors; yellow goes neon in dark | Neutral `.secondary` sparklines; deltas keep semantic color |
+| P2-2 | IMG-2 | Token Flow provider nodes, Insight tiles | Solid gradient tiles with white glyphs read as primary buttons | Soft 16–20% tint with tinted glyph, matching token-type tiles |
+| P2-3 | TYPE-4 | Dashboard views | 8 font sizes (9, 10, 11, 12, 13, 14, 17, 26) | 5: caption 10, meta 11, body 12, title 14, display 26 |
+| P2-4 | LAY-3 | Dashboard views | Spacing literals 1–3, 5–7, 9, 10, 14, 18 | Snapped to the 4pt grid (hairline 1–2pt kept); card padding 16, radius 12 |
+| P2-5 | MOT-6 | `rangeEmptyState` | Empty range had no next action | "Show All History" button when not already on All |
+
+Verified clean: TYPE-1, TYPE-2, COL-2 (dark parity), COL-4, BTN-1, BTN-2, BTN-5,
+IMG-1 (SF Symbols + one brand-symbol set), MODAL-*, FORM-* (no forms), HIER-3.
+
+### Detail
+
+- **P0-1 TYPE-3** — `.tertiary` maps to `tertiaryLabelColor`, roughly 2:1 against the
+  card fill. The footnote is the only place the API-equivalent pricing caveat and the
+  unpriced-token gap appear, so it is content, not chrome. Source:
+  https://x.com/zander_supafast/status/1968252670604685678
+- **P1-1 LAY-2** — the hairline existed to separate adjacent cards in dark mode; the
+  12pt grid gap and a slightly stronger fill (`.quaternary` 0.4→0.5) do that without a
+  line. Source: https://x.com/zander_supafast/status/2080000671781110136
+- **P1-2 LAY-1/LAY-4** — nested surfaces also broke the radius rule (inner 9 inside
+  outer 10 with 14pt padding). Removing the inner surface removes both problems.
+  Source: https://x.com/zander_supafast/status/2084623671444799847
+- **P1-3 HIER-2** — `ContentView` already sets the window title to "Agentic Use".
+  Source: https://x.com/zander_supafast/status/2053925539019165904
+- **P1-4 HIER-2 (open)** — for the Cost metric the chart legend and Provider Breakdown
+  show identical shares. Options: drop shares from the legend (keep it as a filter),
+  or fold Provider Breakdown's cost and per-model popover into the legend and remove
+  the card. Left for a product call.
+- **P1-5 MOT-5** — a skeleton of the KPI row and chart frame would remove the layout
+  jump when data lands. Source: https://x.com/zander_supafast/status/1554384338619453440
+
+### Systemic changes
+
+- `agenticUseCard` is the single card treatment: borderless, `AgenticUseLayout.cardPadding`
+  (16) and `cardRadius` (12). One change fixed every panel.
+- `AgenticUseLayout` documents the five-size type scale and 4pt spacing for future panels.
+- The snapshot workbench header mirrors the live header so captures stay truthful.
+
+### Outside catalog (reviewer judgment)
+
+- The warning banner's icon-only dismiss button had no label or tooltip; added
+  "Dismiss" help and an accessibility label.
+
 ## 2026-10-23 — contemporary web redesign
 
 Scope: the complete `workers/web` landing experience at `/` and `/made`, its

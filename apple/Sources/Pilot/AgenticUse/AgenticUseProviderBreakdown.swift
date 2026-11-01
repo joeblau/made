@@ -32,7 +32,7 @@ struct AgenticUseProviderBreakdown: View {
 
     var body: some View {
         let entries = entries
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Provider Breakdown").agenticUseCardTitle()
                 Spacer(minLength: 8)
@@ -44,7 +44,7 @@ struct AgenticUseProviderBreakdown: View {
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 104), spacing: 12, alignment: .topLeading)],
                 alignment: .leading,
-                spacing: 10
+                spacing: 12
             ) {
                 ForEach(entries) { entry in
                     AgenticUseProviderLegendEntry(
@@ -90,10 +90,10 @@ private struct AgenticUseProviderLegendEntry: View {
     @State private var showsModels = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 7) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Circle()
                 .fill(AgenticUseModelPalette.providerColor(for: provider))
-                .frame(width: 9, height: 9)
+                .frame(width: 8, height: 8)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
@@ -117,7 +117,7 @@ private struct AgenticUseProviderLegendEntry: View {
                 Text(provider.displayName)
                     .scaledFont(size: 12, weight: .semibold)
                 ForEach(models) { total in
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(AgenticUseModelPalette.color(for: total.model))
                             .frame(width: 8, height: 8)
@@ -148,9 +148,9 @@ private struct AgenticUseProviderLegendEntry: View {
 struct AgenticUseUnpricedBadge: View {
     var body: some View {
         Text("unpriced")
-            .scaledFont(size: 9, weight: .semibold)
+            .scaledFont(size: 10, weight: .semibold)
             .foregroundStyle(.orange)
-            .padding(.horizontal, 5)
+            .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(Color.orange.opacity(0.15), in: Capsule())
     }

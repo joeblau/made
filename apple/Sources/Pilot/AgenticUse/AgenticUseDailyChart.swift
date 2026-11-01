@@ -90,14 +90,14 @@ struct AgenticUseDailyChartPanel: View {
 
     private var header: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) {
+            HStack(spacing: 12) {
                 Text(title).agenticUseCardTitle().fixedSize()
                 metricPicker
                 Spacer(minLength: 8)
                 trailingControls
             }
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 14) {
+                HStack(spacing: 12) {
                     Text(title).agenticUseCardTitle().fixedSize()
                     Spacer(minLength: 8)
                     trailingControls
@@ -232,7 +232,7 @@ struct AgenticUseDailyChartPanel: View {
                     .annotation(
                         position: .top,
                         alignment: .leading,
-                        spacing: 6,
+                        spacing: 8,
                         overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .chart))
                     ) {
                         tooltip(for: selected, cells: cells)
@@ -324,7 +324,7 @@ struct AgenticUseDailyChartPanel: View {
     /// isolates that provider; clicking it again restores the stack.
     private var legend: some View {
         let shares = legendShares
-        return HStack(spacing: 18) {
+        return HStack(spacing: 16) {
             Spacer(minLength: 0)
             ForEach(shares, id: \.provider) { entry in
                 Button {
@@ -332,10 +332,10 @@ struct AgenticUseDailyChartPanel: View {
                         isolated = isolated == entry.provider ? nil : entry.provider
                     }
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: 8) {
                         Circle()
                             .fill(AgenticUseModelPalette.providerColor(for: entry.provider))
-                            .frame(width: 9, height: 9)
+                            .frame(width: 8, height: 8)
                         Text(entry.provider.displayName)
                             .scaledFont(size: 12, weight: .medium)
                         Text(AgenticUseFormat.percent(entry.share))
@@ -406,7 +406,7 @@ struct AgenticUseDailyChartPanel: View {
     private func tooltip(for bucket: Date, cells: [Cell]) -> some View {
         let rows = cells.filter { $0.bucket == bucket }.sorted { $0.value > $1.value }
         let total = rows.reduce(0) { $0 + $1.value }
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 8) {
             Text(tooltipDate(bucket))
                 .scaledFont(size: 11, weight: .medium)
                 .foregroundStyle(.secondary)
@@ -420,7 +420,7 @@ struct AgenticUseDailyChartPanel: View {
             }
             Divider()
             ForEach(rows) { row in
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     Circle()
                         .fill(AgenticUseModelPalette.providerColor(for: row.provider))
                         .frame(width: 8, height: 8)
@@ -434,7 +434,7 @@ struct AgenticUseDailyChartPanel: View {
                 }
             }
         }
-        .padding(10)
+        .padding(12)
         .frame(minWidth: 180, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(

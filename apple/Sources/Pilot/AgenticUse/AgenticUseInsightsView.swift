@@ -1,6 +1,8 @@
 import SwiftUI
 
 /// Up to three plain-language observations derived by `AgenticUseInsights`.
+/// Insights sit directly on the card, grouped by spacing — nested boxes made
+/// the panel read as cards inside a card.
 struct AgenticUseInsightsView: View {
     let insights: [AgenticUseInsight]
 
@@ -8,9 +10,9 @@ struct AgenticUseInsightsView: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Insights").agenticUseCardTitle()
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 190), spacing: 10, alignment: .top)],
+                columns: [GridItem(.adaptive(minimum: 190), spacing: 16, alignment: .top)],
                 alignment: .leading,
-                spacing: 10
+                spacing: 16
             ) {
                 ForEach(insights) { insight in
                     card(insight)
@@ -22,14 +24,16 @@ struct AgenticUseInsightsView: View {
 
     private func card(_ insight: AgenticUseInsight) -> some View {
         let tint = Self.tint(for: insight.kind)
-        return HStack(alignment: .top, spacing: 10) {
+        // A soft tinted tile: a solid gradient with a white glyph read like a
+        // small primary button competing with the real controls.
+        return HStack(alignment: .top, spacing: 12) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(tint.gradient)
+                .fill(tint.opacity(0.16))
                 .frame(width: 32, height: 32)
                 .overlay {
                     Image(systemName: Self.symbol(for: insight.kind))
                         .scaledFont(size: 14, weight: .semibold)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(tint)
                 }
             VStack(alignment: .leading, spacing: 4) {
                 Text(insight.title)
@@ -42,9 +46,7 @@ struct AgenticUseInsightsView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 
