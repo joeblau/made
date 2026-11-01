@@ -35,6 +35,70 @@ private struct PaneLayoutPlan {
     let expandedSize: CGFloat
 }
 
+/// Pane size floors. The relative 0.1 floor alone let a divider drag (or a
+/// narrower window) squeeze a pane to 37–65pt, where pane headers clip and
+/// picker titles break a letter per line. An expanded pane therefore keeps
+/// at least `minimumPaneLength` points whenever the stack fits every expanded
+/// pane at that length; a stack too small for that keeps the relative floor.
+enum PaneSizing {
+    /// Enough for a pane header: glyph, a short title, and two small buttons.
+    static let minimumPaneLength: Double = 160
+    static let minimumRelativeFraction = 0.1
+
+    /// The smallest fraction a divider drag may leave an expanded pane.
+    static func minimumFraction(expandedSize: Double?, expandedCount: Int) -> Double {
+        guard let expandedSize, expandedSize > 0, expandedCount > 0,
+              minimumPaneLength * Double(expandedCount) <= expandedSize else {
+            return minimumRelativeFraction
+        }
+        return max(minimumRelativeFraction, minimumPaneLength / expandedSize)
+    }
+
+    /// New fractions for the pair either side of a divider. The pair's total is
+    /// preserved, and neither side is pushed below `minimumFraction`; a side
+    /// already below it (a window that just got narrower) may grow but not
+    /// shrink, so the result never jumps, goes negative, or overflows the pair.
+    static func resizedPair(
+        leading: Double,
+        trailing: Double,
+        delta: Double,
+        minimumFraction: Double
+    ) -> (leading: Double, trailing: Double) {
+        let leading = max(0, leading)
+        let trailing = max(0, trailing)
+        let total = leading + trailing
+        let lower = min(minimumFraction, leading)
+        let upper = total - min(minimumFraction, trailing)
+        let newLeading = min(max(leading + delta, lower), upper)
+        return (newLeading, total - newLeading)
+    }
+
+    /// Lifts every expanded pane below `minimumPaneLength` up to it, taking the
+    /// space proportionally from the larger panes. Input fractions sum to 1;
+    /// so does the output. When the panes can't all fit at the floor, the
+    /// fractions come back unchanged (the previous, purely relative layout).
+    static func flooredFractions(_ fractions: [UUID: Double], expandedSize: Double) -> [UUID: Double] {
+        guard !fractions.isEmpty, expandedSize > 0,
+              minimumPaneLength * Double(fractions.count) <= expandedSize else { return fractions }
+        let floor = minimumPaneLength / expandedSize
+        var pinned = Set<UUID>()
+        while true {
+            let free = fractions.filter { !pinned.contains($0.key) }
+            let remaining = max(0, 1 - Double(pinned.count) * floor)
+            let freeTotal = free.values.reduce(0, +)
+            let scaled = free.mapValues { value in
+                freeTotal > 0 ? value / freeTotal * remaining : remaining / Double(free.count)
+            }
+            let undersized = scaled.filter { $0.value < floor }.map(\.key)
+            // `count * floor <= 1` means at least one pane always stays free.
+            guard !undersized.isEmpty, undersized.count < free.count else {
+                return scaled.merging(pinned.map { ($0, floor) }) { scaledValue, _ in scaledValue }
+            }
+            pinned.formUnion(undersized)
+        }
+    }
+}
+
 struct WorkspaceView: View {
     @Bindable var workspace: Workspace
     let isActive: Bool
@@ -423,7 +487,10 @@ private extension WorkspaceView {
         let collapsedThickness = min(PaneLayoutMetrics.collapsedPaneThickness, max(0, maxCollapsedThickness))
         let collapsedTotal = CGFloat(collapsedPanes.count) * collapsedThickness
         let expandedSize = expandedPanes.isEmpty ? 0 : max(0, totalSize - collapsedTotal)
-        let fractions = workspace.normalizedExpandedSizeFractions
+        let fractions = PaneSizing.flooredFractions(
+            workspace.normalizedExpandedSizeFractions,
+            expandedSize: Double(expandedSize)
+        )
 
         var sizes: [UUID: CGFloat] = [:]
         for pane in sorted {
@@ -507,7 +574,12 @@ private struct PaneResizeHandle: View {
                     let moved = current - lastDragLocation
                     lastDragLocation = current
                     let delta = Double(moved / totalSize)
-                    workspace.resizePanes(leadingID: leadingID, trailingID: trailingID, delta: delta)
+                    workspace.resizePanes(
+                        leadingID: leadingID,
+                        trailingID: trailingID,
+                        delta: delta,
+                        expandedSize: Double(totalSize)
+                    )
                 }
                 .onEnded { _ in
                     guard isEnabled else { return }

@@ -100,7 +100,7 @@ struct AndroidPaneView: View {
                 toast(label: "Screenshot Copied", systemImage: "checkmark.circle.fill")
             }
             if showsDroppedTextToast {
-                toast(label: "Some characters can't be typed over adb", systemImage: "keyboard.badge.ellipsis")
+                toast(label: "Some characters can\u{2019}t be typed over adb", systemImage: "keyboard.badge.ellipsis")
             }
         }
         .onChange(of: session.clipboardCopyCount) { _, _ in

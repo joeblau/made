@@ -1186,30 +1186,30 @@ final class Workspace {
     }
 
     /// Resize the nearest expanded panes on either side of the divider by a delta
-    /// (in fraction of total expanded size). Collapsed panes keep their slit width.
-    func resizePanes(leadingID: UUID, trailingID: UUID, delta: Double) {
+    /// (in fraction of `expandedSize`, the points shared by expanded panes).
+    /// Collapsed panes keep their slit width; see `PaneSizing` for the floor.
+    func resizePanes(leadingID: UUID, trailingID: UUID, delta: Double, expandedSize: Double? = nil) {
         guard let (leadingPane, trailingPane) = resizePanePair(
             leadingID: leadingID,
             trailingID: trailingID
         ) else { return }
 
-        let fractions = normalizedExpandedSizeFractions
+        // Start from what's on screen (floored), so the first drag never jumps.
+        var fractions = normalizedExpandedSizeFractions
+        if let expandedSize { fractions = PaneSizing.flooredFractions(fractions, expandedSize: expandedSize) }
         guard let leadFrac = fractions[leadingPane.id],
               let trailFrac = fractions[trailingPane.id] else { return }
 
-        let minFraction = 0.1
-        let newLead = max(minFraction, min(leadFrac + delta, leadFrac + trailFrac - minFraction))
-        let newTrail = leadFrac + trailFrac - newLead
-
-        // Apply to all panes (initialize any that were 0)
+        let minimum = PaneSizing.minimumFraction(expandedSize: expandedSize, expandedCount: fractions.count)
+        let (newLead, newTrail) = PaneSizing.resizedPair(
+            leading: leadFrac, trailing: trailFrac, delta: delta, minimumFraction: minimum
+        )
+        fractions[leadingPane.id] = newLead
+        fractions[trailingPane.id] = newTrail
+        // Write every expanded pane's normalized share, not just the pair's:
+        // mixing normalized and raw weights would resize unrelated panes.
         for pane in sortedPanes where !pane.isCollapsed {
-            if pane.id == leadingPane.id {
-                pane.sizeFraction = newLead
-            } else if pane.id == trailingPane.id {
-                pane.sizeFraction = newTrail
-            } else if pane.sizeFraction <= 0 {
-                pane.sizeFraction = fractions[pane.id] ?? (1.0 / Double(panes.count))
-            }
+            pane.sizeFraction = fractions[pane.id] ?? (1.0 / Double(max(panes.count, 1)))
         }
     }
 

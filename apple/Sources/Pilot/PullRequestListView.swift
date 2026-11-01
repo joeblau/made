@@ -766,6 +766,9 @@ struct ActionsListView: View {
             RepositoryTableHeader(
                 title: store.repositoryName,
                 systemImage: "folder",
+                // Spin only for the first read; the skeleton below covers the
+                // same wait, and a silent 30s poll must not animate (MOT-5).
+                isLoading: store.isLoadingWorkflowRuns && !store.hasLoadedWorkflowRuns,
                 refreshHelp: "Refresh actions",
                 isRefreshDisabled: store.repoPath.isEmpty
             ) {
@@ -783,7 +786,12 @@ struct ActionsListView: View {
                     .padding(12)
                 }
 
-                if store.actions.isEmpty && !store.isLoading, let error = store.workflowError {
+                switch store.workflowRunsOverlay {
+                case .loading:
+                    // First read: skeleton cards, never "No Actions" (MOT-5).
+                    InspectorLoadingPlaceholder()
+                        .transition(.opacity)
+                case .error(let error):
                     ContentUnavailableView {
                         Label("Couldn\u{2019}t Load Actions", systemImage: "exclamationmark.triangle")
                     } description: {
@@ -794,7 +802,7 @@ struct ActionsListView: View {
                     }
                     .legibleSecondaryHierarchy()
                     .transition(.opacity)
-                } else if store.actions.isEmpty && !store.isLoading {
+                case .empty:
                     ContentUnavailableView(
                         "No Actions",
                         systemImage: "gearshape.2",
@@ -804,6 +812,8 @@ struct ActionsListView: View {
                     )
                     .legibleSecondaryHierarchy()
                     .transition(.opacity)
+                case nil:
+                    EmptyView()
                 }
             }
         }
@@ -929,6 +939,7 @@ struct ActionsListView: View {
 private struct RepositoryTableHeader: View {
     let title: String
     let systemImage: String
+    var isLoading = false
     let refreshHelp: String
     let isRefreshDisabled: Bool
     let refresh: () -> Void
@@ -937,6 +948,7 @@ private struct RepositoryTableHeader: View {
         InspectorSectionHeader(
             title: title,
             systemImage: systemImage,
+            isLoading: isLoading,
             refreshHelp: refreshHelp,
             isRefreshDisabled: isRefreshDisabled,
             refresh: refresh

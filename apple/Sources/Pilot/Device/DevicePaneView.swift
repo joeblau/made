@@ -241,9 +241,17 @@ struct DevicePickerHeader: View {
 
     var body: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-            Spacer()
+            // A narrow pane drops the title to its symbol rather than
+            // breaking it a letter or two per line (TYPE-2).
+            ViewThatFits(in: .horizontal) {
+                Label(title, systemImage: systemImage)
+                Image(systemName: systemImage)
+                    .accessibilityLabel(title)
+                    .help(title)
+            }
+            .font(.headline)
+            .lineLimit(1)
+            Spacer(minLength: 0)
             if isRefreshing {
                 ProgressView().controlSize(.small)
             }
@@ -275,14 +283,20 @@ struct DevicePickerRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: LiquidGlassMetrics.Spacing.large)
             VStack(alignment: .leading, spacing: 2) {
+                // One line each, truncated at the end; `.help` carries the
+                // full name when a narrow pane cuts it short (TYPE-2).
                 Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
                 if let detail {
                     Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
-            Spacer()
+            Spacer(minLength: 0)
             if let badge {
                 Text(badge)
                     .font(.caption.weight(.medium))
@@ -294,6 +308,7 @@ struct DevicePickerRow: View {
         }
         .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+        .help(detail.map { "\(title), \($0)" } ?? title)
     }
 }
 
@@ -330,8 +345,67 @@ struct DevicePaneMessage<Actions: View>: View {
         self.actions = actions()
     }
 
+    /// Below this width a title word like "Devices" no longer fits on a line
+    /// and ContentUnavailableView breaks it mid-word ("De- / vice / s"). That
+    /// happens when a narrow window can't give every pane the 160pt floor.
+    static var compactWidth: CGFloat { 120 }
+
+    @State private var width: CGFloat = .infinity
+
     var body: some View {
-        let message = ContentUnavailableView {
+        let content = Group {
+            if width < Self.compactWidth {
+                compactMessage
+            } else {
+                fullMessage
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+
+        if onCanvas {
+            content
+                .environment(\.colorScheme, .dark)
+                .background(PreviewCanvasBackground())
+        } else {
+            content
+        }
+    }
+
+    /// Glyph only, with the title and detail in the tooltip and VoiceOver
+    /// label, so a sliver-wide pane shows a clean symbol instead of broken
+    /// words.
+    private var compactMessage: some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
+            Image(systemName: systemImage)
+                .scaledFont(size: 22)
+                .foregroundStyle(.secondary)
+                .symbolEffect(.pulse, isActive: isLoading)
+                .accessibilityHidden(true)
+            if isLoading {
+                ProgressView().controlSize(.small)
+            }
+            if hasActions {
+                VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    actions
+                }
+                .lineLimit(1)
+            }
+        }
+        .uiZoomedDynamicType()
+        .padding(LiquidGlassMetrics.Spacing.xSmall)
+        .help(accessibilityText)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityText)
+    }
+
+    private var accessibilityText: String {
+        guard let detail, !detail.isEmpty else { return title }
+        return "\(title). \(detail)"
+    }
+
+    private var fullMessage: some View {
+        ContentUnavailableView {
             Label {
                 Text(title)
             } icon: {
@@ -364,15 +438,6 @@ struct DevicePaneMessage<Actions: View>: View {
         }
         .legibleSecondaryHierarchy()
         .uiZoomedDynamicType()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-        if onCanvas {
-            message
-                .environment(\.colorScheme, .dark)
-                .background(PreviewCanvasBackground())
-        } else {
-            message
-        }
     }
 }
 
@@ -399,6 +464,13 @@ extension DevicePaneMessage where Actions == EmptyView {
 /// Transient confirmation toast for the device panes. Floating glass over the
 /// mirrored screen (the control layer, never content); non-interactive.
 struct DevicePaneToast: View {
+    /// Black scrim inside the glass. The mirrored screen can be any
+    /// brightness whatever the app's appearance, and glass tint blends with
+    /// what's behind it, so an explicit fill sets the floor: at 0.75 over pure
+    /// white it leaves about rgb(64), which keeps white text near 10:1 and
+    /// the orange heads-up near 5:1 (TYPE-3). Pinned by DeviceToastContrastTests.
+    nonisolated static let scrimOpacity = 0.75
+
     let text: String
     let systemImage: String
     var tint: Color = .primary
@@ -409,7 +481,12 @@ struct DevicePaneToast: View {
             .foregroundStyle(tint)
             .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
             .padding(.vertical, LiquidGlassMetrics.Spacing.small)
+            .background(Capsule().fill(.black.opacity(Self.scrimOpacity)))
+            // Keeps the pre-26 material fallback and its drop shadow.
             .compatFloatingGlassCapsule()
+            // Pinned dark so `.primary`, the tint, and the glass all resolve
+            // for the dark capsule in both app appearances.
+            .environment(\.colorScheme, .dark)
     }
 }
 

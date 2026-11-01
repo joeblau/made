@@ -112,6 +112,12 @@ final class RepositoryStore {
     var pullRequestError: String?
     /// Why the last workflow run read failed, or nil.
     var workflowError: String?
+    /// Whether a `gh run list` read is in flight, including silent polls.
+    private(set) var isLoadingWorkflowRuns = false
+    /// Whether a workflow-run read has finished for this repo since it was
+    /// opened. Only the first read shows the skeleton; later polls keep the
+    /// empty or error state on screen so it can't flicker every 30s (MOT-5).
+    private(set) var hasLoadedWorkflowRuns = false
     var isLoadingFilesystem = false
     private var refreshTimer: Timer?
     private var polledResources: RepositoryPolledResources = .both
@@ -136,6 +142,8 @@ final class RepositoryStore {
         hasLoadedPullRequests = false
         actions = []
         runs = []
+        isLoadingWorkflowRuns = false
+        hasLoadedWorkflowRuns = false
         pullRequestError = nil
         workflowError = nil
         filesystem = []
@@ -194,7 +202,21 @@ final class RepositoryStore {
         filesystem = []
         isLoading = false
         hasLoadedPullRequests = false
+        isLoadingWorkflowRuns = false
+        hasLoadedWorkflowRuns = false
         isLoadingFilesystem = false
+    }
+
+    /// What the Actions tab lays over its (empty) list. A first read shows
+    /// the skeleton; after that the error or empty state stays put whatever
+    /// polls are in flight, so a 30s tick never fades it out and back.
+    var workflowRunsOverlay: InspectorListOverlay? {
+        InspectorListOverlay(
+            isEmpty: actions.isEmpty,
+            hasRepository: !repoPath.isEmpty,
+            hasLoaded: hasLoadedWorkflowRuns,
+            error: workflowError
+        )
     }
 
     func fetchAll(policy: RepositoryRefreshPolicy = .automatic) {
@@ -224,6 +246,7 @@ final class RepositoryStore {
     /// GitHub API round-trip) feeds both instead of two per refresh tick.
     func fetchWorkflowRuns(policy: RepositoryRefreshPolicy = .automatic) {
         guard !repoPath.isEmpty else { return }
+        isLoadingWorkflowRuns = true
         let dir = repoPath
 
         Task {
@@ -234,6 +257,8 @@ final class RepositoryStore {
                 self.runs = runs
             }
             self.workflowError = error
+            self.isLoadingWorkflowRuns = false
+            self.hasLoadedWorkflowRuns = true
         }
     }
 
@@ -438,6 +463,25 @@ final class RepositoryStore {
         return String(filePath.dropFirst(prefix.count))
     }
 
+}
+
+/// The state an inspector list shows in place of rows, or nil while it has
+/// rows to show.
+enum InspectorListOverlay: Equatable {
+    case loading
+    case error(String)
+    case empty
+
+    init?(isEmpty: Bool, hasRepository: Bool, hasLoaded: Bool, error: String?) {
+        guard isEmpty else { return nil }
+        if hasRepository && !hasLoaded {
+            self = .loading
+        } else if let error {
+            self = .error(error)
+        } else {
+            self = .empty
+        }
+    }
 }
 
 /// Plain-language copy for a failed `gh` read in the inspector. The PR,

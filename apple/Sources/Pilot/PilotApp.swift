@@ -1024,20 +1024,23 @@ struct PilotApp: App {
             return
         }
 
-        // In a device pane: ⌘C grabs a screenshot to the clipboard. The
-        // session's `clipboardCopyCount` increment drives the toast.
-        if let pane = store.selectedWorkspace?.selectedPane,
-           pane.kind == .device {
-            DeviceCaptureRegistry.shared.session(for: pane.id)
-                .copyScreenshotToClipboard()
-            return
-        }
-
-        if let pane = store.selectedWorkspace?.selectedPane,
-           pane.kind == .android {
-            AndroidDeviceRegistry.shared.session(for: pane.id)
-                .copyScreenshotToClipboard()
-            return
+        // In a device, Simulator, or Android pane: ⌘C grabs a screenshot to
+        // the clipboard, and each session's `clipboardCopyCount` drives its
+        // toast. The menu command owns ⌘C, so the panes never see the key.
+        if let pane = store.selectedWorkspace?.selectedPane {
+            switch pane.kind {
+            case .device:
+                DeviceCaptureRegistry.shared.session(for: pane.id).copyScreenshotToClipboard()
+                return
+            case .simulator:
+                SimulatorRegistry.shared.session(for: pane.id).copyScreenshotToClipboard()
+                return
+            case .android:
+                AndroidDeviceRegistry.shared.session(for: pane.id).copyScreenshotToClipboard()
+                return
+            case .terminal, .browser, .editor:
+                break
+            }
         }
 
         sendStandardEditAction(#selector(NSText.copy(_:)))

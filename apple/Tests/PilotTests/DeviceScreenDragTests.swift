@@ -109,3 +109,42 @@ struct TerminalDropTextTests {
         #expect(TerminalDropText.text(from: pasteboard) == "/tmp/shot.png")
     }
 }
+
+/// The device-pane toasts float over a mirrored screen that can be pure white
+/// whatever the app's appearance. Their black scrim alone must keep the text
+/// at WCAG AA (4.5:1) over that worst case, for the default white label and
+/// the orange "Recording without audio" heads-up (TYPE-3).
+@Suite("Device pane toast contrast")
+struct DeviceToastContrastTests {
+    @Test("The scrim keeps toast text at 4.5:1 or better over a white screen")
+    func scrimClearsAAOverWhite() throws {
+        // Black at `scrimOpacity` over white, composited in sRGB.
+        let backdrop = 1 - DevicePaneToast.scrimOpacity
+        let backdropLuminance = Self.luminance(red: backdrop, green: backdrop, blue: backdrop)
+
+        var orange: NSColor?
+        try #require(NSAppearance(named: .darkAqua)).performAsCurrentDrawingAppearance {
+            orange = NSColor.systemOrange.usingColorSpace(.sRGB)
+        }
+        let tint = try #require(orange)
+        let tintLuminance = Self.luminance(
+            red: Double(tint.redComponent),
+            green: Double(tint.greenComponent),
+            blue: Double(tint.blueComponent)
+        )
+
+        #expect(Self.contrast(1, backdropLuminance) >= 4.5)
+        #expect(Self.contrast(tintLuminance, backdropLuminance) >= 4.5)
+    }
+
+    private static func luminance(red: Double, green: Double, blue: Double) -> Double {
+        func linear(_ value: Double) -> Double {
+            value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+    }
+
+    private static func contrast(_ first: Double, _ second: Double) -> Double {
+        (max(first, second) + 0.05) / (min(first, second) + 0.05)
+    }
+}

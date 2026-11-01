@@ -146,6 +146,7 @@ private struct LocalServerCard: View {
     let server: LocalServer
     let isLive: Bool
     let onTap: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Content card, not a control: a quiet semantic fill, no glass (glass is
     /// for the control layer) and no border (LAY-2).
@@ -156,14 +157,18 @@ private struct LocalServerCard: View {
         Button(action: onTap) {
             // A narrow pane drops the decorative preview instead of letting
             // the card's minimum width overflow the pane, which clipped the
-            // "Local" header and the cards' leading edge (LAY-6).
+            // "Local" header and the cards' leading edge (LAY-6). Narrower
+            // still, the hotkey badge goes too, so the URL keeps its port.
             ViewThatFits(in: .horizontal) {
-                cardContent(showsThumbnail: true)
-                cardContent(showsThumbnail: false)
+                cardContent(showsThumbnail: true, showsHotkey: true)
+                cardContent(showsThumbnail: false, showsHotkey: true)
+                cardContent(showsThumbnail: false, showsHotkey: false)
             }
             .padding(Self.padding)
             .background(
-                .fill.quinary,
+                // `.quinary` is 253 on 255 in light mode, too faint to show
+                // the tap target; one step up reads as a card (BTN-5).
+                colorScheme == .light ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(.fill.quinary),
                 in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
             )
         }
@@ -171,7 +176,7 @@ private struct LocalServerCard: View {
         .buttonStyle(.liquidGlassPressable(cornerRadius: Self.cornerRadius))
     }
 
-    private func cardContent(showsThumbnail: Bool) -> some View {
+    private func cardContent(showsThumbnail: Bool, showsHotkey: Bool) -> some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             if showsThumbnail {
                 BrowserPreviewThumbnail(
@@ -188,13 +193,16 @@ private struct LocalServerCard: View {
                 Text(server.name)
                     .scaledFont(size: 15, weight: .semibold)
                     .lineLimit(1)
+                // Truncate from the front: "…host:5173" keeps the port, which
+                // is what tells two local servers apart.
                 Text(server.displayURL)
                     .scaledFont(size: 13)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.head)
             }
             Spacer(minLength: 0)
-            if let hotkey {
+            if showsHotkey, let hotkey {
                 Text("\(hotkey)")
                     .scaledFont(size: 12, weight: .semibold, design: .monospaced)
                     .foregroundStyle(.secondary)
