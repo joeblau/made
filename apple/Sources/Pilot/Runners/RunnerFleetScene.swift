@@ -245,6 +245,11 @@ final class RunnerFleetScene {
         // The environment's horizon line rims the edges, and a weak cool fill
         // keeps the fronts legible.
         scene.rootNode.addChildNode(Self.light(.directional, intensity: 1_200, color: NSColor(red: 1, green: 0.97, blue: 0.93, alpha: 1), angles: SIMD3(-1.3, .pi, 0)))
+        // Warm-left, cool-right side contrast: a low pale-gold light from the
+        // front left lights the left panels and corners, and a cool blue fill
+        // from the right keeps the far sides from going flat black.
+        scene.rootNode.addChildNode(Self.light(.directional, intensity: 1_400, color: NSColor(red: 1, green: 0.8, blue: 0.5, alpha: 1), from: SIMD3(-100, 24, 16)))
+        scene.rootNode.addChildNode(Self.light(.directional, intensity: 380, color: NSColor(red: 0.4, green: 0.55, blue: 1, alpha: 1), from: SIMD3(100, 22, 10)))
         scene.rootNode.addChildNode(Self.light(.directional, intensity: 260, color: NSColor(red: 0.55, green: 0.65, blue: 1, alpha: 1), angles: SIMD3(-0.6, 0.4, 0)))
         scene.rootNode.addChildNode(Self.light(.ambient, intensity: 60, color: NSColor(red: 0.25, green: 0.32, blue: 0.6, alpha: 1), angles: .zero))
 
@@ -252,6 +257,14 @@ final class RunnerFleetScene {
         scene.rootNode.addChildNode(fleetNode)
         buildHub()
         applyCamera()
+    }
+
+    /// A directional light shining from `from` toward the origin.
+    private static func light(_ type: SCNLight.LightType, intensity: CGFloat, color: NSColor, from: SIMD3<Float>) -> SCNNode {
+        let node = light(type, intensity: intensity, color: color, angles: .zero)
+        node.simdPosition = from
+        node.simdLook(at: .zero)
+        return node
     }
 
     private static func light(_ type: SCNLight.LightType, intensity: CGFloat, color: NSColor, angles: SIMD3<Float>) -> SCNNode {
