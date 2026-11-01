@@ -3,69 +3,6 @@ import Sparkle
 import SwiftData
 import SwiftUI
 
-/// Scene-local browser selection used by menu commands. Revealing a browser
-/// preserves focused-pane mode by moving that focus to the browser instead of
-/// leaving `focusedPaneID` attached to a hidden pane.
-@MainActor
-enum BrowserCommandSelection {
-    static func selectedState(
-        in workspace: Workspace?,
-        supporting capability: BrowserCapability? = nil
-    ) -> BrowserState? {
-        guard let state = BrowserToolbarSelection.state(for: workspace?.selectedPane) else {
-            return nil
-        }
-        if let capability, !state.supports(capability) {
-            return nil
-        }
-        return state
-    }
-
-    static func hasBrowser(
-        in workspace: Workspace?,
-        supporting capability: BrowserCapability? = nil
-    ) -> Bool {
-        workspace?.panes.contains { pane in
-            guard pane.kind == .browser,
-                  let state = pane.browserState else { return false }
-            return capability.map(state.supports) ?? true
-        } ?? false
-    }
-
-    @discardableResult
-    static func revealBrowser(
-        in workspace: Workspace?,
-        supporting capability: BrowserCapability? = nil
-    ) -> BrowserState? {
-        guard let workspace else { return nil }
-
-        func isEligible(_ pane: Pane) -> Bool {
-            guard pane.kind == .browser,
-                  let state = pane.browserState else { return false }
-            return capability.map(state.supports) ?? true
-        }
-
-        let browser: Pane
-        if let selectedPane = workspace.selectedPane,
-           isEligible(selectedPane) {
-            browser = selectedPane
-        } else if let firstBrowser = workspace.sortedPanes.first(where: isEligible) {
-            browser = firstBrowser
-        } else {
-            return nil
-        }
-
-        if let focusedPaneID = workspace.focusedPaneID,
-           focusedPaneID != browser.id {
-            workspace.focusPane(browser)
-        } else {
-            workspace.expandPane(browser)
-            workspace.selectedPaneID = browser.id
-        }
-        return BrowserToolbarSelection.state(for: browser)
-    }
-}
-
 /// Browser menu commands follow the key scene's focused Workspace. Main and
 /// Extension publish their own workspace with `focusedSceneValue`, preventing
 /// shortcuts in one window from reloading, annotating, or selecting a browser
@@ -236,6 +173,11 @@ struct PilotApp: App {
     @State private var screenMirror: ScreenMirror
     @State private var plotterClientCount = 0
     @State private var plotterPairingRequest: FrameLinkPairingRequest?
+    #if DEBUG
+    /// Review-only stand-ins for a peer's pairing prompt (`DemoReviewFixture`).
+    @State private var demoWalkiePairing = DemoReviewFixture.walkiePairingRequest()
+    @State private var demoPlotterPairing = DemoReviewFixture.plotterPairingRequest()
+    #endif
     @State private var remoteInkModel = RemoteInkModel()
     @State private var walkieInput = PilotWalkieInputState()
     @State private var mainWindowID: CGWindowID?
@@ -583,7 +525,7 @@ struct PilotApp: App {
                         localAudioOutput: headphoneDetector.audioOutput,
                         isPlotterConnected: plotterClientCount > 0,
                         remoteInkModel: remoteInkModel,
-                        isPeerRecording: walkieInput.isRecording,
+                        isPeerRecording: isPeerRecordingForDisplay,
                         usageStore: usageStore,
                         agenticUseStore: agenticUseStore,
                         runnersStore: runnersStore
@@ -694,42 +636,45 @@ struct PilotApp: App {
                     secureIdentity.announce()
                 }
                 .alert(
-                    syncService.pairingRequest?.isKeyChange == true
+                    walkiePairingPrompt?.isKeyChange == true
                         ? "Trust New Walkie Identity?"
                         : "Pair with Walkie?",
                     isPresented: Binding(
-                        get: { syncService.pairingRequest != nil },
-                        set: { if !$0 { syncService.resolvePairingRequest(approved: false) } }
+                        get: { walkiePairingPrompt != nil },
+                        set: { if !$0 { resolveWalkiePairing(approved: false) } }
                     )
                 ) {
                     Button("Reject", role: .cancel) {
-                        syncService.resolvePairingRequest(approved: false)
+                        resolveWalkiePairing(approved: false)
                     }
-                    Button(syncService.pairingRequest?.isKeyChange == true ? "Trust New Key" : "Pair") {
-                        syncService.resolvePairingRequest(approved: true)
+                    Button(walkiePairingPrompt?.isKeyChange == true ? "Trust New Key" : "Pair") {
+                        resolveWalkiePairing(approved: true)
                     }
                 } message: {
-                    let request = syncService.pairingRequest
+                    let request = walkiePairingPrompt
                     Text("Verify this fingerprint on \(request?.displayName ?? "the other device") before approving:\n\n\(request?.fingerprint ?? "")")
                 }
                 .alert(
-                    plotterPairingRequest?.isKeyChange == true
+                    plotterPairingPrompt?.isKeyChange == true
                         ? "Trust New Kneeboard Identity?"
                         : "Pair with Kneeboard?",
                     isPresented: Binding(
-                        get: { plotterPairingRequest != nil },
-                        set: { if !$0 { frameSender.resolvePairingRequest(approved: false) } }
+                        get: { plotterPairingPrompt != nil },
+                        set: { if !$0 { resolvePlotterPairing(approved: false) } }
                     )
                 ) {
                     Button("Reject", role: .cancel) {
-                        frameSender.resolvePairingRequest(approved: false)
+                        resolvePlotterPairing(approved: false)
                     }
-                    Button(plotterPairingRequest?.isKeyChange == true ? "Trust New Key" : "Pair") {
-                        frameSender.resolvePairingRequest(approved: true)
+                    Button(plotterPairingPrompt?.isKeyChange == true ? "Trust New Key" : "Pair") {
+                        resolvePlotterPairing(approved: true)
                     }
                 } message: {
-                    Text("Verify this fingerprint on Kneeboard before approving:\n\n\(plotterPairingRequest?.fingerprint ?? "")")
+                    Text("Verify this fingerprint on Kneeboard before approving:\n\n\(plotterPairingPrompt?.fingerprint ?? "")")
                 }
+                #if DEBUG
+                .background { DemoSecureMessagingOpener() }
+                #endif
                 .environment(secureIdentity)
                 .background {
                     PilotWindowReader(
@@ -869,7 +814,9 @@ struct PilotApp: App {
                 if setupProgress.needsInitialSetup {
                     ContentUnavailableView("Setup Required", systemImage: "gearshape.2", description: Text(
                         "Finish setup in the main Cockpit window to open your workspaces."
-                    )).padding(LiquidGlassMetrics.Spacing.xxLarge) // Designed empty state (MOT-6).
+                    ))
+                    .legibleSecondaryHierarchy()
+                    .padding(LiquidGlassMetrics.Spacing.xxLarge) // Designed empty state (MOT-6).
                 } else {
                     ExtensionWindowView(
                         store: store,
@@ -904,6 +851,19 @@ struct PilotApp: App {
             PilotExtensionWorkspaceCommands(store: store)
         }
 
+        #if DEBUG
+        // Review-only: nothing in the app opens Secure Messaging yet, so a
+        // demo launch with `-demoSecureMessaging YES` shows it in its own
+        // window. Release builds compile none of this.
+        Window("Secure Messaging", id: DemoReviewFixture.secureMessagingWindowID) {
+            PilotSecureMessagingView()
+        }
+        .defaultLaunchBehavior(.suppressed)
+        // Kept out of the Window menu: debug builds outside a review launch
+        // should not offer an unfinished surface.
+        .commandsRemoved()
+        #endif
+
         Window("Set Up Cockpit", id: "setup") {
             SetupWindowView(progress: setupProgress, updater: updaterController.updater) { directory in
                 if let directory { store.addWorkspace(directory: directory) }
@@ -922,6 +882,43 @@ struct PilotApp: App {
         }
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .windowResizability(.contentMinSize)
+    }
+
+    private var isPeerRecordingForDisplay: Bool {
+        #if DEBUG
+        if DemoReviewFixture.flag("demoPeerRecording") { return true }
+        #endif
+        return walkieInput.isRecording
+    }
+
+    // Demo prompts never reached the peer services (demo mode does not start
+    // them), so resolving one only dismisses it and writes nothing.
+    private var walkiePairingPrompt: PeerSyncPairingRequest? {
+        #if DEBUG
+        if let demoWalkiePairing { return demoWalkiePairing }
+        #endif
+        return syncService.pairingRequest
+    }
+
+    private var plotterPairingPrompt: FrameLinkPairingRequest? {
+        #if DEBUG
+        if let demoPlotterPairing { return demoPlotterPairing }
+        #endif
+        return plotterPairingRequest
+    }
+
+    private func resolveWalkiePairing(approved: Bool) {
+        #if DEBUG
+        if demoWalkiePairing != nil { demoWalkiePairing = nil; return }
+        #endif
+        syncService.resolvePairingRequest(approved: approved)
+    }
+
+    private func resolvePlotterPairing(approved: Bool) {
+        #if DEBUG
+        if demoPlotterPairing != nil { demoPlotterPairing = nil; return }
+        #endif
+        frameSender.resolvePairingRequest(approved: approved)
     }
 
     private func remoteInputSurface() -> WorkspacePaneSurface {

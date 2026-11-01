@@ -6,7 +6,9 @@ struct WorkspaceSidebarHeading: View {
     var body: some View {
         Text(title)
             .scaledFont(size: 11, weight: .semibold)
-            .foregroundStyle(.secondary)
+            // Vibrant `.secondary` measured 3.2:1 on the glass sidebar in
+            // both appearances (TYPE-3).
+            .glassLegibleForeground(.secondary)
             .lineLimit(1)
     }
 }
@@ -42,6 +44,7 @@ struct WorkspaceSidebarRow: View {
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 if isRenaming {
                     TextField("Name", text: $draftName)
+                        .clearsFieldEditorBackground()
                         .focused($renameFocused)
                         .onSubmit(commitRename)
                         .onExitCommand(perform: cancelRename)
@@ -99,7 +102,7 @@ struct WorkspaceSidebarRow: View {
             }
 
             Button(action: onUpdateRootPath) {
-                Label("Update Root Path", systemImage: "arrow.triangle.2.circlepath")
+                Label("Update Root Path…", systemImage: "arrow.triangle.2.circlepath")
             }
 
             Divider()
@@ -142,7 +145,7 @@ struct WorkspaceSidebarRow: View {
     private func branchLabel(_ branch: String) -> some View {
         Text(branch)
             .scaledFont(size: 10)
-            .foregroundStyle(.secondary)
+            .glassLegibleForeground(.secondary)
             .lineLimit(1)
             .truncationMode(.middle)
             .help("On branch \(branch)")
@@ -428,7 +431,7 @@ struct WorkspaceGroupSidebarRow: View {
                 // rather than a glyph swap (MOT-4).
                 Image(systemName: "chevron.right")
                     .scaledFont(size: 9, weight: .semibold)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                     .rotationEffect(.degrees(group.isExpanded ? 90 : 0))
                     .frame(width: 10)
                 WorkspaceSidebarHeading(title: group.name)
@@ -455,7 +458,7 @@ struct WorkspaceGroupSidebarRow: View {
         .draggable(WorkspaceSidebarDragPayload(groupID: group.id))
         .contextMenu {
             Button("New Workspace in Group…", action: onNewWorkspace)
-            Button("Rename Group", action: onRename)
+            Button("Rename Group…", action: onRename)
             Button("Ungroup Workspaces") {
                 store.workspaceGroups.remove(group.id, workspaceIDs: store.unpinnedWorkspaceIDs)
             }

@@ -894,3 +894,56 @@ final class WorkspaceStore {
             .element
     }
 }
+
+#if DEBUG
+/// DEBUG-only review fixtures. Each one needs `-demoMode YES` plus its own
+/// launch argument, and drives presentation that otherwise needs a live peer:
+/// `-demoPairingPrompt walkie|walkieKeyChange|kneeboard|kneeboardKeyChange`,
+/// `-demoPeerRecording YES`, `-demoPeersConnected YES`, and
+/// `-demoSecureMessaging YES`. None of them touches pairing, keys, or the
+/// network, and release builds compile none of this.
+enum DemoReviewFixture {
+    static var isDemo: Bool { UserDefaults.standard.bool(forKey: "demoMode") }
+
+    static func flag(_ key: String) -> Bool {
+        isDemo && UserDefaults.standard.bool(forKey: key)
+    }
+
+    static var pairingPrompt: String? {
+        isDemo ? UserDefaults.standard.string(forKey: "demoPairingPrompt") : nil
+    }
+
+    static let fingerprint = "3F9A 21C7 8B04 E6D2 5A1F 90CE 7B33 64D8"
+
+    static func walkiePairingRequest() -> PeerSyncPairingRequest? {
+        guard let kind = pairingPrompt, kind.hasPrefix("walkie") else { return nil }
+        return PeerSyncPairingRequest(
+            id: UUID(), displayName: "Walkie on iPhone",
+            fingerprint: fingerprint, isKeyChange: kind.hasSuffix("KeyChange")
+        )
+    }
+
+    static func plotterPairingRequest() -> FrameLinkPairingRequest? {
+        guard let kind = pairingPrompt, kind.hasPrefix("kneeboard") else { return nil }
+        return FrameLinkPairingRequest(
+            id: UUID(), displayName: "Kneeboard on iPad", fingerprint: fingerprint,
+            publicKey: "", isKeyChange: kind.hasSuffix("KeyChange")
+        )
+    }
+    static let secureMessagingWindowID = "demo.secure-messaging"
+}
+
+/// Opens the review-only Secure Messaging window once for
+/// `-demoSecureMessaging YES`.
+struct DemoSecureMessagingOpener: View {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Color.clear
+            .task {
+                guard DemoReviewFixture.flag("demoSecureMessaging") else { return }
+                openWindow(id: DemoReviewFixture.secureMessagingWindowID)
+            }
+    }
+}
+#endif

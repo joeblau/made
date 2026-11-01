@@ -504,7 +504,7 @@ enum BrowserAnnotate {
         var style = document.createElement('style');
         style.textContent = '[data-pilot-annotate-box] .pa-close:hover{background:rgba(255,255,255,0.12)!important;color:#fff!important;}' +
           '[data-pilot-annotate-box] textarea:focus{outline:none!important;border-color:#0a84ff!important;box-shadow:0 0 0 3px rgba(10,132,255,0.25)!important;}' +
-          '[data-pilot-annotate-box] textarea::placeholder{color:#636366!important;}' +
+          '[data-pilot-annotate-box] textarea::placeholder{color:#c7c7cc!important;}' +
           '[data-pilot-annotate-box] .pa-send:hover{background:#2f8cff!important;}' +
           '[data-pilot-annotate-box] .pa-send:active{transform:scale(0.97)!important;}' +
           '@media (prefers-color-scheme: light){' +
@@ -514,7 +514,7 @@ enum BrowserAnnotate {
             '[data-pilot-annotate-box] .pa-close{color:#6e6e73!important;}' +
             '[data-pilot-annotate-box] .pa-close:hover{background:rgba(0,0,0,0.08)!important;color:#1d1d1f!important;}' +
             '[data-pilot-annotate-box] .pa-input{background:rgba(0,0,0,0.04)!important;color:#1d1d1f!important;border-color:rgba(0,0,0,0.12)!important;}' +
-            '[data-pilot-annotate-box] .pa-input::placeholder{color:#8e8e93!important;}' +
+            '[data-pilot-annotate-box] .pa-input::placeholder{color:#636366!important;}' +
             '[data-pilot-annotate-box] .pa-hint{color:#6e6e73!important;}' +
           '}' +
           '@media (prefers-reduced-motion: reduce){[data-pilot-annotate-box]{transition:none!important;transform:none!important;}}';
@@ -530,14 +530,14 @@ enum BrowserAnnotate {
         var tag = document.createElement('span');
         tag.className = 'pa-tag';
         tag.textContent = '<' + el.tagName.toLowerCase() + '>';
-        tag.style.cssText = 'font:11px ui-monospace,Menlo,monospace;color:#8e8e93;background:rgba(255,255,255,0.08);border-radius:999px;padding:2px 8px;overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;';
+        tag.style.cssText = 'font:11px ui-monospace,Menlo,monospace;color:#c7c7cc;background:rgba(255,255,255,0.08);border-radius:999px;padding:2px 8px;overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;';
         header.appendChild(tag);
         var close = document.createElement('button');
         close.className = 'pa-close';
         close.textContent = '×';
         close.title = 'Dismiss';
         close.setAttribute('aria-label', 'Dismiss');
-        close.style.cssText = 'margin-left:auto;width:24px;height:24px;line-height:22px;text-align:center;background:transparent;color:#8e8e93;border:none;border-radius:50%;font-size:16px;cursor:pointer;padding:0;transition:background 0.15s ease-out,color 0.15s ease-out;';
+        close.style.cssText = 'margin-left:auto;width:24px;height:24px;line-height:22px;text-align:center;background:transparent;color:#aeaeb2;border:none;border-radius:50%;font-size:16px;cursor:pointer;padding:0;transition:background 0.15s ease-out,color 0.15s ease-out;';
         close.addEventListener('click', clearSelection);
         header.appendChild(close);
         box.appendChild(header);
@@ -554,7 +554,7 @@ enum BrowserAnnotate {
         var hint = document.createElement('div');
         hint.className = 'pa-hint';
         hint.textContent = 'Press Enter, click a terminal, then Send';
-        hint.style.cssText = 'color:#8e8e93;font-size:11px;flex:1;';
+        hint.style.cssText = 'color:#c7c7cc;font-size:11px;flex:1;';
         footer.appendChild(hint);
         var send = document.createElement('button');
         send.className = 'pa-send';

@@ -72,7 +72,7 @@ struct WorkspaceSidebarList<WorkspaceRow: View>: View {
                         // reads as a destination rather than a stray caption.
                         Label("Drop workspaces here", systemImage: "tray.and.arrow.down")
                             .scaledFont(size: 11)
-                            .foregroundStyle(.secondary)
+                            .glassLegibleForeground(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.leading, 16)
                             .contentShape(Rectangle())

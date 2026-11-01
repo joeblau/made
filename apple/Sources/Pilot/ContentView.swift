@@ -358,7 +358,7 @@ struct ContentView: View {
                             groupName = ""
                             isGroupNamePresented = true
                         } label: {
-                            Label("New Workspace Group", systemImage: "folder.badge.plus")
+                            Label("New Workspace Group…", systemImage: "folder.badge.plus")
                         }
                     } label: {
                         Label("New Workspace", systemImage: "plus")
@@ -371,21 +371,28 @@ struct ContentView: View {
             ZStack {
                 if workspaces.isEmpty {
                     // Empty state with a clear next action (MOT-6); the only
-                    // action here, so it is the prominent one (BTN-1).
-                    ContentUnavailableView {
-                        Label("No Workspace Selected", systemImage: "rectangle.on.rectangle.slash")
-                    } description: {
-                        Text("Create a workspace with the + button.")
-                    } actions: {
-                        Button {
-                            newWorkspaceRequest = NewWorkspaceRequest()
-                        } label: {
-                            Label("New Workspace…", systemImage: "plus")
+                    // action here, so it is the prominent one (BTN-1). Only
+                    // in workspace detail: the global modes draw without a
+                    // background, so it used to show through Notes.
+                    if store.isWorkspaceDetailVisible {
+                        ContentUnavailableView {
+                            // Nothing exists to select yet, so say that (HIER-2);
+                            // "No Workspace Selected" is the state below.
+                            Label("No Workspaces", systemImage: "rectangle.on.rectangle.slash")
+                        } description: {
+                            Text("Create a workspace with the + button.")
+                        } actions: {
+                            Button {
+                                newWorkspaceRequest = NewWorkspaceRequest()
+                            } label: {
+                                Label("New Workspace…", systemImage: "plus")
+                            }
+                            .compatGlassProminentButtonStyle()
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.large)
+                            .accessibilityIdentifier("workspace.empty.new-workspace")
                         }
-                        .compatGlassProminentButtonStyle()
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.large)
-                        .accessibilityIdentifier("workspace.empty.new-workspace")
+                        .legibleSecondaryHierarchy()
                     }
                 } else {
                     // The workspace stack stays mounted at all times — even in
@@ -427,6 +434,7 @@ struct ContentView: View {
                                 onSelect: store.selectWorkspace
                             )
                         }
+                        .legibleSecondaryHierarchy()
                     }
                 }
 
@@ -774,10 +782,17 @@ struct ContentView: View {
             isConnected: localAudioOutput != nil,
             name: localAudioOutput?.name
         )
+        #if DEBUG
+        // Review-only: `-demoPeersConnected YES` in a demo launch shows the
+        // connected glyphs without a paired peer.
+        let demoConnected = DemoReviewFixture.flag("demoPeersConnected")
+        #else
+        let demoConnected = false
+        #endif
         return [
-            ConnectedDevice(kind: .iphone, isConnected: syncService.isConnected),
-            ConnectedDevice(kind: .ipad, isConnected: isPlotterConnected),
-            ConnectedDevice(kind: .appleWatch, isConnected: peerDeviceStatus.isWatchConnected),
+            ConnectedDevice(kind: .iphone, isConnected: syncService.isConnected || demoConnected),
+            ConnectedDevice(kind: .ipad, isConnected: isPlotterConnected || demoConnected),
+            ConnectedDevice(kind: .appleWatch, isConnected: peerDeviceStatus.isWatchConnected || demoConnected),
             audioDevice
         ]
     }

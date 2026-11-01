@@ -208,6 +208,7 @@ struct AgenticUseView: View {
             Button("Rescan") { store.rescan() }
                 .compatGlassProminentButtonStyle()
         }
+        .legibleSecondaryHierarchy()
     }
 
     private var rangeEmptyState: some View {
@@ -221,6 +222,7 @@ struct AgenticUseView: View {
                     .compatGlassProminentButtonStyle()
             }
         }
+        .legibleSecondaryHierarchy()
     }
 
     private var rangeDescription: String {
@@ -240,6 +242,7 @@ struct AgenticUseView: View {
             Button("Retry") { store.rescan() }
                 .compatGlassProminentButtonStyle()
         }
+        .legibleSecondaryHierarchy()
     }
 }
 

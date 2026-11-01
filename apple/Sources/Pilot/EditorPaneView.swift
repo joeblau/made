@@ -282,6 +282,7 @@ struct EditorPaneView: View {
             Button("Find File…", action: openFinder)
                 .compatGlassProminentButtonStyle()
         }
+        .legibleSecondaryHierarchy()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -445,7 +446,7 @@ struct EditorPaneView: View {
             if !directory.isEmpty {
                 Text(directory)
                     .scaledFont(size: 11)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }

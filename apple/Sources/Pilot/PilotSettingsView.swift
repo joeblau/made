@@ -33,6 +33,7 @@ struct PilotSettingsView: View {
             .overlay {
                 if !showsGeneral && !showsUsage {
                     ContentUnavailableView.search(text: searchText)
+                    .legibleSecondaryHierarchy()
                 }
             }
             .searchable(text: $searchText, placement: .sidebar, prompt: "Search")

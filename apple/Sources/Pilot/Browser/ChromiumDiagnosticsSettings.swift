@@ -284,7 +284,7 @@ struct ChromiumDiagnosticsSettingsSection: View {
                 }
             }
 
-            Button("Clear Chromium Browsing Data", role: .destructive) {
+            Button("Clear Chromium Browsing Data…", role: .destructive) {
                 isConfirmingClear = true
             }
             // Secondary glass, not prominent: a destructive action is never

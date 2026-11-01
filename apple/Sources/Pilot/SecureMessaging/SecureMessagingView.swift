@@ -119,6 +119,11 @@ struct PilotSecureMessagingView: View {
                 .autocorrectionDisabled()
                 .lineLimit(1...3)
                 .liquidGlassField(multiline: true)
+                // A grouped Form row offers no container shape, so the
+                // field's concentric corners resolved to square on macOS 27
+                // while the capsule fields below stayed round (LAY-4). Give
+                // it the field radius to be concentric with.
+                .liquidGlassContainerShape(cornerRadius: LiquidGlassMetrics.Radius.field)
             }
             labeledField("Pairing token") {
                 TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))

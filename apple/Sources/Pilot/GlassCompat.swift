@@ -107,6 +107,75 @@ extension ToolbarContent {
     }
 }
 
+/// Text levels for copy that sits directly on Liquid Glass.
+enum GlassLegibleText {
+    case primary
+    case secondary
+}
+
+extension View {
+    /// Draws text on glass in a fixed gray per appearance instead of a
+    /// vibrant label color. Glass blends `.primary` and `.secondary` toward
+    /// whatever is behind it, which measured 4.2:1 for the unfocused URL text
+    /// and 3.2:1 for quick-open paths in dark mode (TYPE-3 needs 4.5:1). The
+    /// grays keep the two levels apart while clearing 4.5:1 on light and dark
+    /// glass.
+    func glassLegibleForeground(_ level: GlassLegibleText) -> some View {
+        modifier(GlassLegibleForeground(level: level))
+    }
+}
+
+private struct GlassLegibleForeground: ViewModifier {
+    let level: GlassLegibleText
+    @Environment(\.backgroundProminence) private var backgroundProminence
+
+    func body(content: Content) -> some View {
+        // On an emphasized selection (a key sidebar's accent row) the system
+        // styles already switch to light text; a fixed gray would not.
+        if backgroundProminence == .increased {
+            switch level {
+            case .primary: content.foregroundStyle(.primary)
+            case .secondary: content.foregroundStyle(.secondary)
+            }
+        } else {
+            switch level {
+            case .primary: content.foregroundStyle(GlassLegibleText.primaryColor)
+            case .secondary: content.foregroundStyle(GlassLegibleText.secondaryColor)
+            }
+        }
+    }
+}
+
+extension GlassLegibleText {
+    /// Appearance-resolved, so a subtree that forces the dark scheme (the
+    /// device stage headers) still gets its own appearance's gray.
+    static let primaryColor = Color(nsColor: NSColor(name: nil) { appearance in
+        isDark(appearance) ? NSColor(white: 0.95, alpha: 1) : NSColor(white: 0.1, alpha: 1)
+    })
+    static let secondaryColor = Color(nsColor: NSColor(name: nil) { appearance in
+        isDark(appearance) ? NSColor(white: 0.68, alpha: 1) : NSColor(white: 0.36, alpha: 1)
+    })
+
+    private static func isDark(_ appearance: NSAppearance) -> Bool {
+        appearance.bestMatch(from: [.aqua, .darkAqua, .vibrantLight, .vibrantDark,
+                                    .accessibilityHighContrastAqua,
+                                    .accessibilityHighContrastDarkAqua]).map {
+            $0 == .darkAqua || $0 == .vibrantDark || $0 == .accessibilityHighContrastDarkAqua
+        } ?? false
+    }
+}
+
+extension View {
+    /// Makes `.secondary` resolve to the legible gray for this subtree.
+    /// System secondary text measured 3.1:1 on the inspector's glass and
+    /// 3.95:1 on white, and `ContentUnavailableView` draws both its title and
+    /// its description in it, so every empty and error state failed TYPE-3.
+    /// Primary stays the system primary; views that set their own style keep it.
+    func legibleSecondaryHierarchy() -> some View {
+        foregroundStyle(HierarchicalShapeStyle.primary, GlassLegibleText.secondaryColor)
+    }
+}
+
 extension View {
     /// Reports whether this `TextField` is being edited, read from AppKit's
     /// first responder. `@FocusState` never updates for a field hosted in an
@@ -118,6 +187,16 @@ extension View {
     func toolbarFieldEditing(_ isEditing: Binding<Bool>) -> some View {
         background(ToolbarFieldEditingProbe(isEditing: isEditing))
     }
+
+    /// Keeps AppKit's field editor from painting an opaque rectangle inside a
+    /// glass capsule while this `TextField` is edited. In a sidebar `List`
+    /// row the shared field editor draws the text background color, which
+    /// showed as a black (dark) or white (light) box inside the inline rename
+    /// capsule. Apply it directly to the `TextField`, like
+    /// `toolbarFieldEditing(_:)`.
+    func clearsFieldEditorBackground() -> some View {
+        background(ToolbarFieldEditingProbe(isEditing: nil, clearsEditorBackground: true))
+    }
 }
 
 /// A click-through view behind a toolbar `TextField` that watches its
@@ -125,20 +204,23 @@ extension View {
 /// editing when the first responder is the AppKit text field under the
 /// probe, or the field editor working for it.
 private struct ToolbarFieldEditingProbe: NSViewRepresentable {
-    @Binding var isEditing: Bool
+    let isEditing: Binding<Bool>?
+    var clearsEditorBackground = false
 
     func makeNSView(context: Context) -> ProbeView {
         let view = ProbeView()
-        view.onChange = { isEditing = $0 }
+        updateNSView(view, context: context)
         return view
     }
 
     func updateNSView(_ view: ProbeView, context: Context) {
-        view.onChange = { isEditing = $0 }
+        view.onChange = isEditing.map { binding in { binding.wrappedValue = $0 } }
+        view.clearsEditorBackground = clearsEditorBackground
     }
 
     final class ProbeView: NSView {
         var onChange: ((Bool) -> Void)?
+        var clearsEditorBackground = false
         private var observation: NSKeyValueObservation?
         private var reported = false
 
@@ -158,6 +240,13 @@ private struct ToolbarFieldEditingProbe: NSViewRepresentable {
         private func refresh() {
             let editing = window.flatMap { Self.editedField(of: $0.firstResponder) }
                 .map(isUnderProbe) ?? false
+            // AppKit configures the shared field editor when editing begins,
+            // so clear its background only after it is working for this field.
+            if editing, clearsEditorBackground,
+               let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor {
+                editor.drawsBackground = false
+                editor.backgroundColor = .clear
+            }
             guard editing != reported else { return }
             reported = editing
             onChange?(editing)

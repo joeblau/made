@@ -59,6 +59,7 @@ struct AgenticUseDailyChartPanel: View {
                     systemImage: "chart.xyaxis.line",
                     description: Text(emptyDescription)
                 )
+                .legibleSecondaryHierarchy()
                 .frame(minHeight: 240)
             } else {
                 chart(cells)

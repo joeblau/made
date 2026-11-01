@@ -107,9 +107,10 @@ struct WorkspaceView: View {
             isSelected: isSelected,
             isHovering: hoveredPaneID == pane.id,
             isWorkspaceActive: isActive,
-            // The extension surface may close its last pane (its empty state
-            // invites re-adding); the main window always keeps one.
-            canClose: workspace.sortedPanes.count > 1 || surface == .extension,
+            // `Workspace.requestRemovePane` and `removePane` keep a
+            // workspace's last pane on both surfaces, so the last tab offers
+            // no close button rather than one that does nothing.
+            canClose: workspace.sortedPanes.count > 1,
             onClose: { workspace.requestRemovePane(pane) },
             onHide: { workspace.collapsePane(pane) },
             onUnhide: { workspace.expandPane(pane) }
@@ -192,7 +193,10 @@ struct WorkspaceView: View {
             Button("Close", role: .destructive) {
                 workspace.requestRemovePane(pane)
             }
-            .disabled(workspace.sortedPanes.count <= 1 && surface != .extension)
+            // `Workspace.removePane` keeps every workspace's last pane, on
+            // both surfaces, so an enabled Close on the last pane was a
+            // silent no-op in Extendo.
+            .disabled(workspace.sortedPanes.count <= 1)
 
             if workspace.sortedPanes.count > 1 {
                 Divider()
@@ -217,9 +221,9 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Reached when the last pane is closed (the extension surface allows
-    /// that): an explicit invitation to add panes, mirroring the toolbar
-    /// launcher's options.
+    /// An explicit invitation to add panes, mirroring the toolbar launcher's
+    /// options. The pane model keeps every workspace's last pane, so this is
+    /// a defensive state for a workspace restored with no panes.
     private var emptyPanesView: some View {
         VStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             ContentUnavailableView(
@@ -227,6 +231,7 @@ struct WorkspaceView: View {
                 systemImage: "rectangle.dashed",
                 description: Text("Add a pane to get started.")
             )
+            .legibleSecondaryHierarchy()
             .frame(maxHeight: 220)
 
             // One row when the pane is wide enough; two rows of three in a

@@ -701,6 +701,7 @@ struct ExtensionWindowView: View {
                                     : "Select a workspace in the main Cockpit window."
                             )
                         )
+                        .legibleSecondaryHierarchy()
                         .accessibilityIdentifier("extension.empty")
                     }
                 }

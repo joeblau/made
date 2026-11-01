@@ -103,6 +103,10 @@ final class RepositoryStore {
     var filesystem: [FileSystemEntry] = []
     var repoPath: String = ""
     var isLoading = false
+    /// Whether a pull-request read has finished for this repo since it was
+    /// opened. `isLoading` also rises for silent polls, so only a first read
+    /// may show the loading skeleton (MOT-5).
+    private(set) var hasLoadedPullRequests = false
     /// Why the last pull request read failed, or nil. A failed read must not
     /// look like an empty repository in the inspector.
     var pullRequestError: String?
@@ -129,6 +133,7 @@ final class RepositoryStore {
 
         repoPath = directory
         pullRequests = []
+        hasLoadedPullRequests = false
         actions = []
         runs = []
         pullRequestError = nil
@@ -188,6 +193,7 @@ final class RepositoryStore {
         workflowError = nil
         filesystem = []
         isLoading = false
+        hasLoadedPullRequests = false
         isLoadingFilesystem = false
     }
 
@@ -210,6 +216,7 @@ final class RepositoryStore {
             if error == nil { self.pullRequests = result }
             self.pullRequestError = error
             self.isLoading = false
+            self.hasLoadedPullRequests = true
         }
     }
 

@@ -14,6 +14,69 @@ enum BrowserToolbarSelection {
     }
 }
 
+/// Scene-local browser selection used by menu commands. Revealing a browser
+/// preserves focused-pane mode by moving that focus to the browser instead of
+/// leaving `focusedPaneID` attached to a hidden pane.
+@MainActor
+enum BrowserCommandSelection {
+    static func selectedState(
+        in workspace: Workspace?,
+        supporting capability: BrowserCapability? = nil
+    ) -> BrowserState? {
+        guard let state = BrowserToolbarSelection.state(for: workspace?.selectedPane) else {
+            return nil
+        }
+        if let capability, !state.supports(capability) {
+            return nil
+        }
+        return state
+    }
+
+    static func hasBrowser(
+        in workspace: Workspace?,
+        supporting capability: BrowserCapability? = nil
+    ) -> Bool {
+        workspace?.panes.contains { pane in
+            guard pane.kind == .browser,
+                  let state = pane.browserState else { return false }
+            return capability.map(state.supports) ?? true
+        } ?? false
+    }
+
+    @discardableResult
+    static func revealBrowser(
+        in workspace: Workspace?,
+        supporting capability: BrowserCapability? = nil
+    ) -> BrowserState? {
+        guard let workspace else { return nil }
+
+        func isEligible(_ pane: Pane) -> Bool {
+            guard pane.kind == .browser,
+                  let state = pane.browserState else { return false }
+            return capability.map(state.supports) ?? true
+        }
+
+        let browser: Pane
+        if let selectedPane = workspace.selectedPane,
+           isEligible(selectedPane) {
+            browser = selectedPane
+        } else if let firstBrowser = workspace.sortedPanes.first(where: isEligible) {
+            browser = firstBrowser
+        } else {
+            return nil
+        }
+
+        if let focusedPaneID = workspace.focusedPaneID,
+           focusedPaneID != browser.id {
+            workspace.focusPane(browser)
+        } else {
+            workspace.expandPane(browser)
+            workspace.selectedPaneID = browser.id
+        }
+        return BrowserToolbarSelection.state(for: browser)
+    }
+}
+
 struct BrowserBackForwardToolbarControls: View {
     let state: BrowserState
 
@@ -81,6 +144,7 @@ struct BrowserAddressToolbarControl: View {
         // `BrowserAddressFocus` finds the AppKit field by it for ⌘L.
         TextField("URL", text: Bindable(state).urlText)
             .scaledFont(size: 13, weight: .medium)
+            .glassLegibleForeground(.primary)
             .focused($isAddressFocused)
             .onSubmit { state.navigate() }
             .toolbarFieldEditing($isAddressEditing)
@@ -191,9 +255,10 @@ struct BrowserToolsToolbarControls: View {
     var body: some View {
 
         Menu {
-            Button("Default Profile") {}
-            Divider()
-            Button("Manage Profiles…") {}
+            // One profile exists, so it reads as the checked current one.
+            // The earlier "Default Profile" and "Manage Profiles…" items were
+            // buttons with empty actions: clicking either did nothing.
+            Toggle("Default Profile", isOn: .constant(true))
             Divider()
             Button("Clear All Browser Data…", role: .destructive) {
                 isConfirmingWebsiteDataReset = true
@@ -263,18 +328,16 @@ struct BrowserToolsToolbarControls: View {
 
         ControlGroup {
             Menu {
-                ForEach(AppearanceMode.allCases, id: \.self) { mode in
-                    Button {
-                        state.appearanceMode = mode
-                    } label: {
-                        HStack {
-                            Text(mode.rawValue)
-                            if state.appearanceMode == mode {
-                                Image(systemName: "checkmark")
-                            }
-                        }
+                // An inline picker gives the menu its native checkmark. An
+                // image in a menu button's label never rendered, so the menu
+                // did not show which mode was active.
+                Picker("Appearance", selection: Bindable(state).appearanceMode) {
+                    ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
                     }
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
             } label: {
                 Label("Appearance", systemImage: appearanceIcon)
             }
@@ -287,10 +350,15 @@ struct BrowserToolsToolbarControls: View {
             Button {
                 state.perform(.toggleAnnotation)
             } label: {
-                Label("Lasso", systemImage: "lasso")
+                // The toolbar draws its glyphs monochrome on macOS 27, so the
+                // accent color alone never showed that Lasso is on (BTN-5).
+                // The glyph itself changes as well.
+                Label("Lasso", systemImage: state.annotateMode ? "lasso.badge.sparkles" : "lasso")
+                    .contentTransition(.symbolEffect(.replace))
             }
             .disabled(!state.supports(.annotation))
             .foregroundStyle(state.annotateMode ? Color.accentColor : Color.primary)
+            .accessibilityValue(state.annotateMode ? "On" : "Off")
             .help(state.annotateMode
                   ? "Turn off Lasso (⇧⌘A)"
                   : "Select a web element and tell an agent what to fix (⇧⌘A)")

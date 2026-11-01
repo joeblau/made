@@ -9,6 +9,45 @@ final class BrowserFaviconMetadata {
     var urls: [String] = []
 }
 
+/// Runtime-only state for one `BrowserState`, observable by SwiftUI. See
+/// `BrowserState.runtime`.
+@Observable
+final class BrowserRuntimeState {
+    var pendingURL: URL? = nil
+    var canGoBack: Bool = false
+    var canGoForward: Bool = false
+    var isLoading: Bool = false
+    var title: String = ""
+    var estimatedProgress: Double = 0
+    var showDevTools: Bool = false
+    var needsInspectorToggle: Bool = false
+    /// Browser Annotate mode — runtime only, off after relaunch.
+    var annotateMode: Bool = false
+    var annotateToggleRequestID: Int = 0
+    /// Set by ⌘L and consumed when this browser's address field is mounted.
+    var needsAddressFocus: Bool = false
+    /// Native navigation callbacks must not replace a newer address-field draft.
+    var isAddressEditing: Bool = false
+    var pendingAddressSubmission: String? = nil
+    /// Recreates the WKWebView after its persistent website data is cleared.
+    var websiteDataResetRequestID: Int = 0
+    /// Recreates an unavailable Chromium surface without changing its engine.
+    var runtimeRetryRequestID: Int = 0
+    /// Chromium-only page command state. Counters make every action edge-triggered.
+    var findQuery: String = ""
+    var findForward: Bool = true
+    var findMatchCase: Bool = false
+    var findNext: Bool = false
+    var findRequestID: Int = 0
+    var stopFindingRequestID: Int = 0
+    var findMatchCount: Int = 0
+    var activeFindMatchOrdinal: Int = 0
+    var printRequestID: Int = 0
+    var savePageRequestID: Int = 0
+    var downloadStatusText: String = ""
+    var downloadProgress: Double? = nil
+}
+
 struct BrowserFaviconView: View {
     let state: BrowserState
 

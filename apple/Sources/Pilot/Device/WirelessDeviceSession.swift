@@ -66,9 +66,17 @@ struct WirelessDeviceView: View {
             // scheme in both appearances (COL-2). Its two secondary actions
             // are neighboring capsule glass buttons (BTN-1).
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Label("Wireless Device", systemImage: "airplay.video")
-                    .font(.headline)
-                Spacer()
+                // A narrow pane drops to a shorter title, then to the glyph,
+                // instead of wrapping the headline onto two lines.
+                ViewThatFits(in: .horizontal) {
+                    Label("Wireless Device", systemImage: "airplay.video")
+                    Label("Wireless", systemImage: "airplay.video")
+                    Image(systemName: "airplay.video")
+                        .accessibilityLabel("Wireless Device")
+                }
+                .font(.headline)
+                .lineLimit(1)
+                Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
                 CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                         Button("Use USB", action: useUSB)
@@ -81,6 +89,7 @@ struct WirelessDeviceView: View {
                     .buttonBorderShape(.capsule)
                     .controlSize(.small)
                 }
+                .fixedSize()
             }
             .padding(LiquidGlassMetrics.Spacing.small)
             .environment(\.colorScheme, .dark)
@@ -93,6 +102,14 @@ struct WirelessDeviceView: View {
                 if session.status != .streaming { instructions }
             }
         }
+    }
+
+    private func startButton(_ title: String) -> some View {
+        Button(title) { session.start() }
+            .compatGlassProminentButtonStyle()
+            .buttonBorderShape(.capsule)
+            .fixedSize()
+            .accessibilityLabel("Start Wireless Sharing")
     }
 
     private var instructions: some View {
@@ -125,9 +142,12 @@ struct WirelessDeviceView: View {
                     .buttonBorderShape(.capsule)
             case .stopped:
                 Text("Wireless Sharing Is Off").font(.headline)
-                Button("Start Wireless Sharing") { session.start() }
-                    .compatGlassProminentButtonStyle()
-                    .buttonBorderShape(.capsule)
+                // A narrow pane takes the short title instead of truncating
+                // the button to "Start Wireless Sh…" (LAY-6).
+                ViewThatFits(in: .horizontal) {
+                    startButton("Start Wireless Sharing")
+                    startButton("Start Sharing")
+                }
             case .streaming:
                 EmptyView()
             }

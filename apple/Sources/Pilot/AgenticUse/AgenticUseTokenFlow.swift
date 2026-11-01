@@ -28,6 +28,7 @@ struct AgenticUseTokenFlowPanel: View {
             }
             if graph.links.isEmpty {
                 ContentUnavailableView("No token flow", systemImage: "point.3.connected.trianglepath.dotted")
+                    .legibleSecondaryHierarchy()
                     .frame(minHeight: 200)
             } else {
                 AgenticUseTokenFlowDiagram(

@@ -26,6 +26,7 @@ struct RunnersView: View {
                     Button("Add Runner Source", systemImage: "plus") { showsAddScope = true }
                         .compatGlassProminentButtonStyle()
                 }
+                .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -200,9 +201,11 @@ struct RunnersView: View {
                     ? "No self-hosted runners are registered for this \(store.selectedScope?.kind.title.lowercased() ?? "scope")."
                     : "Resolve the access or connection issue above, then try again.")
             )
+            .legibleSecondaryHierarchy()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.visibleRunners.isEmpty {
             ContentUnavailableView.search(text: store.searchText)
+                .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if layout == .fleet {
             RunnerFleetView(

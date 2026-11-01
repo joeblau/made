@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import Observation
 
 /// Decides when a container-list read may start. At most one read is in flight;
@@ -443,6 +444,20 @@ final class DockerStore {
     private static func describe(_ error: any Error) -> String {
         if let transportError = error as? DockerTransportError {
             return transportError.errorDescription ?? "\(transportError)"
+        }
+        // The socket's own errors read as "Network.NWError error 2 - No such
+        // file or directory". Say what it means instead (HIER-2).
+        if let networkError = error as? NWError, case .posix(let code) = networkError {
+            switch code {
+            case .ENOENT:
+                return "No engine is running: its Docker socket is gone."
+            case .ECONNREFUSED:
+                return "The Docker socket is there, but no engine is answering on it."
+            case .EACCES, .EPERM:
+                return "Cockpit doesn't have permission to open the Docker socket."
+            default:
+                break
+            }
         }
         return error.localizedDescription
     }

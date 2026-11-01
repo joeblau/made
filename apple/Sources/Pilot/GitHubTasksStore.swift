@@ -230,6 +230,7 @@ struct GitHubTasksView: View {
                             Button("Retry", action: store.refresh)
                                 .compatGlassProminentButtonStyle()
                         }
+                        .legibleSecondaryHierarchy()
                         .transition(.opacity)
                     } else {
                         ContentUnavailableView(
@@ -237,6 +238,7 @@ struct GitHubTasksView: View {
                             systemImage: "checkmark.circle",
                             description: Text("This repo has no open GitHub issues.")
                         )
+                        .legibleSecondaryHierarchy()
                         .transition(.opacity)
                     }
                 }

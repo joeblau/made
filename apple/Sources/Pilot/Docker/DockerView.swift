@@ -164,6 +164,7 @@ struct DockerView: View {
                 } description: {
                     Text("Nothing has been created on this engine yet. Start one from a terminal with `docker run`.")
                 }
+                .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if store.visibleContainers.isEmpty {
                 ContentUnavailableView {
@@ -173,6 +174,7 @@ struct DockerView: View {
                          ? "No container matches the filter."
                          : "No running container matches the filter. Turn on “Show stopped” to see the rest.")
                 }
+                .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 containerList
@@ -246,6 +248,7 @@ struct DockerView: View {
                 }
             }
         }
+        .legibleSecondaryHierarchy()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -348,7 +351,12 @@ private struct DockerContainerRow: View {
         }
         .contextMenu {
             ForEach(availableActions, id: \.self) { action in
-                Button(action.label, systemImage: action.systemImage) { perform(action) }
+                // Remove asks for confirmation first, so its menu item takes
+                // an ellipsis.
+                Button(
+                    action == .remove ? "\(action.label)…" : action.label,
+                    systemImage: action.systemImage
+                ) { perform(action) }
             }
             Divider()
             Button("Copy Container ID") {

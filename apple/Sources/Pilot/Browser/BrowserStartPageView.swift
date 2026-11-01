@@ -154,44 +154,12 @@ private struct LocalServerCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
-                BrowserPreviewThumbnail(
-                    name: server.name,
-                    displayURL: server.displayURL,
-                    // Concentric with the card: outer = inner + padding (LAY-4).
-                    cornerRadius: LiquidGlassMetrics.Radius.inner(
-                        outer: Self.cornerRadius,
-                        padding: Self.padding
-                    )
-                )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(server.name)
-                        .scaledFont(size: 15, weight: .semibold)
-                        .lineLimit(1)
-                    Text(server.displayURL)
-                        .scaledFont(size: 13)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                if let hotkey {
-                    Text("\(hotkey)")
-                        .scaledFont(size: 12, weight: .semibold, design: .monospaced)
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 20, minHeight: 20)
-                        .padding(.horizontal, LiquidGlassMetrics.Spacing.xxSmall)
-                        .background(
-                            .fill.tertiary,
-                            in: RoundedRectangle(
-                                cornerRadius: LiquidGlassMetrics.Radius.control,
-                                style: .continuous
-                            )
-                        )
-                }
-                Circle()
-                    .fill(isLive ? .green : Color(nsColor: .tertiaryLabelColor))
-                    .frame(width: 8, height: 8)
-                    .animation(LiquidGlassMetrics.stateChange, value: isLive)
+            // A narrow pane drops the decorative preview instead of letting
+            // the card's minimum width overflow the pane, which clipped the
+            // "Local" header and the cards' leading edge (LAY-6).
+            ViewThatFits(in: .horizontal) {
+                cardContent(showsThumbnail: true)
+                cardContent(showsThumbnail: false)
             }
             .padding(Self.padding)
             .background(
@@ -201,6 +169,50 @@ private struct LocalServerCard: View {
         }
         // Whole-card tap target: hover wash plus press dim/scale (BTN-5).
         .buttonStyle(.liquidGlassPressable(cornerRadius: Self.cornerRadius))
+    }
+
+    private func cardContent(showsThumbnail: Bool) -> some View {
+        HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
+            if showsThumbnail {
+                BrowserPreviewThumbnail(
+                    name: server.name,
+                    displayURL: server.displayURL,
+                    // Concentric with the card: outer = inner + padding (LAY-4).
+                    cornerRadius: LiquidGlassMetrics.Radius.inner(
+                        outer: Self.cornerRadius,
+                        padding: Self.padding
+                    )
+                )
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(server.name)
+                    .scaledFont(size: 15, weight: .semibold)
+                    .lineLimit(1)
+                Text(server.displayURL)
+                    .scaledFont(size: 13)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            if let hotkey {
+                Text("\(hotkey)")
+                    .scaledFont(size: 12, weight: .semibold, design: .monospaced)
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 20, minHeight: 20)
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xxSmall)
+                    .background(
+                        .fill.tertiary,
+                        in: RoundedRectangle(
+                            cornerRadius: LiquidGlassMetrics.Radius.control,
+                            style: .continuous
+                        )
+                    )
+            }
+            Circle()
+                .fill(isLive ? .green : Color(nsColor: .tertiaryLabelColor))
+                .frame(width: 8, height: 8)
+                .animation(LiquidGlassMetrics.stateChange, value: isLive)
+        }
     }
 }
 

@@ -105,9 +105,11 @@ struct InkOverlay: View {
     private static let swatchInset = LiquidGlassMetrics.Spacing.xxSmall
 
     var body: some View {
-        ZStack(alignment: .top) {
+        // The controls float at the bottom edge. At the top they sat across
+        // the pane tab strip and covered the tab titles (LAY-5).
+        ZStack(alignment: .bottom) {
             InkCanvas(model: model, onDismiss: { isActive = false })
-            toolbar.padding(.top, LiquidGlassMetrics.Spacing.medium)
+            toolbar.padding(.bottom, LiquidGlassMetrics.Spacing.large)
         }
     }
 

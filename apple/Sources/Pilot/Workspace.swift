@@ -483,41 +483,47 @@ final class BrowserState {
     var navigationRequestID: Int = 0
     var inspectorToggleRequestID: Int = 0
 
-    @Transient var pendingURL: URL? = nil
-    @Transient var canGoBack: Bool = false
-    @Transient var canGoForward: Bool = false
-    @Transient var isLoading: Bool = false
-    @Transient var title: String = ""
+    /// Runtime-only page state. SwiftData does not publish changes to
+    /// `@Transient` stored properties, so a toolbar or page view that
+    /// stayed mounted never saw ⌘L, Lasso, loading, or history updates.
+    /// The values live in an `@Observable` object instead; the forwarding
+    /// properties below are computed, so the persisted schema is unchanged.
+    @Transient private var runtime = BrowserRuntimeState()
+    var pendingURL: URL? { get { runtime.pendingURL } set { runtime.pendingURL = newValue } }
+    var canGoBack: Bool { get { runtime.canGoBack } set { runtime.canGoBack = newValue } }
+    var canGoForward: Bool { get { runtime.canGoForward } set { runtime.canGoForward = newValue } }
+    var isLoading: Bool { get { runtime.isLoading } set { runtime.isLoading = newValue } }
+    var title: String { get { runtime.title } set { runtime.title = newValue } }
     /// Favicon metadata follows the loaded page, independently of address edits.
     @Transient private var faviconMetadata = BrowserFaviconMetadata()
-    @Transient var estimatedProgress: Double = 0
-    @Transient var showDevTools: Bool = false
-    @Transient var needsInspectorToggle: Bool = false
+    var estimatedProgress: Double { get { runtime.estimatedProgress } set { runtime.estimatedProgress = newValue } }
+    var showDevTools: Bool { get { runtime.showDevTools } set { runtime.showDevTools = newValue } }
+    var needsInspectorToggle: Bool { get { runtime.needsInspectorToggle } set { runtime.needsInspectorToggle = newValue } }
     /// Browser Annotate mode — runtime only, off after relaunch.
-    @Transient var annotateMode: Bool = false
-    @Transient var annotateToggleRequestID: Int = 0
+    var annotateMode: Bool { get { runtime.annotateMode } set { runtime.annotateMode = newValue } }
+    var annotateToggleRequestID: Int { get { runtime.annotateToggleRequestID } set { runtime.annotateToggleRequestID = newValue } }
     /// Set by ⌘L and consumed when this browser's address field is mounted.
-    @Transient var needsAddressFocus: Bool = false
+    var needsAddressFocus: Bool { get { runtime.needsAddressFocus } set { runtime.needsAddressFocus = newValue } }
     /// Native navigation callbacks must not replace a newer address-field draft.
-    @Transient var isAddressEditing: Bool = false
-    @Transient var pendingAddressSubmission: String? = nil
+    var isAddressEditing: Bool { get { runtime.isAddressEditing } set { runtime.isAddressEditing = newValue } }
+    var pendingAddressSubmission: String? { get { runtime.pendingAddressSubmission } set { runtime.pendingAddressSubmission = newValue } }
     /// Recreates the WKWebView after its persistent website data is cleared.
-    @Transient var websiteDataResetRequestID: Int = 0
+    var websiteDataResetRequestID: Int { get { runtime.websiteDataResetRequestID } set { runtime.websiteDataResetRequestID = newValue } }
     /// Recreates an unavailable Chromium surface without changing its engine.
-    @Transient var runtimeRetryRequestID: Int = 0
+    var runtimeRetryRequestID: Int { get { runtime.runtimeRetryRequestID } set { runtime.runtimeRetryRequestID = newValue } }
     /// Chromium-only page command state. Counters make every action edge-triggered.
-    @Transient var findQuery: String = ""
-    @Transient var findForward: Bool = true
-    @Transient var findMatchCase: Bool = false
-    @Transient var findNext: Bool = false
-    @Transient var findRequestID: Int = 0
-    @Transient var stopFindingRequestID: Int = 0
-    @Transient var findMatchCount: Int = 0
-    @Transient var activeFindMatchOrdinal: Int = 0
-    @Transient var printRequestID: Int = 0
-    @Transient var savePageRequestID: Int = 0
-    @Transient var downloadStatusText: String = ""
-    @Transient var downloadProgress: Double? = nil
+    var findQuery: String { get { runtime.findQuery } set { runtime.findQuery = newValue } }
+    var findForward: Bool { get { runtime.findForward } set { runtime.findForward = newValue } }
+    var findMatchCase: Bool { get { runtime.findMatchCase } set { runtime.findMatchCase = newValue } }
+    var findNext: Bool { get { runtime.findNext } set { runtime.findNext = newValue } }
+    var findRequestID: Int { get { runtime.findRequestID } set { runtime.findRequestID = newValue } }
+    var stopFindingRequestID: Int { get { runtime.stopFindingRequestID } set { runtime.stopFindingRequestID = newValue } }
+    var findMatchCount: Int { get { runtime.findMatchCount } set { runtime.findMatchCount = newValue } }
+    var activeFindMatchOrdinal: Int { get { runtime.activeFindMatchOrdinal } set { runtime.activeFindMatchOrdinal = newValue } }
+    var printRequestID: Int { get { runtime.printRequestID } set { runtime.printRequestID = newValue } }
+    var savePageRequestID: Int { get { runtime.savePageRequestID } set { runtime.savePageRequestID = newValue } }
+    var downloadStatusText: String { get { runtime.downloadStatusText } set { runtime.downloadStatusText = newValue } }
+    var downloadProgress: Double? { get { runtime.downloadProgress } set { runtime.downloadProgress = newValue } }
 
     var appearanceMode: AppearanceMode {
         get { AppearanceMode(rawValue: appearanceModeRaw) ?? .system }

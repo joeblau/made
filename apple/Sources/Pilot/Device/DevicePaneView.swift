@@ -362,6 +362,7 @@ struct DevicePaneMessage<Actions: View>: View {
                 }
             }
         }
+        .legibleSecondaryHierarchy()
         .uiZoomedDynamicType()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
 

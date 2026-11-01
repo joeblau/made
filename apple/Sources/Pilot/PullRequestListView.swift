@@ -269,6 +269,7 @@ struct FilesystemListView: View {
             ContentUnavailableView("No Files",
                                    systemImage: "folder",
                                    description: Text("Select a workspace with a git repo root path."))
+                .legibleSecondaryHierarchy()
         } else {
             VStack(spacing: 0) {
                 if !store.repoPath.isEmpty {
@@ -618,7 +619,13 @@ struct PullRequestListView: View {
                         Button("Retry") { store.fetchPullRequests(policy: .manual) }
                             .compatGlassProminentButtonStyle()
                     }
+                    .legibleSecondaryHierarchy()
                     .transition(.opacity)
+                } else if store.pullRequests.isEmpty && store.isLoading && !store.hasLoadedPullRequests {
+                    // First read: skeleton cards instead of a blank panel,
+                    // like the Issues tab (MOT-5).
+                    InspectorLoadingPlaceholder()
+                        .transition(.opacity)
                 } else if store.pullRequests.isEmpty && !store.isLoading {
                     // The hint names the missing repo only when there is none;
                     // an empty list for a real repo says so instead.
@@ -629,6 +636,7 @@ struct PullRequestListView: View {
                             ? "Select a workspace with a GitHub repo root path."
                             : "This repository has no open pull requests.")
                     )
+                    .legibleSecondaryHierarchy()
                     .transition(.opacity)
                 }
             }
@@ -784,6 +792,7 @@ struct ActionsListView: View {
                         Button("Retry") { store.fetchWorkflowRuns(policy: .manual) }
                             .compatGlassProminentButtonStyle()
                     }
+                    .legibleSecondaryHierarchy()
                     .transition(.opacity)
                 } else if store.actions.isEmpty && !store.isLoading {
                     ContentUnavailableView(
@@ -793,6 +802,7 @@ struct ActionsListView: View {
                             ? "Select a workspace with a GitHub repo root path."
                             : "No GitHub Actions workflow runs for this repository.")
                     )
+                    .legibleSecondaryHierarchy()
                     .transition(.opacity)
                 }
             }

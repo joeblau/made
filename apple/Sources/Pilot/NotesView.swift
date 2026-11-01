@@ -90,7 +90,9 @@ struct NotesView: View {
             systemImage: "eye.slash"
         )
         .scaledFont(size: 11)
-        .foregroundStyle(.secondary)
+        // Vibrant `.secondary` measured 3.95:1 on the light editor canvas;
+        // a security notice must clear 4.5:1 (TYPE-3).
+        .glassLegibleForeground(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
@@ -220,6 +222,11 @@ struct NotesView: View {
                 Button("New Note") { store.addNote() }
                     .compatGlassProminentButtonStyle()
             }
+            .legibleSecondaryHierarchy()
+            // Fill the detail area like the editor does. Without this the
+            // VStack centered the whole column, so the tab bar and notice
+            // floated to mid-pane with blank space above them (LAY-1).
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
