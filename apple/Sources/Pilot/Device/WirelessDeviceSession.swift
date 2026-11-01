@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import SwiftUI
 
 @MainActor @Observable
@@ -124,14 +125,38 @@ struct WirelessDeviceView: View {
 private struct WirelessDeviceVideoView: NSViewRepresentable {
     let renderer: AirPlayVideoRenderer
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+    func makeNSView(context: Context) -> WirelessDeviceHostView {
+        let view = WirelessDeviceHostView()
         view.wantsLayer = true
         view.layer = renderer.layer
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: WirelessDeviceHostView, context: Context) {
         if view.layer !== renderer.layer { view.layer = renderer.layer }
+    }
+}
+
+/// The AirPlay mirror is view-only, so a plain drag drags the screen image.
+final class WirelessDeviceHostView: NSView {
+    private var screenDrag = DeviceScreenDragGesture()
+
+    override func mouseDown(with event: NSEvent) {
+        _ = screenDrag.press(at: event.locationInWindow, modifiers: event.modifierFlags, requiresCommand: false)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard screenDrag.drag(to: event.locationInWindow),
+              let displayLayer = layer as? AVSampleBufferDisplayLayer else { return }
+        DeviceScreenDrag.begin(
+            from: self,
+            event: event,
+            frame: DeviceScreenDrag.displayedFrame(of: displayLayer),
+            name: "iphone"
+        )
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        screenDrag.release()
     }
 }
