@@ -139,7 +139,21 @@ LAY-3 ×51, MOT-4 ×41, BTN-5 ×37, BTN-1 ×29, LAY-4 ×26, COL-2 ×25, MOT-5 ×
 | visual | apple/Sources/Plotter/ContentView.swift | COL-2 | Follow-up to the dark pinning: the shared SettingsButton presents its own sheet, so the Settings sheet came out dark in light mode. In Kneeboard only, it is replaced with an inline ellipsis Button that keeps the same "Settings" accessibility label and glass circle style. A `.sheet { SettingsScreen() }` is now presented from the ZStack, so Settings follows the system appearance again. The Dashboard sheet already followed it. Also updated a doc comment on GlassCircleButtonStyle that no longer applied. |
 | visual | apple/Tests/PilotTests/Snapshots/SnapshotWorkbench.swift | brief-3, brief-4, LAY-4 | The stand-in Notes tabs in the capture harness were squared rounded rectangles (radius 7), but the real NotesView tabs are capsules. Changed them to an opaque Capsule so the landing-page screenshots match the restyled app. |
 
-### Open items (reviewer judgment / outside catalog)
+### Closeout (round 2)
+
+Decided: controls inside glass panels, sheets, and popovers are glass, following the system's own 26/27 sheets. That covers the remote-computer picker and the Chromium find popover. Field rule: free-standing fields, fields in panels, sheets, and popovers, and Form rows with their own stacked label are glass. These keep system styling: macOS grouped-Form rows whose title is the row label, fields already hosted inside a toolbar glass capsule or glass palette, and system alert fields, which cannot be styled.
+
+- Kneeboard: the floating circle buttons, the connection badge, and the UIKit annotation toolbar share one `@ScaledMetric` (48pt at default). They scale together with Dynamic Type and are capped at AX2 so the two clusters never collide on iPad mini (TYPE-4, LAY-3).
+- Walkie Secure Messaging fields and the remote-computer host field adopt `.liquidGlassField` (FORM-1/FORM-4).
+- Glass chips gain a pointer hover wash (BTN-5).
+- Docker row actions show for keyboard focus and VoiceOver and are exposed as accessibility actions. Fast Command play/stop have labels.
+- Pane launcher menus drop the deprecated borderless menu style.
+- Dynamic Island expanded dashboard Live Activities: no duplicate header, at most two rows, and an inset that clears the Island's curved corners (HIER-3, LAY-2).
+- Trigger: the root tint is wired, so the glyph and the one `.glassProminent` action no longer fall back to gray (BTN-1, COL-4).
+- `CopilotUITests` is `@MainActor`, like `PlotterUITests`, so it compiles under Swift 6. It was broken at the base commit too.
+- Visually verified in the simulator: Trigger (dark; watchOS has no light mode), the Walkie widget gallery in all nine kind/size pages, the dashboard Live Activities on the Lock Screen and in the compact and expanded Island, Walkie Secure Messaging, and Kneeboard from default size through accessibility sizes. The real Cockpit glass window cannot be captured without granting Screen Recording, so Cockpit was checked with the headless harness only.
+
+### Open items from round 1 (resolved above unless noted)
 
 - Glass buttons sit inside floating glass panels in the RemoteComputerPicker (Close, Connect, Open Local Network Settings) and the Chromium find popover. This matches how system popovers and sheets behave on 26, but it is technically glass on glass. Simplifying it would mean the panel buttons use pressable or plain styles, which works against brief item 1. This needs a product decision.
 - The sidebar rename field (liquidGlassField) and the sidebar status cluster (glass circles) sit on the macOS 26 glass sidebar. This is the same layering the system uses for the sidebar search field, but it should be checked visually.
