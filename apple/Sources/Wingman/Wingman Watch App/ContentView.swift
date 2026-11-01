@@ -51,6 +51,13 @@ struct ContentView: View {
                 }
             }
         }
+        // The asset-catalog AccentColor is empty and not wired as the global
+        // accent, so the tint falls back to a neutral gray and the gesture
+        // glyph and prominent Send button read as secondary text. Use the
+        // same system blue as Walkie's accent so the one primary action
+        // stands out (BTN-1, COL-4). The navigation title still follows the
+        // (empty) asset accent; giving the asset a color is a brand decision.
+        .tint(.blue)
     }
 
     // MARK: - Current Gesture Display
@@ -60,7 +67,7 @@ struct ContentView: View {
             VStack(spacing: 4) {
                 Image(systemName: currentIcon)
                     .font(.title2)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.tint)
                     .contentTransition(.symbolEffect(.replace))
 
                 Text(currentGesture)

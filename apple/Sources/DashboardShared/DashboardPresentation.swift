@@ -195,37 +195,52 @@ public struct ActionsDashboardActivityCard: View {
     private let projection: ActionsDashboardActivityProjection
     private let isStale: Bool
     private let compact: Bool
+    private let islandExpanded: Bool
 
-    public init(projection: ActionsDashboardActivityProjection, isStale: Bool = false, compact: Bool = false) {
+    /// - Parameter islandExpanded: The expanded Dynamic Island's bottom
+    ///   region, whose leading/trailing regions already show the family title
+    ///   and headline count. Drops the duplicate header, trades the card
+    ///   padding for a corner-clearance inset, and caps the list at
+    ///   ``DashboardActivityLayout/islandRowLimit`` single-line rows so
+    ///   nothing clips at the Island's fixed height.
+    public init(
+        projection: ActionsDashboardActivityProjection,
+        isStale: Bool = false,
+        compact: Bool = false,
+        islandExpanded: Bool = false
+    ) {
         self.projection = projection
         self.isStale = isStale
         self.compact = compact
+        self.islandExpanded = islandExpanded
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .foregroundStyle(.blue)
-                    .widgetAccentable()
-                Text("Actions")
-                    .font(.headline)
-                Spacer()
-                Text("\(projection.activeCount) active · \(projection.runCount) runs")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        VStack(alignment: .leading, spacing: DashboardActivityLayout.spacing(compact: compact)) {
+            if !islandExpanded {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.blue)
+                        .widgetAccentable()
+                    Text("Actions")
+                        .font(.headline)
+                    Spacer()
+                    Text("\(projection.activeCount) active · \(projection.runCount) runs")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             if isStale {
                 DashboardStaleLabel()
             }
             if !compact {
-                ForEach(projection.runs, id: \.id) { run in
-                    DashboardRunRow(run: run, detail: .stacked)
+                ForEach(DashboardActivityLayout.rows(projection.runs, islandExpanded: islandExpanded), id: \.id) { run in
+                    DashboardRunRow(run: run, detail: DashboardActivityLayout.rowDetail(islandExpanded: islandExpanded))
                 }
             }
         }
-        .padding(compact ? 8 : 16)
+        .padding(DashboardActivityLayout.padding(compact: compact, islandExpanded: islandExpanded))
     }
 }
 
@@ -233,30 +248,30 @@ public struct UsageDashboardActivityCard: View {
     private let projection: UsageDashboardActivityProjection
     private let isStale: Bool
     private let compact: Bool
+    private let islandExpanded: Bool
 
-    public init(projection: UsageDashboardActivityProjection, isStale: Bool = false, compact: Bool = false) {
+    /// - Parameter islandExpanded: The expanded Dynamic Island's bottom
+    ///   region, whose leading/trailing regions already show the family title
+    ///   and headline count. Drops the duplicate header, trades the card
+    ///   padding for a corner-clearance inset, and caps the list at
+    ///   ``DashboardActivityLayout/islandRowLimit`` single-line rows so
+    ///   nothing clips at the Island's fixed height.
+    public init(
+        projection: UsageDashboardActivityProjection,
+        isStale: Bool = false,
+        compact: Bool = false,
+        islandExpanded: Bool = false
+    ) {
         self.projection = projection
         self.isStale = isStale
         self.compact = compact
+        self.islandExpanded = islandExpanded
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(.purple)
-                    .widgetAccentable()
-                Text("AI Usage")
-                    .font(.headline)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 0) {
-                    Text(DashboardFormat.cost(projection.estimatedCost))
-                        .font(.headline)
-                        .monospacedDigit()
-                    Text("\(DashboardFormat.tokens(projection.totalTokens)) tokens")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: DashboardActivityLayout.spacing(compact: compact)) {
+            if !islandExpanded {
+                usageHeader
             }
             if projection.hasUnpricedModels {
                 DashboardWarningLabel(text: "Partial estimate · unpriced models", systemImage: "exclamationmark.triangle.fill")
@@ -265,12 +280,31 @@ public struct UsageDashboardActivityCard: View {
                 DashboardStaleLabel()
             }
             if !compact {
-                ForEach(projection.providers, id: \.id) { provider in
-                    DashboardProviderRow(provider: provider, detail: .stacked)
+                ForEach(DashboardActivityLayout.rows(projection.providers, islandExpanded: islandExpanded), id: \.id) { provider in
+                    DashboardProviderRow(provider: provider, detail: DashboardActivityLayout.rowDetail(islandExpanded: islandExpanded))
                 }
             }
         }
-        .padding(compact ? 8 : 16)
+        .padding(DashboardActivityLayout.padding(compact: compact, islandExpanded: islandExpanded))
+    }
+
+    private var usageHeader: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.purple)
+                .widgetAccentable()
+            Text("AI Usage")
+                .font(.headline)
+            Spacer()
+            VStack(alignment: .trailing, spacing: 0) {
+                Text(DashboardFormat.cost(projection.estimatedCost))
+                    .font(.headline)
+                    .monospacedDigit()
+                Text("\(DashboardFormat.tokens(projection.totalTokens)) tokens")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 
@@ -278,26 +312,41 @@ public struct RunnersDashboardActivityCard: View {
     private let projection: RunnersDashboardActivityProjection
     private let isStale: Bool
     private let compact: Bool
+    private let islandExpanded: Bool
 
-    public init(projection: RunnersDashboardActivityProjection, isStale: Bool = false, compact: Bool = false) {
+    /// - Parameter islandExpanded: The expanded Dynamic Island's bottom
+    ///   region, whose leading/trailing regions already show the family title
+    ///   and headline count. Drops the duplicate header, trades the card
+    ///   padding for a corner-clearance inset, and caps the list at
+    ///   ``DashboardActivityLayout/islandRowLimit`` single-line rows so
+    ///   nothing clips at the Island's fixed height.
+    public init(
+        projection: RunnersDashboardActivityProjection,
+        isStale: Bool = false,
+        compact: Bool = false,
+        islandExpanded: Bool = false
+    ) {
         self.projection = projection
         self.isStale = isStale
         self.compact = compact
+        self.islandExpanded = islandExpanded
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 4 : 8) {
-            HStack(spacing: 8) {
-                Image(systemName: "server.rack")
-                    .foregroundStyle(.blue)
-                    .widgetAccentable()
-                Text(projection.enterpriseName.isEmpty ? "Runners" : projection.enterpriseName)
-                    .font(.headline)
-                    .lineLimit(1)
-                Spacer()
-                Text("\(projection.idleCount) idle / \(projection.totalCount)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: DashboardActivityLayout.spacing(compact: compact)) {
+            if !islandExpanded {
+                HStack(spacing: 8) {
+                    Image(systemName: "server.rack")
+                        .foregroundStyle(.blue)
+                        .widgetAccentable()
+                    Text(projection.enterpriseName.isEmpty ? "Runners" : projection.enterpriseName)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer()
+                    Text("\(projection.idleCount) idle / \(projection.totalCount)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             // State colors live on the glyphs; the counts stay secondary text
             // so caption-size copy keeps contrast in both modes.
@@ -317,12 +366,39 @@ public struct RunnersDashboardActivityCard: View {
                 DashboardStaleLabel()
             }
             if !compact {
-                ForEach(projection.runners, id: \.id) { runner in
-                    DashboardRunnerRow(runner: runner, detail: .stacked)
+                ForEach(DashboardActivityLayout.rows(projection.runners, islandExpanded: islandExpanded), id: \.id) { runner in
+                    DashboardRunnerRow(runner: runner, detail: DashboardActivityLayout.rowDetail(islandExpanded: islandExpanded))
                 }
             }
         }
-        .padding(compact ? 8 : 16)
+        .padding(DashboardActivityLayout.padding(compact: compact, islandExpanded: islandExpanded))
+    }
+}
+
+/// Shared sizing for the three Live Activity cards across their Lock Screen,
+/// small (Watch Smart Stack / CarPlay), and expanded Dynamic Island layouts.
+enum DashboardActivityLayout {
+    /// Rows that fit the expanded Island's bottom region below its
+    /// leading/trailing header without clipping.
+    static let islandRowLimit = 2
+
+    static func spacing(compact: Bool) -> CGFloat { compact ? 4 : 8 }
+
+    /// The Island supplies its own outer margins, but its bottom corners are
+    /// tightly curved: the last row needs a little inset so leading glyphs
+    /// and trailing status text clear the curve instead of clipping.
+    static func padding(compact: Bool, islandExpanded: Bool) -> EdgeInsets {
+        if islandExpanded { return EdgeInsets(top: 0, leading: 8, bottom: 8, trailing: 8) }
+        let inset: CGFloat = compact ? 8 : 16
+        return EdgeInsets(top: inset, leading: inset, bottom: inset, trailing: inset)
+    }
+
+    static func rowDetail(islandExpanded: Bool) -> DashboardRowDetail {
+        islandExpanded ? .inline : .stacked
+    }
+
+    static func rows<Row>(_ rows: [Row], islandExpanded: Bool) -> [Row] {
+        islandExpanded ? Array(rows.prefix(islandRowLimit)) : rows
     }
 }
 

@@ -20,7 +20,7 @@ public struct ActionsDashboardLiveActivity: Widget {
                         .contentTransition(.numericText(value: Double(context.state.activeCount)))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    ActionsDashboardActivityCard(projection: context.state, isStale: context.isStale)
+                    ActionsDashboardActivityCard(projection: context.state, isStale: context.isStale, islandExpanded: true)
                 }
             } compactLeading: {
                 // Same family tint as the minimal view and keyline.
@@ -59,7 +59,7 @@ public struct UsageDashboardLiveActivity: Widget {
                         .contentTransition(.numericText(value: context.state.estimatedCost))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    UsageDashboardActivityCard(projection: context.state, isStale: context.isStale)
+                    UsageDashboardActivityCard(projection: context.state, isStale: context.isStale, islandExpanded: true)
                 }
             } compactLeading: {
                 Image(systemName: context.state.hasUnpricedModels ? "exclamationmark.triangle.fill" : "sparkles")
@@ -97,7 +97,7 @@ public struct RunnersDashboardLiveActivity: Widget {
                         .contentTransition(.numericText(value: Double(context.state.idleCount)))
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    RunnersDashboardActivityCard(projection: context.state, isStale: context.isStale)
+                    RunnersDashboardActivityCard(projection: context.state, isStale: context.isStale, islandExpanded: true)
                 }
             } compactLeading: {
                 Image(systemName: "server.rack")
