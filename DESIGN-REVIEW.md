@@ -1,5 +1,75 @@
 # Design review — made (blau.app web + Pilot/Walkie/Kneeboard apps)
 
+## 2026-10-31 — App-wide cleanup and Liquid Glass (Cockpit, Walkie, Kneeboard, Trigger)
+
+Scope: every app surface except Agentic Use and the 3D runner fleet scene, which
+had open PRs and get the same pass once those land. Reviewed against the
+zandesign catalog (React-targeted; applied to SwiftUI equivalents) in four
+parallel slices: Cockpit window shell, Cockpit tool panes, Walkie + Trigger, and
+Kneeboard + the widgets and Live Activities shared by all three apps.
+
+### Liquid Glass direction
+
+Glass is the control layer that floats above content: buttons, toggles,
+segmented pickers, menus and pop-up buttons, toolbars, pane headers, floating
+control clusters, and sheet action rows. Content — lists, cards, editors,
+terminals, web pages, device screens — stays solid, and glass never stacks on
+glass. Standard SwiftUI controls already render as glass on the 26 SDKs, so the
+largest gains came from replacing hand-drawn controls with standard ones.
+Buttons use secondary glass by default and prominent glass for the single
+primary action per view (BTN-1). Cockpit keeps `#available` guards through
+`GlassCompat.swift` (`compatGlassButtonStyle`, `compatGlassProminentButtonStyle`,
+`compatGlassCapsule`, `compatFloatingGlass`) because its long-term floor is
+macOS 15. Widgets and Live Activities use WidgetKit's accent and vibrant
+rendering (`widgetAccentable`, `widgetAccentedRenderingMode`) instead of
+custom glass.
+
+### Bugs fixed along the way
+
+- Kneeboard dashboard sheet: panels used `.background` on a grouped background
+  and disappeared in dark mode (COL-2).
+- Kneeboard "Searching for Cockpit": dark help text on the always-black mirror
+  area in light mode (COL-2/TYPE-3).
+- Medium dashboard widgets clipped their last row and footer; the small Runners
+  widget wrapped "Offline".
+- Cockpit tab close button hit area was white-on-white in light mode.
+- Device/Simulator/Android overlay buttons rendered light-mode chrome on the
+  always-dark device canvas.
+
+### Findings by theme
+
+| Theme | Checks | Representative fixes |
+|---|---|---|
+| Contrast | TYPE-3 | Informative `.tertiary` text (PR/task metadata, runner details, Docker empty state, quick-jump shortcut) → `.secondary`; colored caption text → tinted glyph + secondary text |
+| Button hierarchy and labels | BTN-1, BTN-2, BTN-4, COL-4 | One prominent action per view across sheets, empty states, and device panes; "OK" → "Done"/"Dismiss"; red row icons and red Stop buttons → neutral, red kept for destructive confirmation |
+| Confirmations | MODAL-1 | Verb + object titles: "Delete Note?", "Close Busy Terminal?", "Remove Container?", "Remove Connection?" with matching confirm verbs |
+| Borders and containers | LAY-1, LAY-2, LAY-4 | Per-row dividers and card borders removed; boxed header above boxed cards removed; nested radii set to inner + padding |
+| Hand-rolled controls | HIER-6 | Custom tab chips, word-wrap menu, settings search field, and Walkie tab switcher replaced with standard or glass controls |
+| Type and spacing | TYPE-2, TYPE-4, LAY-3, LAY-5, FORM-5 | Raw point sizes → text styles or `scaledFont`; title case for headings and buttons; spacing snapped to the 4pt grid; field + helper grouped at 4pt |
+| States | MOT-5, MOT-6 | Bare spinners gained labels; empty states use prominent glass for their next action |
+
+### Verification
+
+Each slice built its own targets, ran its tests, linted, and captured before and
+after screenshots in light and dark where a capture path exists. The integrated
+branch is validated with `apple/bin/build-ci.sh`, `apple/bin/test.sh all`,
+`apple/bin/lint-swift.sh --all`, `bin/check-docs.sh`, and an XcodeGen drift check.
+
+Known gap: Cockpit's offscreen snapshot harness (`capture-pilot-scenes.py`) cannot
+render Liquid Glass — glass inside scroll views and the Remote Desktop scene
+capture blank. Cockpit glass was therefore verified in the running app, not in
+the harness. Teaching the harness to render glass (an on-screen capture window,
+or a forced material fallback in `GlassCompat`) is follow-up work.
+
+### Deferred
+
+- Agentic Use and the runner fleet scene (open PRs #310–#312).
+- Loading skeletons (MOT-5) and illustrated empty states (MOT-6): new design
+  work rather than cleanup.
+- Pairing alert wording ("Reject") and Walkie's "Remove Download" /
+  "Regenerate & re-sync" confirmations: behavior or security decisions.
+- Ink color swatches still lack accessibility labels.
+
 ## 2026-10-23 — contemporary web redesign
 
 Scope: the complete `workers/web` landing experience at `/` and `/made`, its
