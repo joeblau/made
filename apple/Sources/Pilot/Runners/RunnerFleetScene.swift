@@ -442,6 +442,8 @@ private final class RunnerNode {
     private let model = SCNNode()
     private let label = SCNNode()
     private let glow = SCNNode(geometry: SCNPlane(width: 30, height: 30))
+    /// The busy cable's colour spilling onto the case, as a real neon tube would.
+    private let spill = SCNNode()
     private let lightMaterial = SCNMaterial()
     private let lightHalo: SCNMaterial = {
         let material = FleetTextures.additive(color: .white)
@@ -464,7 +466,19 @@ private final class RunnerNode {
         glow.simdPosition = SIMD3(0, 0.02, 0)
         glow.renderingOrder = -1
 
-        let shadow = SCNNode(geometry: SCNPlane(width: 19, height: 19))
+        let spillLight = SCNLight()
+        spillLight.type = .omni
+        spillLight.intensity = 0
+        spillLight.attenuationStartDistance = 2
+        spillLight.attenuationEndDistance = 11
+        spillLight.attenuationFalloffExponent = 2
+        spill.light = spillLight
+        // Just above and behind the lid's back edge where the cable plugs in, so
+        // the tint fades across the lid toward the front; the short range
+        // keeps it off the neighbouring runners.
+        spill.simdPosition = SIMD3(0, 6, -RunnerFleetLayout.miniHalfDepth - 1.5)
+
+        let shadow = SCNNode(geometry: SCNPlane(width: 16, height: 16))
         let shadowMaterial = SCNMaterial()
         shadowMaterial.lightingModel = .constant
         shadowMaterial.diffuse.contents = FleetTextures.contactShadow()
@@ -480,7 +494,7 @@ private final class RunnerNode {
         label.simdPosition = SIMD3(0, 0, RunnerFleetLayout.labelDepth)
         label.renderingOrder = 10
         label.categoryBitMask = RunnerFleetScene.pickableCategory
-        for node in [glow, shadow, model, label] { root.addChildNode(node) }
+        for node in [glow, shadow, model, label, spill] { root.addChildNode(node) }
     }
 
     func remove() {
@@ -509,15 +523,19 @@ private final class RunnerNode {
             cableMaterial.emission.contents = color
             cableMaterial.emission.intensity = 2.2
             glowMaterial.multiply.contents = color
-            glow.opacity = 1
+            glow.opacity = 0.7
+            spill.light?.color = color
+            spill.light?.intensity = 100
         case .idle:
             cableMaterial.emission.contents = NSColor(white: 0.24, alpha: 1)
             cableMaterial.emission.intensity = 1
             glow.opacity = 0
+            spill.light?.intensity = 0
         case .offline:
             cableMaterial.emission.contents = NSColor(white: 0.12, alpha: 1)
             cableMaterial.emission.intensity = 1
             glow.opacity = 0
+            spill.light?.intensity = 0
         }
 
         cable.childNodes.forEach { $0.removeFromParentNode() }
@@ -569,7 +587,8 @@ private final class RunnerNode {
 
     /// The real light is a 1.6 mm dot, so a soft halo makes on and off legible at fleet scale.
     private func addHalo(at position: SCNVector3) {
-        let halo = SCNNode(geometry: SCNPlane(width: 1.6, height: 1.6))
+        // Small: a crisp dot with a hint of bloom, like the real light.
+        let halo = SCNNode(geometry: SCNPlane(width: 0.7, height: 0.7))
         halo.geometry?.firstMaterial = lightHalo
         // Centred on the light and drawn without a depth test: offsetting it in
         // front of the case to avoid clipping shifted it off the light by parallax.
@@ -785,13 +804,16 @@ enum FleetTextures {
     }
 
     static func contactShadow() -> CGImage? {
+        // A tight, softened rounded square matching the case footprint, so the
+        // minis sit on the floor instead of hovering over a wide blur.
         cached("shadow", size: 128) { context, size in
             context.setFillColor(CGColor(gray: 1, alpha: 1))
             context.fill(CGRect(x: 0, y: 0, width: size, height: size))
-            let colors = [CGColor(gray: 0.04, alpha: 1), CGColor(gray: 0.35, alpha: 1), CGColor(gray: 1, alpha: 1)] as CFArray
-            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceGray(), colors: colors, locations: [0, 0.6, 1]) else { return }
-            let center = CGPoint(x: size / 2, y: size / 2)
-            context.drawRadialGradient(gradient, startCenter: center, startRadius: 0, endCenter: center, endRadius: size / 2, options: [])
+            let footprint = CGRect(x: 0, y: 0, width: size, height: size).insetBy(dx: size * 0.13, dy: size * 0.13)
+            context.setShadow(offset: .zero, blur: size * 0.09, color: CGColor(gray: 0, alpha: 1))
+            context.setFillColor(CGColor(gray: 0.03, alpha: 1))
+            context.addPath(CGPath(roundedRect: footprint, cornerWidth: size * 0.16, cornerHeight: size * 0.16, transform: nil))
+            context.fillPath()
         }
     }
 
@@ -825,14 +847,18 @@ enum FleetTextures {
                 context.drawLinearGradient(gradient, start: CGPoint(x: 0, y: height * low), end: CGPoint(x: 0, y: height * high), options: [])
                 context.restoreGState()
             }
-            band(0.25, 0.43, CGColor(red: 0.12, green: 0.12, blue: 0.13, alpha: 1), CGColor(red: 0.34, green: 0.32, blue: 0.3, alpha: 1))
+            band(0.25, 0.43, CGColor(red: 0.1, green: 0.11, blue: 0.14, alpha: 1), CGColor(red: 0.3, green: 0.31, blue: 0.36, alpha: 1))
             band(0.58, 0.8, CGColor(red: 0.5, green: 0.46, blue: 0.4, alpha: 1), CGColor(red: 0.8, green: 0.74, blue: 0.65, alpha: 1))
             band(0.86, 0.96, CGColor(red: 0.45, green: 0.43, blue: 0.4, alpha: 1), CGColor(red: 0.6, green: 0.58, blue: 0.55, alpha: 1))
             let strips: [(CGFloat, CGFloat, CGFloat)] = [(0.25, 0.45, 1), (0.6, 0.35, 1), (0.2, 0.7, 1), (0.3, 0.5, 1)]
             for (index, color) in strips.enumerated() {
                 context.setFillColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
-                context.fill(CGRect(x: width * (CGFloat(index) / 4 + 0.05), y: height * 0.47, width: width * 0.15, height: height * 0.05))
+                context.fill(CGRect(x: width * (CGFloat(index) / 4 + 0.05), y: height * 0.45, width: width * 0.15, height: height * 0.04))
             }
+            // A thin bright horizon line: the rounded edges sweep through every
+            // angle between lid and front, so each one catches it as a rim highlight.
+            context.setFillColor(CGColor(red: 1, green: 0.97, blue: 0.92, alpha: 1))
+            context.fill(CGRect(x: 0, y: height * 0.495, width: width, height: height * 0.018))
         }
     }
 
