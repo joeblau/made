@@ -40,13 +40,13 @@ struct BrowserStartPageView: View {
     }
 
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Local")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             Text("No dev servers found in this workspace.")
                 .font(.callout)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -62,7 +62,7 @@ struct BrowserStartPageView: View {
             // full pane width with the padding inside it, so the overlay
             // scroll indicator at the edge never covers card content.
             ScrollView {
-                VStack(spacing: 10) {
+                VStack(spacing: 12) {
                     ForEach(Array(servers.enumerated()), id: \.element.id) { index, server in
                         LocalServerCard(
                             hotkey: index < 9 ? index + 1 : nil,
@@ -103,7 +103,7 @@ private struct LocalServerCard: View {
 
     var body: some View {
         Button(action: onTap) {
-            HStack(spacing: 14) {
+            HStack(spacing: 16) {
                 BrowserPreviewThumbnail(name: server.name, displayURL: server.displayURL)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(server.name)
@@ -119,10 +119,10 @@ private struct LocalServerCard: View {
                     Text("\(hotkey)")
                         .scaledFont(size: 12, weight: .semibold, design: .monospaced)
                         .foregroundStyle(.secondary)
-                        .frame(minWidth: 18, minHeight: 18)
+                        .frame(minWidth: 20, minHeight: 20)
                         .padding(.horizontal, 4)
                         .background {
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.6))
                         }
                 }
@@ -130,13 +130,13 @@ private struct LocalServerCard: View {
                     .fill(isLive ? .green : Color(nsColor: .tertiaryLabelColor))
                     .frame(width: 8, height: 8)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
+            // Outer radius = thumbnail radius (6) + padding (12), LAY-4.
+            .padding(12)
             .background {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(Color.primary.opacity(isHovering ? 0.10 : 0.06))
             }
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
@@ -149,13 +149,13 @@ private struct BrowserPreviewThumbnail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 Circle().fill(.red).frame(width: 5, height: 5)
                 Circle().fill(.yellow).frame(width: 5, height: 5)
                 Circle().fill(.green).frame(width: 5, height: 5)
                 Spacer(minLength: 0)
             }
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Capsule().fill(Color.secondary.opacity(0.35)).frame(height: 3)
                 Capsule().fill(Color.secondary.opacity(0.25)).frame(width: 38, height: 3)
             }
@@ -170,10 +170,10 @@ private struct BrowserPreviewThumbnail: View {
                     .lineLimit(1)
             }
         }
-        .padding(6)
+        .padding(8)
         .frame(width: 96, height: 60)
         .background {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.white)
         }
         .foregroundStyle(.black)

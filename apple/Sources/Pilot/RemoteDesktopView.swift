@@ -55,7 +55,7 @@ struct RemoteDesktopView: View {
             Button("Cancel", role: .cancel) { renamingGroupID = nil }
         }
         .confirmationDialog(
-            "Remove this connection?",
+            "Remove Connection?",
             isPresented: Binding(
                 get: { store.remoteConnectionPendingClose != nil },
                 set: { if !$0 { store.remoteConnectionPendingClose = nil } }
@@ -93,27 +93,32 @@ struct RemoteDesktopView: View {
         }
     }
 
+    /// Group tabs are glass controls above the screen grid; only the selected
+    /// group carries the accent tint, as a state signal (COL-4).
     private var groupBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ForEach(groups.groups) { group in
+                        let isSelected = group.id == groups.selectedGroupID
                         Button {
                             store.selectedRemoteConnectionID = groups.selectGroup(
                                 group.id, preserving: store.selectedRemoteConnectionID
                             )
                         } label: {
                             Label(group.name, systemImage: "square.grid.2x2")
+                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
                                 .lineLimit(1)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(
-                                    group.id == groups.selectedGroupID
-                                        ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08),
-                                    in: RoundedRectangle(cornerRadius: 7)
-                                )
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
+                        .compatGlassCapsule(
+                            tint: isSelected ? Color.accentColor.opacity(0.22) : nil,
+                            interactive: true
+                        )
+                        .accessibilityAddTraits(isSelected ? .isSelected : [])
                         .contextMenu {
                             Button("Rename Group…") { rename(group) }
                             Button("Delete Empty Group", role: .destructive) { groups.deleteEmptyGroup(group.id) }
@@ -128,16 +133,19 @@ struct RemoteDesktopView: View {
                         store.selectedRemoteConnectionID = nil
                         if let group = groups.groups.first(where: { $0.id == id }) { rename(group) }
                     } label: {
-                        Image(systemName: "plus").frame(width: 26, height: 26)
+                        Image(systemName: "plus")
                     }
-                    .buttonStyle(.plain)
+                    .buttonBorderShape(.circle)
+                    .compatGlassButtonStyle()
                     .help("New Group")
                     .accessibilityLabel("New Group")
                 }
+                .padding(.vertical, 4)
             }
             if let group = groups.selectedGroup {
                 Button { rename(group) } label: { Image(systemName: "pencil") }
-                    .buttonStyle(.plain)
+                    .buttonBorderShape(.circle)
+                    .compatGlassButtonStyle()
                     .help("Rename Group")
                     .accessibilityLabel("Rename Group")
                 Text("\(group.connectionIDs.count)/4")
@@ -146,6 +154,7 @@ struct RemoteDesktopView: View {
                 Button { pickerGroupID = group.id } label: {
                     Label("Add Computer", systemImage: "plus")
                 }
+                .compatGlassButtonStyle()
                 .disabled(group.isFull)
                 .help(group.isFull ? "This group already has four computers" : "Add a computer to this group")
             }
@@ -326,17 +335,17 @@ private struct RemoteConnectionPane: View {
     }
 
     private var connectingOverlay: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 12) {
             ProgressView().controlSize(.large)
             Text("Connecting to \(connection.displayTitle)…")
                 .foregroundStyle(.white.opacity(0.85))
                 .font(.callout)
             Button("Cancel") { session.disconnect() }
                 .keyboardShortcut(isSelected ? .cancelAction : nil)
-                .buttonStyle(.bordered)
-                .tint(.white)
+                .compatGlassButtonStyle()
+                .environment(\.colorScheme, .dark)
         }
-        .padding(28)
+        .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black.opacity(0.55))
     }
@@ -356,10 +365,10 @@ private struct RemoteConnectionPane: View {
     private func connectFormContents(error: String?) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "display")
-                .font(.system(size: 40, weight: .light))
+                .scaledFont(size: 36, weight: .light)
                 .foregroundStyle(.tertiary)
 
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 Text(connection.displayTitle)
                     .font(.title3.weight(.semibold))
                 Text(verbatim: "\(connection.host):\(connection.port)")
@@ -367,7 +376,7 @@ private struct RemoteConnectionPane: View {
                     .foregroundStyle(.secondary)
             }
 
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 TextField("Username (optional)", text: Bindable(connection).username)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 280)
@@ -402,7 +411,7 @@ private struct RemoteConnectionPane: View {
                     .frame(width: 120)
             }
             .keyboardShortcut(isSelected ? .defaultAction : nil)
-            .buttonStyle(.borderedProminent)
+            .compatGlassProminentButtonStyle()
             .disabled(connection.host.trimmingCharacters(in: .whitespaces).isEmpty)
         }
     }
@@ -441,19 +450,21 @@ private struct RemoteComputerPicker: View {
             HStack(spacing: 8) {
                 Image(systemName: "wifi")
                     .foregroundStyle(.secondary)
-                Text("Computers on this network")
-                    .font(.system(size: 14, weight: .medium))
+                Text("Computers on This Network")
+                    .font(.headline)
                 Spacer()
                 Button {
                     onCancel()
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
+                .help("Close")
+                .accessibilityLabel("Close")
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
 
             discoveredList
@@ -467,13 +478,14 @@ private struct RemoteComputerPicker: View {
                     .focused($manualFocused)
                     .onSubmit(connectManual)
                 Button("Connect", action: connectManual)
+                    .compatGlassProminentButtonStyle()
                     .disabled(manualHost.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
         .frame(width: 520)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         .shadow(color: .black.opacity(0.25), radius: 24, y: 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.top, 60)
@@ -491,19 +503,19 @@ private struct RemoteComputerPicker: View {
                         Button {
                             pick(service)
                         } label: {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 12) {
                                 Image(systemName: "macbook")
                                     .foregroundStyle(.secondary)
                                 Text(service.name)
-                                    .font(.system(size: 13))
+                                    .font(.body)
                                     .foregroundStyle(.primary)
                                 Spacer()
                                 Image(systemName: "chevron.right")
-                                    .font(.system(size: 10, weight: .semibold))
+                                    .font(.caption2.weight(.semibold))
                                     .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 9)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -526,7 +538,7 @@ private struct RemoteComputerPicker: View {
             switch discovery.browseState {
             case .needsPermission, .failed:
                 Image(systemName: "wifi.exclamationmark")
-                    .font(.system(size: 26))
+                    .font(.largeTitle)
                     .foregroundStyle(.secondary)
                 Text("Cockpit can't browse the local network")
                     .font(.callout.weight(.medium))
@@ -540,7 +552,7 @@ private struct RemoteComputerPicker: View {
 
             Text("The target Mac needs Screen Sharing on (System Settings → General → Sharing), and Cockpit needs Local Network access. You can still connect by typing a host below.")
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
 
@@ -549,7 +561,7 @@ private struct RemoteComputerPicker: View {
                     NSWorkspace.shared.open(url)
                 }
             }
-            .buttonStyle(.bordered)
+            .compatGlassButtonStyle()
             .controlSize(.small)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

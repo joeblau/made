@@ -320,7 +320,7 @@ struct ChromiumDiagnosticsSettingsSection: View {
                 set: { if !$0 { resultMessage = nil } }
             )
         ) {
-            Button("OK") {
+            Button("Done") {
                 resultMessage = nil
             }
         } message: {

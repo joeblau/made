@@ -9,7 +9,6 @@ struct RunnersView: View {
     var body: some View {
         VStack(spacing: 0) {
             tabBar
-            Divider()
             if store.selectedScope != nil {
                 summaryBar
                 if let error = store.snapshot.error { errorBanner(error) }
@@ -21,7 +20,7 @@ struct RunnersView: View {
                     Text("Add an enterprise, organization, or repository to see its self-hosted runners.")
                 } actions: {
                     Button("Add Runner Source", systemImage: "plus") { showsAddScope = true }
-                        .buttonStyle(.borderedProminent)
+                        .compatGlassProminentButtonStyle()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -46,40 +45,52 @@ struct RunnersView: View {
         }
     }
 
+    /// Scope tabs are glass controls floating above the fleet; the selected
+    /// tab carries the only accent tint, as a state signal (COL-4).
     private var tabBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ForEach(store.scopes) { scope in
-                        Button {
-                            store.selectedScopeID = scope.id
-                            store.searchText = ""
-                        } label: {
-                            Label(scope.name, systemImage: scope.kind.symbol)
-                                .font(.subheadline.weight(.medium))
-                                .lineLimit(1)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(
-                                    store.selectedScopeID == scope.id
-                                        ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08),
-                                    in: RoundedRectangle(cornerRadius: 8)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(store.selectedScopeID == scope.id ? .isSelected : [])
-                        .contextMenu {
-                            if let url = scope.settingsURL { Link("Open Runner Settings on GitHub", destination: url) }
-                            Button("Remove Tab", role: .destructive) { store.remove(scope) }
-                        }
+                        scopeTab(scope)
                     }
                 }
+                .padding(.vertical, 4)
             }
             Button { showsAddScope = true } label: { Image(systemName: "plus") }
+                .buttonBorderShape(.circle)
+                .compatGlassButtonStyle()
                 .help("Add an enterprise, organization, or repository")
                 .accessibilityLabel("Add a runner source")
         }
-        .padding(12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+    }
+
+    private func scopeTab(_ scope: RunnerScope) -> some View {
+        let isSelected = store.selectedScopeID == scope.id
+        return Button {
+            store.selectedScopeID = scope.id
+            store.searchText = ""
+        } label: {
+            Label(scope.name, systemImage: scope.kind.symbol)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .compatGlassCapsule(
+            tint: isSelected ? Color.accentColor.opacity(0.22) : nil,
+            interactive: true
+        )
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .contextMenu {
+            if let url = scope.settingsURL { Link("Open Runner Settings on GitHub", destination: url) }
+            Button("Remove Tab", role: .destructive) { store.remove(scope) }
+        }
     }
 
     private var summaryBar: some View {
@@ -94,7 +105,7 @@ struct RunnersView: View {
             }
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.vertical, 12)
     }
 
     private var summaryCounts: some View {
@@ -103,7 +114,7 @@ struct RunnersView: View {
                 .font(.headline)
             ForEach(GitHubRunner.State.allCases, id: \.rawValue) { state in
                 let count = store.snapshot.runners.filter { $0.state == state }.count
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     Circle().fill(state.color).frame(width: 6, height: 6)
                     Text("\(count) \(state.rawValue.lowercased())")
                         .font(.subheadline)
@@ -116,15 +127,16 @@ struct RunnersView: View {
     private var searchControls: some View {
         HStack(spacing: 16) {
             Spacer(minLength: 0)
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Filter runners", text: $store.searchText)
                     .textFieldStyle(.plain)
             }
             .font(.subheadline)
-            .padding(7)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .frame(maxWidth: 200)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 7))
+            .compatGlassCapsule()
 
             Picker("Layout", selection: $layout) {
                 ForEach(RunnerLayout.allCases, id: \.self) { layout in
@@ -138,7 +150,8 @@ struct RunnersView: View {
 
             if store.isRefreshing { ProgressView().controlSize(.small) }
             Button { Task { await store.refreshSelected() } } label: { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.plain)
+                .buttonBorderShape(.circle)
+                .compatGlassButtonStyle()
                 .disabled(store.isRefreshing)
                 .help("Refresh runners")
                 .accessibilityLabel("Refresh runners")
@@ -146,18 +159,20 @@ struct RunnersView: View {
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
             VStack(alignment: .leading, spacing: 4) {
                 Text(message)
                 if store.snapshot.updatedAt != nil { Text("Showing the last successful refresh.").foregroundStyle(.secondary) }
             }
             Spacer()
-            Button("Retry") { Task { await store.refreshSelected() } }.disabled(store.isRefreshing)
+            Button("Retry") { Task { await store.refreshSelected() } }
+                .compatGlassButtonStyle()
+                .disabled(store.isRefreshing)
         }
         .font(.subheadline)
         .padding(12)
-        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 20)
         .padding(.bottom, 12)
     }
@@ -232,11 +247,11 @@ private struct RunnerCard: View {
     let edit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
                 RunnerHardwareImage(hardware: hardware)
                     .frame(width: 64, height: 64)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 14))
+                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                 Spacer()
                 RunnerStatusBadge(state: runner.state)
             }
@@ -252,9 +267,8 @@ private struct RunnerCard: View {
                 .lineLimit(2)
                 .frame(height: 32, alignment: .topLeading)
                 .help(runner.labels.map(\.name).joined(separator: ", "))
-            Divider()
             HStack {
-                Text(runner.name).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
+                Text(runner.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 8)
                 Button(action: edit) { Image(systemName: "pencil") }
                     .buttonStyle(.plain)
@@ -263,10 +277,9 @@ private struct RunnerCard: View {
                     .accessibilityLabel("Edit \(name)")
             }
         }
-        .padding(18)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.secondary.opacity(0.12)))
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 24))
         .contextMenu { Button("Edit Device…", action: edit) }
     }
 }
@@ -282,11 +295,11 @@ private struct RunnerTile: View {
     @State private var showsDetails = false
 
     var body: some View {
-        HStack(spacing: 14) {
-            RunnerHardwareImage(hardware: hardware, size: 30)
-                .frame(width: 50, height: 50)
-                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-            VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 12) {
+            RunnerHardwareImage(hardware: hardware, size: 32)
+                .frame(width: 48, height: 48)
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+            VStack(alignment: .leading, spacing: 8) {
                 Text(name)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
@@ -305,11 +318,10 @@ private struct RunnerTile: View {
             }
         }
         .opacity(runner.state == .offline ? 0.6 : 1)
-        .padding(14)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(isHovering ? 0.1 : 0.055), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.secondary.opacity(0.12)))
-        .contentShape(RoundedRectangle(cornerRadius: 14))
+        .background(Color.secondary.opacity(isHovering ? 0.12 : 0.07), in: RoundedRectangle(cornerRadius: 20))
+        .contentShape(RoundedRectangle(cornerRadius: 20))
         .onHover { isHovering = $0 }
         .task(id: isHovering) {
             guard isHovering else {
@@ -340,17 +352,17 @@ struct RunnerDetailsPopover: View {
     let hardware: RunnerHardware
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 RunnerHardwareImage(hardware: hardware)
                     .frame(width: 56, height: 56)
                     .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(name).font(.headline).lineLimit(2)
                     RunnerStatusBadge(state: runner.state)
                 }
             }
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
                 detailRow("Hardware", hardware.title)
                 detailRow("Platform", [runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))
                 if name != runner.name { detailRow("Runner", runner.name) }
@@ -384,8 +396,8 @@ private struct RunnerStatusBadge: View {
         Label(state.rawValue, systemImage: state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
             .font(.caption.weight(.medium))
             .foregroundStyle(state.color)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .background(state.color.opacity(0.12), in: Capsule())
     }
 }
@@ -442,27 +454,37 @@ private struct AddRunnerScopeSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Add Runners").font(.title2.weight(.semibold))
+            Text("Add Runner Source").font(.title2.weight(.semibold))
             Picker("Source", selection: $kind) {
                 ForEach(RunnerScope.Kind.allCases, id: \.self) { kind in Text(kind.title).tag(kind) }
             }
             .pickerStyle(.segmented)
+            .labelsHidden()
             VStack(alignment: .leading, spacing: 8) {
                 Text(kind.title).font(.subheadline.weight(.medium))
-                TextField(kind.inputPlaceholder, text: $name)
-                    .textFieldStyle(.roundedBorder)
-                    .focused($isNameFocused)
-                    .onSubmit(submit)
-                Text(kind == .enterprise
-                     ? "Uses your GitHub CLI account. Enterprise runners need the manage_runners:enterprise token scope."
-                     : "Uses your GitHub CLI account. You’ll need access to view this source’s self-hosted runners.")
-                    .font(.caption).foregroundStyle(.secondary)
+                // Helper text sits tight under its own field (FORM-5).
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField(kind.inputPlaceholder, text: $name)
+                        .textFieldStyle(.roundedBorder)
+                        .focused($isNameFocused)
+                        .onSubmit(submit)
+                    Text(kind == .enterprise
+                         ? "Uses your GitHub CLI account. Enterprise runners need the manage_runners:enterprise token scope."
+                         : "Uses your GitHub CLI account. You’ll need access to view this source’s self-hosted runners.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Add", action: submit).keyboardShortcut(.defaultAction).disabled(scope == nil)
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .compatGlassButtonStyle()
+                Button("Add Source", action: submit)
+                    .keyboardShortcut(.defaultAction)
+                    .compatGlassProminentButtonStyle()
+                    .disabled(scope == nil)
             }
+            .padding(.top, 4)
         }
         .padding(24)
         .frame(width: 420)
@@ -490,7 +512,7 @@ private struct RunnerDetailsSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 14) {
+            HStack(spacing: 16) {
                 RunnerHardwareImage(hardware: presentation.hardware ?? .inferred(for: runner))
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Edit Device").font(.title2.weight(.semibold))
@@ -508,11 +530,16 @@ private struct RunnerDetailsSheet: View {
             }
             Text("Device names and images are saved in Cockpit. Runner labels come from GitHub.")
                 .font(.caption).foregroundStyle(.secondary)
-            HStack {
-                Button("Reset") { presentation = RunnerPresentation() }
+            HStack(spacing: 8) {
+                Button("Reset to Defaults") { presentation = RunnerPresentation() }
+                    .compatGlassButtonStyle()
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save") { save(presentation); dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                    .compatGlassButtonStyle()
+                Button("Save") { save(presentation); dismiss() }
+                    .keyboardShortcut(.defaultAction)
+                    .compatGlassProminentButtonStyle()
             }
         }
         .padding(24)

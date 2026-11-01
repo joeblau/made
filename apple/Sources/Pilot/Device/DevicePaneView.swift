@@ -98,6 +98,8 @@ struct DevicePaneView: View {
                             } label: {
                                 Label("Share Wirelessly…", systemImage: "airplay.video")
                             }
+                            .compatGlassButtonStyle()
+                            .environment(\.colorScheme, .dark)
                             .padding(12)
                         }
                 }
@@ -254,10 +256,11 @@ private struct IOSDevicePickerView: View {
             Button(action: startWireless) {
                 Label("Share Wirelessly…", systemImage: "airplay.video")
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
+                    .padding(.vertical, 4)
             }
-            .buttonStyle(.borderless)
-            .padding(8)
+            .compatGlassButtonStyle()
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
 
             if let preferredName = session.preferredDeviceName {
                 Label("Waiting for \(preferredName)", systemImage: "cable.connector")
@@ -315,7 +318,7 @@ private struct IOSDevicePickerView: View {
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 
     private var emptyState: some View {
@@ -326,9 +329,9 @@ private struct IOSDevicePickerView: View {
                     .foregroundStyle(.secondary)
             } else if let error = session.lastError {
                 Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 34))
+                    .scaledFont(size: 36)
                     .foregroundStyle(.secondary)
-                Text("Couldn't list devices").font(.headline)
+                Text("Couldn't List Devices").font(.headline)
                 Text(error)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -336,9 +339,9 @@ private struct IOSDevicePickerView: View {
                     .padding(.horizontal, 32)
             } else {
                 Image(systemName: "apps.iphone")
-                    .font(.system(size: 34))
+                    .scaledFont(size: 36)
                     .foregroundStyle(.secondary)
-                Text("No USB devices found").font(.headline)
+                Text("No USB Devices Found").font(.headline)
                 Text("Connect an iPhone or iPad over USB, trust this Mac, and keep its screen awake.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -363,10 +366,9 @@ private struct DeviceToastView: View {
         Label(toast.text, systemImage: toast.systemImage)
             .font(.headline)
             .foregroundStyle(toast.tint)
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+            .compatGlassCapsule()
     }
 }
 
@@ -392,7 +394,7 @@ private struct DeviceStatusOverlay: View {
                 } else {
                     statusBlock(
                         icon: "exclamationmark.triangle",
-                        title: "Capture failed",
+                        title: "Capture Failed",
                         detail: message,
                         // Self-heal polls in the background, but give the user
                         // an immediate exact-device retry too.
@@ -409,7 +411,7 @@ private struct DeviceStatusOverlay: View {
             Image(systemName: "video.slash")
                 .scaledFont(size: 36)
                 .foregroundStyle(.secondary)
-            Text("Camera access required")
+            Text("Camera Access Required")
                 .font(.headline)
             Text(message)
                 .font(.subheadline)
@@ -420,14 +422,16 @@ private struct DeviceStatusOverlay: View {
                 Button("Open Camera Settings") {
                     session.openCameraPrivacySettings()
                 }
-                .buttonStyle(.borderedProminent)
+                .compatGlassProminentButtonStyle()
                 Button("Check Again") {
                     session.retry()
                 }
+                .compatGlassButtonStyle()
             }
             .padding(.top, 8)
         }
         .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PreviewCanvasBackground())
     }
@@ -456,16 +460,18 @@ private struct DeviceStatusOverlay: View {
                 HStack {
                     if let retry {
                         Button("Retry", action: retry)
-                            .buttonStyle(.borderedProminent)
+                            .compatGlassProminentButtonStyle()
                     }
                     if let chooseAnother {
                         Button("Back to Devices", action: chooseAnother)
+                            .compatGlassButtonStyle()
                     }
                 }
                 .padding(.top, 8)
             }
         }
         .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PreviewCanvasBackground())
     }
