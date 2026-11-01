@@ -39,9 +39,10 @@ enum MacMiniModel {
         for material in geometry.materials {
             guard let color = (material.diffuse.contents as? NSColor)?.usingColorSpace(.deviceRGB),
                   abs(color.redComponent - 0.66) < 0.05, abs(color.blueComponent - 0.69) < 0.05 else { continue }
-            material.diffuse.contents = NSColor(red: 0.86, green: 0.82, blue: 0.78, alpha: 1)
-            material.metalness.contents = 1.0
-            material.roughness.contents = 0.16
+            material.diffuse.contents = NSColor(red: 0.92, green: 0.9, blue: 0.88, alpha: 1)
+            // Mostly metal, with enough diffuse response for the overhead key to light the lid.
+            material.metalness.contents = 0.7
+            material.roughness.contents = 0.3
         }
     }
 
@@ -207,32 +208,45 @@ final class RunnerFleetScene {
     init() {
         scene.background.contents = Self.background
         scene.lightingEnvironment.contents = FleetTextures.environment()
-        scene.lightingEnvironment.intensity = 2.0
-        scene.fogColor = Self.background
-        scene.fogStartDistance = 1_000
-        scene.fogEndDistance = 2_400
+        scene.lightingEnvironment.intensity = 1.2
+        // Navy haze so the back rows recede.
+        scene.fogColor = NSColor(red: 0.025, green: 0.035, blue: 0.07, alpha: 1)
+        scene.fogStartDistance = 900
+        scene.fogEndDistance = 2_600
+        scene.fogDensityExponent = 1.5
 
         let camera = SCNCamera()
         camera.fieldOfView = CGFloat(Self.fieldOfView)
         camera.zNear = 1
         camera.zFar = 6_000
         camera.wantsHDR = true
-        camera.bloomIntensity = 1.4
-        camera.bloomThreshold = 1.05
-        camera.bloomBlurRadius = 10
         camera.wantsExposureAdaptation = false
-        // A touch of grading and vignette gives the product-shot depth of the mockup.
-        camera.contrast = 0.12
-        camera.saturation = 1.15
-        camera.vignettingIntensity = 0.35
-        camera.vignettingPower = 1.2
+        camera.bloomIntensity = 2.2
+        camera.bloomThreshold = 1.2
+        camera.bloomIterationCount = 2
+        camera.bloomBlurRadius = 14
+        // Contact darkening where cases meet the floor.
+        camera.screenSpaceAmbientOcclusionIntensity = 1.4
+        camera.screenSpaceAmbientOcclusionRadius = 3
+        camera.screenSpaceAmbientOcclusionNormalThreshold = 0.3
+        camera.screenSpaceAmbientOcclusionDepthThreshold = 2
+        // Deeper contrast for the cinematic grade; the cool cast comes from the
+        // lighting itself rather than a lookup table.
+        camera.contrast = 0.2
+        camera.saturation = 1.1
+        camera.vignettingIntensity = 0.7
+        camera.vignettingPower = 1.4
         cameraNode.camera = camera
         scene.rootNode.addChildNode(cameraNode)
 
-        // Warm key from above the camera and a faint navy fill; the cool edge
-        // highlights come from the environment so they never tint the lids.
-        scene.rootNode.addChildNode(Self.light(.directional, intensity: 1_100, color: NSColor(red: 1, green: 0.94, blue: 0.86, alpha: 1), angles: SIMD3(-0.95, -0.3, 0)))
-        scene.rootNode.addChildNode(Self.light(.ambient, intensity: 90, color: NSColor(red: 0.3, green: 0.36, blue: 0.6, alpha: 1), angles: .zero))
+        // Lit like a product shot: a strong overhead key from slightly behind
+        // brightens the lids while the sides stay charcoal; its mirror highlight
+        // points away from the camera, so no hot spot (a low backlight left one).
+        // The environment's horizon line rims the edges, and a weak cool fill
+        // keeps the fronts legible.
+        scene.rootNode.addChildNode(Self.light(.directional, intensity: 1_200, color: NSColor(red: 1, green: 0.97, blue: 0.93, alpha: 1), angles: SIMD3(-1.3, .pi, 0)))
+        scene.rootNode.addChildNode(Self.light(.directional, intensity: 260, color: NSColor(red: 0.55, green: 0.65, blue: 1, alpha: 1), angles: SIMD3(-0.6, 0.4, 0)))
+        scene.rootNode.addChildNode(Self.light(.ambient, intensity: 60, color: NSColor(red: 0.25, green: 0.32, blue: 0.6, alpha: 1), angles: .zero))
 
         scene.rootNode.addChildNode(makeFloor())
         scene.rootNode.addChildNode(fleetNode)
@@ -338,11 +352,13 @@ final class RunnerFleetScene {
         scene.rootNode.addChildNode(hubNode)
     }
 
+    /// Dark navy floor. A reflective SCNFloor mirrored the depth-test-free
+    /// captions regardless of category masks, so the floor stays matte.
     private func makeFloor() -> SCNNode {
         let plane = SCNPlane(width: 6_000, height: 6_000)
         let material = SCNMaterial()
         material.lightingModel = .constant
-        material.diffuse.contents = NSColor.black
+        material.diffuse.contents = NSColor(red: 0.018, green: 0.024, blue: 0.045, alpha: 1)
         material.emission.contents = FleetTextures.dotGrid()
         material.emission.wrapS = .repeat
         material.emission.wrapT = .repeat
@@ -525,7 +541,7 @@ private final class RunnerNode {
             glowMaterial.multiply.contents = color
             glow.opacity = 0.7
             spill.light?.color = color
-            spill.light?.intensity = 100
+            spill.light?.intensity = 35
         case .idle:
             cableMaterial.emission.contents = NSColor(white: 0.24, alpha: 1)
             cableMaterial.emission.intensity = 1
@@ -826,39 +842,38 @@ enum FleetTextures {
         }
     }
 
-    /// A dark studio built around what each face reflects from the fleet
-    /// camera's 30° pitch: lids mirror the sky about 30° up, so a warm band
-    /// there gives them the champagne sheen; fronts mirror about 30° down, so a
-    /// neutral band lifts them; thin cool strips on the horizon catch the edges.
+    /// A near-black studio with one soft ring of light just above the horizon.
+    /// Lids reflect the sky about 30° up and catch the ring's falling edge as a
+    /// sheen; fronts reflect the dark floor; rounded edges sweep through the
+    /// bright horizon line and read as rims. Azimuth-independent on purpose.
     static func environment() -> CGImage? {
         // Equirectangular (2:1), y up from the bottom; SceneKit ignores square images.
         cached("environment", width: 1_024, height: 512) { context, width, height in
-            let base = [
-                CGColor(red: 0.01, green: 0.012, blue: 0.02, alpha: 1), CGColor(red: 0.04, green: 0.045, blue: 0.07, alpha: 1),
-                CGColor(red: 0.08, green: 0.085, blue: 0.11, alpha: 1),
-            ] as CFArray
-            guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: base, locations: [0, 0.5, 1]) else { return }
-            context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: 0, y: height), options: [])
-            func band(_ low: CGFloat, _ high: CGFloat, _ bottom: CGColor, _ top: CGColor) {
-                let colors = [bottom, top] as CFArray
-                guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1]) else { return }
+            context.setFillColor(CGColor(red: 0.012, green: 0.016, blue: 0.03, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            func band(_ low: CGFloat, _ high: CGFloat, _ colors: [CGColor], _ locations: [CGFloat]) {
+                guard let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors as CFArray, locations: locations) else { return }
                 context.saveGState()
                 context.clip(to: CGRect(x: 0, y: height * low, width: width, height: height * (high - low)))
                 context.drawLinearGradient(gradient, start: CGPoint(x: 0, y: height * low), end: CGPoint(x: 0, y: height * high), options: [])
                 context.restoreGState()
             }
-            band(0.25, 0.43, CGColor(red: 0.1, green: 0.11, blue: 0.14, alpha: 1), CGColor(red: 0.3, green: 0.31, blue: 0.36, alpha: 1))
-            band(0.58, 0.8, CGColor(red: 0.5, green: 0.46, blue: 0.4, alpha: 1), CGColor(red: 0.8, green: 0.74, blue: 0.65, alpha: 1))
-            band(0.86, 0.96, CGColor(red: 0.45, green: 0.43, blue: 0.4, alpha: 1), CGColor(red: 0.6, green: 0.58, blue: 0.55, alpha: 1))
-            let strips: [(CGFloat, CGFloat, CGFloat)] = [(0.25, 0.45, 1), (0.6, 0.35, 1), (0.2, 0.7, 1), (0.3, 0.5, 1)]
-            for (index, color) in strips.enumerated() {
+            // Fronts: a faint cool floor bounce.
+            band(0.3, 0.5, [CGColor(red: 0.02, green: 0.025, blue: 0.05, alpha: 1), CGColor(red: 0.2, green: 0.21, blue: 0.26, alpha: 1)], [0, 1])
+            // Lids: bright from the horizon through about 35°, fading out by 60°.
+            band(0.5, 0.84, [
+                CGColor(red: 0.95, green: 0.93, blue: 0.9, alpha: 1), CGColor(red: 0.82, green: 0.81, blue: 0.8, alpha: 1),
+                CGColor(red: 0.1, green: 0.11, blue: 0.15, alpha: 1),
+            ], [0, 0.55, 1])
+            // Rim line on the horizon.
+            context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            context.fill(CGRect(x: 0, y: height * 0.497, width: width, height: height * 0.012))
+            // Cool accents just below the horizon tint the case sides like the cables.
+            let accents: [(CGFloat, CGFloat, CGFloat)] = [(0.25, 0.45, 1), (0.6, 0.35, 1), (0.2, 0.7, 1), (0.3, 0.5, 1)]
+            for (index, color) in accents.enumerated() {
                 context.setFillColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
-                context.fill(CGRect(x: width * (CGFloat(index) / 4 + 0.05), y: height * 0.45, width: width * 0.15, height: height * 0.04))
+                context.fill(CGRect(x: width * (CGFloat(index) / 4 + 0.04), y: height * 0.45, width: width * 0.17, height: height * 0.035))
             }
-            // A thin bright horizon line: the rounded edges sweep through every
-            // angle between lid and front, so each one catches it as a rim highlight.
-            context.setFillColor(CGColor(red: 1, green: 0.97, blue: 0.92, alpha: 1))
-            context.fill(CGRect(x: 0, y: height * 0.495, width: width, height: height * 0.018))
         }
     }
 

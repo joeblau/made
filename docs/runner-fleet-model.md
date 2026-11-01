@@ -23,8 +23,9 @@ model tests.
 At runtime Cockpit merges the model's meshes by material into one shared
 template, so each runner costs about 19 draw calls instead of 74. SceneKit's
 `flattenedClone()` cannot do this: it returns an empty geometry for the file's
-multi-channel polygon elements. The aluminium is re-tuned warmer and glossier
-for the fleet's dark studio lighting. Apple's export scrambles node names, so the
+multi-channel polygon elements. The aluminium is re-tuned (lighter, partly
+diffuse) so the fleet's overhead key brightens the lids while the sides stay
+dark. Apple's export scrambles node names, so the
 status light is located by geometry: the only tiny flat disc on the front face.
 `RunnerFleetTests` fails if the bundled model stops yielding exactly one.
 
