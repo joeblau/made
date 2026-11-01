@@ -96,6 +96,7 @@ struct InkOverlay: View {
 
     private let palette: [NSColor] = [.systemRed, .systemOrange, .systemYellow,
                                       .systemGreen, .systemBlue, .white]
+    private let paletteNames = ["Red", "Orange", "Yellow", "Green", "Blue", "White"]
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -108,20 +109,24 @@ struct InkOverlay: View {
         HStack(spacing: 10) {
             ForEach(palette.indices, id: \.self) { index in
                 let swatch = palette[index]
-                Circle()
-                    .fill(Color(nsColor: swatch))
-                    .frame(width: 18, height: 18)
-                    .overlay {
-                        Circle().strokeBorder(
-                            .primary.opacity(!model.isEraser && model.color == swatch ? 0.9 : 0),
-                            lineWidth: 2
-                        )
-                    }
-                    .contentShape(Circle())
-                    .onTapGesture {
-                        model.color = swatch
-                        model.isEraser = false
-                    }
+                let isSelected = !model.isEraser && model.color == swatch
+                // A real button, so keyboard and VoiceOver can pick a color.
+                Button {
+                    model.color = swatch
+                    model.isEraser = false
+                } label: {
+                    Circle()
+                        .fill(Color(nsColor: swatch))
+                        .frame(width: 18, height: 18)
+                        .overlay {
+                            Circle().strokeBorder(.primary.opacity(isSelected ? 0.9 : 0), lineWidth: 2)
+                        }
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .help("\(paletteNames[index]) ink")
+                .accessibilityLabel("\(paletteNames[index]) ink")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
 
             Color.clear.frame(width: 4, height: 1)

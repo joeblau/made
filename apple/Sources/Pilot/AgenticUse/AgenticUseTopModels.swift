@@ -23,15 +23,12 @@ struct AgenticUseTopModels: View {
                         withAnimation(.snappy) { showsAll.toggle() }
                     } label: {
                         HStack(spacing: 4) {
-                            Text(showsAll ? "Show top \(Self.collapsedCount)" : "View all \(models.count) models")
+                            Text(showsAll ? "Show Top \(Self.collapsedCount)" : "View All \(models.count) Models")
                             Image(systemName: showsAll ? "chevron.up" : "arrow.right")
                         }
-                        .scaledFont(size: 11, weight: .medium)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
-                    .buttonStyle(.plain)
+                    .compatGlassButtonStyle()
+                    .controlSize(.small)
                 }
             }
 
