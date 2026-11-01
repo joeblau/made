@@ -241,7 +241,7 @@ public struct ActionsDashboardActivityCard: View {
             if !islandExpanded {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(DashboardTone.blue)
                         .widgetAccentable()
                     Text("Actions")
                         .font(.headline)
@@ -324,7 +324,7 @@ public struct UsageDashboardActivityCard: View {
     private var usageHeader: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles")
-                .foregroundStyle(.purple)
+                .foregroundStyle(DashboardTone.purple)
                 .widgetAccentable()
             Text("AI Usage")
                 .font(.headline)
@@ -375,7 +375,7 @@ public struct RunnersDashboardActivityCard: View {
             if !islandExpanded {
                 HStack(spacing: 8) {
                     Image(systemName: "server.rack")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(DashboardTone.blue)
                         .widgetAccentable()
                     Text(projection.enterpriseName.isEmpty ? "Runners" : projection.enterpriseName)
                         .font(.headline)
@@ -392,12 +392,12 @@ public struct RunnersDashboardActivityCard: View {
                 DashboardStatusLabel(
                     text: "\(projection.busyCount) busy",
                     systemImage: "gearshape.2",
-                    tint: projection.busyCount > 0 ? .orange : .secondary
+                    tint: projection.busyCount > 0 ? .orange : nil
                 )
                 DashboardStatusLabel(
                     text: "\(projection.offlineCount) offline",
                     systemImage: "xmark.circle.fill",
-                    tint: projection.offlineCount > 0 ? .red : .secondary
+                    tint: projection.offlineCount > 0 ? .red : nil
                 )
             }
             if isStale {
@@ -477,7 +477,7 @@ private struct DashboardWidgetFrame<Content: View>: View {
     @Environment(\.widgetFamily) private var family
     let title: String
     let systemImage: String
-    let tint: Color
+    let tint: DashboardTone
     let updatedAt: Double?
     let isStale: Bool
     @ViewBuilder var content: Content
@@ -552,7 +552,7 @@ private struct DashboardMetric: View {
     let value: Int
     let label: String
     /// A state color, or `nil` for a neutral total / an absent state.
-    var tint: Color?
+    var tint: DashboardTone?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -561,7 +561,9 @@ private struct DashboardMetric: View {
                 .monospacedDigit()
                 // Timeline reloads roll the count instead of hard-cutting (MOT-4).
                 .contentTransition(.numericText(value: Double(value)))
-                .foregroundStyle(tint ?? Color.primary)
+                // Light mode darkens the tint so the number keeps 4.5:1 on
+                // the white widget; tinted mode recolors it as an accent.
+                .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.primary))
                 .lineLimit(1)
                 .widgetAccentable()
             Text(label)
@@ -622,7 +624,8 @@ private struct DashboardWarningLabel: View {
 private struct DashboardStatusLabel: View {
     let text: String
     let systemImage: String
-    let tint: Color
+    /// The glyph's state color, or `nil` for an absent state (secondary).
+    let tint: DashboardTone?
 
     var body: some View {
         Label {
@@ -630,7 +633,7 @@ private struct DashboardStatusLabel: View {
                 .foregroundStyle(.secondary)
         } icon: {
             Image(systemName: systemImage)
-                .foregroundStyle(tint)
+                .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
         }
         .font(.caption2)
         .lineLimit(1)
@@ -773,14 +776,15 @@ private struct DashboardRunnerRow: View {
 /// Type size.
 private struct DashboardRowGlyph: View {
     let systemName: String
-    let tint: Color
+    /// The state color, or `nil` for a neutral state (secondary).
+    let tint: DashboardTone?
     @ScaledMetric(relativeTo: .caption) private var side: CGFloat = 16
 
     var body: some View {
         Image(systemName: systemName)
             .resizable()
             .scaledToFit()
-            .foregroundStyle(tint)
+            .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
             .frame(width: side, height: side)
     }
 }
@@ -874,20 +878,67 @@ enum DashboardFormat {
 }
 
 extension ActionsDashboardRun {
-    var dashboardTint: Color {
-        guard isComplete else { return isActive ? .blue : .secondary }
+    /// `nil` is a neutral state, drawn secondary.
+    var dashboardTint: DashboardTone? {
+        guard isComplete else { return isActive ? .blue : nil }
         if isFailure { return .red }
         switch conclusion {
         case "success": return .green
-        case "cancelled", "skipped", "neutral": return .secondary
+        case "cancelled", "skipped", "neutral": return nil
         default: return .orange
         }
     }
 }
 
 extension RunnersDashboardRunner {
-    var dashboardTint: Color {
+    var dashboardTint: DashboardTone {
         if isOffline { return .red }
         return busy ? .orange : .green
+    }
+}
+
+/// The dashboards' state colors. The system tints are tuned for glyphs on
+/// dark and fall to about 2.2:1 (green, orange) and 3.5:1 (red, blue) as
+/// text on a light widget, so full-color light mode mixes each one with
+/// black until it clears 4.5:1 on white (TYPE-3). Dark mode keeps the
+/// system color, and accented (tinted) and vibrant rendering keep it too:
+/// there `.widgetAccentable()` and the system recolor the content, and a
+/// darkened source would only dim the vibrant result.
+enum DashboardTone: CaseIterable, ShapeStyle {
+    case blue, green, orange, red, purple
+
+    var systemColor: Color {
+        switch self {
+        case .blue: .blue
+        case .green: .green
+        case .orange: .orange
+        case .red: .red
+        case .purple: .purple
+        }
+    }
+
+    /// How far toward black the light-mode tint is mixed. `mix(with:by:)`
+    /// blends in perceptual space, so each amount was picked by resolving
+    /// the result and computing its WCAG contrast on white rather than from
+    /// sRGB math: blue 4.79, green 4.89, orange 4.91, red 4.85 and purple
+    /// 4.82:1 on the iOS 27 and macOS system colors (from 3.52, 2.22, 2.31,
+    /// 3.57 and 4.17:1). `DashboardToneTests` holds the 4.5:1 floor.
+    var lightModeDarkening: Double {
+        switch self {
+        case .blue: 0.12
+        case .green: 0.27
+        case .orange: 0.26
+        case .red: 0.12
+        case .purple: 0.06
+        }
+    }
+
+    func color(colorScheme: ColorScheme, renderingMode: WidgetRenderingMode) -> Color {
+        guard colorScheme == .light, renderingMode == .fullColor else { return systemColor }
+        return systemColor.mix(with: .black, by: lightModeDarkening)
+    }
+
+    func resolve(in environment: EnvironmentValues) -> Color {
+        color(colorScheme: environment.colorScheme, renderingMode: environment.widgetRenderingMode)
     }
 }

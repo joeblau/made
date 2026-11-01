@@ -39,6 +39,10 @@ struct ContentView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showModelDownloadConfirmation = false
     @State private var showSpeechStorage = false
+    /// The error that sent the user to the storage sheet ("Manage Storage"),
+    /// kept after the alert clears `modelErrorMessage` so the sheet can still
+    /// say why the download stopped (FORM-4).
+    @State private var storageErrorMessage: String?
     @AppStorage("transcription.allowRestrictedNetwork") private var allowRestrictedNetwork = false
     /// Auto-generated identity key, auto-exchanged with Pilot over the
     /// encrypted channel (issue #51). Drives the Settings "Identity & Keys".
@@ -216,6 +220,7 @@ struct ContentView: View {
                 prepareSpeechModel(allowRestrictedNetwork: true)
             }
             Button("Manage Storage") {
+                storageErrorMessage = transcription.modelErrorMessage
                 transcription.modelErrorMessage = nil
                 showSpeechStorage = true
             }
@@ -223,8 +228,12 @@ struct ContentView: View {
         } message: {
             Text(transcription.modelErrorMessage ?? "")
         }
-        .sheet(isPresented: $showSpeechStorage) {
-            SpeechModelStorageView(transcription: transcription)
+        .sheet(isPresented: $showSpeechStorage, onDismiss: { storageErrorMessage = nil }) {
+            SpeechModelStorageView(
+                transcription: transcription,
+                errorMessage: $storageErrorMessage,
+                onCancelLoad: cancelModelLoad
+            )
         }
         .alert(
             pairingRequest?.isKeyChange == true
@@ -310,10 +319,7 @@ struct ContentView: View {
     }
 
     private func modelLoadingCancelButton(fullWidth: Bool) -> some View {
-        Button {
-            transcription.cancelModelLoad()
-            walkie.interrupt()
-        } label: {
+        Button(action: cancelModelLoad) {
             // Full width below the status at accessibility sizes; beside it,
             // the label stretches to the status capsule's height.
             Text("Cancel")
@@ -321,6 +327,13 @@ struct ContentView: View {
         }
         .liquidGlassButtonStyle()
         .buttonBorderShape(.capsule)
+    }
+
+    /// Shared by the banner's Cancel and the storage sheet's, which covers
+    /// the banner: a walkie cycle waiting on the model ends with the load.
+    private func cancelModelLoad() {
+        transcription.cancelModelLoad()
+        walkie.interrupt()
     }
 
     @ViewBuilder
@@ -618,11 +631,17 @@ struct ContentView: View {
         case .modelLoading:
             transcription.isModelLoading = true
             transcription.modelLoadingFraction = 0.42
+            transcription.isLoadingFromCache = false
             transcription.modelLoadingProgress = "Downloading speech model… 42%"
         case .modelLoadingCached:
             transcription.isModelLoading = true
             transcription.modelLoadingFraction = nil
+            transcription.isLoadingFromCache = true
             transcription.modelLoadingProgress = "Loading cached speech model…"
+        case .storageSheetError:
+            storageErrorMessage = "The speech-model download stopped because the network became "
+                + "unavailable or restricted."
+            showSpeechStorage = true
         case .downloadAlert:
             showModelDownloadConfirmation = true
         case .transcriptionError:
@@ -655,7 +674,7 @@ struct ContentView: View {
 enum CopilotDemoScenario: String {
     case searching, noWorkspaces, disconnected
     case preparing, listening, recording, finishing, sent
-    case modelLoading, modelLoadingCached
+    case modelLoading, modelLoadingCached, storageSheetError
     case downloadAlert, transcriptionError, pairAlert, keyChangeAlert
     case storageError, activityError
 
@@ -683,45 +702,73 @@ enum CopilotDemoScenario: String {
     }
 }
 
+/// Which storage controls the speech sheet offers. While a load runs, the
+/// sheet covers the main banner, so it offers that banner's Cancel instead
+/// of download actions a tap would silently join.
+struct SpeechStorageControls: Equatable {
+    /// The Cancel title while a load runs, else `nil`.
+    let cancelTitle: String?
+    /// Remove Download, for a stored (possibly partial) or loaded model.
+    let showsRemove: Bool
+    let removeEnabled: Bool
+    /// Download on Wi-Fi / Use Cellular: only with nothing stored and idle.
+    let showsDownload: Bool
+
+    /// `isCachedLoad` comes from the service's load preparation, not from a
+    /// missing fraction: cancelling or an indeterminate download also clears
+    /// the fraction, and must keep reading "Cancel Download".
+    init(isLoading: Bool, isCachedLoad: Bool, hasStoredModel: Bool, isLoaded: Bool) {
+        let stored = hasStoredModel || isLoaded
+        cancelTitle = isLoading ? (isCachedLoad ? "Cancel Loading" : "Cancel Download") : nil
+        showsRemove = stored
+        removeEnabled = stored && !isLoading
+        showsDownload = !stored && !isLoading
+    }
+
+    /// The live service error wins; otherwise the one carried in from the
+    /// "Transcription Unavailable" alert.
+    static func displayedError(service: String?, carried: String?) -> String? {
+        service ?? carried
+    }
+}
+
 private struct SpeechModelStorageView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var transcription: TranscriptionService
+    /// The error carried in from "Manage Storage"; cleared by the next action.
+    @Binding var errorMessage: String?
+    let onCancelLoad: () -> Void
+
+    private var controls: SpeechStorageControls {
+        SpeechStorageControls(
+            isLoading: transcription.isModelLoading,
+            isCachedLoad: transcription.isLoadingFromCache,
+            hasStoredModel: transcription.hasStoredModel,
+            isLoaded: transcription.isModelLoaded
+        )
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
+                    if let message = SpeechStorageControls.displayedError(
+                        service: transcription.modelErrorMessage, carried: errorMessage
+                    ) {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
+                            .font(.footnote)
+                            // Separator starts at the glyph, like every other row.
+                            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                    }
                     LabeledContent("Model", value: SpeechModelCache.displayName)
                     LabeledContent("Download size", value: SpeechModelCache.downloadSize)
                     LabeledContent("Stored", value: transcription.cachedModelSize)
                     if transcription.isModelLoading {
-                        // Designed loading state while the sheet covers the
-                        // main screen's download banner (MOT-5).
-                        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                            if let fraction = transcription.modelLoadingFraction {
-                                ProgressView(value: fraction)
-                                    .frame(width: 72)
-                            } else {
-                                ProgressView()
-                            }
-                            Text(transcription.modelLoadingProgress)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                        loadingRow
                     }
-                    if transcription.hasStoredModel || transcription.isModelLoaded {
-                        Button("Remove Download", role: .destructive) {
-                            Task { await transcription.removeCachedModel() }
-                        }
-                        .disabled(transcription.isModelLoading)
-                    } else {
-                        Button("Download on Wi-Fi") {
-                            Task { _ = await transcription.loadModel(allowRestrictedNetwork: false) }
-                        }
-                        Button("Use Cellular") {
-                            Task { _ = await transcription.loadModel(allowRestrictedNetwork: true) }
-                        }
-                    }
+                    storageControls
                 } header: {
                     Text("On-device Speech Model")
                 } footer: {
@@ -739,6 +786,61 @@ private struct SpeechModelStorageView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+        }
+    }
+
+    /// Designed loading state while the sheet covers the main screen's
+    /// download banner (MOT-5). Like the banner, it becomes one column at
+    /// accessibility sizes so the status wraps by words at full width
+    /// instead of squeezing beside a fixed-width bar (TYPE-4).
+    private var loadingRow: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small))
+            : AnyLayout(HStackLayout(spacing: LiquidGlassMetrics.Spacing.small))
+        return layout {
+            if let fraction = transcription.modelLoadingFraction {
+                ProgressView(value: fraction)
+                    .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : 72)
+            } else {
+                ProgressView()
+            }
+            Text(transcription.modelLoadingProgress)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // The separator below starts under the bar or spinner, the row's
+        // leading edge, not under the status text.
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+    }
+
+    @ViewBuilder
+    private var storageControls: some View {
+        let controls = controls
+        if let cancelTitle = controls.cancelTitle {
+            // Plain, like the main banner's Cancel: stopping a download
+            // keeps what is stored, so it is not destructive.
+            Button(cancelTitle) {
+                errorMessage = nil
+                onCancelLoad()
+            }
+        }
+        if controls.showsRemove {
+            Button("Remove Download", role: .destructive) {
+                errorMessage = nil
+                Task { await transcription.removeCachedModel() }
+            }
+            .disabled(!controls.removeEnabled)
+        }
+        if controls.showsDownload {
+            Button("Download on Wi-Fi") {
+                errorMessage = nil
+                Task { _ = await transcription.loadModel(allowRestrictedNetwork: false) }
+            }
+            Button("Use Cellular") {
+                errorMessage = nil
+                Task { _ = await transcription.loadModel(allowRestrictedNetwork: true) }
             }
         }
     }

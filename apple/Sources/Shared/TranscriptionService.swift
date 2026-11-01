@@ -171,6 +171,10 @@ final class TranscriptionService: @unchecked Sendable {
     var isModelLoading: Bool = false
     var modelLoadingProgress: String = ""
     var modelLoadingFraction: Double?
+    /// Whether the load in flight reads an already-complete cache rather than
+    /// downloading. Set once per load from its preparation, so a cancelling
+    /// or indeterminate download (fraction nil) never reads as a cached load.
+    var isLoadingFromCache = false
     var modelErrorMessage: String?
 
     private var loadedModel: TranscriptionLoadedModel?
@@ -323,6 +327,7 @@ final class TranscriptionService: @unchecked Sendable {
             ? "Loading cached speech model…"
             : "Preparing speech model download…"
         modelLoadingFraction = preparation.isCached ? nil : 0
+        isLoadingFromCache = preparation.isCached
         modelLoadGeneration += 1
         modelCancellationRequested = false
         modelCancellationMessage = nil
@@ -381,6 +386,7 @@ final class TranscriptionService: @unchecked Sendable {
             isModelLoading = false
             modelLoadingProgress = ""
             modelLoadingFraction = nil
+            isLoadingFromCache = false
             modelCancellationRequested = false
             modelCancellationMessage = nil
             // Include partial downloads in storage controls after failure/cancellation.
