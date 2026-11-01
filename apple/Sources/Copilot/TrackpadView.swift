@@ -49,14 +49,16 @@ struct TrackpadView: View {
     @State private var trailingFlush: Task<Void, Never>?
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 32, style: .continuous)
-            .fill(.ultraThinMaterial)
-            .overlay {
-                Text("Trackpad")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+        // Floating input surface: Liquid Glass (non-interactive, so the glass
+        // doesn't flex under a drag) in place of a hand-filled material.
+        // The label is the glass's own content so it renders above the glass
+        // with system vibrancy instead of being sampled beneath it.
+        Text("Trackpad")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity)
             .frame(height: 200)
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 1)

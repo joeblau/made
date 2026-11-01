@@ -10,7 +10,7 @@ struct ContentView: View {
     // and the regular path is completely unchanged.
     private let isDemoMode = UserDefaults.standard.bool(forKey: "demoMode")
 
-    @State private var currentGesture: String = "Waiting..."
+    @State private var currentGesture: String = "Waiting…"
     @State private var currentIcon: String = "hand.raised"
 
     private var isConnected: Bool {
@@ -31,9 +31,9 @@ struct ContentView: View {
                 HStack(spacing: 4) {
                     Circle()
                         .fill(isConnected ? .green : .red)
-                        .frame(width: 10, height: 10)
+                        .frame(width: 8, height: 8)
                     Text(isConnected ? "Walkie Connected" : "Walkie Disconnected")
-                        .font(.system(size: 10))
+                        .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
@@ -51,10 +51,10 @@ struct ContentView: View {
     // MARK: - Current Gesture Display
 
     private var gestureDisplay: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: 8) {
             VStack(spacing: 4) {
                 Image(systemName: currentIcon)
-                    .font(.system(size: 28))
+                    .font(.title2)
                     .foregroundStyle(Color.accentColor)
                     .contentTransition(.symbolEffect(.replace))
 
@@ -67,12 +67,13 @@ struct ContentView: View {
                 triggerDoublePinch(source: "button")
             } label: {
                 Label("Send to Walkie", systemImage: "hand.pinch.fill")
-                    .font(.caption2.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            // Standard watchOS 26 primary control: prominent Liquid Glass,
+            // capsule by default (no manual clip).
+            .buttonStyle(.glassProminent)
             .handGestureShortcut(.primaryAction)
-            .clipShape(Capsule())
         }
         .frame(maxWidth: .infinity)
         .contentShape(Rectangle())
