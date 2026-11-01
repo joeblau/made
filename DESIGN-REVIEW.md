@@ -186,9 +186,24 @@ Cockpit ran in the macOS 26 VM with guest-only fixtures: synthetic Claude, Codex
 - Walkie Settings: an empty stored peer key no longer shows a "Synced" badge. This is display only; pinning still reads `DeviceIdentity` directly.
 - Kneeboard: the PencilKit tool picker hides while a sheet is up. The floating glass cluster uses the UIKit corner-adapted safe area (`.safeArea(cornerAdaptation: .horizontal)`), so in a resized iPadOS window it starts clear of the window controls. The annotation toolbar moves to a second row when both clusters cannot fit.
 
-Still not reviewable in a VM or simulator: the Runners 3D Fleet (the VM's paravirtual GPU asserts) and live Simulator, Device, and Android streams.
+Still not reviewable in this pass: the Runners 3D Fleet (the VM's paravirtual GPU asserts) and live Simulator, Device, and Android streams. The macOS 27 pass below covers them.
 
-Finding outside design scope: when nothing is paired, the pairing store reports the peer key as an empty string, and `BuildActivityController` and `BuildPushCoordinator` accept it in their `guard let peerKey` checks. Normalizing that belongs to a security-reviewed change, not this pass.
+Finding outside design scope: when nothing is paired, the pairing store reports the peer key as an empty string, and `BuildActivityController` and `BuildPushCoordinator` accept it in their `guard let peerKey` checks. Normalizing that belongs to a security-reviewed change, not this pass. It is fixed in the macOS 27 pass below.
+
+### macOS 27 pass, live streams, and peer-key hardening
+
+Cockpit ran in a macOS 27.2 tart VM (`ghcr.io/cirruslabs/macos-runner:golden-gate`, Xcode 27.2, iOS 27 runtimes) with the same guest-only fixtures, plus a guest-only stand-in `adb` that answers the exact commands `AdbBridge` runs and streams a looping H.264 phone clip for `screenrecord`. A reviewer captured light and dark, and an independent critic re-read the captures and the diff.
+
+- macOS 27 against the 26 captures: no glass regressions. Toolbar groups, the pane launcher, sidebar, inspector tabs, the Docker filter field and switch, Agentic Use, Remote Desktop, Runners, Settings, the sheets, popovers, and menus all match. Control heights are unchanged.
+- Runners 3D Fleet: the VM crash comes from SceneKit's two-pass bloom. The paravirtual Metal driver cannot back the per-mip texture views and asserts in `AppleParavirtTexture`; every other scene feature renders. Cockpit now uses one bloom pass when the Metal device is paravirtual and two everywhere else, so real hardware is unchanged and the fleet renders in VMs.
+- Fleet fixes: back-row captions no longer sit on the lids of taller cases in front (row spacing 31 → 36, plus a text scrim; COL-6). The details popover takes `.preferredColorScheme(.dark)`, so its glass matches its white text in light mode (TYPE-3). The Idle and Offline legend swatches get a hairline rim.
+- Simulator pane: live iPhone 18 Pro (iOS 27.0) stream, toolbar, and Command-drag export all checked; no chrome defects. Device-specific runtimes now read "iOS 27.2 (iPhone19,4)" instead of "iOS 27.2.iPhone19.4" (HIER-5), with a test.
+- Android pane: live stream, taps, swipes, and the Back/Home/App Switch keys all work. Fixed a real bug: `adb emu avd name` replies in CRLF, which Swift treats as one character, so running emulators never matched their AVD and were offered for boot again. The parsed name must now pass the same allowlist as `-list-avds` output, with a test. Rows show the AVD name ("Pixel 9 API 36") instead of the shared "sdk gphone64 arm64" model, and a restored pane is titled "Android".
+- Device (USB) pane: the live stream needs a physical iPhone, so only its non-live states were checked on 27 (permission, header, empty state, disabled toolbar).
+
+Security: an unpaired store reports the peer pin as `""`, which `BuildActivityController` (Walkie) and `BuildPushCoordinator` (Cockpit) accepted as a key. A monitor could start or restore and keep polling while unpaired. `DeviceIdentity.peerPublicKeyBase64()` now returns `nil` unless the stored pin parses as an X25519 key, and both coordinators normalize again. `pairingDecision` treats an unparsable pin as first pairing. Every path is equal or stricter: nothing that was refused is now allowed, and the only label change (Pair instead of Trust New Key for a malformed pin) cannot happen in production. Walkie shows "Pair Walkie with Cockpit to follow a build." Covered by `PairedPeerKeyTests` and `BuildPushCoordinatorPairingTests`. Left for a policy decision: SecureMessagingView still saves its peer-key text field into the same Keychain slot as the PeerSync pin.
+
+Verification: `build-ci.sh`, `test.sh all` (PilotTests 819 passed, 2 CEF skips; SharedTests 214; PlotterTests 4), `lint-swift.sh --all`, `app-icon-tool.swift validate`, `check-docs.sh`, and the Copilot and Plotter UI tests all pass.
 
 ### Open items from round 1 (resolved above unless noted)
 
