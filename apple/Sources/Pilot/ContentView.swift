@@ -270,11 +270,15 @@ struct ContentView: View {
                 .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
                 .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
             }
-            .alert(editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
-                   isPresented: $isGroupNamePresented) {
-                TextField("Group name", text: $groupName)
-                Button("Cancel", role: .cancel) {}
-                Button(editingGroupID == nil ? "Create" : "Save") {
+            // A glass prompt sheet rather than a system alert, so the name
+            // field is a Liquid Glass field like every other text input.
+            .sheet(isPresented: $isGroupNamePresented) {
+                TextPromptSheet(
+                    title: editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
+                    label: "Group name",
+                    confirmTitle: editingGroupID == nil ? "Create" : "Save",
+                    text: $groupName
+                ) {
                     if let editingGroupID {
                         store.workspaceGroups.rename(editingGroupID, to: groupName)
                     } else {
@@ -282,7 +286,6 @@ struct ContentView: View {
                         workspacesSectionExpanded = true
                     }
                 }
-                .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .sheet(item: $newWorkspaceRequest) { request in
                 NewWorkspaceSheet(finder: newWorkspaceFinder) { directory in

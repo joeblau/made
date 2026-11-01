@@ -78,15 +78,18 @@ extension View {
     /// glass in a capsule (single-line) or a concentric rounded rectangle
     /// (`multiline: true`), and an accent stroke while focused (FORM-4).
     ///
-    /// Every free-standing field is glass, including fields inside glass
+    /// Every text input in the apps is glass, including fields inside glass
     /// panels, sheets, and popovers (the system 26+ precedent: glass sheets
-    /// carry glass controls). It also suits `Form` rows that stack their own
-    /// visible label above the field (Walkie's Secure Messaging). Keep the
-    /// system styling for fields whose title *is* the row label (macOS
-    /// grouped `Form`s), fields hosted in a toolbar item or glass palette
-    /// (the system capsule is already glass: no glass on glass), and fields
-    /// in a system `.alert`. Pair the field with a persistent visible label;
-    /// the placeholder is a hint, not the label (FORM-1/FORM-2).
+    /// carry glass controls) and `Form` rows. In a `Form`, stack a visible
+    /// label above the field and hide the field's own row label
+    /// (`.labelsHidden()` on macOS grouped `Form`s), as both Secure
+    /// Messaging screens do. Never ask for text in a system `.alert`; present
+    /// a small glass sheet instead (Pilot's `TextPromptSheet`). The only
+    /// fields that keep the plain style are those hosted in a toolbar
+    /// capsule or a glass palette: their host is already glass, so a glass
+    /// field would stack glass on glass. Pair the field with a persistent
+    /// visible label; the placeholder is a hint, not the label
+    /// (FORM-1/FORM-2).
     ///
     /// - Parameters:
     ///   - multiline: Use for `TextEditor` and `TextField(axis: .vertical)`.

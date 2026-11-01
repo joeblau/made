@@ -38,17 +38,22 @@ struct RemoteDesktopView: View {
             }
             .animation(LiquidGlassMetrics.spring, value: pickerGroupID)
         }
-        .alert("Rename Group", isPresented: Binding(
+        // A glass prompt sheet rather than a system alert, so the name field
+        // is a Liquid Glass field like every other text input.
+        .sheet(isPresented: Binding(
             get: { renamingGroupID != nil },
             set: { if !$0 { renamingGroupID = nil } }
         )) {
-            TextField("Group name", text: $groupName)
-            Button("Save") {
+            TextPromptSheet(
+                title: "Rename Group",
+                label: "Group name",
+                confirmTitle: "Save",
+                text: $groupName,
+                onCancel: { renamingGroupID = nil }
+            ) {
                 if let id = renamingGroupID { groups.renameGroup(id, to: groupName) }
                 renamingGroupID = nil
             }
-            .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button("Cancel", role: .cancel) { renamingGroupID = nil }
         }
         .confirmationDialog(
             "Remove Connection?",

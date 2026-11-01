@@ -103,16 +103,37 @@ struct PilotSecureMessagingView: View {
 
     private var pairingSection: some View {
         Section {
-            TextField("Peer public key (base64)", text: $peerKeyInput, axis: .vertical)
+            // Persistent labels above each field; placeholders are only an
+            // instruction or a bare example (FORM-1/FORM-2). Each field is a
+            // Liquid Glass field with a focus ring (FORM-4), matching Walkie's
+            // Secure Messaging form.
+            labeledField("Peer public key") {
+                TextField(
+                    "Peer public key",
+                    text: $peerKeyInput,
+                    prompt: Text("Paste your peer's base64 key"),
+                    axis: .vertical
+                )
+                .labelsHidden()
                 .font(.system(.footnote, design: .monospaced))
                 .autocorrectionDisabled()
                 .lineLimit(1...3)
-            TextField("Pairing token", text: $tokenInput)
-                .autocorrectionDisabled()
+                .liquidGlassField(multiline: true)
+            }
+            labeledField("Pairing token") {
+                TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))
+                    .labelsHidden()
+                    .autocorrectionDisabled()
+                    .liquidGlassField()
+            }
             Button("Generate Pairing Token") { generateToken() }
                 .compatGlassButtonStyle()
-            TextField("Rendezvous URL", text: $rendezvousURL)
-                .autocorrectionDisabled()
+            labeledField("Rendezvous URL") {
+                TextField("Rendezvous URL", text: $rendezvousURL, prompt: Text(verbatim: "https://rendezvous.blau.app"))
+                    .labelsHidden()
+                    .autocorrectionDisabled()
+                    .liquidGlassField()
+            }
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
 
             if let transport, !transport.state.isFailed {
@@ -135,14 +156,15 @@ struct PilotSecureMessagingView: View {
 
     private func messagingSection(_ transport: SecureChannelResponder) -> some View {
         Section("Send") {
-            // A persistent row label (FORM-1) with the field and its action
-            // side by side. Connect is hidden while connected, so Send is the
-            // view's single prominent action (BTN-1).
-            LabeledContent("Message") {
+            // A persistent label above the glass field (FORM-1), with the
+            // field and its action side by side. Connect is hidden while
+            // connected, so Send is the view's single prominent action (BTN-1).
+            labeledField("Message") {
                 HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     TextField("Message", text: $outgoing)
                         .labelsHidden()
                         .onSubmit(send)
+                        .liquidGlassField()
                     Button("Send", action: send)
                         .compatGlassProminentButtonStyle()
                         .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -170,6 +192,25 @@ struct PilotSecureMessagingView: View {
                 }
             }
         }
+    }
+
+    /// A grouped-`Form` row with its visible label stacked above the field
+    /// (FORM-1). The field's own title is its VoiceOver name, so the visible
+    /// label is hidden from VoiceOver to avoid reading it twice; fields pass
+    /// `.labelsHidden()` so the Form does not also draw a leading row label.
+    private func labeledField<Field: View>(
+        _ title: LocalizedStringKey,
+        @ViewBuilder field: () -> Field
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            field()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
     }
 
     // MARK: - Actions

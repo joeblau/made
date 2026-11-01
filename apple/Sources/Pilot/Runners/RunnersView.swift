@@ -556,13 +556,24 @@ private struct RunnerDetailsSheet: View {
                     Text(runner.name).font(.subheadline).foregroundStyle(.secondary)
                 }
             }
-            Form {
-                TextField("Display name", text: $presentation.name, prompt: Text(runner.name))
-                Picker("Hardware", selection: $presentation.hardware) {
-                    Text("Automatic (\(RunnerHardware.inferred(for: runner).title))").tag(nil as RunnerHardware?)
-                    ForEach(RunnerHardware.allCases) { hardware in
-                        Text(hardware.title).tag(Optional(hardware))
+            // Persistent labels stacked above each control (FORM-1), matching
+            // Add Runner Source; the placeholder is only the GitHub name the
+            // device falls back to (FORM-2).
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
+                stackedRow("Display name") {
+                    TextField("Display name", text: $presentation.name, prompt: Text(runner.name))
+                        .labelsHidden()
+                        .liquidGlassField()
+                }
+                stackedRow("Hardware") {
+                    Picker("Hardware", selection: $presentation.hardware) {
+                        Text("Automatic (\(RunnerHardware.inferred(for: runner).title))").tag(nil as RunnerHardware?)
+                        ForEach(RunnerHardware.allCases) { hardware in
+                            Text(hardware.title).tag(Optional(hardware))
+                        }
                     }
+                    .labelsHidden()
+                    .fixedSize()
                 }
             }
             Text("Device names and images are saved in Cockpit. Runner labels come from GitHub.")
@@ -581,6 +592,21 @@ private struct RunnerDetailsSheet: View {
         }
         .padding(LiquidGlassMetrics.Spacing.xLarge)
         .frame(width: 440)
+    }
+
+    /// A visible label above its control; the control's own title stays its
+    /// VoiceOver name, so the visible label is hidden from VoiceOver.
+    private func stackedRow<Control: View>(
+        _ title: LocalizedStringKey,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            control()
+        }
     }
 }
 
