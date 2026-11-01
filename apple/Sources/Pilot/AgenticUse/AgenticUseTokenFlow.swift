@@ -194,8 +194,9 @@ private struct AgenticUseTokenFlowDiagram: View {
                 .fill(tint.opacity(0.2))
                 .frame(width: 36, height: 36)
                 .overlay {
+                    // Icon glyphs fill about 55% of their tile; they don't follow the text scale.
                     Image(provider.brandSymbol)
-                        .scaledFont(size: 14, weight: .semibold)
+                        .scaledFont(size: 20, weight: .semibold)
                         .foregroundStyle(tint)
                 }
             VStack(alignment: .leading, spacing: 2) {
@@ -249,7 +250,7 @@ private struct AgenticUseTokenFlowDiagram: View {
                 .frame(width: 32, height: 32)
                 .overlay {
                     Image(systemName: type.symbol)
-                        .scaledFont(size: 14, weight: .semibold)
+                        .scaledFont(size: 17, weight: .semibold)
                         .foregroundStyle(tint)
                 }
             VStack(alignment: .leading, spacing: 2) {
