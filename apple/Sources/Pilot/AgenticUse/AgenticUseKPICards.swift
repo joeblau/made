@@ -5,8 +5,8 @@ import SwiftUI
 ///
 /// Delta color is semantic — green when the change is an improvement (lower
 /// cost, higher cache hit rate), red when it is a regression, secondary for
-/// volume figures that are neither good nor bad. Sparkline tints are
-/// decorative and fixed per card.
+/// volume figures that are neither good nor bad. Sparklines stay neutral:
+/// per-card hues collided with the provider colors used everywhere else.
 struct AgenticUseKPICards: View {
     let snapshot: AgenticUseSnapshot
     /// Columns to lay the cards across; the dashboard picks this from width.
@@ -46,7 +46,6 @@ struct AgenticUseKPICards: View {
                 delta: relativeDelta(snapshot.totalCostUSD, previous?.totalCostUSD, polarity: .lowerIsBetter),
                 fallbackCaption: fallbackCaption,
                 sparkline: buckets.map(\.cost),
-                tint: .green,
                 help: "API-equivalent cost of the logged tokens at published per-token rates — not a subscription bill."
             ),
             AgenticUseKPIMetric(
@@ -60,7 +59,6 @@ struct AgenticUseKPICards: View {
                 ),
                 fallbackCaption: fallbackCaption,
                 sparkline: buckets.map { Double($0.tokens) },
-                tint: .blue,
                 help: "Input, cache write, cache read, and output tokens across every agent."
             ),
             AgenticUseKPIMetric(
@@ -70,7 +68,6 @@ struct AgenticUseKPICards: View {
                 delta: pointsDelta(snapshot.stats.cachedInputShare, previous?.cachedInputShare),
                 fallbackCaption: fallbackCaption,
                 sparkline: buckets.compactMap(\.cachedInputShare),
-                tint: .purple,
                 anchorsAtZero: false,
                 help: "Cache reads as a share of all observed input tokens."
             ),
@@ -83,7 +80,6 @@ struct AgenticUseKPICards: View {
                 ),
                 fallbackCaption: fallbackCaption,
                 sparkline: buckets.map(\.cacheSavings),
-                tint: .yellow,
                 help: "Estimated difference between full-rate input pricing and actual cached pricing."
             ),
             AgenticUseKPIMetric(
@@ -93,7 +89,6 @@ struct AgenticUseKPICards: View {
                 delta: relativeDelta(averageCost, previousAverage, polarity: .lowerIsBetter),
                 fallbackCaption: fallbackCaption,
                 sparkline: Self.movingAverage(buckets.map(\.cost), window: isHourly ? 3 : 7),
-                tint: .teal,
                 help: isHourly
                     ? "Estimated cost divided by the 24 hours in range."
                     : "Estimated cost divided by every calendar day in range, active or not."
@@ -181,7 +176,6 @@ struct AgenticUseKPIMetric: Identifiable {
     let delta: Delta?
     let fallbackCaption: String
     let sparkline: [Double]
-    let tint: Color
     var anchorsAtZero = true
     let help: String
 }
@@ -190,7 +184,7 @@ private struct AgenticUseKPICard: View {
     let metric: AgenticUseKPIMetric
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(metric.title)
                 .scaledFont(size: 12, weight: .medium)
                 .foregroundStyle(.secondary)
@@ -208,7 +202,7 @@ private struct AgenticUseKPICard: View {
                 if metric.sparkline.count > 1 {
                     AgenticUseSparkline(
                         values: metric.sparkline,
-                        tint: metric.tint,
+                        tint: .secondary,
                         anchorsAtZero: metric.anchorsAtZero
                     )
                     .frame(minWidth: 44, maxWidth: 110)
@@ -225,7 +219,7 @@ private struct AgenticUseKPICard: View {
     private var deltaLabel: some View {
         if let delta = metric.delta {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 5) {
+                HStack(spacing: 4) {
                     deltaBadge(delta)
                     Text(delta.caption)
                         .scaledFont(size: 11)
@@ -237,7 +231,7 @@ private struct AgenticUseKPICard: View {
         } else {
             Text(metric.fallbackCaption)
                 .scaledFont(size: 11)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
     }
@@ -247,7 +241,7 @@ private struct AgenticUseKPICard: View {
             Image(systemName: delta.symbol)
                 .scaledFont(size: 11, weight: .bold)
             Text(delta.text)
-                .scaledFont(size: 13, weight: .semibold)
+                .scaledFont(size: 12, weight: .semibold)
                 .monospacedDigit()
         }
         .foregroundStyle(AgenticUseTone.color(delta.effectiveTone))

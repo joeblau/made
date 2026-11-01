@@ -17,8 +17,8 @@ struct AgenticUseTokenFlowPanel: View {
 
     var body: some View {
         let graph = graph
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text("Token Flow").agenticUseCardTitle()
                 Text("\(AgenticUseFormat.tokens(graph.totalTokens)) tokens by provider, model, and type")
                     .scaledFont(size: 11)
@@ -187,16 +187,18 @@ private struct AgenticUseTokenFlowDiagram: View {
 
     private func providerNode(_ provider: AgenticProvider, node: AgenticTokenFlowGraph.Node) -> some View {
         let tint = AgenticUseModelPalette.providerColor(for: provider)
-        return HStack(spacing: 9) {
+        // Soft tint like the token-type tiles: a solid gradient tile read as
+        // a button and out-shouted the flow itself.
+        return HStack(spacing: 8) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(tint.gradient)
+                .fill(tint.opacity(0.2))
                 .frame(width: 36, height: 36)
                 .overlay {
                     Image(provider.brandSymbol)
-                        .scaledFont(size: 17, weight: .semibold)
-                        .foregroundStyle(.white)
+                        .scaledFont(size: 14, weight: .semibold)
+                        .foregroundStyle(tint)
                 }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(provider.displayName)
                     .scaledFont(size: 12, weight: .semibold)
                 Text("\(AgenticUseFormat.tokens(node.tokens)) tokens")
@@ -210,12 +212,12 @@ private struct AgenticUseTokenFlowDiagram: View {
             .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .nodeChrome(tint: tint, dimmed: isDimmed(.provider(provider)))
     }
 
     private func modelNode(title: String, provider: AgenticProvider?, help: String) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             Group {
                 if let provider {
                     Image(provider.brandSymbol)
@@ -233,7 +235,7 @@ private struct AgenticUseTokenFlowDiagram: View {
                 .truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 9)
+        .padding(.horizontal, 8)
         .nodeChrome(tint: nil, dimmed: false)
         .help(help)
     }
@@ -241,16 +243,16 @@ private struct AgenticUseTokenFlowDiagram: View {
     private func typeNode(_ type: AgenticTokenFlowGraph.TokenType, node: AgenticTokenFlowGraph.Node) -> some View {
         let tint = Self.tint(for: type)
         let share = graph.totalTokens > 0 ? Double(node.tokens) / Double(graph.totalTokens) : 0
-        return HStack(spacing: 9) {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(tint.opacity(0.22))
-                .frame(width: 30, height: 30)
+        return HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(tint.opacity(0.2))
+                .frame(width: 32, height: 32)
                 .overlay {
                     Image(systemName: type.symbol)
-                        .scaledFont(size: 13, weight: .semibold)
+                        .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(tint)
                 }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(type.title)
                     .scaledFont(size: 12, weight: .semibold)
                 Text("\(AgenticUseFormat.tokens(node.tokens)) (\(AgenticUseFormat.percent(share)))")
@@ -262,7 +264,7 @@ private struct AgenticUseTokenFlowDiagram: View {
             .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .nodeChrome(tint: tint, dimmed: isDimmed(.tokenType(type)))
     }
 
@@ -380,20 +382,17 @@ private struct AgenticUseTokenFlowDiagram: View {
 }
 
 private extension View {
-    /// Shared node card: material fill so ribbons pass cleanly underneath,
-    /// tinted wash and edge for provider and token-type nodes.
+    /// Shared node card: an opaque fill so ribbons pass cleanly underneath,
+    /// with a tinted wash for provider and token-type nodes. No outline —
+    /// the wash already separates each node from the ribbons.
     func nodeChrome(tint: Color?, dimmed: Bool) -> some View {
         frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(.background)
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill((tint ?? .secondary).opacity(tint == nil ? 0.08 : 0.14))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill((tint ?? .secondary).opacity(tint == nil ? 0.1 : 0.16))
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .strokeBorder((tint ?? .primary).opacity(tint == nil ? 0.1 : 0.35), lineWidth: 1)
-            )
             .opacity(dimmed ? 0.45 : 1)
             .animation(.easeOut(duration: 0.18), value: dimmed)
     }

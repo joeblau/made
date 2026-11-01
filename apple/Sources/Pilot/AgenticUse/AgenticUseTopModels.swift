@@ -14,7 +14,7 @@ struct AgenticUseTopModels: View {
     var body: some View {
         let models = snapshot.modelTotals
         let visible = showsAll ? models : Array(models.prefix(Self.collapsedCount))
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("Top Models").agenticUseCardTitle()
                 Spacer(minLength: 8)
@@ -27,15 +27,17 @@ struct AgenticUseTopModels: View {
                             Image(systemName: showsAll ? "chevron.up" : "arrow.right")
                         }
                         .scaledFont(size: 11, weight: .medium)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
                         .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
                 }
             }
 
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 0) {
+            // One rule under the header; rows separate by spacing rather than a
+            // divider on every line.
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
                 GridRow {
                     header("#")
                     header("Model").frame(maxWidth: .infinity, alignment: .leading)
@@ -45,8 +47,8 @@ struct AgenticUseTopModels: View {
                     header("$/1M").gridColumnAlignment(.trailing)
                     header(trendTitle)
                 }
+                Divider().gridCellUnsizedAxes(.horizontal)
                 ForEach(Array(visible.enumerated()), id: \.element.id) { index, total in
-                    Divider().gridCellUnsizedAxes(.horizontal)
                     row(rank: index + 1, total: total)
                 }
             }
@@ -65,7 +67,7 @@ struct AgenticUseTopModels: View {
                 .scaledFont(size: 12)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Text(total.displayName)
                     .scaledFont(size: 12, weight: .medium)
                     .lineLimit(1)
@@ -74,7 +76,7 @@ struct AgenticUseTopModels: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(total.model)
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Image(total.provider.brandSymbol)
                     .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(tint)
@@ -92,7 +94,7 @@ struct AgenticUseTopModels: View {
                 .frame(height: 22)
                 .help("Tokens per \(snapshot.range.bucketUnit == .hour ? "hour" : "day")")
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 8)
     }
 
     private func header(_ text: String) -> some View {
@@ -100,7 +102,7 @@ struct AgenticUseTopModels: View {
             .scaledFont(size: 11, weight: .medium)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            .padding(.bottom, 6)
+            .padding(.bottom, 8)
     }
 
     private func number(_ text: String) -> some View {
