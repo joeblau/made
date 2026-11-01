@@ -31,10 +31,9 @@ struct SimulatorPaneView: View {
             if showsCopiedToast {
                 Label("Screenshot Copied", systemImage: "checkmark.circle.fill")
                     .font(.headline)
-                    .padding(.horizontal, 18)
+                    .padding(.horizontal, 16)
                     .padding(.vertical, 12)
-                    .background(.regularMaterial, in: Capsule())
-                    .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+                    .compatGlassCapsule()
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
                     .allowsHitTesting(false)
                     .zIndex(20)
@@ -134,7 +133,7 @@ private struct SimulatorPickerView: View {
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -144,13 +143,13 @@ private struct SimulatorPickerView: View {
                 ProgressView()
                 Text("Looking for simulators…").foregroundStyle(.secondary)
             } else if let error = session.lastError {
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 34)).foregroundStyle(.secondary)
-                Text("Couldn't list simulators").font(.headline)
+                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
+                Text("Couldn't List Simulators").font(.headline)
                 Text(error).font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
             } else {
-                Image(systemName: "iphone").font(.system(size: 34)).foregroundStyle(.secondary)
-                Text("No simulators found").font(.headline)
+                Image(systemName: "iphone").scaledFont(size: 36).foregroundStyle(.secondary)
+                Text("No Simulators Found").font(.headline)
                 Text("Create one in Xcode (Window → Devices and Simulators), then Refresh.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
@@ -164,9 +163,9 @@ private struct SimulatorPickerView: View {
 
 private struct SimulatorToolingMissingView: View {
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "wrench.and.screwdriver").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text("Full Xcode required").font(.headline)
+        VStack(spacing: 12) {
+            Image(systemName: "wrench.and.screwdriver").scaledFont(size: 36).foregroundStyle(.secondary)
+            Text("Full Xcode Required").font(.headline)
             Text("The iOS Simulator needs a full Xcode install (the Command Line Tools alone can't run simctl).\n\nInstall Xcode, then run:\nsudo xcode-select -s /Applications/Xcode.app/Contents/Developer")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).padding(.horizontal, 32)
@@ -192,17 +191,18 @@ private struct SimulatorStatusOverlay: View {
                 ProgressView()
                 Text("Connecting to \(name)…").font(.headline)
             case .failed(let message):
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 36)).foregroundStyle(.secondary)
-                Text("Simulator unavailable").font(.headline)
+                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
+                Text("Simulator Unavailable").font(.headline)
                 Text(message).font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
                 Button("Back to Devices") { session.chooseAnotherDevice() }
-                    .buttonStyle(.borderedProminent)
+                    .compatGlassProminentButtonStyle()
             default:
                 EmptyView()
             }
         }
         .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PreviewCanvasBackground())
     }

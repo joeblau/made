@@ -49,6 +49,25 @@ extension View {
     func compatGlassCapsule(tint: Color? = nil, interactive: Bool = false) -> some View {
         compatGlassEffect(tint: tint, interactive: interactive, in: Capsule())
     }
+
+    /// Glass for a control layer that floats over arbitrary content (ink
+    /// toolbars, toasts, quick-open palettes). Liquid Glass casts its own
+    /// depth, so macOS 26 adds no shadow; the macOS 15 fallback keeps the
+    /// opaque-enough `.regularMaterial` plus drop shadow these overlays
+    /// always used, so text stays legible over busy panes.
+    @ViewBuilder
+    func compatFloatingGlass(in shape: some Shape) -> some View {
+        if #available(macOS 26.0, *) {
+            glassEffect(.regular, in: shape)
+        } else {
+            background(.regularMaterial, in: shape)
+                .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        }
+    }
+
+    func compatFloatingGlassCapsule() -> some View {
+        compatFloatingGlass(in: Capsule())
+    }
 }
 
 /// `GlassEffectContainer` only coordinates blending between neighboring glass

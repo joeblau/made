@@ -126,9 +126,11 @@ struct InkOverlay: View {
 
             Color.clear.frame(width: 4, height: 1)
 
-            toolButton("eraser", active: model.isEraser) { model.isEraser.toggle() }
-            toolButton("arrow.uturn.backward", disabled: model.strokes.isEmpty) { model.undo() }
-            toolButton("trash", disabled: model.strokes.isEmpty) { model.clear() }
+            toolButton("eraser", help: "Eraser", active: model.isEraser) { model.isEraser.toggle() }
+            toolButton("arrow.uturn.backward", help: "Undo last stroke", disabled: model.strokes.isEmpty) {
+                model.undo()
+            }
+            toolButton("trash", help: "Clear annotations", disabled: model.strokes.isEmpty) { model.clear() }
 
             Color.clear.frame(width: 4, height: 1)
 
@@ -136,15 +138,15 @@ struct InkOverlay: View {
                 .buttonStyle(.plain)
                 .scaledFont(size: 12, weight: .semibold)
                 .padding(.horizontal, 4)
+                .help("Finish annotating")
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .fixedSize()
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        .compatFloatingGlassCapsule()
     }
 
-    private func toolButton(_ symbol: String, active: Bool = false,
+    private func toolButton(_ symbol: String, help: String, active: Bool = false,
                             disabled: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
@@ -155,6 +157,9 @@ struct InkOverlay: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .help(help)
+        .accessibilityLabel(help)
+        .accessibilityAddTraits(active ? .isSelected : [])
     }
 }
 
@@ -178,10 +183,9 @@ struct RemoteInkControls: View {
             button("arrow.uturn.backward", help: "Undo last Kneeboard stroke") { model.undo() }
             button("trash", help: "Clear Kneeboard annotations") { model.clear() }
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: Capsule())
-        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        .compatFloatingGlassCapsule()
     }
 
     private func button(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -193,6 +197,7 @@ struct RemoteInkControls: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 

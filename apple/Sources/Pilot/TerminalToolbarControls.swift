@@ -180,12 +180,14 @@ enum TerminalCloseConfirmation {
     private static func present(for panes: [Pane]) async -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = panes.count == 1 ? "Close busy terminal?" : "Close busy terminals?"
+        // MODAL-1: verb + object title, and a confirm button that repeats the
+        // verb instead of "Anyway".
+        alert.messageText = panes.count == 1 ? "Close Busy Terminal?" : "Close Busy Terminals?"
         alert.informativeText = "Closing will terminate running commands or AI sessions in "
             + (panes.count == 1 ? "this terminal." : "\(panes.count) terminals.")
             + " Any work in progress may be lost."
         alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Close Anyway")
+        alert.addButton(withTitle: panes.count == 1 ? "Close Terminal" : "Close Terminals")
         alert.buttons[0].keyEquivalent = "\r"
         alert.buttons[1].hasDestructiveAction = true
         if let window = NSApp.keyWindow {

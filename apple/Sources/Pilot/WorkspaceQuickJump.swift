@@ -70,20 +70,22 @@ struct PinnedQuickJumpRow: View {
                                 Text(target.name)
                                     .lineLimit(1)
                                 Spacer(minLength: 4)
+                                // The shortcut is the point of this row, so it
+                                // stays at secondary contrast, not tertiary.
                                 Text(verbatim: "⌘\(target.shortcutNumber)")
                                     .scaledFont(size: 10)
-                                    .foregroundStyle(.tertiary)
+                                    .foregroundStyle(.secondary)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                         }
-                        .buttonStyle(.bordered)
+                        .compatGlassButtonStyle()
                         .help("Jump to \(target.name)")
                     }
                 }
                 .frame(maxWidth: 520)
             }
-            .padding(.top, 6)
+            .padding(.top, 8)
             .accessibilityIdentifier("workspace.pinned-quick-jump")
         }
     }

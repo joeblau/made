@@ -149,10 +149,10 @@ struct ContentView: View {
         .onDisappear { walkie.interrupt() }
         .overlay(alignment: .top) {
             if transcription.isModelLoading {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     if let fraction = transcription.modelLoadingFraction {
                         ProgressView(value: fraction)
-                            .frame(width: 70)
+                            .frame(width: 72)
                     } else {
                         ProgressView()
                     }
@@ -164,8 +164,11 @@ struct ContentView: View {
                         walkie.interrupt()
                     }
                 }
-                .padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                // Floating status/control layer above the list: Liquid Glass,
+                // with a plain Cancel inside so glass never stacks on glass.
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
                 .padding()
             }
         }
@@ -182,7 +185,7 @@ struct ContentView: View {
         } message: {
             Text("On-device transcription requires Parakeet v3 Ultra (about 630 MB). It is downloaded only once and cached on this iPhone. After it finishes, hold Volume Down again to record.")
         }
-        .alert("Transcription unavailable", isPresented: Binding(
+        .alert("Transcription Unavailable", isPresented: Binding(
             get: { transcription.modelErrorMessage != nil },
             set: { if !$0 { transcription.modelErrorMessage = nil } }
         )) {
@@ -231,7 +234,7 @@ struct ContentView: View {
     private var mainContent: some View {
         if !isPeerConnected && workspaces.isEmpty {
             ContentUnavailableView {
-                Label("Looking for Cockpit...", systemImage: "antenna.radiowaves.left.and.right")
+                Label("Looking for Cockpit…", systemImage: "antenna.radiowaves.left.and.right")
             } description: {
                 Text("Make sure Cockpit is running on your Mac.")
             } actions: {
@@ -284,7 +287,7 @@ struct ContentView: View {
     @ViewBuilder
     private var walkieStatus: some View {
         if !demoMode, walkie.phase != .idle || walkie.statusMessage != nil {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 switch walkie.phase {
                 case .preparing:
                     Label("Preparing microphone…", systemImage: "mic")
@@ -307,9 +310,12 @@ struct ContentView: View {
             }
             .font(.footnote)
             .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            // Transient HUD floating over the list, not a full-bleed slab
+            // under the (already glass) navigation bar.
+            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
             .padding(.horizontal)
-            .padding(.vertical, 8)
-            .background(.regularMaterial)
+            .padding(.bottom, 8)
         }
     }
 
@@ -324,15 +330,18 @@ struct ContentView: View {
         HStack {
             Text(workspace.name)
                 .fontWeight(isHighlighted ? .semibold : .regular)
+            Spacer()
+            // Count sits trailing, like system list badges, so names share
+            // one leading edge and counts share one trailing edge.
             if workspace.badgeCount > 0 {
                 Text("\(workspace.badgeCount)")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.caption.weight(.bold))
+                    .monospacedDigit()
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
                     .background(.red, in: Capsule())
             }
-            Spacer()
         }
         .padding(.vertical, 4)
     }
@@ -366,11 +375,14 @@ struct ContentView: View {
             .accessibilityLabel("Speech Model Storage")
         }
         // Device connection status, top-right.
+        // Status glyphs, not controls: keep them off the glass control layer
+        // so they don't read as tappable buttons.
         ToolbarItemGroup(placement: .topBarTrailing) {
             ForEach(connectedDevices) { device in
                 deviceIcon(device)
             }
         }
+        .sharedBackgroundVisibility(.hidden)
     }
 
     @ViewBuilder
@@ -384,14 +396,16 @@ struct ContentView: View {
     @ViewBuilder
     private var trackpadInset: some View {
         if isPeerConnected {
-            VStack(spacing: 10) {
-                // Always rendered (fixed height) so the bottom doesn't flash
-                // in/out as workspace state syncs each second; degrades to a
-                // disabled state when the selection has no tabs.
-                TabSwitcherBar(workspace: selectedWorkspace) { workspaceID, tabID in
-                    syncService.send(.selectTab(SelectTab(workspaceID: workspaceID, tabID: tabID)))
+            GlassEffectContainer(spacing: 12) {
+                VStack(spacing: 12) {
+                    // Always rendered (fixed height) so the bottom doesn't flash
+                    // in/out as workspace state syncs each second; degrades to a
+                    // disabled state when the selection has no tabs.
+                    TabSwitcherBar(workspace: selectedWorkspace) { workspaceID, tabID in
+                        syncService.send(.selectTab(SelectTab(workspaceID: workspaceID, tabID: tabID)))
+                    }
+                    TrackpadView(syncService: syncService)
                 }
-                TrackpadView(syncService: syncService)
             }
         }
     }
@@ -551,25 +565,26 @@ private struct TabSwitcherBar: View {
                 .allowsHitTesting(false)
         }
         .frame(height: 64)
-        // Match the trackpad's material and horizontal insets so the
-        // two controls line up as a pair.
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        // Floating control: interactive Liquid Glass capsule (height 64,
+        // radius 32 — the trackpad's radius) sharing the trackpad's
+        // horizontal insets so the two controls line up as a pair.
+        .glassEffect(.regular.interactive(), in: Capsule())
         .padding(.horizontal)
     }
 
     @ViewBuilder
     private var centerLabel: some View {
         if let current {
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: current.systemImageName)
-                    .font(.system(size: 15))
+                    .font(.subheadline)
                 Text(current.title)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.callout.weight(.semibold))
                     .lineLimit(1)
             }
         } else {
             Text("No tabs")
-                .font(.system(size: 16))
+                .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
@@ -587,9 +602,10 @@ private struct TabSwitcherBar: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: alignment) {
                     Image(systemName: systemImage)
-                        .font(.system(size: 17, weight: .semibold))
-                        .padding(.horizontal, 22)
-                        .foregroundStyle(enabled ? Color.accentColor : Color.secondary.opacity(0.4))
+                        .font(.body.weight(.semibold))
+                        .padding(.horizontal, 24)
+                        // Monochrome on glass; tint is reserved for state (COL-4).
+                        .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 }
                 .contentShape(Rectangle())
         }

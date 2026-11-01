@@ -236,7 +236,8 @@ struct WorkspaceView: View {
         } label: {
             Label(kind.displayName, systemImage: kind.systemImageName)
         }
-        .buttonStyle(.bordered)
+        // Peer choices with no single primary (BTN-1), so all secondary glass.
+        .compatGlassButtonStyle()
     }
 
     @ViewBuilder

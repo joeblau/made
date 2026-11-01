@@ -21,7 +21,7 @@ struct BuildMonitorView: View {
                 if let message = monitor.message {
                     Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 }
-                Section("Workflow runs") {
+                Section {
                     if monitor.runs.isEmpty {
                         ContentUnavailableView(
                             connected ? "No Recent Builds" : "Connect to Cockpit",
@@ -32,21 +32,28 @@ struct BuildMonitorView: View {
                         )
                     }
                     ForEach(monitor.runs) { run in
-                        VStack(alignment: .leading, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 12) {
                             runDetails(run)
                             if !run.state.isComplete, monitor.followedRun?.id != run.id {
                                 Button("Follow Build", systemImage: "livephoto") {
                                     Task { await monitor.follow(run, connected: connected) }
                                 }
+                                // Secondary glass control. A non-default style also
+                                // keeps the List from routing taps anywhere in the
+                                // row (including its GitHub link) to this button.
+                                .buttonStyle(.glass)
+                                .controlSize(.small)
                                 .disabled(!connected || monitor.isStarting)
                             }
                         }
                         .padding(.vertical, 4)
                     }
-                }
-                Section {
+                } header: {
+                    Text("Workflow runs")
+                } footer: {
+                    // Explanatory copy rides the section footer instead of its
+                    // own boxed section.
                     Text("Follow one run on your Lock Screen and Dynamic Island. Updates continue while Cockpit is running and your Mac is awake. Starting another monitor replaces the current one.")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Builds")
@@ -55,7 +62,7 @@ struct BuildMonitorView: View {
     }
 
     private func runDetails(_ run: BuildWorkflowRun) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
             Text(run.workflow).font(.headline)
             Text("\(run.repository) · \(run.branch)").font(.subheadline).foregroundStyle(.secondary)
             HStack {

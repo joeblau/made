@@ -11,7 +11,7 @@ struct CopilotDashboardView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 24) {
                     Picker("Dashboard", selection: $selectedFamily) {
                         Text("Actions").tag(DashboardFamily.actions)
                         Text("Usage").tag(DashboardFamily.usage)
@@ -28,7 +28,9 @@ struct CopilotDashboardView: View {
                     selectedCard
                         .padding(16)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        // Content card, not a control: a quiet fill instead of a
+                        // material that would stack on the sheet's glass.
+                        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
 
                     activityControl
 
@@ -76,7 +78,7 @@ struct CopilotDashboardView: View {
 
     private var activityControl: some View {
         let isActive = activities.activeFamilies.contains(selectedFamily)
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 12) {
             Label(
                 isActive ? "Live Activity is on" : "Live Activity is off",
                 systemImage: isActive ? "livephoto" : "livephoto.slash"
@@ -84,10 +86,15 @@ struct CopilotDashboardView: View {
             .font(.subheadline)
             .foregroundStyle(isActive ? .green : .secondary)
 
-            Button(isActive ? "Stop Live Activity" : "Start Live Activity") {
+            Button {
                 updateActivity()
+            } label: {
+                Text(isActive ? "Stop Live Activity" : "Start Live Activity")
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            // The screen's one primary action: full-width prominent glass.
+            .buttonStyle(.glassProminent)
+            .controlSize(.large)
             .disabled(isUpdatingActivity || (!isActive && !hasSelectedSnapshot))
 
             if !isActive && !hasSelectedSnapshot {

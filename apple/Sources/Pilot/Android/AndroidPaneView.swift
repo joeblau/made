@@ -149,10 +149,9 @@ struct AndroidPaneView: View {
     private func toast(label: String, systemImage: String) -> some View {
         Label(label, systemImage: systemImage)
             .font(.headline)
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.35), radius: 12, y: 4)
+            .compatGlassCapsule()
             .transition(.opacity.combined(with: .scale(scale: 0.85)))
             .allowsHitTesting(false)
             .zIndex(20)
@@ -279,7 +278,7 @@ private struct AndroidPickerView: View {
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 
     /// Only the Simulator target lists bootable AVDs; the header text only earns
@@ -303,7 +302,7 @@ private struct AndroidPickerView: View {
                 .foregroundStyle(.tertiary)
         }
         .contentShape(Rectangle())
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
     }
 
     private func stateHint(_ device: AndroidDevice) -> String? {
@@ -322,12 +321,12 @@ private struct AndroidPickerView: View {
                 ProgressView()
                 Text("Looking for devices…").foregroundStyle(.secondary)
             } else if let error = session.lastError {
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 34)).foregroundStyle(.secondary)
-                Text("Couldn't list devices").font(.headline)
+                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
+                Text("Couldn't List Devices").font(.headline)
                 Text(error).font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
             } else {
-                Image(systemName: "smartphone").font(.system(size: 34)).foregroundStyle(.secondary)
+                Image(systemName: "smartphone").scaledFont(size: 36).foregroundStyle(.secondary)
                 Text(emptyTitle).font(.headline)
                 Text(emptyGuidance)
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -343,9 +342,9 @@ private struct AndroidPickerView: View {
 
     private var emptyTitle: String {
         switch session.target {
-        case .simulator: "No Android simulators found"
-        case .device: "No Android devices found"
-        case nil: "No Android sources found"
+        case .simulator: "No Android Simulators Found"
+        case .device: "No Android Devices Found"
+        case nil: "No Android Sources Found"
         }
     }
 
@@ -364,16 +363,17 @@ private struct AndroidToolingMissingView: View {
     let session: AndroidDeviceSession
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "wrench.and.screwdriver").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text("adb required").font(.headline)
+        VStack(spacing: 12) {
+            Image(systemName: "wrench.and.screwdriver").scaledFont(size: 36).foregroundStyle(.secondary)
+            Text("adb Required").font(.headline)
             Text("Mirroring an Android device needs the adb tool from Android platform-tools.\n\nInstall it with:\nbrew install --cask android-platform-tools\n\nor install Android Studio, then Refresh.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center).padding(.horizontal, 32)
             Button("Refresh") { session.refreshDevices() }
-                .buttonStyle(.borderedProminent)
+                .compatGlassProminentButtonStyle()
         }
         .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PreviewCanvasBackground())
     }
@@ -393,25 +393,28 @@ private struct AndroidStatusOverlay: View {
                 Text("The emulator can take a minute to boot.")
                     .font(.subheadline).foregroundStyle(.secondary)
                 Button("Back to Devices") { session.chooseAnotherDevice() }
+                    .compatGlassButtonStyle()
                     .padding(.top, 4)
             case .connecting(let name):
                 ProgressView()
                 Text("Connecting to \(name)…").font(.headline)
             case .failed(let message):
-                Image(systemName: "exclamationmark.triangle").font(.system(size: 36)).foregroundStyle(.secondary)
-                Text("Device unavailable").font(.headline)
+                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
+                Text("Device Unavailable").font(.headline)
                 Text(message).font(.subheadline).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 32)
                 HStack {
                     Button("Retry") { session.retry() }
-                        .buttonStyle(.borderedProminent)
+                        .compatGlassProminentButtonStyle()
                     Button("Back to Devices") { session.chooseAnotherDevice() }
+                        .compatGlassButtonStyle()
                 }
             default:
                 EmptyView()
             }
         }
         .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(PreviewCanvasBackground())
     }

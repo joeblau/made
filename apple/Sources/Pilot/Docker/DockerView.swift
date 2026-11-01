@@ -19,7 +19,7 @@ struct DockerView: View {
             content
         }
         .confirmationDialog(
-            "Remove this container?",
+            "Remove Container?",
             isPresented: Binding(
                 get: { store.containerPendingRemoval != nil },
                 set: { if !$0 { store.containerPendingRemoval = nil } }
@@ -46,35 +46,36 @@ struct DockerView: View {
 
             Spacer(minLength: 12)
 
-            HStack(spacing: 6) {
+            // Header controls float as glass above the container list.
+            HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .scaledFont(size: 11)
                     .foregroundStyle(.secondary)
-                TextField("Filter", text: $store.searchText)
+                TextField("Filter containers", text: $store.searchText)
                     .textFieldStyle(.plain)
                     .scaledFont(size: 12)
                     .frame(width: 160)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 12)
             .padding(.vertical, 4)
-            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .compatGlassCapsule()
 
             Toggle("Show stopped", isOn: $store.showsStopped)
-                .toggleStyle(.checkbox)
-                .controlSize(.small)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
 
             Button {
                 store.refreshNow()
             } label: {
                 Image(systemName: "arrow.clockwise")
                     .scaledFont(size: 12, weight: .medium)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .buttonBorderShape(.circle)
+            .compatGlassButtonStyle()
+            .controlSize(.small)
             .disabled(!store.engine.isConnected)
             .help("Refresh")
+            .accessibilityLabel("Refresh containers")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -106,7 +107,7 @@ struct DockerView: View {
                     .scaledFont(size: 12)
                     .foregroundStyle(.secondary)
                 if store.isRefreshing {
-                    ProgressView().controlSize(.small).scaleEffect(0.7)
+                    ProgressView().controlSize(.mini)
                 }
             }
         }
@@ -128,6 +129,8 @@ struct DockerView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss error")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -140,7 +143,9 @@ struct DockerView: View {
     private var content: some View {
         switch store.engine {
         case .checking:
-            ProgressView()
+            ProgressView("Looking for a container engine…")
+                .controlSize(.small)
+                .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .unavailable(let reason):
             unavailableState(reason: reason)
@@ -184,6 +189,8 @@ struct DockerView: View {
                             }
                         )
                         .tag(container.id)
+                        // Whitespace, not a rule under every row, separates containers (LAY-2).
+                        .listRowSeparator(.hidden)
                     }
                 } header: {
                     HStack(spacing: 6) {
@@ -203,19 +210,19 @@ struct DockerView: View {
         ContentUnavailableView {
             Label("No Container Engine", systemImage: "shippingbox")
         } description: {
-            VStack(spacing: 6) {
+            VStack(spacing: 8) {
                 Text(reason)
                 Text("""
                      Pilot talks to whichever engine you already run — Docker Desktop, \
                      Colima, Rancher Desktop, or Podman's Docker-compatible service. \
                      Start one and this list fills in.
                      """)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
             }
         } actions: {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button("Retry") { store.reconnect() }
-                    .buttonStyle(.borderedProminent)
+                    .compatGlassProminentButtonStyle()
                 if let dockerApp = Self.installedDockerAppURL {
                     Button("Open Docker Desktop") {
                         NSWorkspace.shared.openApplication(
@@ -223,6 +230,7 @@ struct DockerView: View {
                             configuration: NSWorkspace.OpenConfiguration()
                         )
                     }
+                    .compatGlassButtonStyle()
                 }
             }
         }
@@ -247,7 +255,7 @@ private struct DockerContainerRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Circle()
                 .fill(container.state.indicatorColor)
                 .frame(width: 7, height: 7)
@@ -279,15 +287,14 @@ private struct DockerContainerRow: View {
 
             if isBusy {
                 ProgressView()
-                    .controlSize(.small)
-                    .scaleEffect(0.7)
+                    .controlSize(.mini)
                     .frame(width: 60, alignment: .trailing)
             } else {
                 actions
                     .opacity(isHovering ? 1 : 0.001)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .contextMenu {
@@ -315,8 +322,10 @@ private struct DockerContainerRow: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(action == .remove ? Color.red.opacity(0.8) : Color.secondary)
+                // Danger color waits for the confirmation dialog (COL-4).
+                .foregroundStyle(.secondary)
                 .help(action.label)
+                .accessibilityLabel(action.label)
             }
         }
     }

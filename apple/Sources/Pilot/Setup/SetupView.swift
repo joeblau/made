@@ -109,10 +109,11 @@ struct SetupView: View {
     }
 
     private var pageHeader: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("SET UP YOUR MAC")
                 .font(.caption.weight(.semibold)).tracking(1.5).foregroundStyle(.secondary)
-            Text(pageTitle).font(.system(size: 26, weight: .bold))
+            // `.largeTitle` is 26pt on macOS: same size, but a named style.
+            Text(pageTitle).font(.largeTitle.bold())
             Text(pageSubtitle).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -154,7 +155,7 @@ struct SetupView: View {
     private func feature(_ symbol: String, _ title: String, _ detail: String) -> some View {
         HStack(alignment: .top, spacing: 16) {
             Image(systemName: symbol).font(.title2).foregroundStyle(Color.accentColor).frame(width: 32)
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.headline)
                 Text(detail).font(.callout).foregroundStyle(.secondary)
             }
@@ -171,7 +172,7 @@ struct SetupView: View {
             Text("Enable Local Network first. Turning this off keeps Walkie and Kneeboard discovery off at launch.")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
-                Button("Refresh permission status") { permissions.refresh() }
+                Button("Refresh Status") { permissions.refresh() }
                 Button("Check Local Network") { permissions.verifyLocalNetwork() }
                     .disabled(permissions.status(.localNetwork) == .checking)
             }
@@ -183,9 +184,9 @@ struct SetupView: View {
 
     private func permissionRow(_ permission: SetupPermission) -> some View {
         let status = permissions.status(permission)
-        return HStack(alignment: .top, spacing: 14) {
-            Image(systemName: permission.symbol).font(.title3).frame(width: 26).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 5) {
+        return HStack(alignment: .top, spacing: 16) {
+            Image(systemName: permission.symbol).font(.title3).frame(width: 32).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(permission.title).font(.headline)
                 Text(permission.detail).font(.callout).foregroundStyle(.secondary)
                 Label(status.label, systemImage: status == .allowed ? "checkmark.circle.fill" : "circle")
@@ -211,8 +212,8 @@ struct SetupView: View {
     }
 
     private var toolRows: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Your first project").font(.headline)
                 Text("Choose a folder now to grant access and open a terminal there when setup finishes.")
                     .font(.callout).foregroundStyle(.secondary)
@@ -226,7 +227,7 @@ struct SetupView: View {
             .padding(16)
             .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
             ForEach(SetupTool.all) { tool in
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text(tool.title).font(.headline)
                         Spacer()
@@ -251,7 +252,7 @@ struct SetupView: View {
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12))
             }
             HStack {
-                Button("Check again") { Task { await tools.refresh() } }.disabled(tools.isChecking)
+                Button("Check Again") { Task { await tools.refresh() } }.disabled(tools.isChecking)
                 if tools.isChecking { ProgressView().controlSize(.small) }
                 Spacer()
                 Link("Get Homebrew", destination: URL(string: "https://brew.sh/")!)
@@ -311,21 +312,25 @@ struct SetupView: View {
         HStack {
             if progress.step != .welcome {
                 Button("Back") { progress.step = SetupStep(rawValue: progress.step.rawValue - 1) ?? .welcome }
+                    .compatGlassButtonStyle()
             }
             Spacer()
+            // One prominent action per step (BTN-1); the rest stay secondary glass.
             if progress.step != .ready {
                 Button("Set Up Later") { progress.step = .ready }
+                    .compatGlassButtonStyle()
                 Button("Continue") { progress.step = SetupStep(rawValue: progress.step.rawValue + 1) ?? .ready }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .compatGlassProminentButtonStyle().keyboardShortcut(.defaultAction)
             } else {
                 Button("Open Cockpit") {
                     permissions.stopProbe()
                     progress.finish()
                     onFinish(projectDirectory)
                 }
-                .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                .compatGlassProminentButtonStyle().keyboardShortcut(.defaultAction)
             }
         }
+        .controlSize(.large)
         .disabled(requesting != nil)
         .padding(.horizontal, 28)
         .padding(.vertical, 16)

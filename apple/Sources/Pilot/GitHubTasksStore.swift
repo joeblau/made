@@ -294,8 +294,8 @@ private struct GitHubTaskRow: View {
 
     /// User • time ago, mirroring the hash • user • time ago line the Commits
     /// and Actions tabs show. An issue has no hash, so the line starts at the
-    /// assignee. Values sit at .tertiary with .quaternary separators, the
-    /// metadata styling shared across the three tabs.
+    /// assignee. Values sit at .secondary with `InspectorMetadataSeparator`,
+    /// the metadata styling shared across the three tabs.
     @ViewBuilder
     private var metadata: some View {
         let age = task.age
@@ -307,21 +307,19 @@ private struct GitHubTaskRow: View {
                     // accessibility label, which no truncation reaches.
                     Text(assigneeSummary)
                         .font(.subheadline)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
 
                 if !task.assignees.isEmpty && !age.isEmpty {
-                    Text("•")
-                        .font(.subheadline)
-                        .foregroundStyle(.quaternary)
+                    InspectorMetadataSeparator()
                 }
 
                 if !age.isEmpty {
                     Text(age)
                         .font(.subheadline)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
             }

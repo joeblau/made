@@ -14,31 +14,20 @@ struct PilotSettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            VStack(spacing: 0) {
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search", text: $searchText)
-                        .textFieldStyle(.plain)
+            // The system sidebar search field (HIER-6) replaces a hand-drawn
+            // capsule; it adopts Liquid Glass on macOS 26 automatically.
+            List(selection: sidebarSelection) {
+                if matchesSearch("General identity keys about version updates setup permissions tools") {
+                    Label("General", systemImage: "gearshape")
+                        .tag(SettingsTab.general)
                 }
-                .padding(.horizontal, 9)
-                .frame(height: 30)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-
-                List(selection: sidebarSelection) {
-                    if matchesSearch("General identity keys about version updates setup permissions tools") {
-                        Label("General", systemImage: "gearshape")
-                            .tag(SettingsTab.general)
-                    }
-                    if matchesSearch("Usage Claude Codex Kimi Grok") {
-                        Label("Usage", systemImage: "chart.bar.xaxis")
-                            .tag(SettingsTab.usage)
-                    }
+                if matchesSearch("Usage Claude Codex Kimi Grok") {
+                    Label("Usage", systemImage: "chart.bar.xaxis")
+                        .tag(SettingsTab.usage)
                 }
-                .listStyle(.sidebar)
             }
+            .listStyle(.sidebar)
+            .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
             .toolbar(removing: .sidebarToggle)
         } detail: {
@@ -99,16 +88,17 @@ struct PilotSettingsPageHeader: View {
     let tint: Color
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             Image(systemName: systemImage)
                 .font(.system(size: 34, weight: .medium))
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(tint)
-                .frame(width: 68, height: 68)
+                .frame(width: 64, height: 64)
                 .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 16))
 
+            // `.largeTitle` is 26pt on macOS: same size, but a named style.
             Text(title)
-                .font(.system(size: 26, weight: .bold))
+                .font(.largeTitle.bold())
 
             Text(subtitle)
                 .font(.callout)
@@ -117,6 +107,6 @@ struct PilotSettingsPageHeader: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 22)
+        .padding(.vertical, 24)
     }
 }

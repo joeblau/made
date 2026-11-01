@@ -36,7 +36,7 @@ struct NewWorkspaceSheet: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Label(folderTitle, systemImage: directory == nil ? "house" : "folder")
                         .lineLimit(1)
@@ -62,9 +62,12 @@ struct NewWorkspaceSheet: View {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
+                    .compatGlassButtonStyle()
                 Button("Create", action: create)
                     .keyboardShortcut(.defaultAction)
+                    .compatGlassProminentButtonStyle()
             }
+            .padding(.top, 8)
         }
         .padding(20)
         .frame(width: 520)

@@ -40,7 +40,8 @@ struct TabItemContent: View {
         HStack(spacing: 6) {
             if isHovering && canClose {
                 headerButton(systemName: "xmark", help: "Close \(paneTitle)", action: onClose)
-                    .background(.white.opacity(0.1), in: Circle())
+                    // Primary-relative so the hit circle reads in light mode too.
+                    .background(Color.primary.opacity(0.08), in: Circle())
                     .transition(.opacity)
             }
 
@@ -100,8 +101,8 @@ private struct TerminalAgentBadge: View {
                 Text(agent.displayName)
                     .scaledFont(size: 10, weight: .semibold)
                     .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
                     .background(Color.accentColor.opacity(0.15), in: Capsule())
                     .help("\(agent.displayName) is open in this terminal")
             }
