@@ -151,29 +151,16 @@ final class GitHubTasksStore {
         in directory: String,
         policy: RepositoryRefreshPolicy
     ) async -> ([GitHubTask], String?) {
-        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory) else {
-            return ([], "This folder is not a Git repository.")
-        }
+        let data: Data
         do {
-            let data = try await RepositoryPollingScheduler.shared.data(
-                for: .issues,
-                repository: repository,
-                policy: policy
-            )
-            guard let issues = try? JSONDecoder().decode([GitHubTask].self, from: data) else {
-                return ([], "Couldn’t parse gh output.")
-            }
-            return (issues, nil)
-        } catch let error as RepositoryPollingError {
-            return ([], error.localizedDescription)
-        } catch let error as ProcessRunnerError {
-            let detail = error.result?.standardErrorString
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let detail, !detail.isEmpty { return ([], detail) }
-            return ([], "Couldn’t load GitHub issues.")
+            data = try await GitHubCLIFailure.read(.issues, in: directory, policy: policy)
         } catch {
-            return ([], "Couldn’t load GitHub issues.")
+            return ([], GitHubCLIFailure.message(for: error, reading: "issues"))
         }
+        guard let issues = try? JSONDecoder().decode([GitHubTask].self, from: data) else {
+            return ([], "Couldn’t read the issues returned by GitHub.")
+        }
+        return (issues, nil)
     }
 }
 
@@ -233,11 +220,16 @@ struct GitHubTasksView: View {
                         InspectorLoadingPlaceholder()
                             .transition(.opacity)
                     } else if let error = store.errorMessage {
-                        ContentUnavailableView(
-                            "No Issues",
-                            systemImage: "exclamationmark.triangle",
-                            description: Text(error)
-                        )
+                        // A failed load is an error, not an empty list: say
+                        // so and offer the one next step (MOT-6, BTN-1).
+                        ContentUnavailableView {
+                            Label("Couldn\u{2019}t Load Issues", systemImage: "exclamationmark.triangle")
+                        } description: {
+                            Text(error)
+                        } actions: {
+                            Button("Retry", action: store.refresh)
+                                .compatGlassProminentButtonStyle()
+                        }
                         .transition(.opacity)
                     } else {
                         ContentUnavailableView(

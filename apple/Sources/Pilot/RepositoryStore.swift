@@ -103,6 +103,11 @@ final class RepositoryStore {
     var filesystem: [FileSystemEntry] = []
     var repoPath: String = ""
     var isLoading = false
+    /// Why the last pull request read failed, or nil. A failed read must not
+    /// look like an empty repository in the inspector.
+    var pullRequestError: String?
+    /// Why the last workflow run read failed, or nil.
+    var workflowError: String?
     var isLoadingFilesystem = false
     private var refreshTimer: Timer?
     private var polledResources: RepositoryPolledResources = .both
@@ -126,6 +131,8 @@ final class RepositoryStore {
         pullRequests = []
         actions = []
         runs = []
+        pullRequestError = nil
+        workflowError = nil
         filesystem = []
         fetchFilesystem()
         polledResources = RepositoryPolledResources(visibleTab: visibleTab)
@@ -177,6 +184,8 @@ final class RepositoryStore {
         pullRequests = []
         actions = []
         runs = []
+        pullRequestError = nil
+        workflowError = nil
         filesystem = []
         isLoading = false
         isLoadingFilesystem = false
@@ -193,11 +202,13 @@ final class RepositoryStore {
         let dir = repoPath
 
         Task {
-            let result = await Self.fetchPullRequestData(directory: dir, policy: policy)
+            let (result, error) = await Self.fetchPullRequestData(directory: dir, policy: policy)
             // Drop stale results: the user may have switched workspaces while
             // the shell command ran, and these would clobber the new repo's data.
             guard self.repoPath == dir else { return }
-            self.pullRequests = result
+            // Keep the last good list on a failed poll; only a success replaces it.
+            if error == nil { self.pullRequests = result }
+            self.pullRequestError = error
             self.isLoading = false
         }
     }
@@ -209,10 +220,13 @@ final class RepositoryStore {
         let dir = repoPath
 
         Task {
-            let (actions, runs) = await Self.fetchWorkflowData(directory: dir, policy: policy)
+            let (actions, runs, error) = await Self.fetchWorkflowData(directory: dir, policy: policy)
             guard self.repoPath == dir else { return }
-            self.actions = actions
-            self.runs = runs
+            if error == nil {
+                self.actions = actions
+                self.runs = runs
+            }
+            self.workflowError = error
         }
     }
 
@@ -232,17 +246,17 @@ final class RepositoryStore {
     private nonisolated static func fetchPullRequestData(
         directory: String,
         policy: RepositoryRefreshPolicy
-    ) async -> [GitPullRequest] {
-        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory),
-              let data = try? await RepositoryPollingScheduler.shared.data(
-                for: .pullRequests,
-                repository: repository,
-                policy: policy
-              ),
-              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return []
+    ) async -> ([GitPullRequest], String?) {
+        let data: Data
+        do {
+            data = try await GitHubCLIFailure.read(.pullRequests, in: directory, policy: policy)
+        } catch {
+            return ([], GitHubCLIFailure.message(for: error, reading: "pull requests"))
         }
-        return items.compactMap { item -> GitPullRequest? in
+        guard let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return ([], "Couldn\u{2019}t read the pull requests returned by GitHub.")
+        }
+        return (items.compactMap { item -> GitPullRequest? in
             guard let number = item["number"] as? Int else { return nil }
             let author = item["author"] as? [String: Any]
             let createdAt = item["createdAt"] as? String ?? ""
@@ -256,21 +270,21 @@ final class RepositoryStore {
                 headBranch: item["headRefName"] as? String ?? "",
                 elapsed: createdAt.isEmpty ? "" : Self.relativeTime(from: createdAt)
             )
-        }
+        }, nil)
     }
 
     private nonisolated static func fetchWorkflowData(
         directory: String,
         policy: RepositoryRefreshPolicy
-    ) async -> ([GitAction], [GitRun]) {
-        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory),
-              let data = try? await RepositoryPollingScheduler.shared.data(
-                for: .workflowRuns,
-                repository: repository,
-                policy: policy
-              ),
-              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return ([], [])
+    ) async -> ([GitAction], [GitRun], String?) {
+        let data: Data
+        do {
+            data = try await GitHubCLIFailure.read(.workflowRuns, in: directory, policy: policy)
+        } catch {
+            return ([], [], GitHubCLIFailure.message(for: error, reading: "workflow runs"))
+        }
+        guard let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return ([], [], "Couldn\u{2019}t read the workflow runs returned by GitHub.")
         }
 
         var actions: [GitAction] = []
@@ -325,7 +339,7 @@ final class RepositoryStore {
                 status: status
             ))
         }
-        return (actions, runs)
+        return (actions, runs, nil)
     }
 
     private nonisolated static func fetchFilesystemData(directory: String) async -> [FileSystemEntry] {
@@ -417,4 +431,46 @@ final class RepositoryStore {
         return String(filePath.dropFirst(prefix.count))
     }
 
+}
+
+/// Plain-language copy for a failed `gh` read in the inspector. The PR,
+/// Actions, and Issues tabs share it so one cause (most often a signed-out
+/// GitHub CLI) reads the same everywhere instead of as raw CLI output.
+enum GitHubCLIFailure: Error, LocalizedError {
+    case notGitHubRepository
+
+    var errorDescription: String? {
+        "This folder isn\u{2019}t a Git repository with a GitHub remote."
+    }
+
+    /// Reads one polled resource, throwing `notGitHubRepository` when the
+    /// folder has no GitHub repository to ask about.
+    nonisolated static func read(
+        _ resource: RepositoryPollResource,
+        in directory: String,
+        policy: RepositoryRefreshPolicy
+    ) async throws -> Data {
+        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory) else {
+            throw GitHubCLIFailure.notGitHubRepository
+        }
+        return try await RepositoryPollingScheduler.shared.data(
+            for: resource,
+            repository: repository,
+            policy: policy
+        )
+    }
+
+    nonisolated static func message(for error: Error, reading noun: String) -> String {
+        if let error = error as? LocalizedError, !(error is ProcessRunnerError),
+           let description = error.errorDescription {
+            return description
+        }
+        let detail = (error as? ProcessRunnerError)?.result?.standardErrorString
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if detail.contains("gh auth login") || detail.contains("not logged") || detail.contains("401") {
+            return "Sign in to GitHub with gh auth login, then retry."
+        }
+        if !detail.isEmpty { return detail }
+        return "Couldn\u{2019}t load \(noun) from GitHub. Check your connection, then retry."
+    }
 }

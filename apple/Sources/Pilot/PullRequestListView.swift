@@ -607,11 +607,27 @@ struct PullRequestListView: View {
                     .padding(12)
                 }
 
-                if store.pullRequests.isEmpty && !store.isLoading {
+                if store.pullRequests.isEmpty && !store.isLoading, let error = store.pullRequestError {
+                    // A failed read is an error, not an empty repository: say so
+                    // and offer the one next step, like the Issues tab (MOT-6).
+                    ContentUnavailableView {
+                        Label("Couldn\u{2019}t Load Pull Requests", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("Retry") { store.fetchPullRequests(policy: .manual) }
+                            .compatGlassProminentButtonStyle()
+                    }
+                    .transition(.opacity)
+                } else if store.pullRequests.isEmpty && !store.isLoading {
+                    // The hint names the missing repo only when there is none;
+                    // an empty list for a real repo says so instead.
                     ContentUnavailableView(
                         "No Pull Requests",
                         systemImage: "arrow.triangle.pull",
-                        description: Text("Select a workspace with a GitHub repo root path.")
+                        description: Text(store.repoPath.isEmpty
+                            ? "Select a workspace with a GitHub repo root path."
+                            : "This repository has no open pull requests.")
                     )
                     .transition(.opacity)
                 }
@@ -759,11 +775,23 @@ struct ActionsListView: View {
                     .padding(12)
                 }
 
-                if store.actions.isEmpty && !store.isLoading {
+                if store.actions.isEmpty && !store.isLoading, let error = store.workflowError {
+                    ContentUnavailableView {
+                        Label("Couldn\u{2019}t Load Actions", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("Retry") { store.fetchWorkflowRuns(policy: .manual) }
+                            .compatGlassProminentButtonStyle()
+                    }
+                    .transition(.opacity)
+                } else if store.actions.isEmpty && !store.isLoading {
                     ContentUnavailableView(
                         "No Actions",
                         systemImage: "gearshape.2",
-                        description: Text("Select a workspace with a GitHub repo root path.")
+                        description: Text(store.repoPath.isEmpty
+                            ? "Select a workspace with a GitHub repo root path."
+                            : "No GitHub Actions workflow runs for this repository.")
                     )
                     .transition(.opacity)
                 }
