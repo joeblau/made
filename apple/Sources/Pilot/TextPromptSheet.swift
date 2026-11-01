@@ -12,13 +12,17 @@ import SwiftUI
 ///
 ///     .sheet(isPresented: $isPresented) {
 ///         TextPromptSheet(title: "Rename Group", label: "Group name",
-///                         confirmTitle: "Save", text: $name) { rename(name) }
+///                         prompt: "Frontend", confirmTitle: "Save",
+///                         text: $name) { rename(name) }
 ///     }
 struct TextPromptSheet: View {
     let title: String
     /// The persistent visible label above the field (FORM-1). It is also the
     /// field's VoiceOver name.
     let label: String
+    /// A bare example value for the placeholder (FORM-2). Without one the
+    /// field would repeat the label as its placeholder.
+    var prompt: String?
     let confirmTitle: String
     @Binding var text: String
     var onCancel: () -> Void = {}
@@ -49,7 +53,7 @@ struct TextPromptSheet: View {
                     // The field carries this name for VoiceOver; hide the
                     // visible label so it is not read twice.
                     .accessibilityHidden(true)
-                TextField(label, text: $text)
+                TextField(label, text: $text, prompt: prompt.map { Text($0) })
                     .accessibilityLabel(label)
                     .focused($isFieldFocused)
                     .onSubmit(confirm)

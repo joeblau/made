@@ -173,7 +173,7 @@ struct BrowserToolsToolbarControls: View {
         Menu {
             Button("Default Profile") {}
             Divider()
-            Button("Manage Profiles...") {}
+            Button("Manage Profiles…") {}
             Divider()
             Button("Clear All Browser Data…", role: .destructive) {
                 isConfirmingWebsiteDataReset = true

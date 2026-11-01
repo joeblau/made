@@ -276,6 +276,7 @@ struct ContentView: View {
                 TextPromptSheet(
                     title: editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
                     label: "Group name",
+                    prompt: "Frontend",
                     confirmTitle: editingGroupID == nil ? "Create" : "Save",
                     text: $groupName
                 ) {
@@ -609,6 +610,13 @@ struct ContentView: View {
                     .padding(16)
             }
         }
+        // Capsule is the default control shape for the whole window and the
+        // sheets it presents: on macOS 26 the bordered/glass buttons, popup
+        // pickers and segmented pickers otherwise draw squared rounded
+        // rectangles beside the capsule fields and chips. A control that
+        // sets its own shape (glass icon circles) still wins, because the
+        // innermost buttonBorderShape applies.
+        .buttonBorderShape(.capsule)
     }
 
     private var canCloseActiveTab: Bool {

@@ -24,23 +24,29 @@ extension View {
         }
     }
 
+    /// A secondary glass button. Always a capsule: on macOS the glass styles
+    /// otherwise default to a rounded rectangle, which reads as a squared
+    /// control next to the capsule fields and chips. The shape is applied
+    /// innermost, so it wins over any outer `buttonBorderShape`; icon-only
+    /// circles use `compatGlassIconButton` instead.
     @ViewBuilder
     func compatGlassButtonStyle() -> some View {
         if #available(macOS 26.0, *) {
-            buttonStyle(.glass)
+            buttonBorderShape(.capsule).buttonStyle(.glass)
         } else {
-            buttonStyle(.bordered)
+            buttonBorderShape(.capsule).buttonStyle(.bordered)
         }
     }
 
     /// The single primary action in a view (BTN-1): tinted Liquid Glass on
-    /// macOS 26, the prominent bordered style before it.
+    /// macOS 26, the prominent bordered style before it. Always a capsule,
+    /// like `compatGlassButtonStyle`.
     @ViewBuilder
     func compatGlassProminentButtonStyle() -> some View {
         if #available(macOS 26.0, *) {
-            buttonStyle(.glassProminent)
+            buttonBorderShape(.capsule).buttonStyle(.glassProminent)
         } else {
-            buttonStyle(.borderedProminent)
+            buttonBorderShape(.capsule).buttonStyle(.borderedProminent)
         }
     }
 
@@ -82,6 +88,29 @@ extension View {
         controlSize: ControlSize = .regular
     ) -> some View {
         liquidGlassIconButton(prominent: prominent, controlSize: controlSize)
+    }
+}
+
+/// A horizontally scrolling strip of glass chips (note tabs, remote desktop
+/// groups, runner sources). A scroll view clips to its bounds, which cut the
+/// chips' glass shadow into a hard-edged gray rectangle in light mode. The
+/// content is inset by the shadow's reach and the scroll view is pulled back
+/// out by the same amount, so the shadow fades out naturally and the strip
+/// keeps its layout. The trailing edge stays put so overflowing chips never
+/// draw over the controls beside the strip.
+struct GlassChipScroller<Content: View>: View {
+    var spacing: CGFloat? = LiquidGlassMetrics.Spacing.xSmall
+    @ViewBuilder var content: Content
+
+    private let bleed = LiquidGlassMetrics.Spacing.medium
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            CompatGlassContainer(spacing: spacing) { content }
+                .padding(bleed)
+        }
+        .padding(.vertical, -bleed)
+        .padding(.leading, -bleed)
     }
 }
 

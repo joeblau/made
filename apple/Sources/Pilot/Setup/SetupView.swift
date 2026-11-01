@@ -335,7 +335,10 @@ struct SetupView: View {
                     }
                     .compatGlassButtonStyle()
                     .animation(LiquidGlassMetrics.stateChange, value: isCopied)
+                    // Glass like its Copy neighbor, so the row's two actions
+                    // read as one control set rather than a button and a URL.
                     Link("Instructions", destination: tool.helpURL)
+                        .compatGlassButtonStyle()
                 }
             }
         }
@@ -378,7 +381,7 @@ struct SetupView: View {
                     }
                 }
                 Divider()
-                Text("\(tools.results.values.filter { $0 }.count) of \(SetupTool.all.count) optional tools ready")
+                Text("\(tools.results.values.filter { $0 }.count) of \(SetupTool.all.count) optional developer tools ready")
                     .foregroundStyle(.secondary)
             }
             .setupCard()

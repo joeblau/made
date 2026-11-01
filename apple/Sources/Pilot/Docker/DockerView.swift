@@ -222,7 +222,7 @@ struct DockerView: View {
             VStack(spacing: 8) {
                 Text(reason)
                 Text("""
-                     Pilot talks to whichever engine you already run — Docker Desktop, \
+                     Cockpit talks to whichever engine you already run — Docker Desktop, \
                      Colima, Rancher Desktop, or Podman's Docker-compatible service. \
                      Start one and this list fills in.
                      """)

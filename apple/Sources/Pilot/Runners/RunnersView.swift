@@ -8,7 +8,11 @@ struct RunnersView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            tabBar
+            // With no sources the empty state's "Add Runner Source" is the one
+            // action (BTN-1); a lone "+" chip strip above it would repeat it.
+            if !store.scopes.isEmpty {
+                tabBar
+            }
             if store.selectedScope != nil {
                 summaryBar
                 if let error = store.snapshot.error { errorBanner(error) }
@@ -51,12 +55,10 @@ struct RunnersView: View {
     /// context menu and the strip scrolls when there are many.
     private var tabBar: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        ForEach(store.scopes) { scope in
-                            scopeTab(scope)
-                        }
+            GlassChipScroller {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    ForEach(store.scopes) { scope in
+                        scopeTab(scope)
                     }
                 }
                 .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)

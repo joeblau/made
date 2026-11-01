@@ -111,56 +111,54 @@ struct NotesView: View {
 
     private func tabBar(notes: [Note]) -> some View {
         HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        ForEach(notes) { note in
-                            NoteTab(
-                                title: note.displayTitle,
-                                isSelected: note.id == store.selectedNoteID,
-                                isDropTarget: dropTargetNoteID == note.id,
-                                onSelect: { store.selectedNoteID = note.id },
-                                onClose: { store.requestCloseNote(note) }
-                            )
-                            // Drag-to-reorder (issue #67). The note rides along as a
-                            // dedicated Transferable payload; dropping onto another tab
-                            // inserts the dragged note just before it and persists the
-                            // new order.
-                            .draggable(NoteTabTransfer(id: note.id)) {
-                                // Legible chip under the cursor while dragging,
-                                // in the same capsule as the tab it came from.
-                                Text(note.displayTitle)
-                                    .scaledFont(size: 12)
-                                    .lineLimit(1)
-                                    .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-                                    .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-                                    .background(.ultraThinMaterial, in: Capsule())
-                            }
-                            .dropDestination(for: NoteTabTransfer.self) { items, _ in
-                                dropTargetNoteID = nil
-                                guard let dragged = items.first else { return false }
-                                store.moveNote(dragged.id, before: note.id)
-                                return true
-                            } isTargeted: { targeted in
-                                dropTargetNoteID = targeted ? note.id : nil
-                            }
+            GlassChipScroller {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    ForEach(notes) { note in
+                        NoteTab(
+                            title: note.displayTitle,
+                            isSelected: note.id == store.selectedNoteID,
+                            isDropTarget: dropTargetNoteID == note.id,
+                            onSelect: { store.selectedNoteID = note.id },
+                            onClose: { store.requestCloseNote(note) }
+                        )
+                        // Drag-to-reorder (issue #67). The note rides along as a
+                        // dedicated Transferable payload; dropping onto another tab
+                        // inserts the dragged note just before it and persists the
+                        // new order.
+                        .draggable(NoteTabTransfer(id: note.id)) {
+                            // Legible chip under the cursor while dragging,
+                            // in the same capsule as the tab it came from.
+                            Text(note.displayTitle)
+                                .scaledFont(size: 12)
+                                .lineLimit(1)
+                                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                                .background(.ultraThinMaterial, in: Capsule())
                         }
-
-                        Button {
-                            store.addNote()
-                        } label: {
-                            Label("New Note", systemImage: "plus")
-                                .scaledFont(size: 12, weight: .medium)
-                        }
-                        .compatGlassIconButton()
-                        .foregroundStyle(.primary)
-                        .help("New Note")
-                        // Dropping a tab on (or past) the + button sends it to the end.
                         .dropDestination(for: NoteTabTransfer.self) { items, _ in
+                            dropTargetNoteID = nil
                             guard let dragged = items.first else { return false }
-                            store.moveNoteToEnd(dragged.id)
+                            store.moveNote(dragged.id, before: note.id)
                             return true
+                        } isTargeted: { targeted in
+                            dropTargetNoteID = targeted ? note.id : nil
                         }
+                    }
+
+                    Button {
+                        store.addNote()
+                    } label: {
+                        Label("New Note", systemImage: "plus")
+                            .scaledFont(size: 12, weight: .medium)
+                    }
+                    .compatGlassIconButton()
+                    .foregroundStyle(.primary)
+                    .help("New Note")
+                    // Dropping a tab on (or past) the + button sends it to the end.
+                    .dropDestination(for: NoteTabTransfer.self) { items, _ in
+                        guard let dragged = items.first else { return false }
+                        store.moveNoteToEnd(dragged.id)
+                        return true
                     }
                 }
                 .padding(.horizontal, LiquidGlassMetrics.Spacing.small)

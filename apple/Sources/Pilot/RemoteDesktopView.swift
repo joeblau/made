@@ -47,6 +47,7 @@ struct RemoteDesktopView: View {
             TextPromptSheet(
                 title: "Rename Group",
                 label: "Group name",
+                prompt: "Studio Macs",
                 confirmTitle: "Save",
                 text: $groupName,
                 onCancel: { renamingGroupID = nil }
@@ -114,10 +115,8 @@ struct RemoteDesktopView: View {
     /// each run of neighboring glass shares a container.
     private var groupBar: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    groupChips
-                }
+            GlassChipScroller {
+                groupChips
             }
             if let group = groups.selectedGroup {
                 CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
@@ -178,7 +177,6 @@ struct RemoteDesktopView: View {
             .compatGlassIconButton()
             .help("New Group")
         }
-        // Room for the glass edge so the scroll view does not clip it.
         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
         .animation(LiquidGlassMetrics.stateChange, value: groups.selectedGroupID)
     }
@@ -259,9 +257,11 @@ struct RemoteDesktopView: View {
             // rather than a dead black tile (MOT-6).
             ZStack {
                 Color.black
+                // Secondary, not tertiary: tertiary label on pure black is
+                // about 2:1 and drops below the TYPE-3 contrast floor.
                 Label("Empty Slot", systemImage: "display")
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .environment(\.colorScheme, .dark)
             }
             .dropDestination(for: String.self) { items, _ in
@@ -519,8 +519,8 @@ private struct RemoteConnectionPane: View {
 /// The "new tab" overlay: a card listing the machines discovered over Bonjour
 /// (`_rfb._tcp`) plus a manual host field. A floating glass panel (the
 /// control layer over the screen grid), like the editor pane's fuzzy file
-/// finder. Its field uses a quiet fill rather than glass so the panel never
-/// stacks glass on glass.
+/// finder. Its host field and buttons are interactive glass controls on that
+/// layer, like every other free-standing field.
 private struct RemoteComputerPicker: View {
     let discovery: RemoteScreenDiscovery
     let onPick: (_ host: String, _ port: Int, _ nickname: String) -> Void

@@ -141,6 +141,9 @@ struct NewWorkspaceSheet: View {
                             bottom: 0,
                             trailing: Self.resultInset
                         ))
+                        // Rows separate by their inset highlight and spacing,
+                        // not hairlines that run past the inset (LAY-2).
+                        .listRowSeparator(.hidden)
                 }
                 .listStyle(.plain)
                 .scrollContentBackground(.hidden)

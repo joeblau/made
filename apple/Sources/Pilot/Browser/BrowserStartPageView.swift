@@ -31,7 +31,7 @@ struct BrowserStartPageView: View {
                     .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         .animation(LiquidGlassMetrics.spring, value: hasScanned)
         .animation(LiquidGlassMetrics.spring, value: servers)
         .animation(LiquidGlassMetrics.stateChange, value: showsScanningState)
@@ -90,9 +90,11 @@ struct BrowserStartPageView: View {
                     Text("No dev servers found in this workspace.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    // Secondary, not tertiary: the next step is the useful
+                    // part, and tertiary text is under 2.5:1 (TYPE-3).
                     Text("Start a local server, or enter a URL in the address bar.")
                         .font(.callout)
-                        .foregroundStyle(.tertiary)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

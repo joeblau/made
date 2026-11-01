@@ -13,7 +13,11 @@ struct AgenticUseView: View {
             if let warning = store.scanWarning {
                 warningBanner(warning)
             }
+            // Fill the remaining height so the header bar stays pinned to the
+            // top: a ContentUnavailableView only takes its ideal height, and
+            // the VStack would otherwise center the header with it.
             content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             if let updated = store.cursorLastUpdated {
                 Text("Cursor last updated \(updated.formatted(date: .abbreviated, time: .shortened))")
                     .agenticUseFont(.meta)

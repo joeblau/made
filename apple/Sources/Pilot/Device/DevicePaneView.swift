@@ -347,9 +347,17 @@ struct DevicePaneMessage<Actions: View>: View {
                 ProgressView().controlSize(.small)
             }
             if hasActions {
+                // Side by side when the pane is wide enough, stacked when
+                // it is narrow, so a label is never truncated ("Open Cam…").
                 CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        actions
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                            actions
+                        }
+                        .fixedSize()
+                        VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                            actions
+                        }
                     }
                 }
             }
