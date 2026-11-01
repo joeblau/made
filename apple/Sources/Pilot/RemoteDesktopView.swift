@@ -525,8 +525,6 @@ private struct RemoteComputerPicker: View {
     @State private var isResolving = false
     @FocusState private var manualFocused: Bool
 
-    private let focusLineWidth: CGFloat = 1.5
-
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
@@ -562,7 +560,7 @@ private struct RemoteComputerPicker: View {
     }
 
     /// Manual host entry with a persistent label (FORM-1); the placeholder is
-    /// an instruction (FORM-2). Capsule field with a visible focus ring
+    /// an instruction (FORM-2). Glass capsule field with a visible focus ring
     /// (FORM-4), next to the panel's one primary action (BTN-1).
     private var manualEntry: some View {
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
@@ -571,29 +569,16 @@ private struct RemoteComputerPicker: View {
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    Image(systemName: "network")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                    TextField(
-                        "Host Address",
-                        text: $manualHost,
-                        prompt: Text("Enter a host, IP address, or MagicDNS name")
-                    )
-                    .textFieldStyle(.plain)
-                    .focused($manualFocused)
-                    .onSubmit(connectManual)
-                }
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
-                .padding(.vertical, LiquidGlassMetrics.fieldVerticalPadding)
-                .background(.fill.tertiary, in: Capsule())
-                .overlay {
-                    Capsule()
-                        .strokeBorder(.tint, lineWidth: focusLineWidth)
-                        .opacity(manualFocused ? 1 : 0)
-                        .allowsHitTesting(false)
-                }
-                .animation(LiquidGlassMetrics.stateChange, value: manualFocused)
+                // Glass like every other free-standing field: the panel is a
+                // glass control layer and its controls are glass too.
+                TextField(
+                    "Host Address",
+                    text: $manualHost,
+                    prompt: Text("Enter a host, IP address, or MagicDNS name")
+                )
+                .focused($manualFocused)
+                .onSubmit(connectManual)
+                .liquidGlassField(systemImage: "network", isFocused: manualFocused)
 
                 Button("Connect", action: connectManual)
                     .compatGlassProminentButtonStyle()

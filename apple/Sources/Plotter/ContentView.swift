@@ -29,32 +29,16 @@ struct ContentView: View {
         // Both float over the mirror as Liquid Glass controls; the container
         // lets the neighboring glass shapes blend into one cluster.
         .overlay(alignment: .topLeading) {
-            GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    // Same "•••" entry as the shared `SettingsButton`, but the
-                    // sheet is presented outside this cluster's pinned-dark
-                    // environment so Settings follows the system appearance.
-                    Button {
-                        showsSettings = true
-                    } label: {
-                        Image(systemName: "ellipsis")
-                    }
-                    .accessibilityLabel("Settings")
-                    Button {
-                        showsDashboard = true
-                    } label: {
-                        // A titled Label keeps the spoken name with the glyph
-                        // (IMG-1); only the symbol is drawn.
-                        Label("Dashboard", systemImage: "square.grid.2x2")
-                            .labelStyle(.iconOnly)
-                    }
-                    .help("Dashboard")
-                    .accessibilityLabel("Dashboard")
-                    ConnectionStatusBadge(mirror: mirror)
-                }
-                .font(.title3)
-                .buttonStyle(GlassCircleButtonStyle())
-            }
+            FloatingControlCluster(
+                mirror: mirror,
+                showsSettings: $showsSettings,
+                showsDashboard: $showsDashboard
+            )
+            // Floating chrome over the mirror grows with Dynamic Type up to
+            // AX2, in step with the UIKit annotation toolbar (which clamps at
+            // the same category). Past that, the two clusters would collide
+            // on an iPad mini in portrait (TYPE-4).
+            .dynamicTypeSize(...FloatingChromeMetrics.maximumDynamicTypeSize)
             // The mirror stage is always black, so its floating chrome stays
             // dark in both appearances (like `SearchingOverlay`). Light glass
             // over black renders as flat gray disks that wash out the green
@@ -98,23 +82,95 @@ struct ContentView: View {
     }
 }
 
+/// Dynamic Type sizing shared by both floating clusters over the mirror: the
+/// SwiftUI Settings/Dashboard/status cluster and the UIKit annotation toolbar.
+/// Both scale the same 48pt base relative to `.title3` (SwiftUI's
+/// `@ScaledMetric` and `UIFontMetrics` produce identical values) and stop
+/// growing at the same size, so the two clusters always share one height.
+enum FloatingChromeMetrics {
+    /// The control circle (and toolbar capsule height) at the default size.
+    static let baseControlSide: CGFloat = 48
+    /// Width of one annotation-toolbar button at the default size.
+    static let baseToolbarButtonWidth: CGFloat = 44
+    /// The regular `.glass` circle's padding around its label on each side.
+    /// Fixed by the system across Dynamic Type sizes (measured on the 27.2
+    /// iPadOS simulator: a 34pt label is a 48pt circle at every size).
+    static let glassButtonPadding: CGFloat = 7
+    /// The largest size the floating chrome grows to (SwiftUI side).
+    static let maximumDynamicTypeSize = DynamicTypeSize.accessibility2
+    /// The same limit for the UIKit side.
+    static let maximumContentSizeCategory = UIContentSizeCategory.accessibilityLarge
+
+    /// `value` scaled like `.title3` for `traits`, rounded to whole points
+    /// so circle edges stay crisp. Matches `@ScaledMetric(relativeTo: .title3)`
+    /// rounded the same way.
+    static func scaled(_ value: CGFloat, for traits: UITraitCollection) -> CGFloat {
+        UIFontMetrics(forTextStyle: .title3).scaledValue(for: value, compatibleWith: traits).rounded()
+    }
+}
+
+/// Settings + Dashboard + connection status. Owns the one `@ScaledMetric`
+/// that sizes every circle in the cluster, so the buttons and the badge stay
+/// identical at every Dynamic Type size (TYPE-4). It lives below the
+/// caller's `dynamicTypeSize` clamp so the metric honors it.
+private struct FloatingControlCluster: View {
+    var mirror: MirrorModel
+    @Binding var showsSettings: Bool
+    @Binding var showsDashboard: Bool
+
+    @ScaledMetric(relativeTo: .title3) private var scaledControlSide = FloatingChromeMetrics.baseControlSide
+
+    var body: some View {
+        let controlSide = scaledControlSide.rounded()
+        GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                // Same "•••" entry as the shared `SettingsButton`, but the
+                // sheet is presented outside this cluster's pinned-dark
+                // environment so Settings follows the system appearance.
+                Button {
+                    showsSettings = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("Settings")
+                Button {
+                    showsDashboard = true
+                } label: {
+                    // A titled Label keeps the spoken name with the glyph
+                    // (IMG-1); only the symbol is drawn.
+                    Label("Dashboard", systemImage: "square.grid.2x2")
+                        .labelStyle(.iconOnly)
+                }
+                .help("Dashboard")
+                .accessibilityLabel("Dashboard")
+                ConnectionStatusBadge(mirror: mirror, diameter: controlSide)
+            }
+            .font(.title3)
+            .buttonStyle(GlassCircleButtonStyle(diameter: controlSide))
+        }
+    }
+}
+
 /// System `.glass` circle buttons with a fixed glyph box, so symbols of
 /// different heights (the ellipsis vs. the grid) produce identical circles.
 /// A primitive style, so it wraps every button in the cluster uniformly.
 private struct GlassCircleButtonStyle: PrimitiveButtonStyle {
-    /// With the regular control size this yields a 48pt circle, matching the
-    /// connection badge and the UIKit annotation toolbar capsule.
-    static let glyphSide: CGFloat = 34
-    /// The rendered circle: the glyph box plus the regular glass padding. The
-    /// badge uses it directly so every circle in the cluster is identical.
-    static let circleDiameter: CGFloat = 48
+    /// The rendered circle; the connection badge uses the same value so every
+    /// circle in the cluster is identical. 48pt at the default size, matching
+    /// the UIKit annotation toolbar capsule.
+    let diameter: CGFloat
+
+    /// The label box: the circle minus the system's regular glass padding.
+    private var glyphSide: CGFloat {
+        max(diameter - 2 * FloatingChromeMetrics.glassButtonPadding, 0)
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         Button(role: configuration.role) {
             configuration.trigger()
         } label: {
             configuration.label
-                .frame(width: Self.glyphSide, height: Self.glyphSide)
+                .frame(width: glyphSide, height: glyphSide)
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
@@ -127,6 +183,9 @@ private struct GlassCircleButtonStyle: PrimitiveButtonStyle {
 /// PencilKit canvas siblings.
 private struct ConnectionStatusBadge: View {
     var mirror: MirrorModel
+    /// Shared with `GlassCircleButtonStyle` so the badge matches its
+    /// neighbors at every Dynamic Type size.
+    let diameter: CGFloat
 
     var body: some View {
         let connected = mirror.frameCount > 0
@@ -136,10 +195,7 @@ private struct ConnectionStatusBadge: View {
             .foregroundStyle(connected ? Color.green : Color.secondary)
             // The glyph morphs between states instead of hard-swapping (MOT-4).
             .contentTransition(.symbolEffect(.replace))
-            .frame(
-                width: GlassCircleButtonStyle.circleDiameter,
-                height: GlassCircleButtonStyle.circleDiameter
-            )
+            .frame(width: diameter, height: diameter)
             .glassEffect(.regular.interactive(), in: Circle())
             // Long-press / secondary-click lifts a circle, not a squared-off
             // rectangle, for the context menu preview.
@@ -297,6 +353,10 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     private let toolbar = UIStackView()
     /// Liquid Glass platter the annotation toolbar floats on.
     private let toolbarGlass = UIVisualEffectView()
+    /// Size constraints of the toolbar buttons, rescaled when Dynamic Type
+    /// changes (see `updateToolbarButtonSizes()`).
+    private var toolbarButtonWidthConstraints: [NSLayoutConstraint] = []
+    private var toolbarButtonHeightConstraints: [NSLayoutConstraint] = []
 
     /// Shown above the (empty) video layer only in demo mode; rides the same
     /// zoom/pan transform so seeded annotation strokes stay aligned.
@@ -480,7 +540,15 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         toolbar.alignment = .center
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         toolbar.isLayoutMarginsRelativeArrangement = true
-        toolbar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
+        // No vertical margin: the buttons themselves are the capsule height
+        // (48pt at the default size, on the 4pt grid), which keeps the
+        // toolbar level with the SwiftUI cluster's 48pt circles.
+        toolbar.directionalLayoutMargins = NSDirectionalEdgeInsets(
+            top: 0,
+            leading: LiquidGlassMetrics.Spacing.xxSmall,
+            bottom: 0,
+            trailing: LiquidGlassMetrics.Spacing.xxSmall
+        )
 
         // Floating controls over the mirror use interactive Liquid Glass in a
         // capsule, matching the SwiftUI settings cluster on the leading side.
@@ -491,6 +559,10 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         // Pinned dark like the SwiftUI cluster: the mirror stage behind it is
         // always black, and `.label` glyphs then resolve light on dark glass.
         toolbarGlass.overrideUserInterfaceStyle = .dark
+        // Same Dynamic Type ceiling as the SwiftUI cluster, so both clusters
+        // stop growing together; the glyphs' text-style symbol configuration
+        // honors it too.
+        toolbarGlass.maximumContentSizeCategory = FloatingChromeMetrics.maximumContentSizeCategory
         toolbarGlass.translatesAutoresizingMaskIntoConstraints = false
         toolbarGlass.contentView.addSubview(toolbar)
 
@@ -524,6 +596,23 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
             toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LiquidGlassMetrics.Spacing.small),
             toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -LiquidGlassMetrics.Spacing.small)
         ])
+
+        updateToolbarButtonSizes()
+        toolbarGlass.registerForTraitChanges(
+            [UITraitPreferredContentSizeCategory.self]
+        ) { [weak self] (_: UIVisualEffectView, _: UITraitCollection) in
+            self?.updateToolbarButtonSizes()
+        }
+    }
+
+    /// Scales the toolbar buttons with Dynamic Type exactly like the SwiftUI
+    /// cluster's `@ScaledMetric`, using the glass view's (clamped) traits.
+    private func updateToolbarButtonSizes() {
+        let traits = toolbarGlass.traitCollection
+        let width = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseToolbarButtonWidth, for: traits)
+        let height = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseControlSide, for: traits)
+        toolbarButtonWidthConstraints.forEach { $0.constant = width }
+        toolbarButtonHeightConstraints.forEach { $0.constant = height }
     }
 
     /// Empties this canvas and tells Pilot to clear too (`onClear` sends a single
@@ -540,8 +629,9 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         onClear?()
     }
 
-    /// A 44pt icon button for the glass toolbar: Dynamic Type symbol sizing,
-    /// a label-colored glyph that adapts with the glass, a spoken name, and
+    /// An icon button for the glass toolbar (44 x 48pt at the default size,
+    /// scaled by `updateToolbarButtonSizes()`): Dynamic Type symbol sizing, a
+    /// label-colored glyph that adapts with the glass, a spoken name, and
     /// pointer hover on iPad trackpads.
     private func button(systemName: String, label: String, action: @escaping () -> Void) -> UIButton {
         let button = UIButton(type: .system)
@@ -551,8 +641,11 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         button.accessibilityLabel = label
         button.isPointerInteractionEnabled = true
         button.addAction(UIAction { _ in action() }, for: .touchUpInside)
-        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let width = button.widthAnchor.constraint(equalToConstant: FloatingChromeMetrics.baseToolbarButtonWidth)
+        let height = button.heightAnchor.constraint(equalToConstant: FloatingChromeMetrics.baseControlSide)
+        NSLayoutConstraint.activate([width, height])
+        toolbarButtonWidthConstraints.append(width)
+        toolbarButtonHeightConstraints.append(height)
         return button
     }
 

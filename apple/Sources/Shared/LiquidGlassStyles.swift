@@ -78,9 +78,15 @@ extension View {
     /// glass in a capsule (single-line) or a concentric rounded rectangle
     /// (`multiline: true`), and an accent stroke while focused (FORM-4).
     ///
-    /// Fields inside a grouped `Form` keep the system styling — do not use
-    /// this there. Pair the field with a persistent visible label; the
-    /// placeholder is a hint, not the label (FORM-1/FORM-2).
+    /// Every free-standing field is glass, including fields inside glass
+    /// panels, sheets, and popovers (the system 26+ precedent: glass sheets
+    /// carry glass controls). It also suits `Form` rows that stack their own
+    /// visible label above the field (Walkie's Secure Messaging). Keep the
+    /// system styling for fields whose title *is* the row label (macOS
+    /// grouped `Form`s), fields hosted in a toolbar item or glass palette
+    /// (the system capsule is already glass: no glass on glass), and fields
+    /// in a system `.alert`. Pair the field with a persistent visible label;
+    /// the placeholder is a hint, not the label (FORM-1/FORM-2).
     ///
     /// - Parameters:
     ///   - multiline: Use for `TextEditor` and `TextField(axis: .vertical)`.
@@ -348,7 +354,8 @@ extension View {
 }
 
 /// A capsule filter chip or tab: interactive glass, accent tint when
-/// selected (a state signal, COL-4), and press feedback. Add
+/// selected (a state signal, COL-4), a pointer hover wash and press
+/// feedback (BTN-5, matching `LiquidGlassPressableButtonStyle`). Add
 /// `.accessibilityAddTraits(isSelected ? .isSelected : [])` on the button.
 ///
 ///     Button(scope.name) { select(scope) }
@@ -357,15 +364,37 @@ struct LiquidGlassChipButtonStyle: ButtonStyle {
     var isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
+        ChipBody(configuration: configuration, isSelected: isSelected)
+    }
+}
+
+/// The chip's body: a view (not the style) so it can own hover state.
+private struct ChipBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isSelected: Bool
+
+    @State private var isHovered = false
+
+    var body: some View {
+        let isPressed = configuration.isPressed
         configuration.label
             .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .lineLimit(1)
             .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
             .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
             .contentShape(Capsule())
+            // The same quiet wash as `HoverHighlight`, inside the glass so
+            // the chip keeps one capsule silhouette. Selected chips get it
+            // too: chips toggle, so the selected one is still actionable.
+            .background {
+                Capsule().fill(.fill.tertiary)
+                    .opacity(isHovered || isPressed ? 1 : 0)
+            }
             .modifier(ChipSurface(isSelected: isSelected))
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(LiquidGlassMetrics.stateChange, value: configuration.isPressed)
+            .scaleEffect(isPressed ? 0.97 : 1)
+            .onHover { isHovered = $0 }
+            .animation(LiquidGlassMetrics.stateChange, value: isHovered)
+            .animation(LiquidGlassMetrics.stateChange, value: isPressed)
     }
 }
 

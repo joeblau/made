@@ -265,6 +265,16 @@ private struct DockerContainerRow: View {
     let perform: (DockerContainerAction) -> Void
 
     @State private var isHovering = false
+    /// The action button holding keyboard focus (Full Keyboard Access / Tab).
+    @FocusState private var focusedAction: DockerContainerAction?
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    /// Pointer users get the hover reveal. Keyboard focus on an action and a
+    /// running VoiceOver also reveal the actions, so a focused control is
+    /// never invisible (A11Y keyboard/VoiceOver reachability).
+    private var revealsActions: Bool {
+        isHovering || focusedAction != nil || voiceOverEnabled
+    }
 
     var body: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.small) {
@@ -300,7 +310,7 @@ private struct DockerContainerRow: View {
             // The actions keep their layout slot while busy, and the spinner
             // sits over it, so the ports column never jumps mid-action.
             actions
-                .opacity(isBusy ? 0 : (isHovering ? 1 : 0.001))
+                .opacity(isBusy ? 0 : (revealsActions ? 1 : 0.001))
                 .disabled(isBusy)
                 .accessibilityHidden(isBusy)
                 .overlay(alignment: .trailing) {
@@ -315,7 +325,18 @@ private struct DockerContainerRow: View {
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
         .animation(LiquidGlassMetrics.stateChange, value: isHovering)
+        .animation(LiquidGlassMetrics.stateChange, value: focusedAction)
         .animation(LiquidGlassMetrics.stateChange, value: isBusy)
+        // The same actions from the row itself in the VoiceOver actions
+        // menu, so they do not depend on finding the trailing buttons.
+        .accessibilityElement(children: .contain)
+        .accessibilityActions {
+            if !isBusy {
+                ForEach(availableActions, id: \.self) { action in
+                    Button(action.label) { perform(action) }
+                }
+            }
+        }
         .contextMenu {
             ForEach(availableActions, id: \.self) { action in
                 Button(action.label, systemImage: action.systemImage) { perform(action) }
@@ -342,6 +363,7 @@ private struct DockerContainerRow: View {
                         Label(action.label, systemImage: action.systemImage)
                     }
                     .compatGlassIconButton(controlSize: .small)
+                    .focused($focusedAction, equals: action)
                     .help(action.label)
                 }
             }

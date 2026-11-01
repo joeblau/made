@@ -93,6 +93,8 @@ struct TerminalFastCommandToolbarActions: View {
             }
             .disabled(activeAction != nil || executableCommand == nil)
             .help("Stop the active process and run this command")
+            // Icon-only (and a spinner while busy), so name it explicitly.
+            .accessibilityLabel("Run Fast Command")
             .accessibilityIdentifier("terminal.fast-command.play")
 
             Button(action: stop) {
@@ -101,6 +103,7 @@ struct TerminalFastCommandToolbarActions: View {
             // Nothing to stop when the terminal sits at a shell prompt.
             .disabled(activeAction != nil || activity != .running)
             .help("Stop the active terminal process")
+            .accessibilityLabel("Stop Terminal Process")
             .accessibilityIdentifier("terminal.fast-command.stop")
         }
         .controlGroupStyle(.navigation)

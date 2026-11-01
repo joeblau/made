@@ -24,8 +24,11 @@ struct WorkspacePaneLauncher: View {
         }
         // Slots stay unglazed inside the one glass capsule (no glass on
         // glass); each gets a circular hover wash and press feedback (BTN-5).
+        // Menus use the button menu style, so they pick up the same plain
+        // button style as their sibling slots (the deprecated borderless
+        // menu style would bypass it).
         .buttonStyle(.plain)
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
         .padding(.horizontal, Self.highlightInset)
         // Not `.interactive()`: the capsule is a container for the slots, not
         // a control, so a click on one slot should not flex the whole cluster.
@@ -203,7 +206,8 @@ private extension View {
 }
 
 /// Circular hover wash for one launcher slot. Works for both the plain
-/// buttons and the borderless menus, so every slot responds the same way.
+/// buttons and the plain button-style menus, so every slot responds the
+/// same way.
 private struct LauncherSlotHover: ViewModifier {
     @Environment(\.isEnabled) private var isEnabled
     @State private var isHovered = false

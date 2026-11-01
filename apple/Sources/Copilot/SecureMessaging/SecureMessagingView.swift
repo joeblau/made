@@ -93,8 +93,10 @@ struct SecureMessagingView: View {
     private var pairingSection: some View {
         Section {
             // Persistent labels above each field; placeholders are only an
-            // instruction or a bare example (FORM-1/FORM-2). Fields keep the
-            // system Form styling.
+            // instruction or a bare example (FORM-1/FORM-2). Each field is a
+            // Liquid Glass field with a focus ring (FORM-4), matching the
+            // bezeled fields of Cockpit's Secure Messaging form instead of
+            // bare text in the row.
             labeledField("Peer public key") {
                 TextField(
                     "Peer public key",
@@ -106,11 +108,13 @@ struct SecureMessagingView: View {
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .lineLimit(1...3)
+                .liquidGlassField(multiline: true)
             }
             labeledField("Pairing token") {
                 TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
+                    .liquidGlassField()
             }
             Button("Generate secure pairing token") { generateToken() }
             labeledField("Rendezvous URL") {
@@ -118,6 +122,7 @@ struct SecureMessagingView: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .keyboardType(.URL)
+                    .liquidGlassField()
             }
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
 
@@ -143,6 +148,7 @@ struct SecureMessagingView: View {
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 TextField("Message", text: $outgoing)
                     .onSubmit(send)
+                    .liquidGlassField()
                 // Connect is hidden while connected, so Send is the view's one
                 // prominent action (BTN-1): a circular glass icon button in the
                 // Messages idiom. A non-default style also keeps the Form from
