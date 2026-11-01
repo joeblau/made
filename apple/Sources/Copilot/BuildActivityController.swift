@@ -23,6 +23,16 @@ final class BuildActivityController {
     @ObservationIgnored private var tokenTask: Task<Void, Never>?
     @ObservationIgnored private var stateTask: Task<Void, Never>?
     @ObservationIgnored private var contentTask: Task<Void, Never>?
+    @ObservationIgnored private let peerKeyProvider: () -> String?
+
+    /// `peerKey` is injectable for tests; production reads the Keychain pin.
+    init(peerKey: @escaping () -> String? = DeviceIdentity.peerPublicKeyBase64) {
+        self.peerKeyProvider = peerKey
+    }
+
+    /// The paired Cockpit key, or `nil` when unpaired. Normalized again so an
+    /// empty or malformed value can never bind or match a monitor record.
+    private var pairedPeerKey: String? { DeviceIdentity.pairedPeerPublicKey(peerKeyProvider()) }
 
     func restore() {
         guard activity == nil else { return }
@@ -31,7 +41,7 @@ final class BuildActivityController {
             Task { for orphan in activities { await orphan.end(nil, dismissalPolicy: .immediate) } }
             return
         }
-        guard record.expiresAt > Date(), record.peerKey == DeviceIdentity.peerPublicKeyBase64(),
+        guard record.expiresAt > Date(), record.peerKey == pairedPeerKey,
               let existing = Activity<BuildActivityAttributes>.activities.first(where: { $0.id == record.activityID }),
               existing.activityState == .active || existing.activityState == .stale else {
             BuildMonitorStorage.clear()
@@ -80,12 +90,13 @@ final class BuildActivityController {
     func follow(_ run: BuildWorkflowRun, connected: Bool) async {
         guard !isStarting else { return }
         guard connected else { message = "Connect to Cockpit to follow a build."; return }
+        guard let peerKey = pairedPeerKey else { message = "Pair Walkie with Cockpit to follow a build."; return }
         guard !run.state.isComplete else { message = "This run has already finished."; return }
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             message = "Enable Live Activities for Walkie in Settings to follow builds."
             return
         }
-        guard let capability = BuildActivityRelay.makeCapability(), let peerKey = DeviceIdentity.peerPublicKeyBase64() else { return }
+        guard let capability = BuildActivityRelay.makeCapability() else { return }
         isStarting = true
         defer { isStarting = false }
         await stop()
@@ -109,7 +120,7 @@ final class BuildActivityController {
 
     func connected() {
         guard let saved, !saved.run.state.isComplete else { return }
-        guard saved.peerKey == DeviceIdentity.peerPublicKeyBase64() else {
+        guard saved.peerKey == pairedPeerKey else {
             Task { await stop() }
             return
         }

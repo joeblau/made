@@ -117,6 +117,13 @@ struct SecurePairingStore {
         return PairingSecrets(token: token, peerPublicKey: peer)
     }
 
+    /// The pinned peer key, or `nil` when unpaired. Unlike `PairingSecrets`,
+    /// which keeps the raw text for the secure-messaging form, an empty,
+    /// whitespace-only, or malformed stored value is never reported as a pin.
+    func loadPairedPeerPublicKey() throws -> String? {
+        DeviceIdentity.pairedPeerPublicKey(try loadMigratingLegacy().peerPublicKey)
+    }
+
     func setToken(_ value: String) throws {
         try set(value, account: Self.tokenAccount)
     }

@@ -71,9 +71,21 @@ enum DeviceIdentity {
         try? SecurePairingStore().setPeerPublicKey(base64)
     }
 
-    /// The trusted peer's public key (base64), if one has been synced.
+    /// The trusted peer's public key (base64), or `nil` when nothing is paired.
+    ///
+    /// The pairing store reports a missing pin as an empty string, and the
+    /// secure-messaging form can save arbitrary text into the same slot. Only a
+    /// well-formed X25519 key counts as paired, so callers that bind state to
+    /// the pin (build follow/push) can never match an empty or malformed value.
     static func peerPublicKeyBase64() -> String? {
-        try? SecurePairingStore().loadMigratingLegacy().peerPublicKey
+        try? SecurePairingStore().loadPairedPeerPublicKey()
+    }
+
+    /// Normalize a stored pin: `nil` unless it trims to a valid X25519 key.
+    static func pairedPeerPublicKey(_ stored: String?) -> String? {
+        guard let trimmed = stored?.trimmingCharacters(in: .whitespacesAndNewlines),
+              parsePeerPublicKey(trimmed) != nil else { return nil }
+        return trimmed
     }
 
     /// Parse a peer's shared base64 public key back into a CryptoKit key, or

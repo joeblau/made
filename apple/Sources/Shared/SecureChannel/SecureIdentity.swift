@@ -61,12 +61,10 @@ final class SecureIdentity {
         peerPublicKey = Self.storedPeerPublicKey()
     }
 
-    /// The pairing store reports "no peer" as an empty string. Treat that as
-    /// unpaired so Settings shows "Waiting to sync…" instead of a "Synced"
-    /// badge over a blank key.
+    /// `DeviceIdentity` reports an empty or malformed pin as `nil`, so Settings
+    /// shows "Waiting to sync…" instead of a "Synced" badge over a blank key.
     private static func storedPeerPublicKey() -> String? {
-        guard let key = DeviceIdentity.peerPublicKeyBase64(), !key.isEmpty else { return nil }
-        return key
+        DeviceIdentity.peerPublicKeyBase64()
     }
 
     /// Generate a fresh identity key and push it to the peer.
