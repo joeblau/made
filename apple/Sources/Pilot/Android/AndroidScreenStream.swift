@@ -60,6 +60,9 @@ final class AndroidScreenStream: @unchecked Sendable {
     /// Set after a backpressure drop or renderer flush: the decoder is missing
     /// references, so non-IDR frames are skipped until the next sync frame.
     private var awaitingDisplayIDR = false
+    /// Set when a quiet spell flushed the assembler's tail; the next bytes
+    /// show whether that tail was really the end of a frame.
+    private var tailFlushedOnIdle = false
     private var stopped = false
     private var exitReported = false
     private var startedAt: ContinuousClock.Instant?
@@ -67,6 +70,12 @@ final class AndroidScreenStream: @unchecked Sendable {
     /// Bounded stderr tail for failure diagnostics; never parsed for control.
     private var stderrTail = Data()
     private static let stderrTailLimit = 4 * 1_024
+    /// How often an idle stdout reader checks whether the stream has exited.
+    private static let readerPollMilliseconds: Int32 = 250
+    /// How long the pipe must stay quiet before the buffered tail counts as a
+    /// whole frame. Well above the gaps inside one frame's delivery, and only
+    /// paid by the last frame before the screen goes still.
+    private static let idleFlushMilliseconds: Int32 = 100
 
     init(
         layer: AVSampleBufferDisplayLayer,
@@ -138,16 +147,54 @@ final class AndroidScreenStream: @unchecked Sendable {
 
             // Blocking pipe reads live on a dedicated thread, never on the
             // width-limited Swift cooperative pool (the ProcessRunner/GCD
-            // convention). stop()/reportExit close the handle, which unblocks
-            // a wedged read, so the thread always exits.
-            let handle = stdout.fileHandleForReading
+            // convention).
+            //
+            // The read is read(2), not `FileHandle.read(upToCount:)`: on a
+            // pipe that call blocks until the full count or EOF, so frames
+            // waited for 64 KB to pile up. A static screen (an idle emulator
+            // sends one ~34 KB keyframe, then nothing) never got there and
+            // the pane sat on "Connecting…"; low-motion frames arrived in
+            // bursts. read(2) hands over whatever the pipe holds.
+            //
+            // The thread owns a duplicate descriptor, so the handle closing
+            // in reportExit can never hand it a reused descriptor number. It
+            // exits on EOF, or within one poll interval of reportExit if a
+            // child that never wrote is wedged, so it never leaks.
+            //
+            // A quiet spell after data flushes the assembler's buffered tail
+            // (see `flushIdleTail`).
+            let descriptor = dup(stdout.fileHandleForReading.fileDescriptor)
             let reader = Thread { [weak self] in
-                while true {
-                    guard let chunk = try? handle.read(upToCount: 64 * 1_024), !chunk.isEmpty else { break }
+                defer { if descriptor >= 0 { close(descriptor) } }
+                var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+                var readiness = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+                var tailPending = false
+                while descriptor >= 0 {
+                    let timeout = tailPending ? Self.idleFlushMilliseconds : Self.readerPollMilliseconds
+                    let ready = poll(&readiness, 1, timeout)
+                    if ready < 0, errno == EINTR { continue }
+                    guard ready >= 0 else { break }
                     guard let self else { return }
+                    if ready == 0 {
+                        if tailPending {
+                            tailPending = false
+                            self.stateQueue.sync { self.flushIdleTail() }
+                            continue
+                        }
+                        if self.stateQueue.sync(execute: { self.exitReported }) { return }
+                        continue
+                    }
+                    let count = buffer.withUnsafeMutableBytes { bytes in
+                        Darwin.read(descriptor, bytes.baseAddress, bytes.count)
+                    }
+                    if count < 0, errno == EINTR { continue }
+                    guard count > 0 else { break }
+                    let chunk = Data(buffer[0..<count])
                     self.stateQueue.sync { self.consume(chunk) }
+                    tailPending = true
                 }
-                self?.stateQueue.async { self?.handleEOF() }
+                guard let self else { return }
+                self.stateQueue.async { self.handleEOF() }
             }
             reader.name = "app.blau.pilot.android.stream-reader"
             reader.qualityOfService = .userInitiated
@@ -176,11 +223,48 @@ final class AndroidScreenStream: @unchecked Sendable {
 
     private func consume(_ chunk: Data) {
         guard !stopped else { return }
+        if tailFlushedOnIdle {
+            tailFlushedOnIdle = false
+            if !Self.beginsWithStartCode(chunk) {
+                // The quiet spell fell inside a NAL unit, so the frame just
+                // shown was cut short. Drop the rest of it (a fresh assembler
+                // skips to the next start code) and resync on a keyframe.
+                logger.info("idle-flushed frame was incomplete; resyncing")
+                assembler = H264AnnexBAssembler()
+                requestSyncFrame()
+            }
+        }
         do {
             try handle(events: assembler.feed(chunk))
         } catch {
             poison("The device sent an invalid video stream (\(error)).")
         }
+    }
+
+    /// The assembler emits a NAL unit only when the next start code arrives,
+    /// so the newest frame always waited for the following one. screenrecord
+    /// sends nothing while the screen is still, which left the settled frame
+    /// after every change (and the first keyframe of a static screen, so a
+    /// blank pane) undisplayed. When the pipe goes quiet, the buffered tail is
+    /// the end of the last frame: emit it.
+    private func flushIdleTail() {
+        guard !stopped else { return }
+        do {
+            let events = try assembler.flushTrailing()
+            guard !events.isEmpty else { return }
+            tailFlushedOnIdle = true
+            try handle(events: events)
+        } catch {
+            poison("The device sent an invalid video stream (\(error)).")
+        }
+    }
+
+    /// Whether a chunk opens with an Annex-B start code (00 00 01 or
+    /// 00 00 00 01), counting a chunk of only zeros as a split start code.
+    private static func beginsWithStartCode(_ chunk: Data) -> Bool {
+        let head = Array(chunk.prefix(4))
+        if head.starts(with: [0, 0, 1]) || head.starts(with: [0, 0, 0, 1]) { return true }
+        return head.count < 4 && head.allSatisfy { $0 == 0 }
     }
 
     private func handleEOF() {
@@ -216,9 +300,9 @@ final class AndroidScreenStream: @unchecked Sendable {
     private func reportExit(_ exit: AndroidStreamExit) {
         guard !exitReported else { return }
         exitReported = true
-        // Detach the stderr source and close stdout so a reader thread wedged
-        // on a stuck pipe (a child that never wrote) gets unblocked instead
-        // of leaking with the FileHandle.
+        // Detach the stderr source and close stdout. The stdout reader reads
+        // its own descriptor and notices `exitReported` on its next poll, so
+        // a wedged child never leaks the thread.
         stderrHandle?.readabilityHandler = nil
         stderrHandle = nil
         try? stdoutHandle?.close()
