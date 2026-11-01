@@ -144,7 +144,8 @@ private struct ActionsDashboardLockScreen: View {
         ActionsDashboardActivityCard(
             projection: context.state,
             isStale: context.isStale,
-            compact: family == .small
+            compact: family == .small,
+            lockScreen: true
         )
     }
 }
@@ -157,7 +158,8 @@ private struct UsageDashboardLockScreen: View {
         UsageDashboardActivityCard(
             projection: context.state,
             isStale: context.isStale,
-            compact: family == .small
+            compact: family == .small,
+            lockScreen: true
         )
     }
 }
@@ -170,7 +172,8 @@ private struct RunnersDashboardLockScreen: View {
         RunnersDashboardActivityCard(
             projection: context.state,
             isStale: context.isStale,
-            compact: family == .small
+            compact: family == .small,
+            lockScreen: true
         )
     }
 }

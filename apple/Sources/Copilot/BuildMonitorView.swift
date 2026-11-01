@@ -12,9 +12,14 @@ struct BuildMonitorView: View {
                     Section {
                         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
                             runDetails(followed)
-                            if !followed.state.isComplete && followed.state.staleDate < Date() {
-                                Label("Updates delayed. Check that Cockpit is awake and online.", systemImage: "wifi.slash")
-                                    .font(.footnote).foregroundStyle(.secondary)
+                            // Re-checked every 15s, so the warning appears
+                            // while the sheet stays open, not only on the
+                            // next update (MOT-5).
+                            TimelineView(.periodic(from: .now, by: 15)) { context in
+                                if !followed.state.isComplete && followed.state.staleDate < context.date {
+                                    Label("Updates delayed. Check that Cockpit is awake and online.", systemImage: "wifi.slash")
+                                        .font(.footnote).foregroundStyle(.secondary)
+                                }
                             }
                             // Same glass capsule as Follow Build: stopping is
                             // reversible (follow again any time), so it stays
@@ -35,7 +40,13 @@ struct BuildMonitorView: View {
                         if let message = monitor.message { Text(message) }
                     }
                 } else if let message = monitor.message {
-                    Section { Text(message).font(.footnote).foregroundStyle(.secondary) }
+                    // A glyph anchors the status line instead of a bare
+                    // sentence alone in a card (HIER-3).
+                    Section {
+                        Label(message, systemImage: "info.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Section {
                     if monitor.runs.isEmpty {
@@ -54,8 +65,16 @@ struct BuildMonitorView: View {
                         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
                             runDetails(run)
                             if !run.state.isComplete, monitor.followedRun?.id != run.id {
-                                Button("Follow Build", systemImage: "livephoto") {
+                                let canFollow = connected && !monitor.isStarting
+                                Button {
                                     Task { await monitor.follow(run, connected: connected) }
+                                } label: {
+                                    Label("Follow Build", systemImage: "livephoto")
+                                        // Plain `.glass` keeps a full-strength
+                                        // label when disabled, so the
+                                        // disconnected state looked tappable;
+                                        // dim it explicitly (BTN-5).
+                                        .foregroundStyle(canFollow ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                                 }
                                 // Secondary glass control. A non-default style also
                                 // keeps the List from routing taps anywhere in the
@@ -63,7 +82,7 @@ struct BuildMonitorView: View {
                                 .buttonStyle(.glass)
                                 .buttonBorderShape(.capsule)
                                 .controlSize(.small)
-                                .disabled(!connected || monitor.isStarting)
+                                .disabled(!canFollow)
                             }
                         }
                         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
@@ -117,7 +136,13 @@ struct BuildMonitorView: View {
                 }
             }
             .font(.caption)
-            Link("View on GitHub", destination: run.url).font(.caption)
+            // Borderless, so only the link text opens GitHub. With the
+            // default style the List made the whole row its tap target, so a
+            // tap on the row (or on a disabled Follow Build while
+            // disconnected) left Walkie for Safari.
+            Link("View on GitHub", destination: run.url)
+                .font(.caption)
+                .buttonStyle(.borderless)
         }
     }
 }

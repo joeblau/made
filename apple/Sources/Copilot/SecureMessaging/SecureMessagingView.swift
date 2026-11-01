@@ -18,6 +18,7 @@ struct SecureMessagingView: View {
     @State private var transport: SecureChannelTransport?
     @State private var outgoing = ""
     @State private var errorMessage: String?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var myPublicKey: String { DeviceIdentity.publicKeyBase64() ?? "—" }
     private let pairingStore = SecurePairingStore()
@@ -34,6 +35,10 @@ struct SecureMessagingView: View {
                 logSection(transport)
             }
         }
+        // The multi-line peer-key field turns Return into a newline, so a
+        // drag down is the way to put the keyboard away and reveal the
+        // field's inline error and Connect (FORM-4).
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Secure Messaging")
         .navigationBarTitleDisplayMode(.inline)
         .task { loadPairingSecrets() }
@@ -109,6 +114,18 @@ struct SecureMessagingView: View {
                 .autocorrectionDisabled()
                 .lineLimit(1...3)
                 .liquidGlassField(multiline: true)
+                // Error state on the field itself, not only in the helper
+                // line below it (FORM-4). Same shape as the glass and its
+                // focus ring.
+                .overlay {
+                    ConcentricRectangle(
+                        corners: .concentric(minimum: .fixed(LiquidGlassMetrics.Radius.field)),
+                        isUniform: true
+                    )
+                    .stroke(.red, lineWidth: 1.5)
+                    .opacity(peerKeyError == nil ? 0 : 1)
+                    .allowsHitTesting(false)
+                }
             }
             labeledField("Pairing token") {
                 TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))
@@ -116,7 +133,27 @@ struct SecureMessagingView: View {
                     .autocorrectionDisabled()
                     .liquidGlassField()
             }
-            Button("Generate secure pairing token") { generateToken() }
+            // Secondary glass beside the token it fills (BTN-1); a
+            // non-default style also keeps the row from routing every tap
+            // in it to this button.
+            // "Generate Token" under the Pairing token label: the shorter
+            // verb label no longer hyphenates mid-word at accessibility
+            // sizes (BTN-2, TYPE-4); the full name stays for VoiceOver.
+            Button {
+                generateToken()
+            } label: {
+                // At accessibility sizes the glyph would force "Generate" to
+                // break mid-word; the title alone wraps by words.
+                if dynamicTypeSize.isAccessibilitySize {
+                    Text("Generate Token")
+                } else {
+                    Label("Generate Token", systemImage: "key.viewfinder")
+                }
+            }
+            .accessibilityLabel("Generate secure pairing token")
+            .liquidGlassButtonStyle()
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
             labeledField("Rendezvous URL") {
                 TextField("Rendezvous URL", text: $rendezvousURL, prompt: Text(verbatim: "https://rendezvous.blau.app"))
                     .textInputAutocapitalization(.never)
@@ -126,15 +163,32 @@ struct SecureMessagingView: View {
             }
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
 
-            if let transport, !transport.state.isFailed {
-                Button(transport.state == .signaling ? "Cancel connection" : "Disconnect", role: .destructive) {
-                    transport.disconnect()
-                    self.transport = nil
-                }
-            } else {
-                Button("Connect") { connect() }
+            // Connect is the screen's one prominent action (BTN-1, BTN-4);
+            // Disconnect and Cancel are reversible, so neutral glass with
+            // the destructive role's red label.
+            Group {
+                if let transport, !transport.state.isFailed {
+                    Button(role: .destructive) {
+                        transport.disconnect()
+                        self.transport = nil
+                    } label: {
+                        Text(transport.state == .signaling ? "Cancel connection" : "Disconnect")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .liquidGlassButtonStyle()
+                } else {
+                    Button {
+                        connect()
+                    } label: {
+                        Text("Connect")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .liquidGlassButtonStyle(prominent: true)
                     .disabled(!canConnect)
+                }
             }
+            .buttonBorderShape(.capsule)
+            .controlSize(.large)
         } header: {
             Text("Peer")
         } footer: {
@@ -162,6 +216,9 @@ struct SecureMessagingView: View {
             } label: {
                 Label("Send test blob (best-effort)", systemImage: "shippingbox")
             }
+            .liquidGlassButtonStyle()
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
         }
     }
 
@@ -199,10 +256,17 @@ struct SecureMessagingView: View {
             VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                 field()
                 if let error {
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .transition(.opacity)
+                    // The red glyph and field stroke carry the error; the
+                    // footnote copy stays primary, since system red text on
+                    // the light grouped row measures about 3.6:1 (TYPE-3).
+                    Label {
+                        Text(error)
+                    } icon: {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                    .font(.footnote)
+                    .transition(.opacity)
                 }
             }
             .animation(LiquidGlassMetrics.stateChange, value: error)

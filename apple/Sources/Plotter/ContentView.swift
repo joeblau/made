@@ -240,18 +240,23 @@ private struct ConnectionStatusBadge: View {
             // The glyph morphs between states instead of hard-swapping (MOT-4).
             .contentTransition(.symbolEffect(.replace))
             .frame(width: diameter, height: diameter)
-            .glassEffect(.regular.interactive(), in: Circle())
+            // The whole circle is the long-press target, not just the glyph.
+            .contentShape(Circle())
             // Long-press / secondary-click lifts a circle, not a squared-off
             // rectangle, for the context menu preview.
             .contentShape(.contextMenuPreview, Circle())
-            .animation(LiquidGlassMetrics.stateChange, value: connected)
-            .help(connected ? "Connected to Cockpit" : "Searching for Cockpit")
-            .accessibilityLabel(connected ? "Connected to Cockpit" : "Not connected to Cockpit")
+            // Attached inside the glass: with the menu outside it, the glass
+            // layer took the long press and the menu never opened, leaving
+            // Forget Paired Cockpit unreachable.
             .contextMenu {
                 Button("Forget Paired Cockpit", role: .destructive) {
                     mirror.forgetPilot()
                 }
             }
+            .glassEffect(.regular.interactive(), in: Circle())
+            .animation(LiquidGlassMetrics.stateChange, value: connected)
+            .help(connected ? "Connected to Cockpit" : "Searching for Cockpit")
+            .accessibilityLabel(connected ? "Connected to Cockpit" : "Not connected to Cockpit")
     }
 }
 
@@ -265,20 +270,16 @@ private struct SearchingOverlay: View {
         let isSearching = mirror.frameCount == 0
         ZStack {
             if isSearching {
-                ContentUnavailableView {
-                    Label {
-                        Text("Searching for Cockpit")
-                    } icon: {
-                        // The antenna pulses outward while searching: the one
-                        // designed loading motion (MOT-5, MOT-3), replacing a
-                        // second competing spinner. Opacity-only, so it stays
-                        // calm with Reduce Motion.
-                        Image(systemName: "antenna.radiowaves.left.and.right")
-                            .symbolEffect(.variableColor.iterative)
-                    }
-                } description: {
-                    Text("Make sure Cockpit is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
+                // At large accessibility sizes the message is taller than
+                // the band between the floating clusters (top) and the
+                // PencilKit palette (bottom): it scrolls inside that band
+                // instead of running under both (TYPE-4).
+                ViewThatFits(in: .vertical) {
+                    placeholder
+                    ScrollView { placeholder }
                 }
+                .padding(.top, Self.topClearance)
+                .padding(.bottom, Self.bottomClearance)
                 // The mirror stage is always black (a video surface), so the
                 // placeholder must stay light-on-dark regardless of system mode.
                 .environment(\.colorScheme, .dark)
@@ -289,6 +290,32 @@ private struct SearchingOverlay: View {
         // cut (MOT-1 context transition). Keyed on the Bool, so per-frame
         // `frameCount` ticks never start an animation.
         .animation(LiquidGlassMetrics.stateChange, value: isSearching)
+    }
+
+    /// Below the floating clusters (48pt circles, 12pt inset, 8pt gap).
+    private static let topClearance: CGFloat = 72
+    /// Above the PencilKit tool palette docked at the bottom edge.
+    private static let bottomClearance: CGFloat = 104
+
+    private var placeholder: some View {
+        ContentUnavailableView {
+            Label {
+                Text("Searching for Cockpit")
+            } icon: {
+                // The antenna pulses outward while searching: the one
+                // designed loading motion (MOT-5, MOT-3), replacing a
+                // second competing spinner. Opacity-only, so it stays
+                // calm with Reduce Motion.
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .symbolEffect(.variableColor.iterative)
+            }
+        } description: {
+            Text("Make sure Cockpit is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
+        }
+        // A readable measure on a wide iPad stage: the centered
+        // description wraps to a few short lines instead of one
+        // 110-character line (LAY-6, TYPE-1).
+        .frame(maxWidth: 560)
     }
 }
 

@@ -69,6 +69,14 @@ final class CopilotDashboardModel {
         updateActivities(for: received)
     }
 
+    #if DEBUG
+    /// Screenshot fixture (`-demoMode YES -demoScenario storageError` only):
+    /// shows the save-failure caution without breaking the app group.
+    func applyDemoPersistenceError() {
+        persistenceError = "Some dashboard data could not be saved for relaunch. Last-good data remains available."
+    }
+    #endif
+
     func restoreActivities() {
         activities?.restore()
         updateActivities(for: DashboardFamily.allCases)

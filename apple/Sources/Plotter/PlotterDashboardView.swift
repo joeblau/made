@@ -58,7 +58,7 @@ struct PlotterDashboardView: View {
     }
 
     private var connectionStatus: some View {
-        let connected = mirror.isCockpitConnected || mirror.isDemoMode
+        let connected = mirror.isCockpitConnected || mirror.isDemoConnected
         // Green marks only the state glyph; the sentence stays secondary text
         // so it keeps body contrast on the grouped background.
         return Label {

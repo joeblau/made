@@ -19,31 +19,34 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            VStack {
-                gestureDisplay
-                    .frame(maxHeight: .infinity)
-                Text(sessionDelegate.deliveryStatus)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    // Delivery state cross-fades instead of hard-cutting (MOT-4).
-                    .contentTransition(.opacity)
-                    .animation(.easeOut(duration: 0.15), value: sessionDelegate.deliveryStatus)
-            }
-            .navigationTitle("Trigger")
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(isConnected ? .green : .red)
-                        .frame(width: 8, height: 8)
-                        // The adjacent text already speaks the state.
-                        .accessibilityHidden(true)
-                    Text(isConnected ? "Walkie Connected" : "Walkie Disconnected")
+            // One scrolling column instead of a fixed stack plus a pinned
+            // footer: at accessibility sizes the fixed stack pushed the
+            // gesture glyph up under the "Trigger" title, and a pinned
+            // footer overlapped the delivery line (TYPE-4).
+            ScrollView {
+                VStack {
+                    gestureDisplay
+                    Text(sessionDelegate.deliveryStatus)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        // Delivery state cross-fades instead of hard-cutting (MOT-4).
+                        .contentTransition(.opacity)
+                        .animation(.easeOut(duration: 0.15), value: sessionDelegate.deliveryStatus)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(isConnected ? .green : .red)
+                            .frame(width: 8, height: 8)
+                            // The adjacent text already speaks the state.
+                            .accessibilityHidden(true)
+                        Text(isConnected ? "Walkie Connected" : "Walkie Disconnected")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
             }
+            .navigationTitle("Trigger")
             .onAppear {
                 if isDemoMode {
                     currentGesture = "Double Pinch"

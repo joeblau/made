@@ -68,7 +68,8 @@ struct PlotterLiveActivity: Widget {
     @ViewBuilder
     private func thumbnail(side: CGFloat) -> some View {
         let shape = RoundedRectangle(cornerRadius: Self.thumbnailRadius, style: .continuous)
-        if let data = PlotterSnapshotStore.readImageData(), let image = UIImage(data: data) {
+        if let data = PlotterSnapshotStore.readImageData(),
+           let image = PlotterSnapshotImage.thumbnail(data, maxPixelSize: PlotterSnapshotImage.activityMaxPixelSize) {
             Image(uiImage: image)
                 .resizable()
                 .aspectRatio(contentMode: .fill)

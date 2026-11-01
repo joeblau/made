@@ -177,6 +177,14 @@ public final class DashboardActivityController: ObservableObject {
         await activity.update(ActivityContent(state: projection, staleDate: projection.staleDate))
     }
 
+    #if DEBUG
+    /// Screenshot fixture for demo builds only: shows the error that a start
+    /// with Live Activities turned off would publish.
+    public func applyDemoActivitiesDisabledError() {
+        lastError = DashboardActivityError.activitiesDisabled.errorDescription
+    }
+    #endif
+
     private func requireAuthorization() throws {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else {
             let error = DashboardActivityError.activitiesDisabled

@@ -1,5 +1,32 @@
+import ImageIO
 import WidgetKit
 import SwiftUI
+
+/// Decodes the mirrored still for a widget or Live Activity at a bounded
+/// size. WidgetKit refuses to archive an image larger than its family's pixel
+/// budget (about 423k pixels for a small widget) and then shows only the
+/// redacted placeholder; the still comes from the peer, so its size is not
+/// ours to trust. ImageIO's thumbnail path also avoids decoding the full
+/// frame in the extension's small memory budget.
+enum PlotterSnapshotImage {
+    static func thumbnail(_ data: Data, maxPixelSize: Int) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return UIImage(cgImage: image)
+    }
+
+    /// Long side for home-screen widgets: 640x400 for a 16:10 frame, and a
+    /// tall frame still fits the small family's budget.
+    static let widgetMaxPixelSize = 640
+    /// Long side for the Live Activity thumbnail (at most about 84x52pt).
+    static let activityMaxPixelSize = 320
+}
 
 /// Home/lock-screen widget showing the most recent frame Plotter received from
 /// the connected Mac, plus connection status. Static (refreshed on the system
@@ -62,7 +89,8 @@ struct PlotterSnapshotView: View {
         // status line past the leading edge).
         Color.clear
             .overlay {
-                if let data = entry.imageData, let image = UIImage(data: data) {
+                if let data = entry.imageData,
+                   let image = PlotterSnapshotImage.thumbnail(data, maxPixelSize: PlotterSnapshotImage.widgetMaxPixelSize) {
                     Image(uiImage: image)
                         .resizable()
                         .widgetAccentedRenderingMode(.accentedDesaturated)

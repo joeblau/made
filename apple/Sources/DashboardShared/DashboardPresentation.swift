@@ -212,6 +212,9 @@ public struct ActionsDashboardActivityCard: View {
     private let isStale: Bool
     private let compact: Bool
     private let islandExpanded: Bool
+    /// The Lock Screen banner: a fixed 160pt-tall card, so the row list is
+    /// trimmed to what fits under the header and any status lines.
+    private let lockScreen: Bool
 
     /// - Parameter islandExpanded: The expanded Dynamic Island's bottom
     ///   region, whose leading/trailing regions already show the family title
@@ -223,12 +226,14 @@ public struct ActionsDashboardActivityCard: View {
         projection: ActionsDashboardActivityProjection,
         isStale: Bool = false,
         compact: Bool = false,
-        islandExpanded: Bool = false
+        islandExpanded: Bool = false,
+        lockScreen: Bool = false
     ) {
         self.projection = projection
         self.isStale = isStale
         self.compact = compact
         self.islandExpanded = islandExpanded
+        self.lockScreen = lockScreen
     }
 
     public var body: some View {
@@ -251,7 +256,10 @@ public struct ActionsDashboardActivityCard: View {
                 DashboardStaleLabel()
             }
             if !compact {
-                ForEach(DashboardActivityLayout.rows(projection.runs, islandExpanded: islandExpanded), id: \.id) { run in
+                ForEach(DashboardActivityLayout.rows(
+                    projection.runs, islandExpanded: islandExpanded,
+                    lockScreenStatusLines: lockScreen ? (isStale ? 1 : 0) : nil
+                ), id: \.id) { run in
                     DashboardRunRow(run: run, detail: DashboardActivityLayout.rowDetail(islandExpanded: islandExpanded))
                 }
             }
@@ -265,6 +273,9 @@ public struct UsageDashboardActivityCard: View {
     private let isStale: Bool
     private let compact: Bool
     private let islandExpanded: Bool
+    /// The Lock Screen banner: a fixed 160pt-tall card, so the row list is
+    /// trimmed to what fits under the header and any status lines.
+    private let lockScreen: Bool
 
     /// - Parameter islandExpanded: The expanded Dynamic Island's bottom
     ///   region, whose leading/trailing regions already show the family title
@@ -276,12 +287,14 @@ public struct UsageDashboardActivityCard: View {
         projection: UsageDashboardActivityProjection,
         isStale: Bool = false,
         compact: Bool = false,
-        islandExpanded: Bool = false
+        islandExpanded: Bool = false,
+        lockScreen: Bool = false
     ) {
         self.projection = projection
         self.isStale = isStale
         self.compact = compact
         self.islandExpanded = islandExpanded
+        self.lockScreen = lockScreen
     }
 
     public var body: some View {
@@ -296,7 +309,11 @@ public struct UsageDashboardActivityCard: View {
                 DashboardStaleLabel()
             }
             if !compact {
-                ForEach(DashboardActivityLayout.rows(projection.providers, islandExpanded: islandExpanded), id: \.id) { provider in
+                ForEach(DashboardActivityLayout.rows(
+                    projection.providers, islandExpanded: islandExpanded,
+                    lockScreenStatusLines: lockScreen
+                        ? (isStale ? 1 : 0) + (projection.hasUnpricedModels ? 1 : 0) : nil
+                ), id: \.id) { provider in
                     DashboardProviderRow(provider: provider, detail: DashboardActivityLayout.rowDetail(islandExpanded: islandExpanded))
                 }
             }
@@ -329,6 +346,9 @@ public struct RunnersDashboardActivityCard: View {
     private let isStale: Bool
     private let compact: Bool
     private let islandExpanded: Bool
+    /// The Lock Screen banner: a fixed 160pt-tall card, so the row list is
+    /// trimmed to what fits under the header and any status lines.
+    private let lockScreen: Bool
 
     /// - Parameter islandExpanded: The expanded Dynamic Island's bottom
     ///   region, whose leading/trailing regions already show the family title
@@ -340,12 +360,14 @@ public struct RunnersDashboardActivityCard: View {
         projection: RunnersDashboardActivityProjection,
         isStale: Bool = false,
         compact: Bool = false,
-        islandExpanded: Bool = false
+        islandExpanded: Bool = false,
+        lockScreen: Bool = false
     ) {
         self.projection = projection
         self.isStale = isStale
         self.compact = compact
         self.islandExpanded = islandExpanded
+        self.lockScreen = lockScreen
     }
 
     public var body: some View {
@@ -382,7 +404,11 @@ public struct RunnersDashboardActivityCard: View {
                 DashboardStaleLabel()
             }
             if !compact {
-                ForEach(DashboardActivityLayout.rows(projection.runners, islandExpanded: islandExpanded), id: \.id) { runner in
+                // The busy/offline line always shows, so it counts as one.
+                ForEach(DashboardActivityLayout.rows(
+                    projection.runners, islandExpanded: islandExpanded,
+                    lockScreenStatusLines: lockScreen ? 1 + (isStale ? 1 : 0) : nil
+                ), id: \.id) { runner in
                     DashboardRunnerRow(runner: runner, detail: DashboardActivityLayout.rowDetail(islandExpanded: islandExpanded))
                 }
             }
@@ -413,8 +439,21 @@ enum DashboardActivityLayout {
         islandExpanded ? .inline : .stacked
     }
 
-    static func rows<Row>(_ rows: [Row], islandExpanded: Bool) -> [Row] {
-        islandExpanded ? Array(rows.prefix(islandRowLimit)) : rows
+    /// Two-line rows that fit the 160pt Lock Screen card under its header
+    /// when no status line is showing.
+    static let lockScreenRowLimit = 2
+
+    /// - Parameter lockScreenStatusLines: On the Lock Screen, how many status
+    ///   lines (stale, partial estimate, busy/offline) sit above the rows;
+    ///   each one costs a row, down to one. `nil` elsewhere (the in-app
+    ///   panels show every row). Without this the Runners card ran past the
+    ///   fixed card height and lost its top and bottom padding (LAY-3).
+    static func rows<Row>(_ rows: [Row], islandExpanded: Bool, lockScreenStatusLines: Int? = nil) -> [Row] {
+        if islandExpanded { return Array(rows.prefix(islandRowLimit)) }
+        if let lines = lockScreenStatusLines {
+            return Array(rows.prefix(max(1, lockScreenRowLimit - lines)))
+        }
+        return rows
     }
 }
 
@@ -599,10 +638,32 @@ private struct DashboardStatusLabel: View {
 }
 
 private struct DashboardEmptyView: View {
+    @Environment(\.widgetFamily) private var family
     let title: String
     let detail: String
 
     var body: some View {
+        if family == .systemLarge {
+            // A large widget is mostly empty space before the first sync:
+            // anchor the message with a glyph and sit it in the middle of
+            // that space instead of a two-line note under the header with
+            // three quarters of the widget blank (MOT-6, HIER-3). Text stays
+            // leading-aligned (TYPE-1).
+            VStack(alignment: .leading, spacing: 8) {
+                Image(systemName: "tray")
+                    .font(.title2)
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+                message
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        } else {
+            message
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var message: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
                 .font(.subheadline)
@@ -612,7 +673,6 @@ private struct DashboardEmptyView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
