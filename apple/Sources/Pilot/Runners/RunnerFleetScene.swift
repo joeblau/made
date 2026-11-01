@@ -250,7 +250,6 @@ final class RunnerFleetScene {
         // from the right keeps the far sides from going flat black.
         scene.rootNode.addChildNode(Self.light(.directional, intensity: 1_400, color: NSColor(red: 1, green: 0.8, blue: 0.5, alpha: 1), from: SIMD3(-100, 24, 16)))
         scene.rootNode.addChildNode(Self.light(.directional, intensity: 380, color: NSColor(red: 0.4, green: 0.55, blue: 1, alpha: 1), from: SIMD3(100, 22, 10)))
-        scene.rootNode.addChildNode(Self.light(.directional, intensity: 260, color: NSColor(red: 0.55, green: 0.65, blue: 1, alpha: 1), angles: SIMD3(-0.6, 0.4, 0)))
         scene.rootNode.addChildNode(Self.light(.ambient, intensity: 60, color: NSColor(red: 0.25, green: 0.32, blue: 0.6, alpha: 1), angles: .zero))
 
         scene.rootNode.addChildNode(makeFloor())
@@ -480,6 +479,18 @@ private final class RunnerNode {
         return material
     }()
     private let cableMaterial = SCNMaterial()
+    /// A wide additive tube around a busy cable: the soft glow of a lit fibre.
+    private let sleeve = SCNNode()
+    private let sleeveMaterial: SCNMaterial = {
+        let material = SCNMaterial()
+        material.lightingModel = .constant
+        material.diffuse.contents = NSColor.black
+        material.blendMode = .add
+        material.writesToDepthBuffer = false
+        return material
+    }()
+    /// Holds the moving packets so they can be cleared without touching the sleeve.
+    private let packets = SCNNode()
     private let glowMaterial = FleetTextures.additive(color: .systemBlue)
     private var path: [SIMD3<Float>] = []
     private var color = NSColor.systemBlue
@@ -524,6 +535,9 @@ private final class RunnerNode {
         label.renderingOrder = 10
         label.categoryBitMask = RunnerFleetScene.pickableCategory
         for node in [glow, shadow, model, label, spill] { root.addChildNode(node) }
+        sleeve.renderingOrder = 2
+        cable.addChildNode(sleeve)
+        cable.addChildNode(packets)
     }
 
     func remove() {
@@ -537,6 +551,8 @@ private final class RunnerNode {
         self.color = color
         cable.geometry = FleetGeometry.tube(along: path, radius: 0.22)
         cable.geometry?.firstMaterial = cableMaterial
+        sleeve.geometry = FleetGeometry.tube(along: path, radius: 0.75, sides: 10)
+        sleeve.geometry?.firstMaterial = sleeveMaterial
     }
 
     func apply(_ item: RunnerFleetItem, animates: Bool) {
@@ -549,25 +565,30 @@ private final class RunnerNode {
         // Cables stay dark gray until data flows, so the lit ones are the working ones.
         switch item.state {
         case .busy:
+            // Well past the bloom threshold so the fibre itself glows.
             cableMaterial.emission.contents = color
-            cableMaterial.emission.intensity = 2.2
+            cableMaterial.emission.intensity = 5
+            sleeveMaterial.emission.contents = color
+            sleeve.opacity = 0.26
             glowMaterial.multiply.contents = color
             glow.opacity = 0.7
             spill.light?.color = color
-            spill.light?.intensity = 35
+            spill.light?.intensity = 60
         case .idle:
             cableMaterial.emission.contents = NSColor(white: 0.24, alpha: 1)
             cableMaterial.emission.intensity = 1
+            sleeve.opacity = 0
             glow.opacity = 0
             spill.light?.intensity = 0
         case .offline:
             cableMaterial.emission.contents = NSColor(white: 0.12, alpha: 1)
             cableMaterial.emission.intensity = 1
+            sleeve.opacity = 0
             glow.opacity = 0
             spill.light?.intensity = 0
         }
 
-        cable.childNodes.forEach { $0.removeFromParentNode() }
+        packets.childNodes.forEach { $0.removeFromParentNode() }
         if item.state == .busy, animates { addPackets() }
 
         if item.name != self.item?.name || item.state != self.item?.state {
@@ -628,6 +649,8 @@ private final class RunnerNode {
     }
 
     /// Job traffic flows down from GitHub; one return packet carries logs back up.
+    /// Each packet glows in its colour and carries a short-range light, so its
+    /// glow plays across the cases it passes and arrives at.
     private func addPackets() {
         guard path.count > 1 else { return }
         var keyTimes: [NSNumber] = [0]
@@ -643,7 +666,9 @@ private final class RunnerNode {
         let up = Array(down.reversed())
         let upTimes = keyTimes.reversed().map { NSNumber(value: 1 - $0.floatValue) }
         let flows: [(values: [NSValue], times: [NSNumber], color: NSColor, phase: Double)] = [
-            (down, keyTimes, color, 0), (down, keyTimes, color, 0.34), (down, keyTimes, .white, 0.67),
+            (down, keyTimes, color, 0), (down, keyTimes, color, 0.34),
+            // A pale tint of the cable colour rather than pure white, so its light reflects in colour.
+            (down, keyTimes, color.blended(withFraction: 0.6, of: .white) ?? .white, 0.67),
             (up, upTimes, NSColor(red: 0.85, green: 0.4, blue: 1, alpha: 1), 0.5),
         ]
         for flow in flows {
@@ -652,8 +677,23 @@ private final class RunnerNode {
             material.lightingModel = .constant
             material.diffuse.contents = NSColor.black
             material.emission.contents = flow.color
-            material.emission.intensity = 3
+            material.emission.intensity = 6
             packet.geometry?.materials = [material]
+
+            let halo = SCNNode(geometry: SCNPlane(width: 3.4, height: 3.4))
+            halo.geometry?.firstMaterial = FleetTextures.additive(color: flow.color)
+            halo.simdEulerAngles = SIMD3(-RunnerFleetLayout.pitch, 0, 0)
+            halo.opacity = 0.85
+            packet.addChildNode(halo)
+
+            let light = SCNLight()
+            light.type = .omni
+            light.color = flow.color
+            light.intensity = 130
+            light.attenuationStartDistance = 0.5
+            light.attenuationEndDistance = 9
+            light.attenuationFalloffExponent = 2
+            packet.light = light
             let animation = CAKeyframeAnimation(keyPath: "position")
             animation.values = flow.values
             animation.keyTimes = flow.times
@@ -661,7 +701,7 @@ private final class RunnerNode {
             animation.repeatCount = .infinity
             animation.timeOffset = duration * flow.phase
             packet.addAnimation(SCNAnimation(caAnimation: animation), forKey: "flow")
-            cable.addChildNode(packet)
+            packets.addChildNode(packet)
         }
     }
 }
