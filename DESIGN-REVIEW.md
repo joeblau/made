@@ -173,6 +173,23 @@ Cockpit was run with `-demoMode YES` inside a tart macOS 26.6 VM. The guest wind
 
 Not reachable in the VM: populated data states (no agent logs, container engine, or gh auth in the guest), live device and simulator streams, a live remote-desktop session, and the Chromium find bar.
 
+### Populated-data pass (real glass and simulators)
+
+Cockpit ran in the macOS 26 VM with guest-only fixtures: synthetic Claude, Codex, Grok, and Kimi session logs, a stand-in `gh` answering exactly the calls Cockpit makes, a fake Docker Engine socket, HTTPS stand-ins for the Claude and Codex usage endpoints, and a live Screen Sharing session to the guest itself. Walkie and Kneeboard ran in the iPhone and iPad simulators with dashboard and build fixtures in their app-group containers, in light, dark, and AX3. Each pass had a reviewer and an independent critic, and every fix was re-captured.
+
+- Contrast (TYPE-3): tinted text on its own tint wash measured about 2:1. Runner status, the plan badges, the terminal agent badge, and the unpriced badge now keep the hue in the dot or wash with primary text. Chart y-axis labels go from 1.85:1 to 3.87:1 in light. Usage meters keep the provider color until 90%.
+- Agentic Use: tooltips no longer clip at the chart edge; sub-dollar axes read `$0.05`; the metric picker no longer slides with the title width; KPI captions align across cards; Token Flow groups models by provider (covered by a test).
+- Inspector, Docker, and Runners: Actions SHAs never wrap and the metadata degrades gracefully; Docker port columns line up; runner labels do not break at hyphens; the edit button no longer fights the hover popover; filter results read "N of M runners".
+- Remote Desktop: the selected tile header is legible over the live session, and the connect form fits short tiles.
+- Walkie and Kneeboard dashboards (DashboardShared): headers, status glyphs, row subtitles, and metric columns adapt at accessibility sizes instead of truncating or overlapping. Stop Live Activity is neutral glass in both apps, and the segment reads "AI Usage" everywhere.
+- Walkie build monitor: Stop Following is a glass action, no doubled "Queued", and a tighter status row.
+- Walkie Settings: an empty stored peer key no longer shows a "Synced" badge. This is display only; pinning still reads `DeviceIdentity` directly.
+- Kneeboard: the PencilKit tool picker hides while a sheet is up. The floating glass cluster uses the UIKit corner-adapted safe area (`.safeArea(cornerAdaptation: .horizontal)`), so in a resized iPadOS window it starts clear of the window controls. The annotation toolbar moves to a second row when both clusters cannot fit.
+
+Still not reviewable in a VM or simulator: the Runners 3D Fleet (the VM's paravirtual GPU asserts) and live Simulator, Device, and Android streams.
+
+Finding outside design scope: when nothing is paired, the pairing store reports the peer key as an empty string, and `BuildActivityController` and `BuildPushCoordinator` accept it in their `guard let peerKey` checks. Normalizing that belongs to a security-reviewed change, not this pass.
+
 ### Open items from round 1 (resolved above unless noted)
 
 - Glass buttons sit inside floating glass panels in the RemoteComputerPicker (Close, Connect, Open Local Network Settings) and the Chromium find popover. This matches how system popovers and sheets behave on 26, but it is technically glass on glass. Simplifying it would mean the panel buttons use pressable or plain styles, which works against brief item 1. This needs a product decision.
