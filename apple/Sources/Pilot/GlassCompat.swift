@@ -68,6 +68,21 @@ extension View {
     func compatFloatingGlassCapsule() -> some View {
         compatFloatingGlass(in: Capsule())
     }
+
+    /// Icon-only circular glass button with a consistent control size, for
+    /// pane headers and overlay clusters (not toolbar items, which get system
+    /// glass). Label the button with `Label(_:systemImage:)` so VoiceOver
+    /// keeps a name. Delegates to the shared `liquidGlassIconButton`, which
+    /// carries the same pre-26 bordered fallback as the helpers above.
+    ///
+    /// Fields, segmented controls, chips, and pressable rows use the shared
+    /// helpers in Sources/Shared/LiquidGlassStyles.swift directly.
+    func compatGlassIconButton(
+        prominent: Bool = false,
+        controlSize: ControlSize = .regular
+    ) -> some View {
+        liquidGlassIconButton(prominent: prominent, controlSize: controlSize)
+    }
 }
 
 /// `GlassEffectContainer` only coordinates blending between neighboring glass

@@ -24,6 +24,7 @@
 		07F1B6AD12372EFBA3B98E9A /* AgenticUsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67A2B4718DE8059B84367B8 /* AgenticUsageStore.swift */; };
 		08CA454023B86BFAC8BC7CE1 /* PilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B802877FCCBEB9F318728CDD /* PilotApp.swift */; };
 		08DD49F5AAEFF7B638031970 /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */; };
+		08DEECFA8B05625A91F7C904 /* LiquidGlassStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */; };
 		094EF307CA9081D03EE059EC /* SetupPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA88105961B3F738C76B55DB /* SetupPresentationTests.swift */; };
 		0A48AE7E34524871F0A92274 /* CursorUsageHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */; };
 		0ABA4A2179B50C85A13C6EB6 /* PlotterUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6013148EE4B3B5AAC6B3719A /* PlotterUITests.swift */; };
@@ -175,6 +176,7 @@
 		54FF74F77D33065F81075B15 /* WorkspacePaneLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD9ED59C64849CDE587FE6AD /* WorkspacePaneLauncher.swift */; };
 		569D8EF2A35144C395DA8DB2 /* SyncMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C973E585B45DEE04F917F2A9 /* SyncMessages.swift */; };
 		5708B18178578CE2FE2F5881 /* MarkdownStyler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C6547433BE509A5ED8E581 /* MarkdownStyler.swift */; };
+		57749F47853C01624E91F7EE /* LiquidGlassStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */; };
 		58886B09AE38DC7B6664EE86 /* PlotterDashboardStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8489709E6EE5732DBC3AF4 /* PlotterDashboardStateTests.swift */; };
 		58E53056E176FA19B29F600E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16C8820FF1D60784570BE850 /* ContentView.swift */; };
 		5A1338AA5781BDFD987F059E /* PlotterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458E916CF174CE8E23102739 /* PlotterApp.swift */; };
@@ -404,6 +406,7 @@
 		CD7EB08D14A25F6AB172A462 /* DockerHTTPParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E9C030E0F4E4C15C365301F /* DockerHTTPParsingTests.swift */; };
 		CDA0BB613367D8A562152638 /* RemoteDesktopViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A241584504866AF2EDBDBD41 /* RemoteDesktopViewer.swift */; };
 		CDBB0FD5D8F4F4200CF818D4 /* AdbBridgeParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1B563FC6199F022C118B2A /* AdbBridgeParsingTests.swift */; };
+		CEB8B97646E0C940E536641C /* LiquidGlassStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */; };
 		CEBF3C40420A95330345F2F0 /* ReliableMessenger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026F88DA72C107C5BA21FA51 /* ReliableMessenger.swift */; };
 		CED8F47482262495F165BEA8 /* AndroidDeviceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E0AC685082B8093A20DB18 /* AndroidDeviceSession.swift */; };
 		CFBC7A794318D7D45008992C /* BuildActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A16F92DC1036A143A79F04 /* BuildActivityController.swift */; };
@@ -811,6 +814,7 @@
 		6A644070194904025F9F3EDF /* RemoteDesktopGroups.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopGroups.swift; sourceTree = "<group>"; };
 		6D20724997EA356496283A78 /* DeviceCaptureLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCaptureLifecycleTests.swift; sourceTree = "<group>"; };
 		6D4B475DC1B0C35E65E10BF5 /* SnapshotHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotHelper.swift; sourceTree = "<group>"; };
+		6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiquidGlassStyles.swift; sourceTree = "<group>"; };
 		6E9C030E0F4E4C15C365301F /* DockerHTTPParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerHTTPParsingTests.swift; sourceTree = "<group>"; };
 		6FB9DCB7C4FF99FDDF01BB19 /* GitStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatus.swift; sourceTree = "<group>"; };
 		6FD8F6A2DF17BA6E97F4D980 /* AndroidDeviceRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidDeviceRegistry.swift; sourceTree = "<group>"; };
@@ -1632,6 +1636,7 @@
 				BAC3752576097566EE9DE7DB /* FrameLink.swift */,
 				0CFE4E5AA08D63CC728530B3 /* FrameLinkSecurity.swift */,
 				D04BC608D7929CA32C073186 /* FrameProtocol.swift */,
+				6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */,
 				A05EF8C2CD7538ADD56AE2E0 /* PeerSyncAuthentication.swift */,
 				61F680F71ECBB3B7379C90A4 /* PeerSyncReliableSend.swift */,
 				072174CC5D47F85E892E627D /* PeerSyncService.swift */,
@@ -2435,6 +2440,7 @@
 				43EBAA3B6945DB0C4ADEA757 /* InkOverlay.swift in Sources */,
 				CCBB02465ABE4D2516B3C5C2 /* InspectorHelper.swift in Sources */,
 				648566C69FBA74C2E0F0289D /* KimiUsageAdapter.swift in Sources */,
+				08DEECFA8B05625A91F7C904 /* LiquidGlassStyles.swift in Sources */,
 				4BA36EFA60662D0F8E788796 /* LocalServerProbe.swift in Sources */,
 				C5F971A995B51C6C2F4F1A38 /* LocalServerScanner.swift in Sources */,
 				2BEC495AB3F755D4F731A5A2 /* MarkdownImage.swift in Sources */,
@@ -2562,6 +2568,7 @@
 				00112F8A51263248448B9811 /* FrameLink.swift in Sources */,
 				11F1F96A10E11D3CD284EF52 /* FrameLinkSecurity.swift in Sources */,
 				C7F97190E40BB844CBBE098E /* FrameProtocol.swift in Sources */,
+				57749F47853C01624E91F7EE /* LiquidGlassStyles.swift in Sources */,
 				38E44409842397528AE2C39E /* MirrorModel.swift in Sources */,
 				5E5611D4617AA5572F61127D /* NoiseIKHandshake.swift in Sources */,
 				FFBFC7B9B3B069C4A137D3E4 /* PacketCodec.swift in Sources */,
@@ -2864,6 +2871,7 @@
 				9E00C48C604CCF1F81761C5B /* FrameLink.swift in Sources */,
 				B8E191A74EF4F41881F9BDA5 /* FrameLinkSecurity.swift in Sources */,
 				0766FA955D7727EC1A131D7F /* FrameProtocol.swift in Sources */,
+				CEB8B97646E0C940E536641C /* LiquidGlassStyles.swift in Sources */,
 				12F1EDE40C3AA559A29C936D /* NoiseIKHandshake.swift in Sources */,
 				4D1F92AA9BC820F9B2AF22DF /* PacketCodec.swift in Sources */,
 				82FE4C55775067A7B0382928 /* ParakeetTranscriptionSession.swift in Sources */,
