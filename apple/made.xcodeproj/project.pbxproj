@@ -3473,7 +3473,10 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.copilot;
 				PRODUCT_NAME = Copilot;
 				SDKROOT = iphoneos;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = COPILOT;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					COPILOT,
+				);
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Chromium;
@@ -3940,7 +3943,10 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.copilot;
 				PRODUCT_NAME = Copilot;
 				SDKROOT = iphoneos;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = COPILOT;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					COPILOT,
+				);
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
@@ -4101,7 +4107,10 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.blau.copilot;
 				PRODUCT_NAME = Copilot;
 				SDKROOT = iphoneos;
-				SWIFT_ACTIVE_COMPILATION_CONDITIONS = COPILOT;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = (
+					"$(inherited)",
+					COPILOT,
+				);
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
