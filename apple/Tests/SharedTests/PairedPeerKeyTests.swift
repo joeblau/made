@@ -74,6 +74,80 @@ struct PairedPeerKeyTests {
         }
     }
 
+    /// Non-empty text the secure-messaging form must never persist as a pin.
+    static func malformedInputs() -> [String] {
+        let key = validKey()
+        return [
+            "not-a-key",
+            "  garbage \n",
+            Data(count: 31).base64EncodedString(),
+            Data(count: 33).base64EncodedString(),
+            String(key.dropLast()),
+            key + "=",
+            key + "==",
+            "key: \(key)",
+        ]
+    }
+
+    @Test("Form peer-key input: valid saves trimmed, blank clears, malformed is rejected")
+    func peerKeyUpdateDecision() {
+        let key = Self.validKey()
+        #expect(SecurePairingStore.peerKeyUpdate(for: key) == .save(key))
+        #expect(SecurePairingStore.peerKeyUpdate(for: "  \(key)\n") == .save(key))
+        for blank in ["", "   ", "\n\t "] {
+            #expect(SecurePairingStore.peerKeyUpdate(for: blank) == .clear, "\(blank.debugDescription)")
+        }
+        for input in Self.malformedInputs() {
+            #expect(SecurePairingStore.peerKeyUpdate(for: input) == .rejectInvalid, "\(input.debugDescription)")
+        }
+    }
+
+    @Test("Malformed form input never overwrites or clears an existing pin")
+    func malformedInputKeepsExistingPin() throws {
+        try Self.withStore { store, storage, _ throws in
+            let pinned = Self.validKey()
+            try store.setPeerPublicKey(pinned)
+            let before = storage.values[SecurePairingStore.peerAccount]
+            for input in Self.malformedInputs() {
+                #expect(try store.applyPeerKeyInput(input) == .rejectInvalid, "\(input.debugDescription)")
+                #expect(throws: SecurePairingStore.StoreError.self) { try store.setPeerPublicKey(input) }
+                #expect(storage.values[SecurePairingStore.peerAccount] == before, "\(input.debugDescription)")
+                #expect(try store.loadPairedPeerPublicKey() == pinned)
+            }
+        }
+    }
+
+    @Test("Malformed form input on an unpaired device stays unpaired with nothing written")
+    func malformedInputWritesNothing() throws {
+        try Self.withStore { store, storage, _ throws in
+            for input in Self.malformedInputs() {
+                #expect(try store.applyPeerKeyInput(input) == .rejectInvalid)
+                #expect(storage.values[SecurePairingStore.peerAccount] == nil)
+            }
+        }
+    }
+
+    @Test("Form input saves a valid key trimmed and an emptied field unpairs")
+    func formInputSavesTrimmedAndClears() throws {
+        try Self.withStore { store, storage, _ throws in
+            let key = Self.validKey()
+            #expect(try store.applyPeerKeyInput("\n  \(key) \t") == .save(key))
+            #expect(storage.values[SecurePairingStore.peerAccount] == Data(key.utf8))
+            #expect(try store.loadPairedPeerPublicKey() == key)
+
+            let replacement = Self.validKey()
+            #expect(try store.applyPeerKeyInput(replacement) == .save(replacement))
+            #expect(try store.loadPairedPeerPublicKey() == replacement)
+
+            for blank in ["", "   ", "\n\t "] {
+                try store.setPeerPublicKey(key)
+                #expect(try store.applyPeerKeyInput(blank) == .clear, "\(blank.debugDescription)")
+                #expect(storage.values[SecurePairingStore.peerAccount] == nil)
+                #expect(try store.loadPairedPeerPublicKey() == nil)
+            }
+        }
+    }
+
     @Test("Peer sync treats a blank pin exactly like no pin: first pairing needs approval")
     func blankPinStillRequiresExplicitPairing() {
         let candidate = Self.validKey()

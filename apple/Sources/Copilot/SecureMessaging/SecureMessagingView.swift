@@ -97,7 +97,7 @@ struct SecureMessagingView: View {
             // Liquid Glass field with a focus ring (FORM-4), matching the
             // bezeled fields of Cockpit's Secure Messaging form instead of
             // bare text in the row.
-            labeledField("Peer public key") {
+            labeledField("Peer public key", error: peerKeyError) {
                 TextField(
                     "Peer public key",
                     text: $peerKeyInput,
@@ -183,8 +183,10 @@ struct SecureMessagingView: View {
     /// A Form row with a persistent visible label above its field (FORM-1),
     /// label → input at 8pt (FORM-5). The field's own title stays its
     /// VoiceOver label, so the visible label is hidden from accessibility.
+    /// `error`, when set, is shown under the field as its inline error state.
     private func labeledField<Field: View>(
         _ title: LocalizedStringKey,
+        error: String? = nil,
         @ViewBuilder field: () -> Field
     ) -> some View {
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
@@ -192,22 +194,49 @@ struct SecureMessagingView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            field()
+            // Input → helper/error text at 4pt (FORM-5); the error is the
+            // field's designed error state (FORM-4).
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                field()
+                if let error {
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .transition(.opacity)
+                }
+            }
+            .animation(LiquidGlassMetrics.stateChange, value: error)
         }
         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
     }
 
     // MARK: - Actions
 
+    /// Inline validation for the peer key. The slot is the shared device pin
+    /// (also used by PeerSync), so malformed text is never persisted; tell
+    /// the user before they leave the screen. An empty field is not an
+    /// error: it unpairs.
+    private var peerKeyError: String? {
+        SecurePairingStore.peerKeyUpdate(for: peerKeyInput) == .rejectInvalid
+            ? "Not a valid base64 X25519 key. It won't be saved."
+            : nil
+    }
+
+    /// The field's key when it is one the store would pin, else `nil`.
+    private var validPeerKey: String? {
+        guard case .save(let key) = SecurePairingStore.peerKeyUpdate(for: peerKeyInput) else { return nil }
+        return key
+    }
+
     private var canConnect: Bool {
-        DeviceIdentity.parsePeerPublicKey(peerKeyInput) != nil
+        validPeerKey != nil
             && SecurePairingStore.isValidIdentifier(
                 tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
             )
     }
 
     private func connect() {
-        guard let peerKey = DeviceIdentity.parsePeerPublicKey(peerKeyInput) else {
+        guard let pin = validPeerKey, let peerKey = DeviceIdentity.parsePeerPublicKey(pin) else {
             errorMessage = "Peer public key is not a valid base64 X25519 key."
             return
         }
@@ -217,7 +246,7 @@ struct SecureMessagingView: View {
             return
         }
         do {
-            try pairingStore.setPeerPublicKey(peerKeyInput)
+            try pairingStore.setPeerPublicKey(pin)
             try pairingStore.setToken(token)
             let identity = try DeviceIdentity.loadOrCreate()
             let client = try SignalingClient(
@@ -250,7 +279,9 @@ struct SecureMessagingView: View {
 
     private func savePairingSecrets() {
         do {
-            try pairingStore.setPeerPublicKey(peerKeyInput)
+            // Writes only a valid key or clears an emptied field; malformed
+            // text leaves the existing pin untouched (shown inline above).
+            try pairingStore.applyPeerKeyInput(peerKeyInput)
             try pairingStore.setToken(tokenInput)
         } catch {
             errorMessage = "Could not save secure pairing settings."

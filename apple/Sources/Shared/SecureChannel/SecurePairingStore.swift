@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -80,6 +81,8 @@ struct SecurePairingStore {
 
     enum StoreError: Error {
         case invalidEncoding
+        /// Non-empty peer-key text that is not a valid base64 X25519 key.
+        case invalidPeerPublicKey
         case keychain(OSStatus)
         case randomGeneration(OSStatus)
     }
@@ -109,7 +112,11 @@ struct SecurePairingStore {
         if let legacyPeer = defaults.string(forKey: Self.legacyPeerKey) {
             if peer.isEmpty {
                 peer = legacyPeer.trimmingCharacters(in: .whitespacesAndNewlines)
-                try setPeerPublicKey(peer)
+                // Migration copies the legacy value verbatim (unchanged
+                // policy). Readers still normalize it through
+                // `DeviceIdentity.pairedPeerPublicKey`, so a malformed legacy
+                // value loads as unpaired rather than as a pin.
+                try set(peer, account: Self.peerAccount)
             }
             defaults.removeObject(forKey: Self.legacyPeerKey)
         }
@@ -128,8 +135,55 @@ struct SecurePairingStore {
         try set(value, account: Self.tokenAccount)
     }
 
+    /// What saving the secure-messaging form's peer-key text does to the pin.
+    /// The pin is shared with PeerSync/Multipeer, so free text must never
+    /// overwrite it.
+    enum PeerKeyUpdate: Equatable {
+        /// A well-formed X25519 key (trimmed) replaces the pin.
+        case save(String)
+        /// An empty or whitespace-only field removes the pin (unpair).
+        case clear
+        /// Malformed text: nothing is written and the existing pin is kept.
+        case rejectInvalid
+    }
+
+    /// Pure decision for persisting user-entered peer-key text. Only the
+    /// canonical base64 of a 32-byte X25519 key is saved: Foundation's
+    /// decoder tolerates some non-canonical text (e.g. surplus `=` padding),
+    /// which would be a pin that never string-matches the peer's announced
+    /// key, so it is rejected rather than stored.
+    static func peerKeyUpdate(for input: String) -> PeerKeyUpdate {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .clear }
+        guard let key = DeviceIdentity.parsePeerPublicKey(trimmed),
+              key.rawRepresentation.base64EncodedString() == trimmed
+        else { return .rejectInvalid }
+        return .save(trimmed)
+    }
+
+    /// Applies ``peerKeyUpdate(for:)``: writes only a valid key, deletes on an
+    /// empty field, and leaves storage untouched for malformed text.
+    @discardableResult
+    func applyPeerKeyInput(_ input: String) throws -> PeerKeyUpdate {
+        let update = Self.peerKeyUpdate(for: input)
+        switch update {
+        case .save(let key):
+            try set(key, account: Self.peerAccount)
+        case .clear:
+            try storage.delete(account: Self.peerAccount)
+        case .rejectInvalid:
+            break
+        }
+        return update
+    }
+
+    /// Pins `value` (trimmed), or unpairs when it is empty. Throws
+    /// ``StoreError/invalidPeerPublicKey`` without touching the existing pin
+    /// when `value` is not a valid X25519 key.
     func setPeerPublicKey(_ value: String) throws {
-        try set(value, account: Self.peerAccount)
+        guard try applyPeerKeyInput(value) != .rejectInvalid else {
+            throw StoreError.invalidPeerPublicKey
+        }
     }
 
     static func isValidIdentifier(_ value: String) -> Bool {
