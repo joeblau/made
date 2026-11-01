@@ -216,6 +216,42 @@ Verification: `build-ci.sh`, `test.sh all` (PilotTests 819 passed, 2 CEF skips; 
 
 Verification: `build-ci.sh`, `test.sh all` (PilotTests 819 passed, 2 CEF skips; SharedTests 218; PlotterTests 4), `lint-swift.sh --all`, `app-icon-tool.swift validate`, `check-docs.sh`, and the Copilot and Plotter UI tests all pass.
 
+### Coverage round: every remaining surface
+
+An inventory listed 45 surface groups that no earlier capture had reached (55 rows once split by state). Each was then captured in light and dark mode on real glass: Cockpit in the macOS 27.2 VM, Walkie and Kneeboard in the iOS/iPadOS 27.2 simulators, and Trigger in the watchOS simulator. An independent critic re-read every capture against the zandesign checks. Hard-to-reach states use DEBUG-only fixtures: Cockpit's `-demoPairingPrompt`, `-demoPeerRecording`, `-demoPeersConnected` and `-demoSecureMessaging`, and Walkie's `-demoScenario <name>`. A fixture prompt only dismisses itself and never resolves a real pairing request. Copilot's compilation conditions now inherit `DEBUG` (`$(inherited)` in `project.yml`), so these fixtures compile in Debug and are absent from Release.
+
+Result: of the 55 rows, 48 are covered on real glass (43 before the recapture pass) and 1 is unreachable by design (No Panes; the last pane can't be closed). The wireless Device pane is partly covered: every state except a live stream. The 5 rows not captured are listed at the end of this section.
+
+Fixes from the coverage round, then from the recapture of those fixes:
+
+- Cockpit:
+  - The Actions inspector shows skeleton cards on first load instead of "No Actions" (MOT-5). The empty or error state then stays put during the 30s poll instead of flickering.
+  - Toasts in the device, Simulator and Android panes sit on a dark capsule inside the glass. They measure 13.6–15.9:1 over a pure-white phone screen and over the home wallpaper; before this they measured 1.96–3.6:1 (TYPE-3).
+  - The Wireless header steps down to icon-only buttons in narrow panes. Its row spans the pane, and both icon circles are the same size.
+  - Device picker titles truncate to one line with the full name in the tooltip, instead of breaking mid-word.
+  - The start page keeps the port visible: the URL truncates from the front, and the hotkey badge drops first.
+  - ⌘C copies a Simulator screenshot.
+  - Panes now have a 160pt minimum width. Dragging one divider no longer resizes the panes that aren't part of the drag. When the window is too narrow to give every pane 160pt, device-pane messages and the Wireless instructions switch to a glyph below 120pt, instead of breaking words ("De- / vice / s"). The text moves to the tooltip and VoiceOver label, and the Wireless pane keeps the pairing code and icon-only Start and Try Again buttons. The receiver name shrinks to fit on one line rather than breaking.
+  - Cleared earlier in the round: ⌘L focuses the URL field when the browser is already selected; unfocused URL text and quick-open paths meet 4.5:1; and empty states, the Lasso glyph, menus, inline rename, ink controls, PR placeholders and Docker errors were tidied.
+- Cockpit hang (it predates this branch): hiding a terminal pane in a narrow window while the wireless receiver ran froze the app in a SwiftUI layout cycle. `GhosttyMetalView` set `isHidden` inside `updateNSView`, and AppKit's key-view rebuild re-entered SwiftUI's focus graph mid-update. The hide now waits for the next main-queue turn and applies whatever state is current then.
+- Walkie:
+  - The speech storage sheet offers Cancel Download, or Cancel Loading for a cached model, while a load runs.
+  - It stacks the progress row at accessibility text sizes and lines up every row separator.
+  - It keeps the error message when opened from the "Transcription Unavailable" alert.
+  - The model banner sits in the safe-area inset.
+  - Fixed during review: a fixture alert no longer resolves a real pending pairing request.
+- Widgets and Live Activities (shared by Walkie, Kneeboard and Cockpit): in light mode, full-color rendering darkens the status tints (`DashboardTone`). All five tones measure 4.79–4.91:1 on white, up from 2.22:1 for green and 2.31:1 for orange. Dark, tinted and vibrant rendering keep the system colors.
+- Kneeboard and Trigger: badge menu, bounded ImageIO snapshot thumbnails (640/320px), Builds link, Runners lock-screen row and contrast fixes.
+
+Not capturable in any VM or simulator, so left unverified: the live wireless stream (no Screen Mirroring sender reaches a VM), the USB Device stream (needs a cabled iPhone), Chromium find, alerts and wallet (no CEF runtime in the VM build), Remote Desktop without Local Network access (would need a TCC decision), the "Changes could not be saved" alert (no fault-injection hook), the macOS desktop widgets (their views are the shared ones covered on iOS), and the Actions "No Actions" empty state (the test `gh` stand-in can't return zero runs; the overlay logic is unit-tested). The system's destructive alert button contrast is the platform's.
+
+Also found and left open:
+- Ghostty keeps building frames for a hidden terminal, because nothing calls `ghostty_surface_set_occlusion`. This predates the branch and needs its own change.
+- The Walkie progress-row status text measures 4.0:1 in light mode (system secondary).
+- The `modelLoadingCached` fixture shows "Not downloaded" next to a cached load. That is a fixture-only gap: the asynchronous storage refresh would overwrite stored state set by a fixture.
+
+Verification: `build-ci.sh`, `test.sh all` (PilotTests 841 passed with 2 CEF skips, SharedTests 227, PlotterTests 4), `lint-swift.sh --all` (0 violations in 355 files), `app-icon-tool.swift validate`, `check-docs.sh`, and the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators all pass.
+
 ### Open items from round 1 (resolved above unless noted)
 
 - Glass buttons sit inside floating glass panels in the RemoteComputerPicker (Close, Connect, Open Local Network Settings) and the Chromium find popover. This matches how system popovers and sheets behave on 26, but it is technically glass on glass. Simplifying it would mean the panel buttons use pressable or plain styles, which works against brief item 1. This needs a product decision.
