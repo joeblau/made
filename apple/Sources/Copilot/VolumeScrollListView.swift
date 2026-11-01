@@ -735,10 +735,11 @@ private struct PreviewItem: Identifiable {
             Spacer()
             if item.badgeCount > 0 {
                 Text("\(item.badgeCount)")
-                    .font(.system(size: 14, weight: .bold))
+                    .font(.caption.weight(.bold))
+                    .monospacedDigit()
                     .foregroundStyle(.white)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 2)
                     .background(.red, in: Capsule())
             }
         }
