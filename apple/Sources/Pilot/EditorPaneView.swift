@@ -98,19 +98,45 @@ struct EditorPaneView: View {
     @State private var keyMonitor: Any?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Quick open floats like Spotlight, so it uses the panel radius; result
+    /// highlights nest concentrically inside it (LAY-4).
+    private static let finderCornerRadius = LiquidGlassMetrics.Radius.panel
+    private static let finderRowInset = LiquidGlassMetrics.Spacing.xSmall
+    private static let finderRowCornerRadius = LiquidGlassMetrics.Radius.inner(
+        outer: finderCornerRadius,
+        padding: finderRowInset
+    )
+
+    /// The banner's dismiss target is a circle; the banner corner wraps it at
+    /// the same inset so the two stay concentric (LAY-4).
+    private static let bannerDismissSize: CGFloat = 24
+    private static let bannerInset = LiquidGlassMetrics.Spacing.xSmall
+    private static let bannerCornerRadius = bannerDismissSize / 2 + bannerInset
 
     var body: some View {
         ZStack {
             editorLayer
 
-            // Save failures must stay visible while editing, not only in the finder.
-            if session.document != nil, let errorMessage = session.errorMessage {
-                errorBanner(errorMessage)
+            // Each overlay animates inside its own wrapper so the spring never
+            // leaks into the editor layer (a reloaded document must not fade).
+            ZStack {
+                // Save failures must stay visible while editing, not only in the finder.
+                if session.document != nil, let errorMessage = session.errorMessage {
+                    errorBanner(errorMessage)
+                        .transition(overlayTransition(edge: .top))
+                }
             }
+            .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: session.errorMessage)
 
-            if showFinder {
-                finderOverlay
+            ZStack {
+                if showFinder {
+                    finderOverlay
+                        .transition(overlayTransition(scale: 0.98))
+                }
             }
+            .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: showFinder)
 
             keyboardShortcuts
         }
@@ -234,25 +260,41 @@ struct EditorPaneView: View {
         )
     }
 
+    /// No buffer and no finder: name the state and offer the one next action
+    /// (MOT-6), keeping the ⌘P hint as the description.
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "curlybraces")
-                .font(.system(size: 32, weight: .light))
-                .foregroundStyle(.tertiary)
+        ContentUnavailableView {
+            Label("No File Open", systemImage: "curlybraces")
+        } description: {
             Text("⌘P to find a file")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        } actions: {
+            Button("Find File…", action: openFinder)
+                .compatGlassProminentButtonStyle()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Overlays slide in from their anchored edge, or scale-fade in place, and
+    /// fall back to a plain fade under Reduce Motion (MOT-4).
+    private func overlayTransition(edge: Edge? = nil, scale: CGFloat = 1) -> AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        if let edge {
+            return .move(edge: edge).combined(with: .opacity)
+        }
+        return .opacity.combined(with: .scale(scale: scale, anchor: .top))
     }
 
     // MARK: - Finder overlay
 
     private var finderOverlay: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                // The palette itself is the glass surface, so the field stays
+                // plain inside it (no glass on glass); the magnifier and the
+                // always-focused palette identify it, Spotlight-style.
                 TextField("Search files…", text: $searchQuery)
                     .textFieldStyle(.plain)
                     .scaledFont(size: 14)
@@ -262,8 +304,8 @@ struct EditorPaneView: View {
                     .onKeyPress(.downArrow) { moveSelection(by: 1); return .handled }
                     .onKeyPress(.upArrow) { moveSelection(by: -1); return .handled }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+            .padding(.vertical, LiquidGlassMetrics.Spacing.small)
 
             resultsBody
                 .frame(maxHeight: 360)
@@ -272,9 +314,9 @@ struct EditorPaneView: View {
         .frame(maxHeight: 360)
         // Quick open is a transient control layer over the editor, like
         // Spotlight: glass on macOS 26, material + shadow before it.
-        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
         .padding(.top, 60)             // float the card toward the top third
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -305,11 +347,11 @@ struct EditorPaneView: View {
     @ViewBuilder
     private var resultsBody: some View {
         if rootPath == nil {
-            finderMessage("Set a workspace root path to browse files.")
+            finderMessage("Set a workspace root path to browse files.", systemImage: "folder.badge.questionmark")
         } else if let errorMessage = session.errorMessage {
-            finderMessage(errorMessage)
+            finderMessage(errorMessage, systemImage: "exclamationmark.triangle")
         } else if finder.isIndexing && finder.results.isEmpty {
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 ProgressView().controlSize(.small)
                 Text("Indexing…")
                     .foregroundStyle(.secondary)
@@ -317,7 +359,7 @@ struct EditorPaneView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding()
         } else if finder.results.isEmpty {
-            finderMessage("No matches")
+            finderMessage("No matches", systemImage: "magnifyingglass")
         } else {
             resultsList
         }
@@ -328,16 +370,23 @@ struct EditorPaneView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(finder.results.enumerated()), id: \.element.id) { index, item in
-                        resultRow(item, isHighlighted: index == selectedIndex)
-                            .id(index)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedIndex = index
-                                openSelected()
-                            }
+                        // A real button so each row has hover/press feedback
+                        // (BTN-5) and reads as actionable to VoiceOver.
+                        Button {
+                            selectedIndex = index
+                            openSelected()
+                        } label: {
+                            resultRow(item, isHighlighted: index == selectedIndex)
+                        }
+                        .buttonStyle(.liquidGlassPressable(cornerRadius: Self.finderRowCornerRadius))
+                        .padding(.horizontal, Self.finderRowInset)
+                        .id(index)
                     }
                 }
-                .padding(.vertical, 4)
+                // The bottom inset matches the side inset so the last row's
+                // highlight stays concentric with the palette corners (LAY-4).
+                .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
+                .padding(.bottom, Self.finderRowInset)
             }
             .onChange(of: selectedIndex) {
                 withAnimation(.easeOut(duration: 0.12)) {
@@ -348,7 +397,7 @@ struct EditorPaneView: View {
     }
 
     private func resultRow(_ item: FileItem, isHighlighted: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(item.name)
                 .scaledFont(size: 13)
                 .foregroundStyle(.primary)
@@ -363,55 +412,69 @@ struct EditorPaneView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
         .background(
             isHighlighted
                 ? Color.accentColor.opacity(0.22)
                 : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6)
+            in: RoundedRectangle(cornerRadius: Self.finderRowCornerRadius, style: .continuous)
         )
-        .padding(.horizontal, 6)
+        .animation(LiquidGlassMetrics.stateChange, value: isHighlighted)
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 
-    private func finderMessage(_ message: String) -> some View {
-        Text(message)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding()
+    /// Compact, palette-sized status: a quiet symbol anchors the message so
+    /// empty and error states read at a glance (MOT-6, HIER-3).
+    private func finderMessage(_ message: String, systemImage: String) -> some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Image(systemName: systemImage)
+                .scaledFont(size: 20, weight: .light)
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            Text(message)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(LiquidGlassMetrics.Spacing.medium)
     }
 
     // MARK: - Error banner
 
     /// Compact, dismissible banner pinned to the top of the editor. Surfaces ⌘S /
     /// auto-save failures (and load errors) without stealing the buffer.
+    ///
+    /// The banner floats over the buffer, so it is the glass layer; its dismiss
+    /// control stays a plain circle with hover/press feedback inside it rather
+    /// than a second glass shape (no glass on glass, BTN-5).
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
+                .accessibilityHidden(true)
             Text(message)
                 .scaledFont(size: 12)
                 .foregroundStyle(.primary)
                 .lineLimit(2)
-            Spacer(minLength: 8)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
             Button {
                 session.errorMessage = nil
             } label: {
                 Image(systemName: "xmark")
                     .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(.secondary)
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
+                    .frame(width: Self.bannerDismissSize, height: Self.bannerDismissSize)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.bannerDismissSize / 2))
             .help("Dismiss")
             .accessibilityLabel("Dismiss error")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
+        .padding(.leading, LiquidGlassMetrics.Spacing.small)
+        .padding(.trailing, Self.bannerInset)
+        .padding(.vertical, Self.bannerInset)
+        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: Self.bannerCornerRadius, style: .continuous))
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.top, LiquidGlassMetrics.Spacing.small)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 

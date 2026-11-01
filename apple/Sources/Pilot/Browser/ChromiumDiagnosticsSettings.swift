@@ -287,6 +287,11 @@ struct ChromiumDiagnosticsSettingsSection: View {
             Button("Clear Chromium Browsing Data", role: .destructive) {
                 isConfirmingClear = true
             }
+            // Secondary glass, not prominent: a destructive action is never
+            // the view's primary call to action (BTN-1, COL-4). The red role
+            // tint is kept for the confirmation alert (MODAL-1).
+            .compatGlassButtonStyle()
+            .buttonBorderShape(.capsule)
             .disabled(clearAvailability != .available || isClearing)
 
             if let reason = clearAvailability.unavailableReason {

@@ -34,7 +34,8 @@ final class ColorChipButton: NSButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+        // A round swatch, matching the ink palette and the system color well.
+        let path = NSBezierPath(ovalIn: rect)
         swatch.setFill()
         path.fill()
         // A hairline border keeps light/white swatches visible against the page.
@@ -169,12 +170,13 @@ final class MarkdownImagePreviewView: NSView {
         self.onRender = onRender
         super.init(frame: frame)
 
+        // A quiet surface-color shift frames the preview instead of a border
+        // (LAY-2), on the shared card radius with continuous corners.
         wantsLayer = true
-        layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.08).cgColor
-        layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.45).cgColor
-        layer?.borderWidth = 0.5
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = LiquidGlassMetrics.Radius.card
+        layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
+        applySurfaceColor()
 
         imageView.imageScaling = .scaleProportionallyDown
         imageView.imageAlignment = .alignCenter
@@ -190,16 +192,32 @@ final class MarkdownImagePreviewView: NSView {
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.alignment = .center
         statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.font = .systemFont(ofSize: 11)
+        statusLabel.font = .preferredFont(forTextStyle: .subheadline)
         addSubview(statusLabel)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { nil }
 
+    /// Layer colors are resolved `CGColor` snapshots, so re-resolve the
+    /// dynamic fill whenever light/dark mode changes (COL-2).
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applySurfaceColor()
+    }
+
+    private func applySurfaceColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.08).cgColor
+        }
+    }
+
     override func layout() {
         super.layout()
-        imageView.frame = bounds.insetBy(dx: 10, dy: 10)
+        imageView.frame = bounds.insetBy(
+            dx: LiquidGlassMetrics.Spacing.xSmall,
+            dy: LiquidGlassMetrics.Spacing.xSmall
+        )
         spinner.frame = NSRect(x: bounds.midX - 8, y: bounds.midY - 18, width: 16, height: 16)
         statusLabel.frame = NSRect(x: 12, y: bounds.midY + 4, width: max(0, bounds.width - 24), height: 18)
     }

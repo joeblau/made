@@ -60,11 +60,20 @@ struct PilotSecureMessagingView: View {
     private var statusSection: some View {
         Section("Status") {
             LabeledContent("Connection") {
-                HStack(spacing: 6) {
-                    Circle().fill(statusColor).frame(width: 8, height: 8)
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    // In-flight stages show activity rather than a static dot
+                    // (MOT-5); settled states keep the colored indicator.
+                    if isConnecting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Circle().fill(statusColor).frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                    }
                     Text(statusText)
                         .foregroundStyle(.secondary)
+                        .contentTransition(.opacity)
                 }
+                .animation(LiquidGlassMetrics.stateChange, value: statusText)
             }
         }
     }
@@ -84,6 +93,7 @@ struct PilotSecureMessagingView: View {
             } label: {
                 Label("Copy My Key", systemImage: "key")
             }
+            .compatGlassButtonStyle()
         } header: {
             Text("My Public Key")
         } footer: {
@@ -100,6 +110,7 @@ struct PilotSecureMessagingView: View {
             TextField("Pairing token", text: $tokenInput)
                 .autocorrectionDisabled()
             Button("Generate Pairing Token") { generateToken() }
+                .compatGlassButtonStyle()
             TextField("Rendezvous URL", text: $rendezvousURL)
                 .autocorrectionDisabled()
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
@@ -109,6 +120,7 @@ struct PilotSecureMessagingView: View {
                     transport.disconnect()
                     self.transport = nil
                 }
+                .compatGlassButtonStyle()
             } else {
                 Button("Connect") { connect() }
                     .compatGlassProminentButtonStyle()
@@ -123,24 +135,33 @@ struct PilotSecureMessagingView: View {
 
     private func messagingSection(_ transport: SecureChannelResponder) -> some View {
         Section("Send") {
-            HStack {
-                TextField("Message", text: $outgoing)
-                    .onSubmit(send)
-                Button("Send", action: send)
-                    .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
+            // A persistent row label (FORM-1) with the field and its action
+            // side by side. Connect is hidden while connected, so Send is the
+            // view's single prominent action (BTN-1).
+            LabeledContent("Message") {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    TextField("Message", text: $outgoing)
+                        .labelsHidden()
+                        .onSubmit(send)
+                    Button("Send", action: send)
+                        .compatGlassProminentButtonStyle()
+                        .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
             Button {
                 transport.sendTestBlob()
             } label: {
                 Label("Send Test Blob (Best-Effort)", systemImage: "shippingbox")
             }
+            .compatGlassButtonStyle()
         }
     }
 
     private func logSection(_ transport: SecureChannelResponder) -> some View {
         Section("Session Log") {
             if transport.log.isEmpty {
-                Text("No activity yet.").foregroundStyle(.secondary)
+                Label("No activity yet.", systemImage: "text.alignleft")
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(transport.log.reversed()) { entry in
                     Text(entry.text)
@@ -240,11 +261,19 @@ struct PilotSecureMessagingView: View {
         }
     }
 
+    private var isConnecting: Bool {
+        switch transport?.state {
+        case .signaling, .holePunching, .handshake: return true
+        case .none, .connected, .failed: return false
+        }
+    }
+
     private var statusColor: Color {
         switch transport?.state {
         case .connected: return .green
         case .failed: return .red
-        case .none: return .gray
+        // Idle reads as the semantic secondary tint in both appearances (COL-2).
+        case .none: return .secondary
         default: return .orange
         }
     }

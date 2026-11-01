@@ -1108,6 +1108,9 @@ final class ChromiumPermissionDecisionStore {
 @MainActor
 final class ChromiumBrowserContainerView: NSView {
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
+    /// Shown while Chromium starts so the pane reads as working, not blank
+    /// (MOT-5).
+    private let startingIndicator = NSProgressIndicator()
     private lazy var retryButton = NSButton(
         title: "Retry",
         target: self,
@@ -1123,17 +1126,37 @@ final class ChromiumBrowserContainerView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        updateBackgroundColor()
 
         messageLabel.translatesAutoresizingMaskIntoConstraints = false
         messageLabel.alignment = .center
         messageLabel.textColor = .secondaryLabelColor
+        messageLabel.font = .preferredFont(forTextStyle: .body)
         messageLabel.maximumNumberOfLines = 3
         addSubview(messageLabel)
+        startingIndicator.translatesAutoresizingMaskIntoConstraints = false
+        startingIndicator.style = .spinning
+        startingIndicator.controlSize = .small
+        startingIndicator.isDisplayedWhenStopped = false
+        addSubview(startingIndicator)
         retryButton.translatesAutoresizingMaskIntoConstraints = false
-        retryButton.bezelStyle = .rounded
+        if #available(macOS 26.0, *) {
+            // The pane's single recovery action: prominent capsule glass
+            // (BTN-1), never a squared bezel.
+            retryButton.bezelStyle = .glass
+            retryButton.borderShape = .capsule
+            retryButton.tintProminence = .primary
+        } else {
+            retryButton.bezelStyle = .rounded
+        }
+        retryButton.controlSize = .large
         addSubview(retryButton)
         NSLayoutConstraint.activate([
+            startingIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
+            startingIndicator.bottomAnchor.constraint(
+                equalTo: messageLabel.topAnchor,
+                constant: -12
+            ),
             messageLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             messageLabel.centerYAnchor.constraint(
                 equalTo: centerYAnchor,
@@ -1155,6 +1178,19 @@ final class ChromiumBrowserContainerView: NSView {
         fatalError("init(coder:) is unavailable")
     }
 
+    /// A layer's `CGColor` is resolved once, so re-resolve the semantic
+    /// window color whenever the appearance flips (COL-2: dark-mode parity).
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackgroundColor()
+    }
+
+    private func updateBackgroundColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
+    }
+
     func install(_ host: ChromiumBrowserHostView) {
         host.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host, positioned: .below, relativeTo: messageLabel)
@@ -1173,6 +1209,7 @@ final class ChromiumBrowserContainerView: NSView {
     }
 
     private func updateMessage() {
+        defer { updateStartingIndicator() }
         switch runtimeState {
         case .starting:
             messageLabel.stringValue = "Starting Chromium..."
@@ -1206,6 +1243,14 @@ final class ChromiumBrowserContainerView: NSView {
             messageLabel.stringValue = "Chromium browser closed."
             messageLabel.isHidden = false
             retryButton.isHidden = true
+        }
+    }
+
+    private func updateStartingIndicator() {
+        if runtimeState == .starting {
+            startingIndicator.startAnimation(nil)
+        } else {
+            startingIndicator.stopAnimation(nil)
         }
     }
 }

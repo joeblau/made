@@ -867,8 +867,9 @@ struct PilotApp: App {
         Window(PilotWindowID.extendoTitle, id: PilotWindowID.extendo) {
             Group {
                 if setupProgress.needsInitialSetup {
-                    Text("Finish setup in the main Cockpit window to open your workspaces.")
-                        .padding(32)
+                    ContentUnavailableView("Setup Required", systemImage: "gearshape.2", description: Text(
+                        "Finish setup in the main Cockpit window to open your workspaces."
+                    )).padding(LiquidGlassMetrics.Spacing.xxLarge) // Designed empty state (MOT-6).
                 } else {
                     ExtensionWindowView(
                         store: store,

@@ -31,9 +31,11 @@ struct InspectorSectionHeader: View {
     var refresh: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // `.subheadline` is 11pt on macOS and follows the inspector's
+            // `uiZoomedDynamicType` ladder like the title beside it (TYPE-4).
             Image(systemName: systemImage)
-                .scaledFont(size: 11, weight: .medium)
+                .font(.subheadline.weight(.medium))
                 .frame(width: 16)
                 .accessibilityHidden(true)
 
@@ -47,35 +49,62 @@ struct InspectorSectionHeader: View {
                     .controlSize(.mini)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
 
-            if isLoading, refresh != nil {
-                // Activity replaces the refresh control in place, so the
-                // feedback appears exactly where the user just clicked.
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 17, height: 17)
-            } else if let refresh {
-                Button(action: refresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .scaledFont(size: 13)
-                        .frame(width: 17, height: 17)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isRefreshDisabled)
-                .help(refreshHelp ?? "Refresh")
+            if let refresh {
+                refreshButton(action: refresh)
+            } else {
+                // Reserve the refresh slot so a header without one (Files)
+                // keeps the same height as every other tab's header.
+                refreshButton(action: {})
+                    .hidden()
+                    .accessibilityHidden(true)
             }
         }
         .foregroundStyle(.secondary)
-        .frame(minHeight: 16)
         // No filled box: a tinted header directly above tinted cards read as
         // boxes inside boxes (LAY-1). 16pt lines the glyph up with the
         // Files outline's disclosure column and the cards' leading icons.
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+        .padding(.top, LiquidGlassMetrics.Spacing.xSmall)
+        .padding(.bottom, LiquidGlassMetrics.Spacing.xxSmall)
         .frame(maxWidth: .infinity)
+    }
+
+    /// Icon-only glass circle (BTN-5). While a refresh runs the spinner
+    /// replaces the glyph inside the same control, so the feedback appears
+    /// exactly where the user just clicked and nothing shifts.
+    private func refreshButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label {
+                Text(refreshHelp ?? "Refresh")
+            } icon: {
+                InspectorRefreshGlyph(isRefreshing: isLoading)
+            }
+        }
+        .compatGlassIconButton(controlSize: .small)
+        .disabled(isRefreshDisabled || isLoading)
+        .help(refreshHelp ?? "Refresh")
+    }
+}
+
+/// The refresh symbol, swapped in place for a spinner while a refresh runs.
+/// The symbol keeps its layout slot (only its opacity changes), so a glass
+/// button built around it never changes size mid-refresh (MOT-5).
+struct InspectorRefreshGlyph: View {
+    let isRefreshing: Bool
+
+    var body: some View {
+        Image(systemName: "arrow.clockwise")
+            .opacity(isRefreshing ? 0 : 1)
+            .overlay {
+                if isRefreshing {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .transition(.opacity)
+                }
+            }
+            .animation(LiquidGlassMetrics.stateChange, value: isRefreshing)
     }
 }
 
@@ -92,19 +121,39 @@ struct InspectorMetadataSeparator: View {
     }
 }
 
+/// Inspector card geometry. Cards are content, not controls: a quiet
+/// semantic fill with no glass and no border (LAY-1/LAY-2), 4pt-grid padding
+/// (LAY-3), and the shared card radius token. A whole-card hover wash uses the
+/// same radius, so it lines up with the card edge exactly (LAY-4).
+enum InspectorCardMetrics {
+    static let padding = LiquidGlassMetrics.Spacing.small
+    static let cornerRadius = LiquidGlassMetrics.Radius.card
+}
+
 extension View {
+    /// A non-interactive inspector card: surface plus the insert/remove
+    /// transition. Interactive cards apply `inspectorCardSurface()` inside a
+    /// `Button` label and `inspectorCardTransition()` outside it.
     func inspectorListCard() -> some View {
-        padding(10)
+        inspectorCardSurface()
+            .inspectorCardTransition()
+    }
+
+    func inspectorCardSurface() -> some View {
+        padding(InspectorCardMetrics.padding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 .quaternary.opacity(0.4),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                in: RoundedRectangle(cornerRadius: InspectorCardMetrics.cornerRadius, style: .continuous)
             )
-            .transition(
-                .opacity.combined(
-                    with: .scale(scale: 0.96, anchor: .top)
-                )
+    }
+
+    func inspectorCardTransition() -> some View {
+        transition(
+            .opacity.combined(
+                with: .scale(scale: 0.96, anchor: .top)
             )
+        )
     }
 
     /// Animate identity changes in inspector card collections while leaving
@@ -127,6 +176,53 @@ private struct InspectorListAnimationModifier<Value: Equatable>: ViewModifier {
     }
 }
 
+/// Skeleton cards for an inspector list's first load (MOT-5): the shape of
+/// the content that is coming, gently pulsing, instead of a lone spinner.
+/// Motion stops under Reduce Motion; VoiceOver reads a single "Loading".
+struct InspectorLoadingPlaceholder: View {
+    var rowCount = 4
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isDimmed = false
+
+    var body: some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
+            ForEach(0..<rowCount, id: \.self) { index in
+                HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    Circle()
+                        .frame(width: 12, height: 12)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Varied widths so the skeleton doesn't read as one
+                        // repeated row (HIER-5).
+                        Text(verbatim: index.isMultiple(of: 2)
+                             ? "Placeholder issue title text"
+                             : "Placeholder title")
+                            .font(.callout)
+                        Text(verbatim: "#0000 • someone • 1h")
+                            .font(.subheadline)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.quaternary)
+                .redacted(reason: .placeholder)
+                .inspectorCardSurface()
+            }
+        }
+        .padding(LiquidGlassMetrics.Spacing.small)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .opacity(isDimmed ? 0.5 : 1)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                isDimmed = true
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading")
+    }
+}
+
 struct InspectorPanelView: View {
     let gitStore: RepositoryStore
     let tasksStore: GitHubTasksStore
@@ -136,8 +232,8 @@ struct InspectorPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             InspectorTabSelector(selection: $selectedTab)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
 
             // Expand the tab content to fill the inspector's height. Without
             // this, an intrinsically-sized tab (e.g. an empty-state
@@ -505,7 +601,7 @@ struct PullRequestListView: View {
                     LazyVStack(spacing: 12) {
                         ForEach(store.pullRequests) { pullRequest in
                             pullRequestRow(pullRequest)
-                                .inspectorListCard()
+                                .inspectorCardTransition()
                         }
                     }
                     .padding(12)
@@ -565,9 +661,11 @@ struct PullRequestListView: View {
 
                 Spacer(minLength: 0)
             }
-            .contentShape(Rectangle())
+            .inspectorCardSurface()
         }
-        .buttonStyle(.plain)
+        // The whole card is the tap target: hover wash + press feedback in
+        // the card's own shape (BTN-5), not glass — cards are content.
+        .buttonStyle(.liquidGlassPressable(cornerRadius: InspectorCardMetrics.cornerRadius))
         .disabled(pullRequest.url.isEmpty)
         .help(pullRequest.url.isEmpty ? "" : "Open on GitHub")
     }
@@ -655,7 +753,7 @@ struct ActionsListView: View {
                     LazyVStack(spacing: 12) {
                         ForEach(store.actions) { action in
                             actionRow(action)
-                                .inspectorListCard()
+                                .inspectorCardTransition()
                         }
                     }
                     .padding(12)
@@ -730,9 +828,9 @@ struct ActionsListView: View {
 
                 Spacer(minLength: 0)
             }
-            .contentShape(Rectangle())
+            .inspectorCardSurface()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.liquidGlassPressable(cornerRadius: InspectorCardMetrics.cornerRadius))
         .disabled(action.url.isEmpty)
         .help(action.url.isEmpty ? "" : "Open on GitHub")
     }

@@ -68,7 +68,9 @@ struct WorkspaceSidebarList<WorkspaceRow: View>: View {
                             )
                         }
                     case .emptyGroup(let id):
-                        Text("Drop workspaces here")
+                        // Empty group: a glyph plus hint, so the drop target
+                        // reads as a destination rather than a stray caption.
+                        Label("Drop workspaces here", systemImage: "tray.and.arrow.down")
                             .scaledFont(size: 11)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)

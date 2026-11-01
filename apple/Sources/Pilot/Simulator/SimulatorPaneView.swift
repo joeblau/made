@@ -29,11 +29,7 @@ struct SimulatorPaneView: View {
             }
 
             if showsCopiedToast {
-                Label("Screenshot Copied", systemImage: "checkmark.circle.fill")
-                    .font(.headline)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .compatGlassCapsule()
+                DevicePaneToast(text: "Screenshot Copied", systemImage: "checkmark.circle.fill")
                     .transition(.opacity.combined(with: .scale(scale: 0.85)))
                     .allowsHitTesting(false)
                     .zIndex(20)
@@ -74,23 +70,13 @@ private struct SimulatorPickerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Label("iPhone Simulator", systemImage: "ipad.landscape.and.ipod")
-                    .font(.headline)
-                Spacer()
-                if session.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
-                Button {
-                    session.refreshDevices()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(session.isRefreshing)
-                .help("Re-scan installed simulators")
-            }
-            .padding(12)
+            DevicePickerHeader(
+                title: "iPhone Simulator",
+                systemImage: "ipad.landscape.and.ipod",
+                isRefreshing: session.isRefreshing,
+                refreshHelp: "Re-scan installed simulators",
+                refresh: { session.refreshDevices() }
+            )
 
             if session.devices.isEmpty {
                 emptyState
@@ -104,7 +90,7 @@ private struct SimulatorPickerView: View {
                                 } label: {
                                     deviceRow(device)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.liquidGlassPressable)
                             }
                         }
                     }
@@ -117,45 +103,27 @@ private struct SimulatorPickerView: View {
     }
 
     private func deviceRow(_ device: SimDevice) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: device.deviceTypeIdentifier?.contains("iPad") == true ? "ipad" : "iphone")
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            Text(device.name)
-            Spacer()
-            if device.isBooted {
-                Text("Booted")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.green)
-            }
-            Image(systemName: device.isBooted ? "play.fill" : "chevron.right")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-        .contentShape(Rectangle())
-        .padding(.vertical, 4)
+        DevicePickerRow(
+            systemImage: device.deviceTypeIdentifier?.contains("iPad") == true ? "ipad" : "iphone",
+            title: device.name,
+            badge: device.isBooted ? "Booted" : nil,
+            trailingSystemImage: device.isBooted ? "play.fill" : "chevron.right"
+        )
     }
 
     @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            if session.isRefreshing {
-                ProgressView()
-                Text("Looking for simulators…").foregroundStyle(.secondary)
-            } else if let error = session.lastError {
-                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
-                Text("Couldn't List Simulators").font(.headline)
-                Text(error).font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
-            } else {
-                Image(systemName: "iphone").scaledFont(size: 36).foregroundStyle(.secondary)
-                Text("No Simulators Found").font(.headline)
-                Text("Create one in Xcode (Window → Devices and Simulators), then Refresh.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
-            }
+        if session.isRefreshing {
+            DevicePaneMessage("Looking for simulators…", systemImage: "iphone", isLoading: true)
+        } else if let error = session.lastError {
+            DevicePaneMessage("Couldn't List Simulators", systemImage: "exclamationmark.triangle", detail: error)
+        } else {
+            DevicePaneMessage(
+                "No Simulators Found",
+                systemImage: "iphone",
+                detail: "Create one in Xcode (Window → Devices and Simulators), then Refresh."
+            )
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -163,16 +131,15 @@ private struct SimulatorPickerView: View {
 
 private struct SimulatorToolingMissingView: View {
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "wrench.and.screwdriver").scaledFont(size: 36).foregroundStyle(.secondary)
-            Text("Full Xcode Required").font(.headline)
-            Text("The iOS Simulator needs a full Xcode install (the Command Line Tools alone can't run simctl).\n\nInstall Xcode, then run:\nsudo xcode-select -s /Applications/Xcode.app/Contents/Developer")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).padding(.horizontal, 32)
-        }
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(PreviewCanvasBackground())
+        // `onCanvas` also fixes the light-appearance contrast: this block
+        // previously skipped the dark scheme, so its secondary text rendered
+        // dark gray on the dark canvas (COL-2, TYPE-3).
+        DevicePaneMessage(
+            "Full Xcode Required",
+            systemImage: "wrench.and.screwdriver",
+            detail: "The iOS Simulator needs a full Xcode install (the Command Line Tools alone can't run simctl).\n\nInstall Xcode, then run:\nsudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
+            onCanvas: true
+        )
     }
 }
 
@@ -182,29 +149,24 @@ private struct SimulatorStatusOverlay: View {
     let session: SimulatorSession
 
     var body: some View {
-        VStack(spacing: 12) {
-            switch session.status {
-            case .booting(let name):
-                ProgressView()
-                Text("Booting \(name)…").font(.headline)
-            case .starting(let name):
-                ProgressView()
-                Text("Connecting to \(name)…").font(.headline)
-            case .failed(let message):
-                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
-                Text("Simulator Unavailable").font(.headline)
-                Text(message).font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
+        switch session.status {
+        case .booting(let name):
+            DevicePaneMessage("Booting \(name)…", systemImage: "iphone", isLoading: true, onCanvas: true)
+        case .starting(let name):
+            DevicePaneMessage("Connecting to \(name)…", systemImage: "iphone", isLoading: true, onCanvas: true)
+        case .failed(let message):
+            DevicePaneMessage(
+                "Simulator Unavailable",
+                systemImage: "exclamationmark.triangle",
+                detail: message,
+                onCanvas: true
+            ) {
                 Button("Back to Devices") { session.chooseAnotherDevice() }
                     .compatGlassProminentButtonStyle()
-            default:
-                EmptyView()
             }
+        default:
+            PreviewCanvasBackground()
         }
-        .foregroundStyle(.white)
-        .environment(\.colorScheme, .dark)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(PreviewCanvasBackground())
     }
 }
 

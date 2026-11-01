@@ -60,6 +60,11 @@ struct BrowserAddressToolbarControl: View {
 
     var body: some View {
 
+        // The field is a toolbar item, so macOS 26 already draws it on the
+        // toolbar's Liquid Glass capsule. Wrapping it in `liquidGlassField`
+        // here would stack glass on glass, so the field stays plain inside
+        // the system capsule. The placeholder must stay "URL":
+        // `BrowserAddressFocus` finds the AppKit field by it for ⌘L.
         TextField("URL", text: Bindable(state).urlText)
             .textFieldStyle(.plain)
             .scaledFont(size: 13, weight: .medium)
@@ -68,12 +73,13 @@ struct BrowserAddressToolbarControl: View {
             .onChange(of: isAddressFocused) { _, isFocused in
                 state.isAddressEditing = isFocused
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 32)
+            .accessibilityLabel("Address")
+            .padding(.leading, LiquidGlassMetrics.Spacing.small)
+            .padding(.trailing, LiquidGlassMetrics.Spacing.xxLarge)
             .frame(maxWidth: .infinity, alignment: .leading)
             .overlay(alignment: .trailing) {
                 browserReloadButton
-                    .padding(.trailing, 10)
+                    .padding(.trailing, LiquidGlassMetrics.Spacing.xxSmall)
             }
             .frame(
                 minWidth: addressMinWidth,
@@ -119,9 +125,19 @@ struct BrowserAddressToolbarControl: View {
                     }
                 }
             }
-            .frame(width: 14, height: 14)
+            .frame(width: 16, height: 16)
+            // The custom style below does not dim itself when disabled, so
+            // the icon carries the enabled state.
+            .foregroundStyle(state.supports(.navigation)
+                             ? AnyShapeStyle(.secondary)
+                             : AnyShapeStyle(.tertiary))
+            .animation(LiquidGlassMetrics.stateChange, value: state.isLoading)
+            // A 24pt circular hit area with a hover wash and press feedback
+            // (BTN-5). It sits inside the toolbar's glass capsule, so it
+            // stays plain-looking rather than adding a second glass layer.
+            .padding(LiquidGlassMetrics.Spacing.xxSmall)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.liquidGlassPressable(cornerRadius: 12))
         .disabled(!state.supports(.navigation))
         .help(state.isLoading ? "Stop" : "Reload")
         .accessibilityIdentifier("browser.reload")
@@ -274,43 +290,63 @@ struct BrowserToolsToolbarControls: View {
     }
 
     private var chromiumFindPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Find", text: $findText)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    state.requestFind(findText)
-                }
-                .accessibilityIdentifier("browser.find-field")
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
+            // Persistent label above the field; the placeholder is only a
+            // hint (FORM-1). Label → field sits tight, field → actions wider
+            // (FORM-5).
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                Text("Find in Page")
+                    .font(.headline)
 
-            HStack {
+                TextField("Find", text: $findText)
+                    .onSubmit {
+                        state.requestFind(findText)
+                    }
+                    .accessibilityLabel("Find in Page")
+                    .accessibilityIdentifier("browser.find-field")
+                    .liquidGlassField(systemImage: "magnifyingglass")
+            }
+
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text(findResultSummary)
+                    .font(.callout)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Button {
-                    state.requestFind(findText, forward: false, findNext: true)
-                } label: {
-                    Label("Previous Match", systemImage: "chevron.up")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(findText.isEmpty)
-                .accessibilityIdentifier("browser.find-previous")
+                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        Button {
+                            state.requestFind(findText, forward: false, findNext: true)
+                        } label: {
+                            Label("Previous Match", systemImage: "chevron.up")
+                        }
+                        .compatGlassIconButton(controlSize: .small)
+                        .disabled(findText.isEmpty)
+                        .help("Previous Match")
+                        .accessibilityIdentifier("browser.find-previous")
 
-                Button {
-                    state.requestFind(findText, forward: true, findNext: true)
-                } label: {
-                    Label("Next Match", systemImage: "chevron.down")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(findText.isEmpty)
-                .accessibilityIdentifier("browser.find-next")
+                        Button {
+                            state.requestFind(findText, forward: true, findNext: true)
+                        } label: {
+                            Label("Next Match", systemImage: "chevron.down")
+                        }
+                        .compatGlassIconButton(controlSize: .small)
+                        .disabled(findText.isEmpty)
+                        .help("Next Match")
+                        .accessibilityIdentifier("browser.find-next")
 
-                Button("Done") {
-                    isShowingFind = false
+                        Button("Done") {
+                            isShowingFind = false
+                        }
+                        .compatGlassButtonStyle()
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.small)
+                    }
                 }
             }
         }
-        .padding(12)
+        .padding(LiquidGlassMetrics.Spacing.medium)
         .frame(width: 320)
         .onDisappear {
             state.stopFinding()

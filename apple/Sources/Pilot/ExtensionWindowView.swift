@@ -767,7 +767,7 @@ struct ExtensionWindowView: View {
                     WorkspacePaneLauncher(workspace: extensionWorkspace)
                 }
             }
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     isDrawingActive.toggle()
                 } label: {
@@ -779,7 +779,13 @@ struct ExtensionWindowView: View {
                 .disabled(extensionWorkspace == nil)
                 .help("Draw over the active Extendo pane (⇧⌘D)")
                 .accessibilityIdentifier("extension.annotate")
-
+            }
+            // Same grouping as the main window: the Inspector toggle is window
+            // layout, so it gets its own glass group.
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     guard let workspace = extensionWorkspace else { return }
                     workspace.setInspectorPresented(!workspace.isInspectorPresented)

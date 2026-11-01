@@ -247,23 +247,28 @@ struct ContentView: View {
                 workspaceRow: workspaceRow
             )
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 12) {
-                    RecordingStatusIndicator(isRecording: isPeerRecording)
-                    AwakeStatusButton()
+                // A floating cluster of circular glass status buttons over the
+                // sidebar's scrolling content, rendered in one container (no
+                // glass on glass); spacing 0 keeps every circle distinct.
+                CompatGlassContainer(spacing: 0) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        RecordingStatusIndicator(isRecording: isPeerRecording)
+                        AwakeStatusButton()
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
 
-                    HStack(spacing: 12) {
-                        ForEach(connectedDevices) { device in
-                            DeviceStatusButton(
-                                device: device,
-                                connectionDetail: connectionDetail(for: device)
-                            )
+                        HStack(spacing: StatusClusterMetrics.spacing) {
+                            ForEach(connectedDevices) { device in
+                                DeviceStatusButton(
+                                    device: device,
+                                    connectionDetail: connectionDetail(for: device)
+                                )
+                            }
                         }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
             }
             .alert(editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
                    isPresented: $isGroupNamePresented) {
@@ -313,9 +318,23 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 if workspaces.isEmpty {
-                    ContentUnavailableView("No Workspace Selected",
-                                           systemImage: "rectangle.on.rectangle.slash",
-                                           description: Text("Create a workspace with the + button."))
+                    // Empty state with a clear next action (MOT-6); the only
+                    // action here, so it is the prominent one (BTN-1).
+                    ContentUnavailableView {
+                        Label("No Workspace Selected", systemImage: "rectangle.on.rectangle.slash")
+                    } description: {
+                        Text("Create a workspace with the + button.")
+                    } actions: {
+                        Button {
+                            newWorkspaceRequest = NewWorkspaceRequest()
+                        } label: {
+                            Label("New Workspace…", systemImage: "plus")
+                        }
+                        .compatGlassProminentButtonStyle()
+                        .buttonBorderShape(.capsule)
+                        .controlSize(.large)
+                        .accessibilityIdentifier("workspace.empty.new-workspace")
+                    }
                 } else {
                     // The workspace stack stays mounted at all times — even in
                     // Notes mode — so entering Notes never tears down live
@@ -517,7 +536,7 @@ struct ContentView: View {
                         .disabled(store.isNotesMode)
                 }
             }
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     isDrawingActive.toggle()
                 } label: {
@@ -526,6 +545,13 @@ struct ContentView: View {
                 }
                 .disabled(store.selectedWorkspace == nil || store.isNotesMode)
                 .help("Draw over the active pane (⇧⌘D)")
+            }
+            // The Inspector toggle is window layout, not a pane tool: give it
+            // its own glass group, as the system does for sidebar toggles.
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     guard let workspace = store.selectedWorkspace else { return }
                     workspace.setInspectorPresented(!workspace.isInspectorPresented)
@@ -904,11 +930,14 @@ private struct RecordingStatusIndicator: View {
         Button {
             isPopoverPresented.toggle()
         } label: {
-            Image(systemName: isRecording ? "waveform.circle.fill" : "waveform.circle")
+            // The glass circle is the button shape, so the glyph drops its
+            // own circle; live recording animates instead of only recoloring.
+            Image(systemName: "waveform")
                 .foregroundStyle(isRecording ? .red : .secondary)
+                .symbolEffect(.variableColor.iterative, isActive: isRecording)
+                .statusGlyphFrame()
         }
-        .buttonStyle(.plain)
-        .statusButtonHitTarget()
+        .statusButtonStyle()
         .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
             StatusPopoverContent(
                 title: "Microphone",
@@ -933,9 +962,9 @@ private struct AwakeStatusButton: View {
         } label: {
             Image(systemName: "cup.and.heat.waves")
                 .foregroundStyle(controller.isEnabled ? Color.green : .secondary)
+                .statusGlyphFrame()
         }
-        .buttonStyle(.plain)
-        .statusButtonHitTarget()
+        .statusButtonStyle()
         .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
             AwakeSessionDetailsView(controller: controller)
         }
@@ -1007,9 +1036,10 @@ private struct DeviceStatusButton: View {
             Image(systemName: device.kind.systemImageName)
                 .symbolVariant(device.kind.usesFillVariant ? .fill : .none)
                 .foregroundStyle(device.isConnected ? .green : .secondary)
+                .contentTransition(.symbolEffect(.replace))
+                .statusGlyphFrame()
         }
-        .buttonStyle(.plain)
-        .statusButtonHitTarget()
+        .statusButtonStyle()
         .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
             StatusPopoverContent(
                 title: device.name ?? device.kind.displayName,
@@ -1059,10 +1089,24 @@ private struct StatusPopoverContent: View {
     }
 }
 
+/// Sidebar status cluster sizing: every circle matches, whatever the glyph's
+/// natural width (IMG-1), and the five circles still fit the 180pt minimum
+/// sidebar width.
+private enum StatusClusterMetrics {
+    static let spacing = LiquidGlassMetrics.Spacing.xxSmall
+    static let glyphSize: CGFloat = 14
+}
+
 private extension View {
-    func statusButtonHitTarget() -> some View {
-        frame(width: 22, height: 22)
-            .contentShape(Rectangle())
+    /// A square glyph frame so circular glass buttons come out the same size.
+    func statusGlyphFrame() -> some View {
+        frame(width: StatusClusterMetrics.glyphSize, height: StatusClusterMetrics.glyphSize)
+    }
+
+    /// Icon-only circular glass for the sidebar status cluster (one control
+    /// size for the whole row).
+    func statusButtonStyle() -> some View {
+        compatGlassIconButton(controlSize: .small)
     }
 }
 

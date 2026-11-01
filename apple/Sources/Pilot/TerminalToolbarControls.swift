@@ -30,17 +30,27 @@ struct TerminalFastCommandToolbarField: View {
     }
 
     var body: some View {
-        TextField("Fast Command", text: $command)
-            .textFieldStyle(.plain)
-            .scaledFont(size: 13, weight: .medium, design: .monospaced)
-            .onSubmit(run)
-            .onChange(of: command) { _, newValue in
-                TerminalFastCommandStore.setCommand(newValue, for: pane.id)
-            }
-            .padding(.horizontal, 12)
-            .frame(minWidth: 220, idealWidth: 360, maxWidth: 480)
-            .layoutPriority(1)
-            .accessibilityIdentifier("terminal.fast-command")
+        // The toolbar item already supplies the capsule glass on macOS 26, so
+        // the field stays plain inside it (no double glass). A leading glyph
+        // keeps the field identifiable once the placeholder is replaced by a
+        // command (FORM-1).
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Image(systemName: "bolt")
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField("Fast Command", text: $command)
+                .textFieldStyle(.plain)
+                .scaledFont(size: 13, weight: .medium, design: .monospaced)
+                .onSubmit(run)
+                .onChange(of: command) { _, newValue in
+                    TerminalFastCommandStore.setCommand(newValue, for: pane.id)
+                }
+                .accessibilityIdentifier("terminal.fast-command")
+        }
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .frame(minWidth: 220, idealWidth: 360, maxWidth: 480)
+        .layoutPriority(1)
+        .help("Fast Command")
     }
 
     private func run() {

@@ -16,17 +16,25 @@ struct PilotSettingsView: View {
         NavigationSplitView {
             // The system sidebar search field (HIER-6) replaces a hand-drawn
             // capsule; it adopts Liquid Glass on macOS 26 automatically.
+            let showsGeneral = matchesSearch("General identity keys about version updates setup permissions tools")
+            let showsUsage = matchesSearch("Usage Claude Codex Kimi Grok")
             List(selection: sidebarSelection) {
-                if matchesSearch("General identity keys about version updates setup permissions tools") {
+                if showsGeneral {
                     Label("General", systemImage: "gearshape")
                         .tag(SettingsTab.general)
                 }
-                if matchesSearch("Usage Claude Codex Kimi Grok") {
+                if showsUsage {
                     Label("Usage", systemImage: "chart.bar.xaxis")
                         .tag(SettingsTab.usage)
                 }
             }
             .listStyle(.sidebar)
+            // A designed no-results state instead of a blank sidebar (MOT-6).
+            .overlay {
+                if !showsGeneral && !showsUsage {
+                    ContentUnavailableView.search(text: searchText)
+                }
+            }
             .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
             .toolbar(removing: .sidebarToggle)
@@ -63,15 +71,24 @@ struct PilotSettingsView: View {
                     systemImage: "gearshape.fill",
                     tint: .blue
                 )
+                // Secondary glass actions (BTN-1: the page has no single
+                // primary action, so none is prominent).
                 Section("Updates") {
                     Button("Check for Updates…") {
                         updater.checkForUpdates()
                     }
+                    .compatGlassButtonStyle()
                 }
                 Section("Setup") {
-                    OpenSetupButton()
-                    Text("Review permissions, companion connections, and developer tools.")
-                        .foregroundStyle(.secondary)
+                    // The description sits beside its action (LAY-5) in the
+                    // standard settings-row layout.
+                    LabeledContent {
+                        OpenSetupButton()
+                            .compatGlassButtonStyle()
+                    } label: {
+                        Text("Review permissions, companion connections, and developer tools.")
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 SettingsSections()
                 ChromiumDiagnosticsSettingsSection()
@@ -88,13 +105,21 @@ struct PilotSettingsPageHeader: View {
     let tint: Color
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // A text style scaled up instead of a fixed point size (TYPE-4).
+            // The tile is content, not a control, so it stays a tinted fill
+            // rather than glass; continuous corners on the card token.
             Image(systemName: systemImage)
-                .font(.system(size: 34, weight: .medium))
+                .font(.largeTitle.weight(.medium))
+                .imageScale(.large)
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(tint)
                 .frame(width: 64, height: 64)
-                .background(tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 16))
+                .background(
+                    tint.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.card, style: .continuous)
+                )
+                .accessibilityHidden(true)
 
             // `.largeTitle` is 26pt on macOS: same size, but a named style.
             Text(title)
@@ -107,6 +132,6 @@ struct PilotSettingsPageHeader: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 24)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xLarge)
     }
 }

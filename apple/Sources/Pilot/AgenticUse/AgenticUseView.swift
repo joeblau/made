@@ -16,11 +16,11 @@ struct AgenticUseView: View {
             content
             if let updated = store.cursorLastUpdated {
                 Text("Cursor last updated \(updated.formatted(date: .abbreviated, time: .shortened))")
-                    .scaledFont(size: 11)
+                    .agenticUseFont(.meta)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+                    .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
             }
         }
         .onAppear { store.start() }
@@ -34,67 +34,84 @@ struct AgenticUseView: View {
     private var headerBar: some View {
         // The window toolbar already titles the page, so the bar leads with the
         // date range instead of repeating "Agentic Use".
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             if let interval = store.snapshot?.interval {
                 Text((interval.start..<interval.end).formatted(.interval.month(.abbreviated).day()))
-                    .scaledFont(size: 12, weight: .medium)
+                    .agenticUseFont(.body, weight: .medium)
                     .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
             }
 
             if store.isRefreshing {
-                ProgressView().controlSize(.small).scaleEffect(0.7)
+                ProgressView()
+                    .controlSize(.mini)
+                    .transition(.opacity)
             }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.small)
 
-            Picker("Range", selection: $store.range) {
-                ForEach(AgenticUseRange.allCases) { range in
-                    Text(range.label).tag(range)
+            // The range picker and refresh are one control cluster: the
+            // system segmented control is a capsule on 26+, and the circular
+            // glass refresh blends with it inside one container.
+            CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    Picker("Range", selection: $store.range) {
+                        ForEach(AgenticUseRange.allCases) { range in
+                            Text(range.label).tag(range)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .controlSize(.small)
+                    .labelsHidden()
+                    .fixedSize()
+
+                    Button {
+                        store.rescan()
+                    } label: {
+                        Label("Refresh usage and pricing", systemImage: "arrow.clockwise")
+                    }
+                    .compatGlassIconButton(controlSize: .small)
+                    .disabled(store.isRefreshing)
+                    .help("Refresh usage and pricing")
+                    .accessibilityLabel("Refresh usage and pricing")
                 }
             }
-            .pickerStyle(.segmented)
-            .controlSize(.small)
-            .labelsHidden()
-            .fixedSize()
-
-            Button {
-                store.rescan()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonBorderShape(.circle)
-            .compatGlassButtonStyle()
-            .controlSize(.small)
-            .disabled(store.isRefreshing)
-            .help("Refresh usage and pricing")
-            .accessibilityLabel("Refresh usage and pricing")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+        .animation(LiquidGlassMetrics.stateChange, value: store.isRefreshing)
     }
 
+    /// An inset, rounded warning strip aligned with the dashboard cards. The
+    /// orange wash is content (a status message), so it stays a tinted fill;
+    /// only the dismiss control is glass.
     private func warningBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
+                .accessibilityHidden(true)
             Text(message)
-                .scaledFont(size: 12)
+                .agenticUseFont(.body)
                 .lineLimit(2)
-            Spacer(minLength: 8)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
             Button {
                 store.dismissScanWarning()
             } label: {
-                Image(systemName: "xmark")
-                    .scaledFont(size: 10, weight: .semibold)
+                Label("Dismiss warning", systemImage: "xmark")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .compatGlassIconButton(controlSize: .mini)
             .help("Dismiss")
             .accessibilityLabel("Dismiss warning")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.1))
+        .padding(.leading, LiquidGlassMetrics.Spacing.small)
+        .padding(.trailing, LiquidGlassMetrics.Spacing.xSmall)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+        .background(
+            Color.orange.opacity(0.12),
+            in: RoundedRectangle(cornerRadius: AgenticUseLayout.cardRadius, style: .continuous)
+        )
+        .padding(.horizontal, AgenticUseLayout.gap)
+        .padding(.bottom, LiquidGlassMetrics.Spacing.xxSmall)
     }
 
     // MARK: - Content
@@ -129,35 +146,57 @@ struct AgenticUseView: View {
 
     // MARK: - States
 
+    /// A skeleton of the dashboard (KPI row + chart) with the scan progress
+    /// in the chart slot, so the page keeps its shape while logs load
+    /// (MOT-5) instead of showing a lone spinner on a blank pane.
     private func scanningState(scanned: Int, total: Int) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: AgenticUseLayout.gap) {
+            HStack(spacing: AgenticUseLayout.gap) {
+                ForEach(0..<5, id: \.self) { _ in
+                    AgenticUseSkeletonBlock()
+                        .frame(height: 96)
+                }
+            }
+            AgenticUseSkeletonBlock()
+                .frame(minHeight: 240, maxHeight: 320)
+                .overlay {
+                    scanningProgress(scanned: scanned, total: total)
+                }
+            Spacer(minLength: 0)
+        }
+        .padding(AgenticUseLayout.gap)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func scanningProgress(scanned: Int, total: Int) -> some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
             if let progress = store.scanProgress {
                 ProgressView(value: progress)
                     .progressViewStyle(.linear)
-                    .frame(width: 240)
+                    .frame(maxWidth: 240)
             } else {
                 ProgressView()
                     .controlSize(.small)
             }
             Text("Loading agent usage…")
-                .scaledFont(size: 12)
+                .agenticUseFont(.body)
                 .foregroundStyle(.secondary)
             if total > 0 {
                 Text("\(scanned.formatted()) of \(total.formatted()) files")
-                    .scaledFont(size: 11)
+                    .agenticUseFont(.meta)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(LiquidGlassMetrics.Spacing.medium)
     }
 
     private var emptyState: some View {
         ContentUnavailableView {
             Label("No Usage Data", systemImage: "chart.line.uptrend.xyaxis")
         } description: {
-            VStack(spacing: 4) {
+            VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                 Text("No usage was found for Claude Code, Codex, Cursor, Grok, or Kimi.")
                 Text("Run an agent session, or enable Cursor usage in Settings.")
             }
@@ -202,18 +241,45 @@ struct AgenticUseView: View {
 
 // MARK: - Shared card chrome
 
-/// Dashboard spacing and type tokens. Spacing sits on the 4pt grid; text uses
-/// five sizes — display (KPI values), title (card headings), body, meta, and
-/// caption (axis labels and footnotes).
+/// Dashboard spacing, radius, and type tokens. Spacing sits on the shared 4pt
+/// grid (LAY-3) and cards use the shared card radius, so the dashboard matches
+/// every other Liquid Glass surface.
 enum AgenticUseLayout {
-    static let cardPadding: CGFloat = 16
-    static let cardRadius: CGFloat = 12
+    static let cardPadding: CGFloat = LiquidGlassMetrics.Spacing.medium
+    static let cardRadius: CGFloat = LiquidGlassMetrics.Radius.card
+    /// Gap between cards and around the page.
+    static let gap: CGFloat = LiquidGlassMetrics.Spacing.small
+
+    /// The dashboard's five named text sizes (TYPE-4): display (KPI values),
+    /// title (card headings), body, meta (supporting labels), and caption
+    /// (axis labels). Every size follows Pilot's ⌘+/⌘- text zoom through
+    /// `scaledFont`. Icon glyphs sized to their tiles are not text and keep
+    /// their own sizes.
+    enum TextStyle {
+        case display
+        case title
+        case body
+        case meta
+        case caption
+
+        var size: CGFloat {
+            switch self {
+            case .display: 26
+            case .title: 14
+            case .body: 12
+            case .meta: 11
+            case .caption: 10
+            }
+        }
+    }
 }
 
 extension View {
     /// The dashboard's card treatment: a quiet `.quaternary` fill, no border.
-    /// The 12pt gaps between cards separate them; a hairline on every card
-    /// made the page read as border soup.
+    /// Cards are content, so they never take glass (glass is the control
+    /// layer). The gaps between cards separate them; a hairline on every card
+    /// made the page read as border soup (LAY-2). The card also declares its
+    /// shape as the container shape, so concentric children nest (LAY-4).
     func agenticUseCard(minHeight: CGFloat? = nil, padding inset: CGFloat = AgenticUseLayout.cardPadding) -> some View {
         padding(inset)
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
@@ -221,11 +287,40 @@ extension View {
                 .quaternary.opacity(0.5),
                 in: RoundedRectangle(cornerRadius: AgenticUseLayout.cardRadius, style: .continuous)
             )
+            .liquidGlassContainerShape(cornerRadius: AgenticUseLayout.cardRadius)
     }
 
-    /// Card heading: 14pt semibold, the size every panel title shares.
+    /// Card heading: the title style every panel shares.
     func agenticUseCardTitle() -> some View {
-        scaledFont(size: 14, weight: .semibold)
+        agenticUseFont(.title, weight: .semibold)
+    }
+
+    /// A named dashboard text style that scales with Pilot's text zoom.
+    func agenticUseFont(
+        _ style: AgenticUseLayout.TextStyle,
+        weight: Font.Weight = .regular,
+        design: Font.Design = .default
+    ) -> some View {
+        scaledFont(size: style.size, weight: weight, design: design)
+    }
+}
+
+/// One placeholder card in the loading skeleton: the card fill, breathing
+/// slowly (held still with Reduce Motion).
+private struct AgenticUseSkeletonBlock: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isDimmed = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: AgenticUseLayout.cardRadius, style: .continuous)
+            .fill(.quaternary.opacity(0.5))
+            .opacity(isDimmed ? 0.45 : 1)
+            .animation(
+                reduceMotion ? nil : .easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                value: isDimmed
+            )
+            .onAppear { isDimmed = !reduceMotion }
+            .accessibilityHidden(true)
     }
 }
 
@@ -252,17 +347,17 @@ struct AgenticUseDashboard: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: AgenticUseLayout.gap) {
                 AgenticUseKPICards(snapshot: snapshot, columns: kpiColumns)
                 AgenticUseDailyChartPanel(snapshot: snapshot)
                 if width >= Self.twoColumnWidth {
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(spacing: 12) {
+                    HStack(alignment: .top, spacing: AgenticUseLayout.gap) {
+                        VStack(spacing: AgenticUseLayout.gap) {
                             AgenticUseTokenFlowPanel(snapshot: snapshot)
                             insights
                         }
                         .frame(maxWidth: .infinity)
-                        VStack(spacing: 12) {
+                        VStack(spacing: AgenticUseLayout.gap) {
                             AgenticUseProviderBreakdown(snapshot: snapshot)
                             AgenticUseTopModels(snapshot: snapshot)
                         }
@@ -276,7 +371,7 @@ struct AgenticUseDashboard: View {
                 }
                 footnote
             }
-            .padding(12)
+            .padding(AgenticUseLayout.gap)
         }
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
@@ -296,7 +391,7 @@ struct AgenticUseDashboard: View {
     /// Costs are estimates; keep the pricing source and any unpriced gap
     /// visible on the page rather than buried in a tooltip.
     private var footnote: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             Text("Costs are API-equivalent estimates at published per-token rates. \(pricingStatus).")
             if snapshot.hasUnpricedModels {
                 Text("* Partial total: \(AgenticUseFormat.tokens(snapshot.unpricedTokens)) tokens have no published rate.")
@@ -305,9 +400,9 @@ struct AgenticUseDashboard: View {
         }
         // Secondary, not tertiary: the pricing caveat is content and has to
         // pass contrast at this size.
-        .scaledFont(size: 11)
+        .agenticUseFont(.meta)
         .foregroundStyle(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.xxSmall)
     }
 }

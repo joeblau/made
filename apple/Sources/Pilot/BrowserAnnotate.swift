@@ -499,55 +499,82 @@ enum BrowserAnnotate {
         var r = el.getBoundingClientRect();
         box = document.createElement('div');
         box.setAttribute('data-pilot-annotate-box', '');
-        box.style.cssText = 'position:fixed;z-index:2147483647;left:' + Math.max(8, Math.min(r.left, window.innerWidth - 340)) + 'px;top:' + Math.min(r.bottom + 8, window.innerHeight - 210) + 'px;width:324px;background:rgba(32,32,34,0.97);color:#fff;border:1px solid rgba(255,255,255,0.14);border-radius:12px;padding:12px;box-shadow:0 12px 40px rgba(0,0,0,0.5);font:13px -apple-system,system-ui;backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);';
+        box.style.cssText = 'position:fixed;z-index:2147483647;left:' + Math.max(8, Math.min(r.left, window.innerWidth - 340)) + 'px;top:' + Math.min(r.bottom + 8, window.innerHeight - 210) + 'px;width:324px;background:rgba(30,30,32,0.8);color:#fff;border:1px solid rgba(255,255,255,0.14);border-radius:20px;padding:12px;box-shadow:0 12px 40px rgba(0,0,0,0.4);font:13px -apple-system,system-ui;backdrop-filter:blur(24px) saturate(1.8);-webkit-backdrop-filter:blur(24px) saturate(1.8);opacity:0;transform:translateY(-4px) scale(0.98);transform-origin:top left;transition:opacity 0.15s ease-out,transform 0.3s cubic-bezier(0.2,0.9,0.3,1.15);';
 
         var style = document.createElement('style');
         style.textContent = '[data-pilot-annotate-box] .pa-close:hover{background:rgba(255,255,255,0.12)!important;color:#fff!important;}' +
           '[data-pilot-annotate-box] textarea:focus{outline:none!important;border-color:#0a84ff!important;box-shadow:0 0 0 3px rgba(10,132,255,0.25)!important;}' +
           '[data-pilot-annotate-box] textarea::placeholder{color:#636366!important;}' +
-          '[data-pilot-annotate-box] .pa-send:hover{background:#2f8cff!important;}';
+          '[data-pilot-annotate-box] .pa-send:hover{background:#2f8cff!important;}' +
+          '[data-pilot-annotate-box] .pa-send:active{transform:scale(0.97)!important;}' +
+          '@media (prefers-color-scheme: light){' +
+            '[data-pilot-annotate-box]{background:rgba(255,255,255,0.8)!important;color:#1d1d1f!important;border-color:rgba(0,0,0,0.08)!important;box-shadow:0 12px 40px rgba(0,0,0,0.16)!important;}' +
+            '[data-pilot-annotate-box] .pa-title{color:#1d1d1f!important;}' +
+            '[data-pilot-annotate-box] .pa-tag{color:#6e6e73!important;background:rgba(0,0,0,0.06)!important;}' +
+            '[data-pilot-annotate-box] .pa-close{color:#6e6e73!important;}' +
+            '[data-pilot-annotate-box] .pa-close:hover{background:rgba(0,0,0,0.08)!important;color:#1d1d1f!important;}' +
+            '[data-pilot-annotate-box] .pa-input{background:rgba(0,0,0,0.04)!important;color:#1d1d1f!important;border-color:rgba(0,0,0,0.12)!important;}' +
+            '[data-pilot-annotate-box] .pa-input::placeholder{color:#8e8e93!important;}' +
+            '[data-pilot-annotate-box] .pa-hint{color:#6e6e73!important;}' +
+          '}' +
+          '@media (prefers-reduced-motion: reduce){[data-pilot-annotate-box]{transition:none!important;transform:none!important;}}';
         box.appendChild(style);
 
         var header = document.createElement('div');
-        header.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:8px;';
+        header.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px;';
         var title = document.createElement('span');
+        title.className = 'pa-title';
         title.textContent = 'Annotate element';
         title.style.cssText = 'font:600 12px -apple-system,system-ui;color:#ebebf0;';
         header.appendChild(title);
         var tag = document.createElement('span');
+        tag.className = 'pa-tag';
         tag.textContent = '<' + el.tagName.toLowerCase() + '>';
-        tag.style.cssText = 'font:11px ui-monospace,Menlo,monospace;color:#8e8e93;background:rgba(255,255,255,0.08);border-radius:4px;padding:1px 5px;overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;';
+        tag.style.cssText = 'font:11px ui-monospace,Menlo,monospace;color:#8e8e93;background:rgba(255,255,255,0.08);border-radius:999px;padding:2px 8px;overflow:hidden;text-overflow:ellipsis;max-width:120px;white-space:nowrap;';
         header.appendChild(tag);
         var close = document.createElement('button');
         close.className = 'pa-close';
         close.textContent = '×';
         close.title = 'Dismiss';
         close.setAttribute('aria-label', 'Dismiss');
-        close.style.cssText = 'margin-left:auto;width:22px;height:22px;line-height:20px;text-align:center;background:transparent;color:#8e8e93;border:none;border-radius:6px;font-size:16px;cursor:pointer;padding:0;transition:background 0.12s;';
+        close.style.cssText = 'margin-left:auto;width:24px;height:24px;line-height:22px;text-align:center;background:transparent;color:#8e8e93;border:none;border-radius:50%;font-size:16px;cursor:pointer;padding:0;transition:background 0.15s ease-out,color 0.15s ease-out;';
         close.addEventListener('click', clearSelection);
         header.appendChild(close);
         box.appendChild(header);
 
         var ta = document.createElement('textarea');
+        ta.className = 'pa-input';
         ta.placeholder = 'Describe what you want to happen…';
-        ta.style.cssText = 'width:100%;height:64px;background:rgba(255,255,255,0.06);color:#fff;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:8px;resize:none;box-sizing:border-box;font:13px -apple-system,system-ui;transition:border-color 0.12s,box-shadow 0.12s;';
+        ta.setAttribute('aria-label', 'Annotate element');
+        ta.style.cssText = 'width:100%;height:64px;background:rgba(255,255,255,0.06);color:#fff;border:1px solid rgba(255,255,255,0.14);border-radius:8px;padding:8px;resize:none;box-sizing:border-box;font:13px -apple-system,system-ui;transition:border-color 0.15s ease-out,box-shadow 0.15s ease-out;';
         box.appendChild(ta);
 
         var footer = document.createElement('div');
         footer.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:8px;';
         var hint = document.createElement('div');
+        hint.className = 'pa-hint';
         hint.textContent = 'Press Enter, click a terminal, then Send';
         hint.style.cssText = 'color:#8e8e93;font-size:11px;flex:1;';
         footer.appendChild(hint);
         var send = document.createElement('button');
         send.className = 'pa-send';
         send.textContent = 'Send';
-        send.style.cssText = 'display:none;background:#0a84ff;color:#fff;border:none;border-radius:7px;padding:6px 14px;font:600 12px -apple-system,system-ui;cursor:pointer;transition:background 0.12s;';
+        send.style.cssText = 'display:none;background:#0a84ff;color:#fff;border:none;border-radius:999px;padding:6px 16px;font:600 12px -apple-system,system-ui;cursor:pointer;transition:background 0.15s ease-out,transform 0.15s ease-out;';
         footer.appendChild(send);
         box.appendChild(footer);
         var root = document.documentElement;
         if (!root) { clearSelection(); return; }
         root.appendChild(box);
+        // Scale-and-fade the panel in (MODAL-2). The timeout backs up rAF so a
+        // throttled frame can never leave the panel invisible.
+        var shownBox = box;
+        var revealBox = function () {
+          if (box !== shownBox) return;
+          shownBox.style.opacity = '1';
+          shownBox.style.transform = 'none';
+        };
+        window.requestAnimationFrame(revealBox);
+        window.setTimeout(revealBox, 100);
         ta.focus();
 
         ta.addEventListener('keydown', function (ev) {

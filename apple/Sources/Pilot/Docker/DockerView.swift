@@ -18,6 +18,7 @@ struct DockerView: View {
             }
             content
         }
+        .animation(LiquidGlassMetrics.spring, value: store.actionError)
         .confirmationDialog(
             "Remove Container?",
             isPresented: Binding(
@@ -34,6 +35,9 @@ struct DockerView: View {
         } message: { container in
             Text("“\(container.name)” will be stopped and deleted. Its named volumes are kept.")
         }
+        // Semantic text styles below follow Cockpit's ⌘+/⌘- ladder through
+        // Dynamic Type, replacing one-off `scaledFont` point sizes (TYPE-4).
+        .uiZoomedDynamicType()
         .onAppear { store.start() }
         .onDisappear { store.stop() }
     }
@@ -41,100 +45,104 @@ struct DockerView: View {
     // MARK: - Status bar
 
     private var statusBar: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
             engineStatus
 
-            Spacer(minLength: 12)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.small)
 
             // Header controls float as glass above the container list.
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .scaledFont(size: 11)
-                    .foregroundStyle(.secondary)
-                TextField("Filter containers", text: $store.searchText)
-                    .textFieldStyle(.plain)
-                    .scaledFont(size: 12)
-                    .frame(width: 160)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .compatGlassCapsule()
+            TextField("Filter containers", text: $store.searchText)
+                .frame(width: 160)
+                .liquidGlassField(systemImage: "magnifyingglass")
+                .font(.callout)
 
             Toggle("Show stopped", isOn: $store.showsStopped)
                 .toggleStyle(.switch)
                 .controlSize(.mini)
 
+            // The spinner for a manual or background refresh runs inside the
+            // control itself rather than beside the engine status (MOT-5).
             Button {
                 store.refreshNow()
             } label: {
-                Image(systemName: "arrow.clockwise")
-                    .scaledFont(size: 12, weight: .medium)
+                Label {
+                    Text("Refresh containers")
+                } icon: {
+                    InspectorRefreshGlyph(isRefreshing: store.isRefreshing)
+                }
             }
-            .buttonBorderShape(.circle)
-            .compatGlassButtonStyle()
-            .controlSize(.small)
+            .compatGlassIconButton(controlSize: .small)
             .disabled(!store.engine.isConnected)
             .help("Refresh")
-            .accessibilityLabel("Refresh containers")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
     }
 
     @ViewBuilder
     private var engineStatus: some View {
         switch store.engine {
         case .checking:
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 ProgressView().controlSize(.small)
                 Text("Looking for a container engine…")
-                    .scaledFont(size: 12)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
         case .unavailable:
-            HStack(spacing: 8) {
-                Circle().fill(.secondary).frame(width: 7, height: 7)
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                Circle().fill(.secondary).frame(width: 8, height: 8)
                 Text("Engine not running")
-                    .scaledFont(size: 12, weight: .medium)
+                    .font(.callout.weight(.medium))
                     .foregroundStyle(.secondary)
             }
         case .connected(let version, _):
-            HStack(spacing: 8) {
-                Circle().fill(.green).frame(width: 7, height: 7)
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                Circle().fill(.green).frame(width: 8, height: 8)
                 Text(version.version.isEmpty ? "Docker" : "Docker \(version.version)")
-                    .scaledFont(size: 12, weight: .medium)
+                    .font(.callout.weight(.medium))
                 Text("\(store.runningCount) of \(store.containers.count) running")
-                    .scaledFont(size: 12)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
-                if store.isRefreshing {
-                    ProgressView().controlSize(.mini)
-                }
+                    .contentTransition(.numericText())
+                    .animation(LiquidGlassMetrics.stateChange, value: store.runningCount)
             }
         }
     }
 
+    /// An inset warning wash (content, not glass) with rounded corners. Its
+    /// radius is the dismiss circle's (~12pt) plus the 8pt vertical inset, so
+    /// the corners nest concentrically (LAY-4).
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
+                .accessibilityHidden(true)
             Text(message)
-                .scaledFont(size: 12)
+                .font(.callout)
                 .lineLimit(2)
-            Spacer(minLength: 8)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
             Button {
                 store.dismissActionError()
             } label: {
-                Image(systemName: "xmark")
-                    .scaledFont(size: 10, weight: .semibold)
+                Label("Dismiss error", systemImage: "xmark")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .compatGlassIconButton(controlSize: .small)
             .help("Dismiss")
-            .accessibilityLabel("Dismiss error")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.1))
+        .padding(.leading, LiquidGlassMetrics.Spacing.small)
+        .padding(.trailing, LiquidGlassMetrics.Spacing.xSmall)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+        .background(
+            Color.orange.opacity(0.1),
+            in: RoundedRectangle(
+                cornerRadius: LiquidGlassMetrics.Radius.field + LiquidGlassMetrics.Spacing.xSmall,
+                style: .continuous
+            )
+        )
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
+        .transition(.opacity.combined(with: .move(edge: .top)))
     }
 
     // MARK: - Content
@@ -193,10 +201,11 @@ struct DockerView: View {
                         .listRowSeparator(.hidden)
                     }
                 } header: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                         if group.isCompose {
                             Image(systemName: "square.stack.3d.up")
-                                .scaledFont(size: 10)
+                                .font(.caption)
+                                .accessibilityHidden(true)
                         }
                         Text(group.title)
                     }
@@ -220,17 +229,20 @@ struct DockerView: View {
                 .foregroundStyle(.secondary)
             }
         } actions: {
-            HStack(spacing: 8) {
-                Button("Retry") { store.reconnect() }
-                    .compatGlassProminentButtonStyle()
-                if let dockerApp = Self.installedDockerAppURL {
-                    Button("Open Docker Desktop") {
-                        NSWorkspace.shared.openApplication(
-                            at: dockerApp,
-                            configuration: NSWorkspace.OpenConfiguration()
-                        )
+            // One primary action (BTN-1); neighbors share a glass container.
+            CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    Button("Retry") { store.reconnect() }
+                        .compatGlassProminentButtonStyle()
+                    if let dockerApp = Self.installedDockerAppURL {
+                        Button("Open Docker Desktop") {
+                            NSWorkspace.shared.openApplication(
+                                at: dockerApp,
+                                configuration: NSWorkspace.OpenConfiguration()
+                            )
+                        }
+                        .compatGlassButtonStyle()
                     }
-                    .compatGlassButtonStyle()
                 }
             }
         }
@@ -255,48 +267,55 @@ private struct DockerContainerRow: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
             Circle()
                 .fill(container.state.indicatorColor)
-                .frame(width: 7, height: 7)
+                .frame(width: 8, height: 8)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(container.name)
-                    .scaledFont(size: 13, weight: .medium)
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
-                HStack(spacing: 6) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     Text(container.image)
                         .lineLimit(1)
                     Text(verbatim: "·")
+                        .accessibilityHidden(true)
                     Text(container.status.isEmpty ? container.state.rawValue.capitalized : container.status)
                         .lineLimit(1)
                 }
-                .scaledFont(size: 11)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
 
             if !container.portsSummary.isEmpty {
                 Text(container.portsSummary)
-                    .scaledFont(size: 11)
-                    .monospaced()
+                    .font(.subheadline.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
 
-            if isBusy {
-                ProgressView()
-                    .controlSize(.mini)
-                    .frame(width: 60, alignment: .trailing)
-            } else {
-                actions
-                    .opacity(isHovering ? 1 : 0.001)
-            }
+            // The actions keep their layout slot while busy, and the spinner
+            // sits over it, so the ports column never jumps mid-action.
+            actions
+                .opacity(isBusy ? 0 : (isHovering ? 1 : 0.001))
+                .disabled(isBusy)
+                .accessibilityHidden(isBusy)
+                .overlay(alignment: .trailing) {
+                    if isBusy {
+                        ProgressView()
+                            .controlSize(.mini)
+                            .accessibilityLabel("Working")
+                    }
+                }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
         .contentShape(Rectangle())
         .onHover { isHovering = $0 }
+        .animation(LiquidGlassMetrics.stateChange, value: isHovering)
+        .animation(LiquidGlassMetrics.stateChange, value: isBusy)
         .contextMenu {
             ForEach(availableActions, id: \.self) { action in
                 Button(action.label, systemImage: action.systemImage) { perform(action) }
@@ -310,22 +329,21 @@ private struct DockerContainerRow: View {
         .help(container.command.isEmpty ? container.shortID : "\(container.shortID) — \(container.command)")
     }
 
+    /// Icon-only glass circles, one control size across the Docker surface.
+    /// Remove carries no destructive role or red tint here: it only asks, and
+    /// the danger color waits for the confirmation dialog (COL-4, MODAL-1).
     private var actions: some View {
-        HStack(spacing: 2) {
-            ForEach(availableActions, id: \.self) { action in
-                Button {
-                    perform(action)
-                } label: {
-                    Image(systemName: action.systemImage)
-                        .scaledFont(size: 11, weight: .medium)
-                        .frame(width: 22, height: 22)
-                        .contentShape(Rectangle())
+        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                ForEach(availableActions, id: \.self) { action in
+                    Button {
+                        perform(action)
+                    } label: {
+                        Label(action.label, systemImage: action.systemImage)
+                    }
+                    .compatGlassIconButton(controlSize: .small)
+                    .help(action.label)
                 }
-                .buttonStyle(.plain)
-                // Danger color waits for the confirmation dialog (COL-4).
-                .foregroundStyle(.secondary)
-                .help(action.label)
-                .accessibilityLabel(action.label)
             }
         }
     }

@@ -227,9 +227,10 @@ struct GitHubTasksView: View {
 
                 if store.tasks.isEmpty {
                     if store.isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // The store raises `isLoading` only for a first or
+                        // manual load with nothing on screen, never for silent
+                        // background polls, so the skeleton cannot flicker.
+                        InspectorLoadingPlaceholder()
                             .transition(.opacity)
                     } else if let error = store.errorMessage {
                         ContentUnavailableView(
@@ -268,24 +269,39 @@ private struct GitHubTaskRow: View {
     let task: GitHubTask
     @State private var sent = false
 
+    /// Hover washes extend this far past the text they highlight; matching
+    /// negative padding keeps the card's layout exactly where it was.
+    private let washInset = LiquidGlassMetrics.Spacing.xxSmall
+
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // Inline text links inside a content card: plain-looking, but with
+            // hover and press feedback (BTN-5) instead of dead styles.
             Button(action: sendImplementPrompt) {
                 Text("#\(task.number)")
                     .font(.system(.body, design: .monospaced, weight: .semibold))
                     .foregroundStyle(sent ? Color.green : Color.accentColor)
+                    .contentTransition(.interpolate)
+                    .padding(washInset)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.liquidGlassPressable)
+            .padding(-washInset)
+            .animation(LiquidGlassMetrics.stateChange, value: sent)
             .help("Run an \u{201C}implement #\(task.number)\u{201D} task in the active terminal")
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(task.title)
-                    .font(.body)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: open)
-                    .help("Open #\(task.number) on GitHub")
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                Button(action: open) {
+                    Text(task.title)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(washInset)
+                }
+                .buttonStyle(.liquidGlassPressable)
+                .padding(-washInset)
+                .help("Open #\(task.number) on GitHub")
 
                 metadata
             }

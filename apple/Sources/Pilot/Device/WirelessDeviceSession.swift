@@ -62,18 +62,28 @@ struct WirelessDeviceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
+            // The header floats on the dark stage, so it renders in the dark
+            // scheme in both appearances (COL-2). Its two secondary actions
+            // are neighboring capsule glass buttons (BTN-1).
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Label("Wireless Device", systemImage: "airplay.video")
                     .font(.headline)
                 Spacer()
-                Button("Use USB", action: useUSB)
-                    .buttonStyle(.borderless)
-                if session.status != .stopped {
-                    Button("Stop") { session.stop() }
-                        .buttonStyle(.borderless)
+                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        Button("Use USB", action: useUSB)
+                            .compatGlassButtonStyle()
+                        if session.status != .stopped {
+                            Button("Stop") { session.stop() }
+                                .compatGlassButtonStyle()
+                        }
+                    }
+                    .buttonBorderShape(.capsule)
+                    .controlSize(.small)
                 }
             }
-            .padding(12)
+            .padding(LiquidGlassMetrics.Spacing.small)
+            .environment(\.colorScheme, .dark)
             ZStack {
                 Color.black
                 if let renderer = session.renderer {
@@ -86,9 +96,11 @@ struct WirelessDeviceView: View {
     }
 
     private var instructions: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             Image(systemName: "airplay.video")
-                .scaledFont(size: 36)
+                .font(.largeTitle)
+                // Pulses while the receiver is listening for a device (MOT-5).
+                .symbolEffect(.pulse, isActive: isListening)
             switch session.status {
             case .starting:
                 ProgressView()
@@ -99,7 +111,8 @@ struct WirelessDeviceView: View {
                 Text(session.receiverName).font(.title2.bold()).textSelection(.enabled)
                 if case .pairing(let code) = session.status {
                     Text("Enter this code on your device")
-                    Text(code).font(.system(size: 36, weight: .medium, design: .monospaced))
+                    Text(code)
+                        .font(.largeTitle.monospaced().weight(.medium))
                         .textSelection(.enabled)
                 }
                 Text("Video only. Keep this pane open while sharing.")
@@ -109,10 +122,12 @@ struct WirelessDeviceView: View {
                 Text(message)
                 Button("Try Again") { session.start() }
                     .compatGlassProminentButtonStyle()
+                    .buttonBorderShape(.capsule)
             case .stopped:
                 Text("Wireless Sharing Is Off").font(.headline)
                 Button("Start Wireless Sharing") { session.start() }
                     .compatGlassProminentButtonStyle()
+                    .buttonBorderShape(.capsule)
             case .streaming:
                 EmptyView()
             }
@@ -120,8 +135,16 @@ struct WirelessDeviceView: View {
         .multilineTextAlignment(.center)
         .foregroundStyle(.white)
         .environment(\.colorScheme, .dark)
-        .padding(32)
+        .uiZoomedDynamicType()
+        .padding(LiquidGlassMetrics.Spacing.xxLarge)
         .frame(maxWidth: 480)
+    }
+
+    private var isListening: Bool {
+        switch session.status {
+        case .starting, .waiting: true
+        default: false
+        }
     }
 }
 

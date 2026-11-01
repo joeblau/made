@@ -14,27 +14,31 @@ struct AgenticUseTopModels: View {
     var body: some View {
         let models = snapshot.modelTotals
         let visible = showsAll ? models : Array(models.prefix(Self.collapsedCount))
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
             HStack {
                 Text("Top Models").agenticUseCardTitle()
-                Spacer(minLength: 8)
+                Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
                 if models.count > Self.collapsedCount {
+                    // Secondary glass: disclosure, not the view's primary action.
                     Button {
-                        withAnimation(.snappy) { showsAll.toggle() }
+                        withAnimation(LiquidGlassMetrics.spring) { showsAll.toggle() }
                     } label: {
-                        HStack(spacing: 4) {
-                            Text(showsAll ? "Show Top \(Self.collapsedCount)" : "View All \(models.count) Models")
-                            Image(systemName: showsAll ? "chevron.up" : "arrow.right")
-                        }
+                        Label(
+                            showsAll ? "Show Top \(Self.collapsedCount)" : "View All \(models.count) Models",
+                            systemImage: showsAll ? "chevron.up" : "chevron.down"
+                        )
+                        .labelStyle(.titleAndIcon)
+                        .contentTransition(.symbolEffect(.replace))
                     }
                     .compatGlassButtonStyle()
+                    .buttonBorderShape(.capsule)
                     .controlSize(.small)
                 }
             }
 
             // One rule under the header; rows separate by spacing rather than a
             // divider on every line.
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 0) {
+            Grid(alignment: .leading, horizontalSpacing: LiquidGlassMetrics.Spacing.medium, verticalSpacing: 0) {
                 GridRow {
                     header("#")
                     header("Model").frame(maxWidth: .infinity, alignment: .leading)
@@ -61,25 +65,26 @@ struct AgenticUseTopModels: View {
         let tint = AgenticUseModelPalette.providerColor(for: total.provider)
         return GridRow {
             Text("\(rank)")
-                .scaledFont(size: 12)
+                .agenticUseFont(.body)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text(total.displayName)
-                    .scaledFont(size: 12, weight: .medium)
+                    .agenticUseFont(.body, weight: .medium)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if total.isUnpriced { AgenticUseUnpricedBadge() }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .help(total.model)
-            HStack(spacing: 4) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                 Image(total.provider.brandSymbol)
-                    .scaledFont(size: 11, weight: .semibold)
+                    .agenticUseFont(.meta, weight: .semibold)
                     .foregroundStyle(tint)
-                    .frame(width: 14)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
                 Text(total.provider.displayName)
-                    .scaledFont(size: 12)
+                    .agenticUseFont(.body)
                     .lineLimit(1)
             }
             number(total.isUnpriced ? "—" : AgenticUseFormat.cost(total.cost))
@@ -88,23 +93,23 @@ struct AgenticUseTopModels: View {
                 .help("Effective cost per million processed tokens, cache reads included")
             AgenticUseSparkline(values: snapshot.tokenTrend(for: total.model), tint: tint, lineWidth: 1.25)
                 .frame(minWidth: 64, idealWidth: 120, maxWidth: 140)
-                .frame(height: 22)
+                .frame(height: 24)
                 .help("Tokens per \(snapshot.range.bucketUnit == .hour ? "hour" : "day")")
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
     }
 
     private func header(_ text: String) -> some View {
         Text(text)
-            .scaledFont(size: 11, weight: .medium)
+            .agenticUseFont(.meta, weight: .medium)
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            .padding(.bottom, 8)
+            .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
     }
 
     private func number(_ text: String) -> some View {
         Text(text)
-            .scaledFont(size: 12)
+            .agenticUseFont(.body)
             .monospacedDigit()
             .lineLimit(1)
     }

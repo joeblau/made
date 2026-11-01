@@ -15,9 +15,12 @@ struct AgenticUseKPICards: View {
     var body: some View {
         let metrics = metrics
         LazyVGrid(
-            columns: Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: max(1, columns)),
+            columns: Array(
+                repeating: GridItem(.flexible(), spacing: AgenticUseLayout.gap, alignment: .top),
+                count: max(1, columns)
+            ),
             alignment: .leading,
-            spacing: 12
+            spacing: AgenticUseLayout.gap
         ) {
             ForEach(metrics) { metric in
                 AgenticUseKPICard(metric: metric)
@@ -184,21 +187,21 @@ private struct AgenticUseKPICard: View {
     let metric: AgenticUseKPIMetric
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             Text(metric.title)
-                .scaledFont(size: 12, weight: .medium)
+                .agenticUseFont(.body, weight: .medium)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Text(metric.value)
-                .scaledFont(size: 26, weight: .bold, design: .rounded)
+                .agenticUseFont(.display, weight: .bold, design: .rounded)
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 .contentTransition(.numericText())
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 deltaLabel
                     .layoutPriority(1)
-                Spacer(minLength: 4)
+                Spacer(minLength: LiquidGlassMetrics.Spacing.xxSmall)
                 if metric.sparkline.count > 1 {
                     AgenticUseSparkline(
                         values: metric.sparkline,
@@ -206,23 +209,23 @@ private struct AgenticUseKPICard: View {
                         anchorsAtZero: metric.anchorsAtZero
                     )
                     .frame(minWidth: 44, maxWidth: 110)
-                    .frame(height: 30)
+                    .frame(height: 32)
                 }
             }
         }
         .agenticUseCard()
         .help(metric.help)
-        .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.7), value: metric.value)
+        .animation(LiquidGlassMetrics.spring, value: metric.value)
     }
 
     @ViewBuilder
     private var deltaLabel: some View {
         if let delta = metric.delta {
             ViewThatFits(in: .horizontal) {
-                HStack(spacing: 4) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     deltaBadge(delta)
                     Text(delta.caption)
-                        .scaledFont(size: 11)
+                        .agenticUseFont(.meta)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -230,7 +233,7 @@ private struct AgenticUseKPICard: View {
             }
         } else {
             Text(metric.fallbackCaption)
-                .scaledFont(size: 11)
+                .agenticUseFont(.meta)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
@@ -239,9 +242,9 @@ private struct AgenticUseKPICard: View {
     private func deltaBadge(_ delta: AgenticUseKPIMetric.Delta) -> some View {
         HStack(spacing: 2) {
             Image(systemName: delta.symbol)
-                .scaledFont(size: 11, weight: .bold)
+                .agenticUseFont(.meta, weight: .bold)
             Text(delta.text)
-                .scaledFont(size: 12, weight: .semibold)
+                .agenticUseFont(.body, weight: .semibold)
                 .monospacedDigit()
         }
         .foregroundStyle(AgenticUseTone.color(delta.effectiveTone))

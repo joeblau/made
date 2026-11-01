@@ -50,43 +50,58 @@ struct PinnedQuickJumpRow: View {
     var body: some View {
         let pinned = PinnedQuickJumpTarget.targets(in: workspaces)
         if !pinned.isEmpty {
-            VStack(spacing: 8) {
+            VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text("Pinned")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
 
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 150, maximum: 240), spacing: 8)],
-                    spacing: 8
-                ) {
-                    ForEach(pinned) { target in
-                        Button {
-                            onSelect(target.id)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "pin.fill")
-                                    .scaledFont(size: 9)
-                                    .foregroundStyle(.secondary)
-                                Text(target.name)
-                                    .lineLimit(1)
-                                Spacer(minLength: 4)
-                                // The shortcut is the point of this row, so it
-                                // stays at secondary contrast, not tertiary.
-                                Text(verbatim: "⌘\(target.shortcutNumber)")
-                                    .scaledFont(size: 10)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                // Neighboring glass buttons render in one container (shared
+                // sampling, no glass on glass); spacing 0 keeps each capsule
+                // distinct rather than merging across the grid gap.
+                CompatGlassContainer(spacing: 0) {
+                    LazyVGrid(
+                        columns: [GridItem(
+                            .adaptive(minimum: 150, maximum: 240),
+                            spacing: LiquidGlassMetrics.Spacing.xSmall
+                        )],
+                        spacing: LiquidGlassMetrics.Spacing.xSmall
+                    ) {
+                        ForEach(pinned) { target in
+                            quickJumpButton(target)
                         }
-                        .compatGlassButtonStyle()
-                        .help("Jump to \(target.name)")
                     }
                 }
                 .frame(maxWidth: 520)
             }
-            .padding(.top, 8)
+            .padding(.top, LiquidGlassMetrics.Spacing.xSmall)
             .accessibilityIdentifier("workspace.pinned-quick-jump")
         }
+    }
+
+    private func quickJumpButton(_ target: PinnedQuickJumpTarget) -> some View {
+        Button {
+            onSelect(target.id)
+        } label: {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                Image(systemName: "pin.fill")
+                    .scaledFont(size: 9)
+                    .foregroundStyle(.secondary)
+                Text(target.name)
+                    .lineLimit(1)
+                Spacer(minLength: LiquidGlassMetrics.Spacing.xxSmall)
+                // The shortcut is the point of this row, so it
+                // stays at secondary contrast, not tertiary.
+                Text(verbatim: "⌘\(target.shortcutNumber)")
+                    .scaledFont(size: 10)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Capsule())
+        }
+        // Peer choices with no single primary (BTN-1): all
+        // secondary glass, capsule-shaped.
+        .compatGlassButtonStyle()
+        .buttonBorderShape(.capsule)
+        .help("Jump to \(target.name)")
     }
 }

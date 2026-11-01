@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// One full-width bar segmented by each provider's share of estimated cost,
-/// with a share/cost legend underneath. Hovering a legend entry opens that
-/// provider's per-model breakdown. Falls back to token share when nothing in
+/// with a share/cost legend underneath. Hovering a legend entry highlights it
+/// and opens that provider's per-model breakdown. Falls back to token share when nothing in
 /// range is priced, and says so.
 struct AgenticUseProviderBreakdown: View {
     let snapshot: AgenticUseSnapshot
@@ -32,19 +32,19 @@ struct AgenticUseProviderBreakdown: View {
 
     var body: some View {
         let entries = entries
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Provider Breakdown").agenticUseCardTitle()
-                Spacer(minLength: 8)
+                Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
                 Text(usesCost ? "share of estimated cost" : "share of tokens (no priced usage)")
-                    .scaledFont(size: 11)
+                    .agenticUseFont(.meta)
                     .foregroundStyle(.secondary)
             }
             bar(entries)
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 104), spacing: 12, alignment: .topLeading)],
+                columns: [GridItem(.adaptive(minimum: 104), spacing: LiquidGlassMetrics.Spacing.small, alignment: .topLeading)],
                 alignment: .leading,
-                spacing: 12
+                spacing: LiquidGlassMetrics.Spacing.small
             ) {
                 ForEach(entries) { entry in
                     AgenticUseProviderLegendEntry(
@@ -74,10 +74,10 @@ struct AgenticUseProviderBreakdown: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.secondary.opacity(0.1))
+            .background(.fill.tertiary)
             .clipShape(Capsule())
         }
-        .frame(height: 14)
+        .frame(height: 12)
     }
 }
 
@@ -90,54 +90,63 @@ private struct AgenticUseProviderLegendEntry: View {
     @State private var showsModels = false
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Circle()
                 .fill(AgenticUseModelPalette.providerColor(for: provider))
                 .frame(width: 8, height: 8)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     Text(AgenticUseFormat.percent(share))
-                        .scaledFont(size: 12, weight: .semibold)
+                        .agenticUseFont(.body, weight: .semibold)
                         .monospacedDigit()
                     Text(provider.displayName)
-                        .scaledFont(size: 12)
+                        .agenticUseFont(.body)
                         .foregroundStyle(.secondary)
                 }
                 Text(value)
-                    .scaledFont(size: 12, weight: .medium)
+                    .agenticUseFont(.body, weight: .medium)
                     .monospacedDigit()
             }
             .lineLimit(1)
         }
+        // Hover wash that bleeds past the entry without shifting the grid,
+        // so the hover that opens the popover has a visible state (BTN-5).
+        .background {
+            RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous)
+                .fill(.fill.tertiary)
+                .padding(-LiquidGlassMetrics.Spacing.xxSmall)
+                .opacity(showsModels ? 1 : 0)
+        }
         .contentShape(Rectangle())
+        .animation(LiquidGlassMetrics.stateChange, value: showsModels)
         .onHover { showsModels = $0 && !models.isEmpty }
         .popover(isPresented: $showsModels, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text(provider.displayName)
-                    .scaledFont(size: 12, weight: .semibold)
+                    .agenticUseFont(.body, weight: .semibold)
                 ForEach(models) { total in
-                    HStack(spacing: 8) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                         RoundedRectangle(cornerRadius: 2, style: .continuous)
                             .fill(AgenticUseModelPalette.color(for: total.model))
                             .frame(width: 8, height: 8)
                         Text(total.displayName)
-                            .scaledFont(size: 11, weight: .medium)
+                            .agenticUseFont(.meta, weight: .medium)
                             .lineLimit(1)
                         if total.isUnpriced { AgenticUseUnpricedBadge() }
-                        Spacer(minLength: 12)
+                        Spacer(minLength: LiquidGlassMetrics.Spacing.small)
                         Text(total.isUnpriced ? "—" : AgenticUseFormat.cost(total.cost))
-                            .scaledFont(size: 11)
+                            .agenticUseFont(.meta)
                             .monospacedDigit()
                         Text(AgenticUseFormat.tokens(total.tokens))
-                            .scaledFont(size: 11)
+                            .agenticUseFont(.meta)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                             .frame(minWidth: 44, alignment: .trailing)
                     }
                 }
             }
-            .padding(12)
+            .padding(LiquidGlassMetrics.Spacing.small)
             .frame(minWidth: 260, alignment: .leading)
         }
     }
@@ -148,10 +157,10 @@ private struct AgenticUseProviderLegendEntry: View {
 struct AgenticUseUnpricedBadge: View {
     var body: some View {
         Text("unpriced")
-            .scaledFont(size: 10, weight: .semibold)
+            .agenticUseFont(.caption, weight: .semibold)
             .foregroundStyle(.orange)
-            .padding(.horizontal, 4)
-            .padding(.vertical, 1)
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.xxSmall)
+            .padding(.vertical, 2)
             .background(Color.orange.opacity(0.15), in: Capsule())
     }
 }

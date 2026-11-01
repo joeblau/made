@@ -56,28 +56,32 @@ struct RunnerFleetView: View {
         }
     }
 
+    /// A non-interactive glass caption floating over the scene. The swatch
+    /// colors mirror the SceneKit cable materials, so they stay literal.
     private var legend: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             legendItem("Running a job", color: Color(red: 0.3, green: 0.75, blue: 1), opacity: 1)
             legendItem("Idle", color: Color(white: 0.24), opacity: 1)
             legendItem("Offline", color: Color(white: 0.12), opacity: 1)
         }
         .font(.caption)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
         .compatGlassCapsule()
     }
 
     private func legendItem(_ title: String, color: Color, opacity: Double) -> some View {
-        HStack(spacing: 6) {
-            Capsule().fill(color.opacity(opacity)).frame(width: 14, height: 4)
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Capsule().fill(color.opacity(opacity)).frame(width: 16, height: 4)
             Text(title)
         }
     }
 
-    /// A Maps-style glass pill floating over the scene; the hairline dividers
-    /// keep the four actions distinct inside one control.
+    /// A Maps-style glass capsule floating over the scene; the hairline
+    /// dividers keep the four actions distinct inside one control, and each
+    /// action gets its own circular hover/press wash (BTN-5) whose radius is
+    /// the capsule's, so the highlight nests concentrically (LAY-4).
     private var cameraControls: some View {
         VStack(spacing: 0) {
             controlButton("plus", help: "Zoom in") { fleet.zoom(by: 1.3, animated: true) }
@@ -88,17 +92,20 @@ struct RunnerFleetView: View {
             Divider().frame(width: 20)
             controlButton("arrow.up.to.line", help: "Back to GitHub") { fleet.frameTop() }
         }
-        .compatGlassEffect(interactive: true, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .compatGlassCapsule(interactive: true)
     }
+
+    private static let controlDiameter: CGFloat = 32
 
     private func controlButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
+                // `.callout` is 12pt on macOS; a text style instead of a
+                // one-off point size (TYPE-4).
+                .font(.callout.weight(.semibold))
+                .frame(width: Self.controlDiameter, height: Self.controlDiameter)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.liquidGlassPressable(cornerRadius: Self.controlDiameter / 2))
         .foregroundStyle(.primary)
         .help(help)
         .accessibilityLabel(help)

@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The dashboard centerpiece: per-provider stacked cost, tokens, or cache
 /// savings over the range (hourly for 24h, daily or weekly otherwise), with a
-/// hover tooltip and a share legend that isolates a provider on click.
+/// hover tooltip and a share legend of capsule filter chips that isolates a
+/// provider on click.
 ///
 /// Providers are stacked in `AgenticProvider.allCases` order and colored by
 /// `AgenticUseModelPalette.providerColor`, the same identity the token-flow
@@ -50,7 +51,7 @@ struct AgenticUseDailyChartPanel: View {
 
     var body: some View {
         let cells = cells
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
             header
             if cells.allSatisfy({ $0.value == 0 }) {
                 ContentUnavailableView(
@@ -90,16 +91,16 @@ struct AgenticUseDailyChartPanel: View {
 
     private var header: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
                 Text(title).agenticUseCardTitle().fixedSize()
                 metricPicker
-                Spacer(minLength: 8)
+                Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
                 trailingControls
             }
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.small) {
                     Text(title).agenticUseCardTitle().fixedSize()
-                    Spacer(minLength: 8)
+                    Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
                     trailingControls
                 }
                 metricPicker
@@ -107,6 +108,8 @@ struct AgenticUseDailyChartPanel: View {
         }
     }
 
+    /// The system segmented control: a capsule with a sliding selection on
+    /// 26+, so no custom segmented control is needed here.
     private var metricPicker: some View {
         Picker("Metric", selection: $metric) {
             ForEach(Metric.allCases) { Text($0.rawValue).tag($0) }
@@ -118,7 +121,7 @@ struct AgenticUseDailyChartPanel: View {
     }
 
     private var trailingControls: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             if Self.offersWeekly(snapshot.range) {
                 Picker("Granularity", selection: $granularity) {
                     ForEach(Granularity.allCases) { Text($0.rawValue).tag($0) }
@@ -286,7 +289,7 @@ struct AgenticUseDailyChartPanel: View {
                 AxisValueLabel {
                     if let number = value.as(Double.self) {
                         Text(axisLabel(for: number))
-                            .scaledFont(size: 10)
+                            .agenticUseFont(.caption)
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
@@ -320,38 +323,55 @@ struct AgenticUseDailyChartPanel: View {
 
     // MARK: - Legend
 
-    /// Shares of the whole range for the current metric. Clicking an entry
-    /// isolates that provider; clicking it again restores the stack.
+    /// Shares of the whole range for the current metric, as capsule filter
+    /// chips. Clicking a chip isolates that provider (the chip takes the
+    /// selected tint); clicking it again restores the stack. Falls back to a
+    /// horizontal scroller when the card is too narrow for one row.
     private var legend: some View {
         let shares = legendShares
-        return HStack(spacing: 16) {
-            Spacer(minLength: 0)
-            ForEach(shares, id: \.provider) { entry in
-                Button {
-                    withAnimation(.snappy) {
-                        isolated = isolated == entry.provider ? nil : entry.provider
-                    }
-                } label: {
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(AgenticUseModelPalette.providerColor(for: entry.provider))
-                            .frame(width: 8, height: 8)
-                        Text(entry.provider.displayName)
-                            .scaledFont(size: 12, weight: .medium)
-                        Text(AgenticUseFormat.percent(entry.share))
-                            .scaledFont(size: 12)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    .opacity(isolated == nil || isolated == entry.provider ? 1 : 0.4)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(isolated == entry.provider ? "Show all providers" : "Show only \(entry.provider.displayName)")
+        return ViewThatFits(in: .horizontal) {
+            legendChips(shares)
+                .frame(maxWidth: .infinity)
+            ScrollView(.horizontal, showsIndicators: false) {
+                legendChips(shares)
             }
-            Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    private func legendChips(_ shares: [(provider: AgenticProvider, share: Double)]) -> some View {
+        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                ForEach(shares, id: \.provider) { entry in
+                    legendChip(entry)
+                }
+            }
+        }
+    }
+
+    private func legendChip(_ entry: (provider: AgenticProvider, share: Double)) -> some View {
+        let isIsolated = isolated == entry.provider
+        return Button {
+            withAnimation(LiquidGlassMetrics.spring) {
+                isolated = isIsolated ? nil : entry.provider
+            }
+        } label: {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                Circle()
+                    .fill(AgenticUseModelPalette.providerColor(for: entry.provider))
+                    .frame(width: 8, height: 8)
+                Text(entry.provider.displayName)
+                    .agenticUseFont(.body, weight: .medium)
+                    .foregroundStyle(.primary)
+                Text(AgenticUseFormat.percent(entry.share))
+                    .agenticUseFont(.body)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            .opacity(isolated == nil || isIsolated ? 1 : 0.5)
+        }
+        .buttonStyle(.liquidGlassChip(isSelected: isIsolated))
+        .help(isIsolated ? "Show all providers" : "Show only \(entry.provider.displayName)")
+        .accessibilityAddTraits(isIsolated ? .isSelected : [])
     }
 
     private var legendShares: [(provider: AgenticProvider, share: Double)] {
@@ -406,42 +426,43 @@ struct AgenticUseDailyChartPanel: View {
     private func tooltip(for bucket: Date, cells: [Cell]) -> some View {
         let rows = cells.filter { $0.bucket == bucket }.sorted { $0.value > $1.value }
         let total = rows.reduce(0) { $0 + $1.value }
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Text(tooltipDate(bucket))
-                .scaledFont(size: 11, weight: .medium)
+                .agenticUseFont(.meta, weight: .medium)
                 .foregroundStyle(.secondary)
             HStack {
-                Text("Total").scaledFont(size: 12, weight: .semibold)
-                Spacer(minLength: 16)
+                Text("Total").agenticUseFont(.body, weight: .semibold)
+                Spacer(minLength: LiquidGlassMetrics.Spacing.medium)
                 Text(formatted(total))
-                    .scaledFont(size: 12, weight: .semibold)
+                    .agenticUseFont(.body, weight: .semibold)
                     .monospacedDigit()
                     .contentTransition(.numericText(value: total))
             }
             Divider()
             ForEach(rows) { row in
-                HStack(spacing: 8) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     Circle()
                         .fill(AgenticUseModelPalette.providerColor(for: row.provider))
                         .frame(width: 8, height: 8)
-                    Text(row.provider.displayName).scaledFont(size: 11)
-                    Spacer(minLength: 16)
+                    Text(row.provider.displayName).agenticUseFont(.meta)
+                    Spacer(minLength: LiquidGlassMetrics.Spacing.medium)
                     Text(formatted(row.value))
-                        .scaledFont(size: 11)
+                        .agenticUseFont(.meta)
                         .monospacedDigit()
                         .foregroundStyle(row.value > 0 ? .primary : .tertiary)
                         .contentTransition(.numericText(value: row.value))
                 }
             }
         }
-        .padding(12)
+        .padding(LiquidGlassMetrics.Spacing.small)
         .frame(minWidth: 180, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        // The tooltip floats over the plot, so it is the one glass surface on
+        // this card (control layer, not content). Glass draws its own edge, so
+        // the old hairline stroke is gone (LAY-2).
+        .compatFloatingGlass(
+            in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.field, style: .continuous)
         )
-        .animation(.interactiveSpring(response: 0.3, dampingFraction: 0.8), value: bucket)
+        .animation(LiquidGlassMetrics.spring, value: bucket)
     }
 
     private func tooltipDate(_ bucket: Date) -> String {
