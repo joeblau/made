@@ -68,16 +68,27 @@ struct InspectorSectionHeader: View {
             }
         }
         .foregroundStyle(.secondary)
-        .frame(minHeight: 17)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .frame(minHeight: 16)
+        // No filled box: a tinted header directly above tinted cards read as
+        // boxes inside boxes (LAY-1). 16pt lines the glyph up with the
+        // Files outline's disclosure column and the cards' leading icons.
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
         .frame(maxWidth: .infinity)
-        .background(
-            .quaternary.opacity(0.45),
-            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-        )
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+    }
+}
+
+/// The "•" between inspector metadata values. Values themselves sit at
+/// `.secondary`: they carry real information (number, author, age), so they
+/// must not drop to `.tertiary` on top of a card fill (TYPE-3); only the
+/// separator recedes.
+struct InspectorMetadataSeparator: View {
+    var body: some View {
+        Text("•")
+            .font(.subheadline)
+            .foregroundStyle(.tertiary)
+            .accessibilityHidden(true)
     }
 }
 
@@ -527,30 +538,26 @@ struct PullRequestListView: View {
                         .font(.callout)
                         .lineLimit(2)
 
-                    // Number • user • time ago at .tertiary with .quaternary
-                    // separators — the metadata styling shared with the Actions
-                    // and Tasks tabs.
+                    // Number • user • time ago at .secondary with
+                    // `InspectorMetadataSeparator` — the metadata styling shared
+                    // with the Actions and Tasks tabs.
                     HStack(spacing: 4) {
                         Text("#\(pullRequest.id)")
                             .font(.system(.subheadline, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                         if !pullRequest.author.isEmpty {
-                            Text("•")
-                                .font(.subheadline)
-                                .foregroundStyle(.quaternary)
+                            InspectorMetadataSeparator()
                             Text(pullRequest.author)
                                 .font(.subheadline)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         }
                         if !pullRequest.elapsed.isEmpty {
-                            Text("•")
-                                .font(.subheadline)
-                                .foregroundStyle(.quaternary)
+                            InspectorMetadataSeparator()
                             Text(pullRequest.elapsed)
                                 .font(.subheadline)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                     }
@@ -685,9 +692,7 @@ struct ActionsListView: View {
                         Text(action.name)
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
-                        Text("•")
-                            .font(.subheadline)
-                            .foregroundStyle(.quaternary)
+                        InspectorMetadataSeparator()
                         Text(action.headBranch)
                             .font(.system(.subheadline, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -696,34 +701,28 @@ struct ActionsListView: View {
                     HStack(spacing: 4) {
                         Text(String(action.headSha.prefix(7)))
                             .font(.system(.subheadline, design: .monospaced))
-                            .foregroundStyle(.tertiary)
+                            .foregroundStyle(.secondary)
                         // Hash • user • duration • time ago.
                         if !action.actor.isEmpty {
-                            Text("•")
-                                .font(.subheadline)
-                                .foregroundStyle(.quaternary)
+                            InspectorMetadataSeparator()
                             Text(action.actor)
                                 .font(.subheadline)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
                         }
                         if !action.duration.isEmpty {
-                            Text("•")
-                                .font(.subheadline)
-                                .foregroundStyle(.quaternary)
+                            InspectorMetadataSeparator()
                             Text(action.duration)
                                 .font(.subheadline)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .fixedSize()
                         }
                         if !action.elapsed.isEmpty {
-                            Text("•")
-                                .font(.subheadline)
-                                .foregroundStyle(.quaternary)
+                            InspectorMetadataSeparator()
                             Text(action.elapsed)
                                 .font(.subheadline)
-                                .foregroundStyle(.tertiary)
+                                .foregroundStyle(.secondary)
                                 .lineLimit(1)
                         }
                     }

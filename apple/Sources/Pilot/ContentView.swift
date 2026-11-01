@@ -533,6 +533,7 @@ struct ContentView: View {
                     Label("Inspector", systemImage: "sidebar.trailing")
                 }
                 .disabled(store.selectedWorkspace == nil || !store.isWorkspaceDetailVisible)
+                .help("Show or hide the Inspector")
             }
         }
         .background(LeadingWorkspaceToolbarItem())
@@ -948,7 +949,7 @@ private struct AwakeSessionDetailsView: View {
     @Bindable var controller: AwakeSessionController
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Toggle(isOn: $controller.isEnabled) {
                 HStack(spacing: 8) {
                     Image(systemName: "cup.and.heat.waves")
@@ -957,7 +958,7 @@ private struct AwakeSessionDetailsView: View {
                     Spacer(minLength: 12)
                     Circle()
                         .fill(controller.isEnabled ? Color.green : Color.secondary.opacity(0.6))
-                        .frame(width: 7, height: 7)
+                        .frame(width: 8, height: 8)
                 }
             }
             .toggleStyle(.checkbox)
@@ -967,7 +968,7 @@ private struct AwakeSessionDetailsView: View {
                 .foregroundStyle(.secondary)
                 .contentTransition(.numericText())
 
-            VStack(alignment: .leading, spacing: 7) {
+            VStack(alignment: .leading, spacing: 8) {
                 Toggle("Allow display sleep", isOn: $controller.allowDisplaySleep)
                 Toggle(
                     "Allow system sleep when display is closed",
@@ -1034,13 +1035,13 @@ private struct StatusPopoverContent: View {
     let tint: Color
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage)
                 .foregroundStyle(tint)
                 .font(.title3)
                 .frame(width: 24)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(title)
                     .font(.headline)
                 Text(status)
@@ -1053,7 +1054,7 @@ private struct StatusPopoverContent: View {
                 }
             }
         }
-        .padding(14)
+        .padding(16)
         .frame(width: 240, alignment: .leading)
     }
 }

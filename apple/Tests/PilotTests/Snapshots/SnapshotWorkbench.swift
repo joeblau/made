@@ -303,7 +303,16 @@ private struct SnapshotNotes: View {
                 }
                 Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
                 Spacer()
-                Label("Word Wrap: None", systemImage: "text.word.spacing").foregroundStyle(.secondary)
+                // Mirrors NotesView's standard pop-up picker (label + value).
+                HStack(spacing: 8) {
+                    Text("Word Wrap").foregroundStyle(.secondary)
+                    HStack(spacing: 4) {
+                        Text("None")
+                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(.quaternary.opacity(0.6), in: Capsule())
+                }
             }.font(.system(size: 12, weight: .medium)).padding(12)
             Label("Secret masking is visual only. Notes are stored locally as plaintext—do not use Notes as a secret manager.",
                   systemImage: "eye.slash")

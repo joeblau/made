@@ -255,14 +255,14 @@ struct EditorPaneView: View {
                     .foregroundStyle(.secondary)
                 TextField("Search files…", text: $searchQuery)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 14))
+                    .scaledFont(size: 14)
                     .focused($searchFocused)
                     .onKeyPress(.return) { openSelected(); return .handled }
                     .onKeyPress(.escape) { dismissFinder(); return .handled }
                     .onKeyPress(.downArrow) { moveSelection(by: 1); return .handled }
                     .onKeyPress(.upArrow) { moveSelection(by: -1); return .handled }
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .padding(.vertical, 12)
 
             resultsBody
@@ -270,8 +270,9 @@ struct EditorPaneView: View {
         }
         .frame(maxWidth: 520)
         .frame(maxHeight: 360)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .shadow(color: .black.opacity(0.25), radius: 24, y: 12)
+        // Quick open is a transient control layer over the editor, like
+        // Spotlight: glass on macOS 26, material + shadow before it.
+        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, 12)
         .padding(.top, 60)             // float the card toward the top third
@@ -349,20 +350,20 @@ struct EditorPaneView: View {
     private func resultRow(_ item: FileItem, isHighlighted: Bool) -> some View {
         VStack(alignment: .leading, spacing: 1) {
             Text(item.name)
-                .font(.system(size: 13))
+                .scaledFont(size: 13)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             let directory = directoryPortion(of: item.relativePath)
             if !directory.isEmpty {
                 Text(directory)
-                    .font(.system(size: 11))
+                    .scaledFont(size: 11)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(
             isHighlighted
@@ -389,7 +390,7 @@ struct EditorPaneView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
             Text(message)
-                .font(.system(size: 12))
+                .scaledFont(size: 12)
                 .foregroundStyle(.primary)
                 .lineLimit(2)
             Spacer(minLength: 8)
@@ -397,16 +398,20 @@ struct EditorPaneView: View {
                 session.errorMessage = nil
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
+                    .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(.secondary)
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss error")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 12)
-        .padding(.top, 10)
+        .padding(.top, 12)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 

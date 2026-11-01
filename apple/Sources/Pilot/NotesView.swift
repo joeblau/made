@@ -35,14 +35,6 @@ private enum NoteWordWrap: Int, CaseIterable, Identifiable {
         }
     }
 
-    var compactTitle: String {
-        switch self {
-        case .eighty: "80"
-        case .oneTwenty: "120"
-        case .none: "None"
-        }
-    }
-
     var columnCount: Int? {
         self == .none ? nil : rawValue
     }
@@ -75,7 +67,7 @@ struct NotesView: View {
             }
         }
         .confirmationDialog(
-            "Delete this note?",
+            "Delete Note?",
             isPresented: Binding(
                 get: { store.notePendingClose != nil },
                 set: { if !$0 { store.notePendingClose = nil } }
@@ -139,8 +131,8 @@ struct NotesView: View {
                                 Text(note.displayTitle)
                                     .scaledFont(size: 12)
                                     .lineLimit(1)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 5)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 4)
                                     .background(
                                         .ultraThinMaterial,
                                         in: RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -187,26 +179,28 @@ struct NotesView: View {
         NoteWordWrap(rawValue: wordWrapRawValue) ?? .eighty
     }
 
+    /// A standard pop-up picker rather than a hand-built checkmark menu: it
+    /// renders as a Liquid Glass pop-up button on macOS 26 and keeps the
+    /// selected width visible without a second "compact" title.
     private var wordWrapMenu: some View {
-        Menu {
+        Picker("Word Wrap", selection: wordWrapSelection) {
             ForEach(NoteWordWrap.allCases) { option in
-                Button {
-                    wordWrapRawValue = option.rawValue
-                } label: {
-                    if option == selectedWordWrap {
-                        Label(option.title, systemImage: "checkmark")
-                    } else {
-                        Text(option.title)
-                    }
-                }
+                Text(option.title).tag(option)
             }
-        } label: {
-            Label("Word Wrap: \(selectedWordWrap.compactTitle)", systemImage: "text.word.spacing")
-                .scaledFont(size: 11, weight: .medium)
         }
-        .menuStyle(.borderlessButton)
+        .pickerStyle(.menu)
+        .scaledFont(size: 11, weight: .medium)
         .fixedSize()
         .help("Word Wrap")
+    }
+
+    /// Falls back to 80 columns for unknown stored values, matching
+    /// `selectedWordWrap`.
+    private var wordWrapSelection: Binding<NoteWordWrap> {
+        Binding(
+            get: { selectedWordWrap },
+            set: { wordWrapRawValue = $0.rawValue }
+        )
     }
 
     @ViewBuilder
@@ -439,15 +433,14 @@ struct NoteTextView: NSViewRepresentable {
     }
 }
 
-/// Borderless SF Symbol button used for the editor's gutter affordances.
+/// Transient "Copied" confirmation floated over the editor.
 private struct CopiedSecretToast: View {
     var body: some View {
         Label("Copied", systemImage: "checkmark.circle.fill")
             .scaledFont(size: 13, weight: .semibold)
             .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(color: .black.opacity(0.3), radius: 10, y: 3)
+            .padding(.vertical, 12)
+            .compatFloatingGlassCapsule()
     }
 }
 
@@ -482,8 +475,8 @@ private struct NoteTab: View {
             .accessibilityHidden(!isHovering && !isSelected)
             .help("Close Note")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
         .frame(maxWidth: 170, alignment: .leading)
         .compatGlassEffect(
             tint: isSelected ? Color.accentColor.opacity(0.14) : nil,
