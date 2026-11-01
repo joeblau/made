@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Liquid Glass shipped in macOS 26, and Pilot deploys back to macOS 15.
@@ -88,6 +89,94 @@ extension View {
         controlSize: ControlSize = .regular
     ) -> some View {
         liquidGlassIconButton(prominent: prominent, controlSize: controlSize)
+    }
+}
+
+extension ToolbarContent {
+    /// Hides the system toolbar capsule behind an item whose control carries
+    /// its own glass (a `liquidGlassField`), so the toolbar never stacks glass
+    /// on glass. Before macOS 26 toolbars draw no shared capsule, so the item
+    /// is returned unchanged.
+    @ToolbarContentBuilder
+    func compatSharedBackgroundHidden() -> some ToolbarContent {
+        if #available(macOS 26.0, *) {
+            sharedBackgroundVisibility(.hidden)
+        } else {
+            self
+        }
+    }
+}
+
+extension View {
+    /// Reports whether this `TextField` is being edited, read from AppKit's
+    /// first responder. `@FocusState` never updates for a field hosted in an
+    /// `NSToolbar` item (verified on macOS 27.2: clicking and typing in the
+    /// field leaves it `false`), so toolbar glass fields drive their focus
+    /// stroke (FORM-4) and editing state from this instead. Apply it directly
+    /// to the `TextField`, before any padding, so the probe covers exactly
+    /// the AppKit field it identifies.
+    func toolbarFieldEditing(_ isEditing: Binding<Bool>) -> some View {
+        background(ToolbarFieldEditingProbe(isEditing: isEditing))
+    }
+}
+
+/// A click-through view behind a toolbar `TextField` that watches its
+/// window's first responder (KVO-compliant per NSWindow.h). The field is
+/// editing when the first responder is the AppKit text field under the
+/// probe, or the field editor working for it.
+private struct ToolbarFieldEditingProbe: NSViewRepresentable {
+    @Binding var isEditing: Bool
+
+    func makeNSView(context: Context) -> ProbeView {
+        let view = ProbeView()
+        view.onChange = { isEditing = $0 }
+        return view
+    }
+
+    func updateNSView(_ view: ProbeView, context: Context) {
+        view.onChange = { isEditing = $0 }
+    }
+
+    final class ProbeView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var observation: NSKeyValueObservation?
+        private var reported = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observation?.invalidate()
+            observation = window?.observe(\.firstResponder, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor [weak self] in self?.refresh() }
+            }
+            // Leaving the window ends editing; refresh after this layout pass
+            // so the binding is never written during a view update.
+            Task { @MainActor [weak self] in self?.refresh() }
+        }
+
+        private func refresh() {
+            let editing = window.flatMap { Self.editedField(of: $0.firstResponder) }
+                .map(isUnderProbe) ?? false
+            guard editing != reported else { return }
+            reported = editing
+            onChange?(editing)
+        }
+
+        private static func editedField(of responder: NSResponder?) -> NSTextField? {
+            if let field = responder as? NSTextField { return field }
+            if let editor = responder as? NSTextView, editor.isFieldEditor {
+                return editor.delegate as? NSTextField
+            }
+            return nil
+        }
+
+        private func isUnderProbe(_ field: NSTextField) -> Bool {
+            guard field.window === window else { return false }
+            let probe = convert(bounds, to: nil)
+            return field.convert(field.bounds, to: nil)
+                .contains(CGPoint(x: probe.midX, y: probe.midY))
+        }
     }
 }
 

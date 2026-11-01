@@ -16,6 +16,8 @@ struct TerminalFastCommandToolbarField: View {
     let pane: Pane
 
     @State private var command: String
+    /// Read from AppKit: `@FocusState` never updates in a toolbar item.
+    @State private var isEditing = false
 
     init(pane: Pane) {
         self.pane = pane
@@ -30,27 +32,28 @@ struct TerminalFastCommandToolbarField: View {
     }
 
     var body: some View {
-        // The toolbar item already supplies the capsule glass on macOS 26, so
-        // the field stays plain inside it (no double glass). A leading glyph
-        // keeps the field identifiable once the placeholder is replaced by a
-        // command (FORM-1).
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Image(systemName: "bolt")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            TextField("Fast Command", text: $command)
-                .textFieldStyle(.plain)
-                .scaledFont(size: 13, weight: .medium, design: .monospaced)
-                .onSubmit(run)
-                .onChange(of: command) { _, newValue in
-                    TerminalFastCommandStore.setCommand(newValue, for: pane.id)
-                }
-                .accessibilityIdentifier("terminal.fast-command")
-        }
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-        .frame(minWidth: 220, idealWidth: 360, maxWidth: 480)
-        .layoutPriority(1)
-        .help("Fast Command")
+        // The field is its own Liquid Glass capsule. Both hosting windows
+        // hide the toolbar item's shared capsule
+        // (`compatSharedBackgroundHidden`), so there is exactly one glass
+        // layer. The leading bolt keeps the field identifiable once the
+        // placeholder is replaced by a command (FORM-1). The capsule takes
+        // the toolbar's control height so it lines up with Play/Stop.
+        TextField("Fast Command", text: $command)
+            .scaledFont(size: 13, weight: .medium, design: .monospaced)
+            .onSubmit(run)
+            .onChange(of: command) { _, newValue in
+                TerminalFastCommandStore.setCommand(newValue, for: pane.id)
+            }
+            .accessibilityIdentifier("terminal.fast-command")
+            .toolbarFieldEditing($isEditing)
+            .liquidGlassField(
+                systemImage: "bolt",
+                isFocused: isEditing,
+                minHeight: LiquidGlassMetrics.toolbarControlHeight
+            )
+            .frame(minWidth: 220, idealWidth: 360, maxWidth: 480)
+            .layoutPriority(1)
+            .help("Fast Command")
     }
 
     private func run() {

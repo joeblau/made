@@ -739,23 +739,22 @@ struct ExtensionWindowView: View {
             )
         )
         .toolbar {
+            // Same as Main: the field is its own glass capsule, so the
+            // item's shared toolbar capsule is hidden.
             ToolbarItem(placement: .principal) {
                 if let selectedTerminalPane {
                     TerminalFastCommandToolbarField(pane: selectedTerminalPane)
                         .id(selectedTerminalPane.id)
                 }
             }
+            .compatSharedBackgroundHidden()
             ToolbarItem(placement: .principal) {
                 if let selectedTerminalPane {
                     TerminalFastCommandToolbarActions(pane: selectedTerminalPane)
                         .id(selectedTerminalPane.id)
                 }
             }
-            ToolbarItemGroup(placement: .secondaryAction) {
-                if let pane = extensionWorkspace?.selectedPane {
-                    PaneToolbarControls(pane: pane)
-                }
-            }
+            PaneToolbarContent(pane: extensionWorkspace?.selectedPane)
             if #available(macOS 26.0, *) {
                 ToolbarItem(placement: .primaryAction) {
                     WorkspacePaneLauncher(workspace: extensionWorkspace)

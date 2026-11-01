@@ -64,6 +64,11 @@ enum LiquidGlassMetrics {
     #if os(macOS)
     static let fieldVerticalPadding: CGFloat = 8
     static let segmentVerticalPadding: CGFloat = 4
+    /// The height of the system Liquid Glass capsule behind toolbar items
+    /// (measured on macOS 27.2). A glass field in its own toolbar item takes
+    /// this height so its capsule lines up with the neighboring items; at the
+    /// default field padding it would sit 3pt short.
+    static let toolbarControlHeight: CGFloat = 36
     #else
     static let fieldVerticalPadding: CGFloat = 12
     static let segmentVerticalPadding: CGFloat = 8
@@ -78,18 +83,20 @@ extension View {
     /// glass in a capsule (single-line) or a concentric rounded rectangle
     /// (`multiline: true`), and an accent stroke while focused (FORM-4).
     ///
-    /// Every text input in the apps is glass, including fields inside glass
-    /// panels, sheets, and popovers (the system 26+ precedent: glass sheets
-    /// carry glass controls) and `Form` rows. In a `Form`, stack a visible
-    /// label above the field and hide the field's own row label
-    /// (`.labelsHidden()` on macOS grouped `Form`s), as both Secure
-    /// Messaging screens do. Never ask for text in a system `.alert`; present
-    /// a small glass sheet instead (Pilot's `TextPromptSheet`). The only
-    /// fields that keep the plain style are those hosted in a toolbar
-    /// capsule or a glass palette: their host is already glass, so a glass
-    /// field would stack glass on glass. Pair the field with a persistent
-    /// visible label; the placeholder is a hint, not the label
-    /// (FORM-1/FORM-2).
+    /// Every text input in the apps is glass, with no exceptions: fields
+    /// inside glass panels, sheets, and popovers (the system 26+ precedent:
+    /// glass sheets carry glass controls), `Form` rows, toolbar fields, and
+    /// palette search fields. In a `Form`, stack a visible label above the
+    /// field and hide the field's own row label (`.labelsHidden()` on macOS
+    /// grouped `Form`s), as both Secure Messaging screens do. Never ask for
+    /// text in a system `.alert`; present a small glass sheet instead
+    /// (Pilot's `TextPromptSheet`). A host must never put this glass on
+    /// glass: give a toolbar field its own item and hide that item's shared
+    /// capsule (Pilot's `compatSharedBackgroundHidden()`), and make a palette
+    /// field a sibling of the results card in one glass container rather
+    /// than a child of a glass panel (Pilot's editor quick open). Pair the
+    /// field with a persistent visible label; the placeholder is a hint, not
+    /// the label (FORM-1/FORM-2).
     ///
     /// - Parameters:
     ///   - multiline: Use for `TextEditor` and `TextField(axis: .vertical)`.
@@ -98,15 +105,19 @@ extension View {
     ///   - isFocused: Pass the caller's focus value when the field already
     ///     has its own `.focused(_:)` binding. When `nil`, the modifier
     ///     tracks focus itself.
+    ///   - minHeight: A minimum height for the glass shape, such as
+    ///     `LiquidGlassMetrics.toolbarControlHeight` for a toolbar field.
     func liquidGlassField(
         multiline: Bool = false,
         systemImage: String? = nil,
-        isFocused: Bool? = nil
+        isFocused: Bool? = nil,
+        minHeight: CGFloat? = nil
     ) -> some View {
         modifier(LiquidGlassFieldModifier(
             multiline: multiline,
             systemImage: systemImage,
-            externalFocus: isFocused
+            externalFocus: isFocused,
+            minHeight: minHeight
         ))
     }
 }
@@ -115,6 +126,7 @@ private struct LiquidGlassFieldModifier: ViewModifier {
     let multiline: Bool
     let systemImage: String?
     let externalFocus: Bool?
+    let minHeight: CGFloat?
     @FocusState private var internalFocus: Bool
 
     func body(content: Content) -> some View {
@@ -138,6 +150,7 @@ private struct LiquidGlassFieldModifier: ViewModifier {
         .scrollContentBackground(multiline ? .hidden : .automatic)
         .padding(.horizontal, multiline ? LiquidGlassMetrics.Spacing.small : LiquidGlassMetrics.Spacing.medium)
         .padding(.vertical, multiline ? LiquidGlassMetrics.Spacing.small : LiquidGlassMetrics.fieldVerticalPadding)
+        .frame(minHeight: minHeight)
         .modifier(LiquidGlassFieldSurface(multiline: multiline, isFocused: isFocused))
         .animation(LiquidGlassMetrics.stateChange, value: isFocused)
     }

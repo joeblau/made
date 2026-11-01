@@ -44,7 +44,11 @@ struct BrowserAddressToolbarControl: View {
     let addressIdealWidth: CGFloat
     let addressMaxWidth: CGFloat
 
+    /// Drives ⌘L's programmatic focus request only: `@FocusState` never
+    /// reports focus for a field hosted in a toolbar item.
     @FocusState private var isAddressFocused: Bool
+    /// Whether the field is being edited, read from AppKit's first responder.
+    @State private var isAddressEditing = false
 
     init(
         state: BrowserState,
@@ -58,28 +62,44 @@ struct BrowserAddressToolbarControl: View {
         self.addressMaxWidth = addressMaxWidth
     }
 
+    /// The reload button: a 16pt glyph with a 4pt pad on each side.
+    private static let reloadDiameter: CGFloat = 16 + 2 * LiquidGlassMetrics.Spacing.xxSmall
+    /// The reload button's inset from the capsule's trailing edge. The 24pt
+    /// circle sits in a field of the toolbar's control height, so the
+    /// trailing inset matches the vertical one (6pt) and the circle nests
+    /// concentrically in the capsule: 18pt = 12pt + 6pt (LAY-4).
+    private static let reloadInset = (LiquidGlassMetrics.toolbarControlHeight - reloadDiameter) / 2
+
     var body: some View {
 
-        // The field is a toolbar item, so macOS 26 already draws it on the
-        // toolbar's Liquid Glass capsule. Wrapping it in `liquidGlassField`
-        // here would stack glass on glass, so the field stays plain inside
-        // the system capsule. The placeholder must stay "URL":
+        // The field is its own Liquid Glass capsule. It lives in its own
+        // toolbar item whose shared capsule is hidden (`PaneToolbarContent`),
+        // so there is exactly one glass layer.
+        // The globe is a fixed glyph rather than a lock: `urlText` is the
+        // editable text, not a verified connection state, so it must not
+        // claim security. The placeholder must stay "URL":
         // `BrowserAddressFocus` finds the AppKit field by it for ⌘L.
         TextField("URL", text: Bindable(state).urlText)
-            .textFieldStyle(.plain)
             .scaledFont(size: 13, weight: .medium)
             .focused($isAddressFocused)
             .onSubmit { state.navigate() }
-            .onChange(of: isAddressFocused) { _, isFocused in
-                state.isAddressEditing = isFocused
+            .toolbarFieldEditing($isAddressEditing)
+            .onChange(of: isAddressEditing) { _, isEditing in
+                state.isAddressEditing = isEditing
             }
+            .onDisappear { state.isAddressEditing = false }
             .accessibilityLabel("Address")
-            .padding(.leading, LiquidGlassMetrics.Spacing.small)
-            .padding(.trailing, LiquidGlassMetrics.Spacing.xxLarge)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Together with the field's own 16pt trailing padding, this
+            // clears the reload button overlaid at the capsule's edge.
+            .padding(.trailing, LiquidGlassMetrics.Spacing.medium)
+            .liquidGlassField(
+                systemImage: "globe",
+                isFocused: isAddressEditing,
+                minHeight: LiquidGlassMetrics.toolbarControlHeight
+            )
             .overlay(alignment: .trailing) {
                 browserReloadButton
-                    .padding(.trailing, LiquidGlassMetrics.Spacing.xxSmall)
+                    .padding(.trailing, Self.reloadInset)
             }
             .frame(
                 minWidth: addressMinWidth,
@@ -133,8 +153,8 @@ struct BrowserAddressToolbarControl: View {
                              : AnyShapeStyle(.tertiary))
             .animation(LiquidGlassMetrics.stateChange, value: state.isLoading)
             // A 24pt circular hit area with a hover wash and press feedback
-            // (BTN-5). It sits inside the toolbar's glass capsule, so it
-            // stays plain-looking rather than adding a second glass layer.
+            // (BTN-5). It sits inside the address field's glass capsule, so
+            // it stays plain-looking rather than adding a second glass layer.
             .padding(LiquidGlassMetrics.Spacing.xxSmall)
         }
         .buttonStyle(.liquidGlassPressable(cornerRadius: 12))
@@ -144,8 +164,9 @@ struct BrowserAddressToolbarControl: View {
     }
 }
 
-/// Complete navigation/location composition used by Main. Extension installs
-/// these as separate navigation and principal toolbar items.
+/// The leading browser navigation controls. Main and Extendo both install
+/// them through `PaneToolbarContent`, ahead of the address field's own
+/// toolbar item and the tools group.
 struct BrowserNavigationToolbarControls: View {
     let state: BrowserState
 
@@ -154,7 +175,6 @@ struct BrowserNavigationToolbarControls: View {
         // as their own affordance rather than a third arrow.
         BrowserWalletToolbarControls(state: state)
         BrowserBackForwardToolbarControls(state: state)
-        BrowserAddressToolbarControl(state: state)
     }
 }
 
@@ -378,16 +398,6 @@ struct BrowserToolsToolbarControls: View {
             state.requestWebsiteDataReset()
             isClearingWebsiteData = false
         }
-    }
-}
-
-/// Complete browser toolbar shared by Main and Extendo.
-struct BrowserToolbarControls: View {
-    let state: BrowserState
-
-    var body: some View {
-        BrowserNavigationToolbarControls(state: state)
-        BrowserToolsToolbarControls(state: state)
     }
 }
 

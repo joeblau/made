@@ -92,6 +92,9 @@ struct EditorPaneView: View {
     @State private var finder = FileFinder()
     @State private var searchQuery = ""
     @State private var selectedIndex = 0
+    /// The results list's natural height, so the results card hugs a short
+    /// list instead of stretching to its cap (see `resultsList`).
+    @State private var finderListHeight: CGFloat?
     @FocusState private var searchFocused: Bool
 
     // Arrow-key fallback for the finder; see `installKeyMonitor()`.
@@ -100,10 +103,18 @@ struct EditorPaneView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Quick open floats like Spotlight, so it uses the panel radius; result
-    /// highlights nest concentrically inside it (LAY-4).
+    /// Quick open floats like Spotlight, so the results card uses the panel
+    /// radius; result highlights nest concentrically inside it (LAY-4).
     private static let finderCornerRadius = LiquidGlassMetrics.Radius.panel
+    /// The gap between the search capsule and the results card. The glass
+    /// container's blend spacing stays below it, so the two shapes read as
+    /// separate pieces at rest, Spotlight-style.
+    private static let finderSectionSpacing = LiquidGlassMetrics.Spacing.small
+    private static let finderGlassBlendSpacing = LiquidGlassMetrics.Spacing.xSmall
     private static let finderRowInset = LiquidGlassMetrics.Spacing.xSmall
+    /// Results up to this count render in an eager stack (see `resultsList`);
+    /// it is above what the 360pt palette shows without scrolling.
+    private static let finderEagerRowLimit = 24
     private static let finderRowCornerRadius = LiquidGlassMetrics.Radius.inner(
         outer: finderCornerRadius,
         padding: finderRowInset
@@ -287,34 +298,37 @@ struct EditorPaneView: View {
     // MARK: - Finder overlay
 
     private var finderOverlay: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                // The palette itself is the glass surface, so the field stays
-                // plain inside it (no glass on glass); the magnifier and the
-                // always-focused palette identify it, Spotlight-style.
+        // Quick open is a transient control layer over the editor, laid out
+        // like Spotlight on macOS 26: the search field is its own glass
+        // capsule and the results float as a separate glass card below it
+        // (material + shadow before 26). Neither sits on the other, and one
+        // container renders and morphs the two glass shapes together.
+        CompatGlassContainer(spacing: Self.finderGlassBlendSpacing) {
+            VStack(spacing: Self.finderSectionSpacing) {
+                // The magnifier and the always-focused capsule identify the
+                // field, Spotlight-style.
                 TextField("Search files…", text: $searchQuery)
-                    .textFieldStyle(.plain)
                     .scaledFont(size: 14)
                     .focused($searchFocused)
                     .onKeyPress(.return) { openSelected(); return .handled }
                     .onKeyPress(.escape) { dismissFinder(); return .handled }
                     .onKeyPress(.downArrow) { moveSelection(by: 1); return .handled }
                     .onKeyPress(.upArrow) { moveSelection(by: -1); return .handled }
-            }
-            .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
-            .padding(.vertical, LiquidGlassMetrics.Spacing.small)
+                    .liquidGlassField(systemImage: "magnifyingglass", isFocused: searchFocused)
 
-            resultsBody
-                .frame(maxHeight: 360)
+                // No height frame here: a `maxHeight` frame takes all the
+                // height offered, so the card would stretch past short
+                // results. The list caps itself and the palette caps the
+                // total below.
+                resultsBody
+                    .clipShape(RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous))
+                    .compatFloatingGlass(
+                        in: RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous)
+                    )
+            }
         }
         .frame(maxWidth: 520)
-        .frame(maxHeight: 360)
-        // Quick open is a transient control layer over the editor, like
-        // Spotlight: glass on macOS 26, material + shadow before it.
-        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous))
+        .frame(maxHeight: 360, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
         .padding(.top, 60)             // float the card toward the top third
@@ -356,8 +370,8 @@ struct EditorPaneView: View {
                 Text("Indexing…")
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding()
+            .frame(maxWidth: .infinity)
+            .padding(LiquidGlassMetrics.Spacing.medium)
         } else if finder.results.isEmpty {
             finderMessage("No matches", systemImage: "magnifyingglass")
         } else {
@@ -368,31 +382,56 @@ struct EditorPaneView: View {
     private var resultsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(finder.results.enumerated()), id: \.element.id) { index, item in
-                        // A real button so each row has hover/press feedback
-                        // (BTN-5) and reads as actionable to VoiceOver.
-                        Button {
-                            selectedIndex = index
-                            openSelected()
-                        } label: {
-                            resultRow(item, isHighlighted: index == selectedIndex)
-                        }
-                        .buttonStyle(.liquidGlassPressable(cornerRadius: Self.finderRowCornerRadius))
-                        .padding(.horizontal, Self.finderRowInset)
-                        .id(index)
+                // A short list is laid out eagerly so its measured height is
+                // exact; a lazy stack's estimated row heights left the card
+                // taller than its rows after a narrowing query. Long lists
+                // overflow the cap anyway, so they stay lazy.
+                Group {
+                    if finder.results.count <= Self.finderEagerRowLimit {
+                        VStack(spacing: 0) { resultRows }
+                    } else {
+                        LazyVStack(spacing: 0) { resultRows }
                     }
                 }
-                // The bottom inset matches the side inset so the last row's
-                // highlight stays concentric with the palette corners (LAY-4).
-                .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
-                .padding(.bottom, Self.finderRowInset)
+                // The results card stands alone, so the top and bottom insets
+                // match the side inset and the first and last rows' highlights
+                // stay concentric with the card corners (LAY-4).
+                .padding(.vertical, Self.finderRowInset)
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.height
+                } action: { height in
+                    finderListHeight = height
+                }
             }
+            // A scroll view takes all the height it is offered, which left a
+            // one-result card stretched to the 360pt cap and mostly empty.
+            // Cap it at the list's own height so the card grows with the
+            // results, Spotlight-style, and scrolls only past the cap.
+            .frame(maxHeight: finderListHeight)
+            // Keep the scroller on the card's straight edge: a full-height
+            // legacy scroller otherwise runs into the rounded corners.
+            .contentMargins(.vertical, Self.finderCornerRadius, for: .scrollIndicators)
             .onChange(of: selectedIndex) {
                 withAnimation(.easeOut(duration: 0.12)) {
                     proxy.scrollTo(selectedIndex, anchor: .center)
                 }
             }
+        }
+    }
+
+    private var resultRows: some View {
+        ForEach(Array(finder.results.enumerated()), id: \.element.id) { index, item in
+            // A real button so each row has hover/press feedback (BTN-5) and
+            // reads as actionable to VoiceOver.
+            Button {
+                selectedIndex = index
+                openSelected()
+            } label: {
+                resultRow(item, isHighlighted: index == selectedIndex)
+            }
+            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.finderRowCornerRadius))
+            .padding(.horizontal, Self.finderRowInset)
+            .id(index)
         }
     }
 
@@ -435,7 +474,8 @@ struct EditorPaneView: View {
             Text(message)
                 .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Width only: the card hugs the message, like a short results list.
+        .frame(maxWidth: .infinity)
         .padding(LiquidGlassMetrics.Spacing.medium)
     }
 

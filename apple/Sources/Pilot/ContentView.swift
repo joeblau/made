@@ -37,8 +37,56 @@ struct WorkspaceNumberShortcuts: View {
 }
 
 /// Keeps every pane-specific toolbar identical between Main and Extendo.
-/// Both windows install this view in the same toolbar placement, so control
-/// order, overflow behavior, and future additions stay synchronized.
+/// Both windows install this content in the same toolbar placement, so
+/// control order, overflow behavior, and future additions stay synchronized.
+///
+/// A browser pane's address field is its own Liquid Glass capsule, so it
+/// gets a dedicated item with the toolbar's shared capsule hidden (no glass
+/// on glass), between the navigation group and the tools group.
+struct PaneToolbarContent: ToolbarContent {
+    let pane: Pane?
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .secondaryAction) {
+            BrowserPaneToolbarSlot(pane: pane, slot: .navigation)
+        }
+        ToolbarItem(placement: .secondaryAction) {
+            BrowserPaneToolbarSlot(pane: pane, slot: .address)
+        }
+        .compatSharedBackgroundHidden()
+        ToolbarItemGroup(placement: .secondaryAction) {
+            if let pane {
+                PaneToolbarControls(pane: pane)
+            }
+        }
+    }
+}
+
+/// One browser-only slot of `PaneToolbarContent`. Resolving the pane inside a
+/// view body keeps the slot observing collapse and kind changes.
+private struct BrowserPaneToolbarSlot: View {
+    enum Slot {
+        case navigation
+        case address
+    }
+
+    let pane: Pane?
+    let slot: Slot
+
+    var body: some View {
+        if let state = BrowserToolbarSelection.state(for: pane) {
+            switch slot {
+            case .navigation:
+                BrowserNavigationToolbarControls(state: state)
+            case .address:
+                BrowserAddressToolbarControl(state: state)
+            }
+        }
+    }
+}
+
+/// The pane-kind tools of `PaneToolbarContent`, after any browser navigation
+/// and address items.
 struct PaneToolbarControls: View {
     let pane: Pane
 
@@ -48,7 +96,7 @@ struct PaneToolbarControls: View {
             switch pane.kind {
             case .browser:
                 if let state = BrowserToolbarSelection.state(for: pane) {
-                    BrowserToolbarControls(state: state)
+                    BrowserToolsToolbarControls(state: state)
                 }
             case .device:
                 DeviceToolbarControls(paneID: pane.id)
@@ -501,6 +549,8 @@ struct ContentView: View {
             )
         )
         .toolbar {
+            // The field is its own glass capsule, so the item's shared
+            // toolbar capsule is hidden (no glass on glass).
             ToolbarItem(placement: .principal) {
                 if store.isWorkspaceDetailVisible,
                    let pane = TerminalToolbarSelection.pane(
@@ -510,6 +560,7 @@ struct ContentView: View {
                         .id(pane.id)
                 }
             }
+            .compatSharedBackgroundHidden()
             ToolbarItem(placement: .principal) {
                 if store.isWorkspaceDetailVisible,
                    let pane = TerminalToolbarSelection.pane(
@@ -519,12 +570,11 @@ struct ContentView: View {
                         .id(pane.id)
                 }
             }
-            ToolbarItemGroup(placement: .secondaryAction) {
-                if store.isWorkspaceDetailVisible,
-                   let pane = store.selectedWorkspace?.selectedPane {
-                    PaneToolbarControls(pane: pane)
-                }
-            }
+            PaneToolbarContent(
+                pane: store.isWorkspaceDetailVisible
+                    ? store.selectedWorkspace?.selectedPane
+                    : nil
+            )
             if #available(macOS 26.0, *) {
                 ToolbarItem(placement: .primaryAction) {
                     // ⌘T / ⌘B live as main-menu commands (see PilotApp.commands)
