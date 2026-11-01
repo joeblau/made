@@ -75,8 +75,14 @@ final class ChromiumFixtureServer: @unchecked Sendable {
             throw ServerError.invalidTLSIdentity
         }
 
+        // Keep the fixture identity in process memory. On macOS a plain
+        // SecPKCS12Import writes the key into the login keychain with an ACL
+        // pinned to the importing build's cdhash; every later (unsigned,
+        // rebuilt) test host then needs keychain consent to sign the TLS
+        // handshake, which stalls Network.framework for the rest of the run.
         let options = [
             kSecImportExportPassphrase as String: "pilot-chromium-tls",
+            kSecImportToMemoryOnly as String: true,
         ] as CFDictionary
         var imported: CFArray?
         let status = SecPKCS12Import(
