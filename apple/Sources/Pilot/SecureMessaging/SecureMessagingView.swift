@@ -45,11 +45,11 @@ struct PilotSecureMessagingView: View {
         .frame(minWidth: 480, minHeight: 560)
         .task { loadPairingSecrets() }
         .onDisappear { savePairingSecrets() }
-        .alert("Connection error", isPresented: Binding(
+        .alert("Secure Messaging Error", isPresented: Binding(
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) { errorMessage = nil }
+            Button("Dismiss", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
         }
@@ -82,10 +82,10 @@ struct PilotSecureMessagingView: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(myPublicKey, forType: .string)
             } label: {
-                Label("Copy my key", systemImage: "key")
+                Label("Copy My Key", systemImage: "key")
             }
         } header: {
-            Text("My public key")
+            Text("My Public Key")
         } footer: {
             Text("Send this to your peer; they paste it as the peer key on their device.")
         }
@@ -99,18 +99,19 @@ struct PilotSecureMessagingView: View {
                 .lineLimit(1...3)
             TextField("Pairing token", text: $tokenInput)
                 .autocorrectionDisabled()
-            Button("Generate secure pairing token") { generateToken() }
+            Button("Generate Pairing Token") { generateToken() }
             TextField("Rendezvous URL", text: $rendezvousURL)
                 .autocorrectionDisabled()
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
 
             if let transport, !transport.state.isFailed {
-                Button(transport.state == .signaling ? "Cancel connection" : "Disconnect", role: .destructive) {
+                Button(transport.state == .signaling ? "Cancel Connection" : "Disconnect", role: .destructive) {
                     transport.disconnect()
                     self.transport = nil
                 }
             } else {
                 Button("Connect") { connect() }
+                    .compatGlassProminentButtonStyle()
                     .disabled(!canConnect)
             }
         } header: {
@@ -131,13 +132,13 @@ struct PilotSecureMessagingView: View {
             Button {
                 transport.sendTestBlob()
             } label: {
-                Label("Send test blob (best-effort)", systemImage: "shippingbox")
+                Label("Send Test Blob (Best-Effort)", systemImage: "shippingbox")
             }
         }
     }
 
     private func logSection(_ transport: SecureChannelResponder) -> some View {
-        Section("Session log") {
+        Section("Session Log") {
             if transport.log.isEmpty {
                 Text("No activity yet.").foregroundStyle(.secondary)
             } else {

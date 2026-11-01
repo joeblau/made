@@ -1,4 +1,5 @@
 import SwiftUI
+@testable import Pilot
 
 struct SnapshotWebPreview: View {
     var compact = false
@@ -108,15 +109,25 @@ struct SnapshotDevice: View {
 struct SnapshotRemoteDesktop: View {
     var body: some View {
         VStack(spacing: 0) {
+            // Mirrors RemoteDesktopView's glass group bar.
             HStack(spacing: 12) {
-                Label("Build lab", systemImage: "square.grid.2x2")
-                    .padding(8).background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 7))
-                Text("Design studio").foregroundStyle(.secondary)
-                Image(systemName: "plus").foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Label("Build lab", systemImage: "square.grid.2x2")
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .compatGlassCapsule(tint: Color.accentColor.opacity(0.22))
+                    Label("Design studio", systemImage: "square.grid.2x2").foregroundStyle(.secondary)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .compatGlassCapsule()
+                    Button {} label: { Image(systemName: "plus") }
+                        .buttonBorderShape(.circle).compatGlassButtonStyle()
+                }
                 Spacer()
+                Button {} label: { Image(systemName: "pencil") }
+                    .buttonBorderShape(.circle).compatGlassButtonStyle()
                 Text("4/4").foregroundStyle(.secondary)
-                Label("Add Computer", systemImage: "plus")
-            }.font(.system(size: 12)).padding(12)
+                Button {} label: { Label("Add Computer", systemImage: "plus") }
+                    .compatGlassButtonStyle()
+            }.font(.system(size: 12)).padding(.horizontal, 12).padding(.vertical, 8)
             GeometryReader { geometry in
                 let size = NSSize(width: (geometry.size.width - 1) / 2, height: (geometry.size.height - 1) / 2)
                 Grid(horizontalSpacing: 1, verticalSpacing: 1) {

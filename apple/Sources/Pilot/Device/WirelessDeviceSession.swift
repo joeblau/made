@@ -85,15 +85,15 @@ struct WirelessDeviceView: View {
     }
 
     private var instructions: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             Image(systemName: "airplay.video")
-                .font(.system(size: 34))
+                .scaledFont(size: 36)
             switch session.status {
             case .starting:
                 ProgressView()
                 Text("Starting wireless sharing…")
             case .waiting, .pairing:
-                Text("Mirror your iPhone or iPad").font(.headline)
+                Text("Mirror Your iPhone or iPad").font(.headline)
                 Text("On the same Wi-Fi network, open Control Center → Screen Mirroring and choose:")
                 Text(session.receiverName).font(.title2.bold()).textSelection(.enabled)
                 if case .pairing(let code) = session.status {
@@ -104,18 +104,21 @@ struct WirelessDeviceView: View {
                 Text("Video only. Keep this pane open while sharing.")
                     .font(.caption).foregroundStyle(.secondary)
             case .failed(let message):
-                Text("Wireless sharing stopped").font(.headline)
+                Text("Wireless Sharing Stopped").font(.headline)
                 Text(message)
                 Button("Try Again") { session.start() }
+                    .compatGlassProminentButtonStyle()
             case .stopped:
-                Text("Wireless sharing is off").font(.headline)
+                Text("Wireless Sharing Is Off").font(.headline)
                 Button("Start Wireless Sharing") { session.start() }
+                    .compatGlassProminentButtonStyle()
             case .streaming:
                 EmptyView()
             }
         }
         .multilineTextAlignment(.center)
         .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
         .padding(32)
         .frame(maxWidth: 480)
     }

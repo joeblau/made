@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shared key for the Settings window's selected section, so a "Set up" button
+/// Shared key for the Settings window's selected section, so a "Set Up" button
 /// can deep-link straight to the Usage settings section.
 enum SettingsTab {
     static let storageKey = "settings.selectedTab"
@@ -172,9 +172,9 @@ private struct ProviderCard: View {
             header
             content
         }
-        .padding(10)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var header: some View {
@@ -189,8 +189,8 @@ private struct ProviderCard: View {
                 Text(plan)
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(tint)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
                     .background(tint.opacity(0.15), in: Capsule())
             }
             Spacer()
@@ -207,7 +207,7 @@ private struct ProviderCard: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button(action: enable) {
-                    Label("Enable", systemImage: "checkmark.circle")
+                    Label("Enable Usage", systemImage: "checkmark.circle")
                         .font(.callout)
                 }
                 .buttonStyle(.link)
@@ -266,7 +266,7 @@ private struct ProviderCard: View {
     }
 
     private func windowRow(_ window: UsageWindow) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(window.name)
                     .font(.callout.weight(.medium))
@@ -373,7 +373,7 @@ private struct ProviderCard: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button(action: openSetup) {
-                Label("Set up", systemImage: "arrow.up.forward")
+                Label("Set Up", systemImage: "arrow.up.forward")
                     .font(.callout)
             }
             .buttonStyle(.link)
