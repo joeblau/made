@@ -202,12 +202,12 @@ struct ContentView: View {
     /// transcription itself runs on the iPhone now — Pilot only paints
     /// the "listening" indicator and pastes the finished text.
     var isPeerRecording: Bool
+    var usageStore: UsageStore
+    var agenticUseStore: AgenticUsageStore
+    var runnersStore: RunnersStore
     @State private var gitStore = RepositoryStore()
     @State private var tasksStore = GitHubTasksStore()
-    @State private var usageStore = UsageStore()
     @State private var dockerStore = DockerStore()
-    @State private var agenticUseStore = AgenticUsageStore()
-    @State private var runnersStore = RunnersStore()
     @State private var branchStore = WorkspaceBranchStore()
     @State private var isDrawingActive = false
     @AppStorage("sidebar.pinnedExpanded") private var pinnedSectionExpanded = true
@@ -221,6 +221,8 @@ struct ContentView: View {
     @State private var isGroupNamePresented = false
     @State private var editingGroupID: UUID?
     @State private var groupName = ""
+    @State private var newWorkspaceRequest: NewWorkspaceRequest?
+    @State private var newWorkspaceFinder = DirectoryFinder()
 
     var body: some View {
         let activeInspectorRepoPath = isInspectorPresentedForSelectedWorkspace ? selectedWorkspaceRootPath : nil
@@ -238,6 +240,9 @@ struct ContentView: View {
                     editingGroupID = group.id
                     groupName = group.name
                     isGroupNamePresented = true
+                },
+                onNewWorkspaceInGroup: { group in
+                    newWorkspaceRequest = NewWorkspaceRequest(groupID: group.id)
                 },
                 workspaceRow: workspaceRow
             )
@@ -274,12 +279,22 @@ struct ContentView: View {
                 }
                 .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            .sheet(item: $newWorkspaceRequest) { request in
+                NewWorkspaceSheet(finder: newWorkspaceFinder) { directory in
+                    store.addWorkspace(directory: directory)
+                    if let groupID = request.groupID, let workspace = store.selectedWorkspace {
+                        store.moveWorkspace(workspace, toGroup: groupID)
+                    }
+                }
+            }
             .navigationSplitViewColumnWidth(min: 180, ideal: 220)
             .toolbar {
                 ToolbarItem(placement: .navigation) {
                     Menu {
-                        Button(action: store.addWorkspace) {
-                            Label("New Workspace", systemImage: "rectangle.on.rectangle")
+                        Button {
+                            newWorkspaceRequest = NewWorkspaceRequest()
+                        } label: {
+                            Label("New Workspace…", systemImage: "rectangle.on.rectangle")
                         }
                         Button {
                             editingGroupID = nil
@@ -414,7 +429,6 @@ struct ContentView: View {
             syncSelectedWorkspaceRootPath()
             syncInspectorRepo(activeInspectorRepoPath)
             focusSelectedWorkspaceTerminal()
-            usageStore.start()
             branchStore.refresh(branchTargets(in: workspaces), force: true)
         }
         // A checkout happens in a terminal pane, so re-read when the workspace
@@ -434,10 +448,7 @@ struct ContentView: View {
             syncInspectorTab(tab)
         }
         .onAppear { installNotesToggleMonitor() }
-        .onDisappear {
-            removeNotesToggleMonitor()
-            usageStore.stop()
-        }
+        .onDisappear { removeNotesToggleMonitor() }
         .onReceive(NotificationCenter.default.publisher(for: .pilotPersistenceSaveFailed)) { notification in
             let operation = notification.userInfo?["operation"] as? String ?? "Saving Cockpit data"
             let message = notification.userInfo?["message"] as? String ?? "Unknown persistence error"
@@ -1079,7 +1090,10 @@ private enum ContentViewPreviewData {
         localAudioOutput: nil,
         isPlotterConnected: false,
         remoteInkModel: RemoteInkModel(),
-        isPeerRecording: false
+        isPeerRecording: false,
+        usageStore: UsageStore(),
+        agenticUseStore: AgenticUsageStore(),
+        runnersStore: RunnersStore()
     )
     .modelContainer(ContentViewPreviewData.container)
 }

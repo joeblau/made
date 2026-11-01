@@ -67,6 +67,7 @@ enum ScreenMirrorWindowSelectionPolicy {
 final class ScreenMirror {
     /// True once a capture stream is actively running.
     private(set) var isRunning = false
+    var onClientConnected: (() -> Void)?
     private let sender: FrameSender
     private var stream: SCStream?
     /// AppKit window number for the live Pilot workspace surface. A companion
@@ -107,11 +108,14 @@ final class ScreenMirror {
             }
         }
 
-        // Wire the sender's control callbacks into the encoder. These fire on
-        // the FrameSender's private queue; StreamOutput hops to its own
-        // serial queue internally where needed.
-        sender.onClientConnected = { [weak output] in
+        // Wire the sender's control callbacks into the encoder and reconnect
+        // publication. These fire on the FrameSender's private queue;
+        // StreamOutput hops to its own serial queue internally where needed.
+        sender.onClientConnected = { [weak self, weak output] in
             output?.requestForceKeyframe()
+            Task { @MainActor in
+                self?.onClientConnected?()
+            }
         }
         sender.onKeyframeRequested = { [weak output] in
             output?.requestForceKeyframe()

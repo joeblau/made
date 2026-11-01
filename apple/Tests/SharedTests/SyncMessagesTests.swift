@@ -50,6 +50,52 @@ struct SyncMessagesTests {
         }
     }
 
+    @Test("Legacy WorkspaceState defaults all dashboard snapshots to nil")
+    func legacyWorkspaceStateHasNoDashboards() throws {
+        let json = #"{"workspaces":[],"selectedWorkspaceID":null,"workflowRuns":null}"#
+        let state = try decoder.decode(WorkspaceState.self, from: Data(json.utf8))
+        #expect(state.workflowRuns == nil)
+        #expect(state.actionsDashboard == nil)
+        #expect(state.usageDashboard == nil)
+        #expect(state.runnersDashboard == nil)
+    }
+
+    @Test("WorkspaceState round-trips all dashboard snapshots")
+    func workspaceStateDashboardRoundTrip() throws {
+        let actions = ActionsDashboardSnapshot(updatedAt: 100, runs: [])
+        let usage = UsageDashboardSnapshot(
+            updatedAt: 200,
+            estimatedCost: 1.5,
+            totalTokens: 250,
+            providers: []
+        )
+        let runners = RunnersDashboardSnapshot(
+            enterpriseID: "enterprise:blau",
+            enterpriseName: "BLAU",
+            totalCount: 0,
+            idleCount: 0,
+            busyCount: 0,
+            offlineCount: 0,
+            runners: [],
+            updatedAt: 300
+        )
+        let state = WorkspaceState(
+            workspaces: [],
+            selectedWorkspaceID: nil,
+            actionsDashboard: actions,
+            usageDashboard: usage,
+            runnersDashboard: runners
+        )
+        let decoded = try decoder.decode(SyncMessage.self, from: try encoder.encode(SyncMessage.workspaceState(state)))
+        guard case .workspaceState(let decodedState) = decoded else {
+            Issue.record("Expected workspaceState case")
+            return
+        }
+        #expect(decodedState.actionsDashboard == actions)
+        #expect(decodedState.usageDashboard == usage)
+        #expect(decodedState.runnersDashboard == runners)
+    }
+
     @Test("SelectWorkspace round-trip")
     func selectWorkspaceRoundTrip() throws {
         let id = UUID()

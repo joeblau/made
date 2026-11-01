@@ -310,6 +310,17 @@ for source in uxplay.tar.gz libplist.tar.bz2 openssl.tar.gz main.cpp bounds.patc
     fail "AirPlay corresponding source is missing: $source"
 done
 
+widgets_extension="$APP/Contents/PlugIns/PilotWidgets.appex"
+widgets_binary="$widgets_extension/Contents/MacOS/PilotWidgets"
+[[ -x "$widgets_binary" ]] || fail "PilotWidgets extension is missing"
+[[ "$(sorted_architectures "$widgets_binary")" == "arm64 x86_64" ]] ||
+  fail "PilotWidgets extension is not universal"
+verify_signature "$widgets_extension" "PilotWidgets extension" "$app_team"
+verify_exact_entitlements "$widgets_extension" \
+  "$APPLE_ROOT/Sources/PilotWidgets/PilotWidgets.entitlements" \
+  "PilotWidgets extension"
+printf '%s\n' "${widgets_binary#"$APP/"}" >> "$allowed_code"
+
 actual_code="$work/actual-code.txt"
 while IFS= read -r candidate; do
   if file "$candidate" | grep -q 'Mach-O'; then

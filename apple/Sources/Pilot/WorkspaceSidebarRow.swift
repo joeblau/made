@@ -410,6 +410,7 @@ struct WorkspaceGroupSidebarRow: View {
     let group: WorkspaceGroup
     let store: WorkspaceStore
     let onRename: () -> Void
+    let onNewWorkspace: () -> Void
     @State private var isDropTarget = false
 
     var body: some View {
@@ -437,12 +438,7 @@ struct WorkspaceGroupSidebarRow: View {
         }
         .draggable(WorkspaceSidebarDragPayload(groupID: group.id))
         .contextMenu {
-            Button("New Workspace in Group") {
-                store.addWorkspace()
-                if let workspace = store.selectedWorkspace {
-                    store.moveWorkspace(workspace, toGroup: group.id)
-                }
-            }
+            Button("New Workspace in Group…", action: onNewWorkspace)
             Button("Rename Group", action: onRename)
             Button("Ungroup Workspaces") {
                 store.workspaceGroups.remove(group.id, workspaceIDs: store.unpinnedWorkspaceIDs)
