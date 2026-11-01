@@ -490,6 +490,7 @@ private struct DeviceCaptureContainerView: NSViewRepresentable {
 final class DeviceCaptureHostView: NSView {
     private let captureSession: DeviceCaptureSession
     private let previewLayer = AVCaptureVideoPreviewLayer()
+    private var screenDrag = DeviceScreenDragGesture()
 
     init(session: DeviceCaptureSession) {
         self.captureSession = session
@@ -520,5 +521,19 @@ final class DeviceCaptureHostView: NSView {
         // Don't tear down on window detach — the SwiftUI host view may be
         // briefly removed when the workspace re-renders. The registry owns
         // teardown when the pane itself is removed.
+    }
+
+    // The wired mirror is view-only, so a plain drag drags the screen image.
+    override func mouseDown(with event: NSEvent) {
+        _ = screenDrag.press(at: event.locationInWindow, modifiers: event.modifierFlags, requiresCommand: false)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard screenDrag.drag(to: event.locationInWindow) else { return }
+        DeviceScreenDrag.begin(from: self, event: event, frame: captureSession.currentFrame(), name: "iphone")
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        screenDrag.release()
     }
 }
