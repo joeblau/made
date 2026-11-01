@@ -2,9 +2,8 @@ import SwiftUI
 
 /// Historical agent usage from local CLI logs and opted-in Cursor history.
 ///
-/// Header bar over a scrolling stack of cards — hero total plus per-model
-/// breakdown, the daily cost chart, a five-cell stat row, and the breakdown
-/// table. All aggregation lives in `AgenticUsageStore`; this file only draws.
+/// Header bar over the scrolling `AgenticUseDashboard`. All aggregation
+/// lives in `AgenticUsageStore` and `AgenticUseDerived`; views only draw.
 struct AgenticUseView: View {
     @Bindable var store: AgenticUsageStore
 
@@ -201,46 +200,104 @@ struct AgenticUseView: View {
 // MARK: - Shared card chrome
 
 extension View {
-    /// The dashboard's card treatment, matching the inspector card idiom
-    /// (`.quaternary` fill, continuous 8pt corners).
-    func agenticUseCard(minHeight: CGFloat? = nil) -> some View {
-        padding(12)
+    /// The dashboard's card treatment: the inspector's `.quaternary` fill
+    /// plus a hairline edge so adjacent cards stay separate in dark mode.
+    func agenticUseCard(minHeight: CGFloat? = nil, padding inset: CGFloat = 14) -> some View {
+        padding(inset)
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
             .background(
                 .quaternary.opacity(0.4),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
             )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.07), lineWidth: 1)
+            )
+    }
+
+    /// Card heading: 14pt semibold, the size every panel title shares.
+    func agenticUseCardTitle() -> some View {
+        scaledFont(size: 14, weight: .semibold)
     }
 }
 
 /// Shared presentation for live usage and deterministic product captures.
+///
+/// KPI cards across the top, the provider-stacked time series below, then
+/// two columns — token flow and insights on the left, provider breakdown and
+/// the Top Models table on the right — collapsing to one column when narrow.
 struct AgenticUseDashboard: View {
     let snapshot: AgenticUseSnapshot
     let pricingStatus: String
 
+    @State private var width: CGFloat = 1200
+
+    private static let twoColumnWidth: CGFloat = 1080
+
+    private var kpiColumns: Int {
+        switch width {
+        case 1000...: 5
+        case 640...: 3
+        default: 2
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    AgenticUseHeroPanel(
-                        totalCost: snapshot.totalCostUSD,
-                        modelTotals: snapshot.modelTotals,
-                        hasUnpricedModels: snapshot.hasUnpricedModels,
-                        unpricedTokens: snapshot.unpricedTokens,
-                        pricingStatus: pricingStatus
-                    )
-                    .frame(width: 300)
-
-                    AgenticUseDailyChartPanel(snapshot: snapshot)
+                AgenticUseKPICards(snapshot: snapshot, columns: kpiColumns)
+                AgenticUseDailyChartPanel(snapshot: snapshot)
+                if width >= Self.twoColumnWidth {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(spacing: 12) {
+                            AgenticUseTokenFlowPanel(snapshot: snapshot)
+                            insights
+                        }
                         .frame(maxWidth: .infinity)
+                        VStack(spacing: 12) {
+                            AgenticUseProviderBreakdown(snapshot: snapshot)
+                            AgenticUseTopModels(snapshot: snapshot)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    AgenticUseTokenFlowPanel(snapshot: snapshot)
+                    AgenticUseProviderBreakdown(snapshot: snapshot)
+                    AgenticUseTopModels(snapshot: snapshot)
+                    insights
                 }
-                AgenticUseStatRow(stats: snapshot.stats)
-                AgenticUseBreakdownView(
-                    modelTotals: snapshot.modelTotals,
-                    dayTotals: snapshot.dayTotals
-                )
+                footnote
             }
             .padding(12)
         }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newWidth in
+            width = newWidth
+        }
+    }
+
+    @ViewBuilder
+    private var insights: some View {
+        let insights = AgenticUseInsights.make(from: snapshot)
+        if !insights.isEmpty {
+            AgenticUseInsightsView(insights: insights)
+        }
+    }
+
+    /// Costs are estimates; keep the pricing source and any unpriced gap
+    /// visible on the page rather than buried in a tooltip.
+    private var footnote: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Costs are API-equivalent estimates at published per-token rates. \(pricingStatus).")
+            if snapshot.hasUnpricedModels {
+                Text("* Partial total: \(AgenticUseFormat.tokens(snapshot.unpricedTokens)) tokens have no published rate.")
+                    .foregroundStyle(.orange)
+            }
+        }
+        .scaledFont(size: 10)
+        .foregroundStyle(.tertiary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 2)
     }
 }
