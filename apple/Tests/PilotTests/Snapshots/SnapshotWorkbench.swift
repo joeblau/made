@@ -143,14 +143,14 @@ struct SnapshotWorkbench: View {
             RunnersView(store: fixtures.runners)
         case .agenticUse:
             VStack(spacing: 0) {
+                // Mirrors AgenticUseView's header bar: the toolbar titles the page.
                 HStack {
-                    Text("Agentic Use").fontWeight(.semibold)
-                    Text("Sep 24 – Oct 23").foregroundStyle(.secondary)
+                    Text("Sep 24 – Oct 23").fontWeight(.medium).foregroundStyle(.secondary)
                     Spacer()
                     Picker("Range", selection: .constant("30d")) {
                         ForEach(["24h", "7d", "30d", "90d", "All"], id: \.self) { Text($0) }
                     }.pickerStyle(.segmented).frame(width: 230)
-                }.font(.system(size: 12)).padding(.horizontal, 12).frame(height: 44)
+                }.font(.system(size: 12)).padding(.horizontal, 16).frame(height: 44)
                 AgenticUseDashboard(snapshot: fixtures.history, pricingStatus: "Pricing reviewed Oct 23, 2026")
             }
         case .remoteDesktop:

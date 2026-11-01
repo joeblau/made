@@ -37,6 +37,12 @@ enum AgenticUseRange: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
+    /// The comparison window named in KPI captions ("vs previous 30d");
+    /// `nil` for `.all`, which has no earlier period to compare against.
+    var comparisonLabel: String? {
+        self == .all ? nil : "vs previous \(label)"
+    }
+
     /// Chart bucket granularity: hours for the 24h window, days otherwise.
     /// Pass this to `AreaMark(x: .value(_, point.day, unit:))`.
     var bucketUnit: Calendar.Component {
@@ -56,6 +62,36 @@ enum AgenticUseRange: String, CaseIterable, Sendable, Identifiable {
             return DateInterval(start: start, end: now)
         case .all:
             return DateInterval(start: .distantPast, end: now)
+        }
+    }
+
+    /// Calendar days a presented window spans: 1 for 24h, the fixed count
+    /// for 7/30/90 days, and oldest-record-day through today for All.
+    func windowDayCount(of interval: DateInterval, calendar: Calendar) -> Int {
+        switch self {
+        case .day: return 1
+        case .week, .month, .quarter: return dayCount
+        case .all:
+            let first = calendar.startOfDay(for: interval.start)
+            let last = calendar.startOfDay(for: interval.end)
+            return (calendar.dateComponents([.day], from: first, to: last).day ?? 0) + 1
+        }
+    }
+
+    /// The equally long window immediately before `interval(endingAt:)`, used
+    /// for the KPI deltas. `nil` for `.all`.
+    func previousInterval(endingAt now: Date, calendar: Calendar) -> DateInterval? {
+        let current = interval(endingAt: now, calendar: calendar)
+        switch self {
+        case .day:
+            return DateInterval(start: current.start.addingTimeInterval(-24 * 60 * 60), end: current.start)
+        case .week, .month, .quarter:
+            guard let start = calendar.date(byAdding: .day, value: -dayCount, to: current.start) else {
+                return nil
+            }
+            return DateInterval(start: start, end: current.start)
+        case .all:
+            return nil
         }
     }
 }
@@ -78,8 +114,56 @@ struct AgenticModelTotal: Sendable, Identifiable, Equatable {
     /// True when the model has no pricing table entry; render the badge, do
     /// not present the zero cost as real.
     let isUnpriced: Bool
+    /// The CLI or editor that logged the model's calls.
+    let provider: AgenticProvider
+    /// Token-type split for the token-flow diagram; sums to `tokens`.
+    var inputTokens = 0
+    var cacheWriteTokens = 0
+    var cacheReadTokens = 0
+    var outputTokens = 0
 
     var id: String { model }
+
+    /// USD per million processed tokens; `nil` when unpriced or empty.
+    var costPerMillionTokens: Double? {
+        guard !isUnpriced, tokens > 0 else { return nil }
+        return cost / Double(tokens) * 1_000_000
+    }
+}
+
+/// One chart bucket for one provider, zero-filled like `AgenticDailyPoint`.
+/// Drives the provider-stacked chart and the KPI sparklines.
+struct AgenticProviderPoint: Sendable, Identifiable, Equatable {
+    /// Bucket start (local midnight, or top of the hour for 24h).
+    let day: Date
+    let provider: AgenticProvider
+    let cost: Double
+    let tokens: Int
+    /// Full-rate minus actual cost for priced records in the bucket.
+    let cacheSavings: Double
+    let cacheReadTokens: Int
+    let observedInputTokens: Int
+
+    var id: String { "\(provider.rawValue)|\(day.timeIntervalSinceReferenceDate)" }
+}
+
+/// Headline totals for one window. The selected range and the equally long
+/// window before it both reduce to this so KPI deltas compare like for like.
+struct AgenticUsePeriodSummary: Sendable, Equatable {
+    let totalCostUSD: Double
+    let processedTokens: Int
+    /// cacheRead / observed input; 0 when nothing observed.
+    let cachedInputShare: Double
+    let cacheSavingsUSD: Double
+    /// Calendar days the window spans (1 for the 24h range).
+    let dayCount: Int
+
+    var averageDailyCostUSD: Double {
+        dayCount > 0 ? totalCostUSD / Double(dayCount) : 0
+    }
+
+    /// No tokens at all — a delta against this would be meaningless.
+    var isEmpty: Bool { processedTokens == 0 }
 }
 
 /// One chart bucket for one model. Day granularity (hour for the 24h range),
@@ -146,6 +230,13 @@ struct AgenticUseSnapshot: Sendable, Equatable {
     /// Actual cost of the range, USD (the hero number).
     let totalCostUSD: Double
     let providerTotals: [AgenticProviderTotal]
+    /// Zero-filled provider series: every bucket x every provider present,
+    /// sorted by bucket then `AgenticProvider.allCases` order.
+    var providerSeries: [AgenticProviderPoint] = []
+    /// The selected window's headline totals.
+    var current: AgenticUsePeriodSummary?
+    /// The equally long window before it; `nil` for `.all`.
+    var previous: AgenticUsePeriodSummary?
     /// Sorted by cost descending (display order for lists).
     let modelTotals: [AgenticModelTotal]
     /// Canonical models present, in fixed presentation order — build the
@@ -515,15 +606,10 @@ final class AgenticUsageStore {
             interval = DateInterval(start: calendar.startOfDay(for: first.timestamp), end: interval.end)
         }
 
-        struct ModelBucket {
-            var cost = 0.0
-            var tokens = 0
-            var isUnpriced = false
-        }
-
         var byModel: [String: ModelBucket] = [:]
         var byProvider: [AgenticProvider: (cost: Double, tokens: Int)] = [:]
         var byChartBucket: [Date: [String: (cost: Double, tokens: Int)]] = [:]
+        var byProviderBucket: [Date: [AgenticProvider: ProviderCell]] = [:]
         var byDay: [Date: (cost: Double, tokens: Int)] = [:]
         var activeDays: Set<Date> = []
         var inputTokens = 0
@@ -543,18 +629,25 @@ final class AgenticUsageStore {
             let tokens = record.totalTokens
 
             var model = byModel[record.model, default: ModelBucket()]
+            var recordSavings = 0.0
             if let cost {
                 model.cost += cost
                 totalCost += cost
                 if let baseline = AgenticUsagePricing.fullRateCost(of: record, rates: rates) {
                     fullRateCost += baseline
                     baselineCost += cost
+                    recordSavings = baseline - cost
                 }
             } else {
                 model.isUnpriced = true
                 unpricedTokens += tokens
             }
             model.tokens += tokens
+            model.provider = record.provider
+            model.inputTokens += record.inputTokens
+            model.cacheWriteTokens += record.cacheWriteTokens
+            model.cacheReadTokens += record.cacheReadTokens
+            model.outputTokens += record.outputTokens
             byModel[record.model] = model
             var provider = byProvider[record.provider, default: (0, 0)]
             provider.cost += cost ?? 0
@@ -576,6 +669,16 @@ final class AgenticUsageStore {
             cell.tokens += tokens
             models[record.model] = cell
             byChartBucket[chartBucket] = models
+
+            var providers = byProviderBucket[chartBucket, default: [:]]
+            var providerCell = providers[record.provider, default: ProviderCell()]
+            providerCell.cost += cost ?? 0
+            providerCell.tokens += tokens
+            providerCell.savings += recordSavings
+            providerCell.cacheRead += record.cacheReadTokens
+            providerCell.observedInput += record.observedInputTokens
+            providers[record.provider] = providerCell
+            byProviderBucket[chartBucket] = providers
 
             var dayCell = byDay[day, default: (0, 0)]
             dayCell.cost += cost ?? 0
@@ -599,54 +702,37 @@ final class AgenticUsageStore {
         }
         let displayNames = modelOrder.map(AgenticModel.displayName(for:))
 
-        let modelTotals = byModel
-            .map { model, bucket in
-                AgenticModelTotal(
-                    model: model,
-                    displayName: AgenticModel.displayName(for: model),
-                    cost: bucket.cost,
-                    tokens: bucket.tokens,
-                    costShare: totalCost > 0 ? bucket.cost / totalCost : 0,
-                    isUnpriced: bucket.isUnpriced
-                )
-            }
-            .sorted { lhs, rhs in
-                lhs.cost == rhs.cost ? lhs.tokens > rhs.tokens : lhs.cost > rhs.cost
-            }
+        let modelTotals = makeModelTotals(byModel, totalCost: totalCost)
 
         if isCancelled() { return nil }
 
         // Zero-fill every bucket in the window for every model present so the
         // stacked area chart never interpolates across silent days.
+        let presentProviders = AgenticProvider.allCases.filter { byProvider[$0] != nil }
         var series: [AgenticDailyPoint] = []
+        var providerSeries: [AgenticProviderPoint] = []
         if !filtered.isEmpty {
-            var bucket: Date
-            if range.bucketUnit == .day {
-                bucket = calendar.startOfDay(for: interval.start)
-            } else {
-                bucket = calendar.dateInterval(of: .hour, for: interval.start)?.start
-                    ?? interval.start
-            }
-            series.reserveCapacity(modelOrder.count * (range.dayCount == 1 ? 26 : range.dayCount + 1))
-            let stepLimit = range == .all ? 2000 : 400
-            var steps = 0
-            while bucket <= interval.end, steps < stepLimit {
+            let buckets = chartBuckets(range: range, interval: interval, calendar: calendar)
+            series.reserveCapacity(modelOrder.count * buckets.count)
+            providerSeries.reserveCapacity(presentProviders.count * buckets.count)
+            for bucket in buckets {
                 let models = byChartBucket[bucket] ?? [:]
                 for (index, model) in modelOrder.enumerated() {
                     let cell = models[model] ?? (0, 0)
-                    series.append(
-                        AgenticDailyPoint(
-                            day: bucket,
-                            model: model,
-                            displayName: displayNames[index],
-                            cost: cell.cost,
-                            tokens: cell.tokens
-                        )
-                    )
+                    series.append(AgenticDailyPoint(
+                        day: bucket, model: model, displayName: displayNames[index],
+                        cost: cell.cost, tokens: cell.tokens
+                    ))
                 }
-                guard let next = calendar.date(byAdding: range.bucketUnit, value: 1, to: bucket) else { break }
-                bucket = next
-                steps += 1
+                let providers = byProviderBucket[bucket] ?? [:]
+                for provider in presentProviders {
+                    let cell = providers[provider] ?? ProviderCell()
+                    providerSeries.append(AgenticProviderPoint(
+                        day: bucket, provider: provider, cost: cell.cost, tokens: cell.tokens,
+                        cacheSavings: max(0, cell.savings), cacheReadTokens: cell.cacheRead,
+                        observedInputTokens: cell.observedInput
+                    ))
+                }
             }
         }
 
@@ -684,11 +770,31 @@ final class AgenticUsageStore {
             }
         }
 
+        let current = AgenticUsePeriodSummary(
+            totalCostUSD: totalCost,
+            processedTokens: processed,
+            cachedInputShare: stats.cachedInputShare,
+            cacheSavingsUSD: savings,
+            dayCount: range.windowDayCount(of: interval, calendar: calendar)
+        )
+
+        if isCancelled() { return nil }
+        let previous = range.previousInterval(endingAt: now, calendar: calendar).map { window in
+            summarize(
+                records.lazy.filter { $0.timestamp >= window.start && $0.timestamp < window.end },
+                dayCount: range == .day ? 1 : range.dayCount,
+                rates: rates
+            )
+        }
+
         return AgenticUseSnapshot(
             range: range,
             interval: interval,
             totalCostUSD: totalCost,
             providerTotals: providerTotals,
+            providerSeries: providerSeries,
+            current: current,
+            previous: previous,
             modelTotals: modelTotals,
             modelOrder: modelOrder,
             modelDisplayNames: displayNames,
@@ -697,6 +803,104 @@ final class AgenticUsageStore {
             stats: stats,
             hasUnpricedModels: modelTotals.contains(where: \.isUnpriced),
             unpricedTokens: unpricedTokens
+        )
+    }
+
+    /// Per-model accumulator for `makeSnapshot`.
+    struct ModelBucket {
+        var cost = 0.0
+        var tokens = 0
+        var isUnpriced = false
+        var provider: AgenticProvider = .claude
+        var inputTokens = 0
+        var cacheWriteTokens = 0
+        var cacheReadTokens = 0
+        var outputTokens = 0
+    }
+
+    /// Per-provider, per-bucket accumulator for `makeSnapshot`.
+    struct ProviderCell {
+        var cost = 0.0
+        var tokens = 0
+        var savings = 0.0
+        var cacheRead = 0
+        var observedInput = 0
+    }
+
+    /// Model accumulators to display totals, cost descending (ties by tokens).
+    nonisolated static func makeModelTotals(
+        _ byModel: [String: ModelBucket], totalCost: Double
+    ) -> [AgenticModelTotal] {
+        byModel
+            .map { model, bucket in
+                AgenticModelTotal(
+                    model: model,
+                    displayName: AgenticModel.displayName(for: model),
+                    cost: bucket.cost,
+                    tokens: bucket.tokens,
+                    costShare: totalCost > 0 ? bucket.cost / totalCost : 0,
+                    isUnpriced: bucket.isUnpriced,
+                    provider: bucket.provider,
+                    inputTokens: bucket.inputTokens,
+                    cacheWriteTokens: bucket.cacheWriteTokens,
+                    cacheReadTokens: bucket.cacheReadTokens,
+                    outputTokens: bucket.outputTokens
+                )
+            }
+            .sorted { lhs, rhs in
+                lhs.cost == rhs.cost ? lhs.tokens > rhs.tokens : lhs.cost > rhs.cost
+            }
+    }
+
+    /// Every chart bucket start in the window, oldest first: local midnights,
+    /// or tops of hours for 24h. Capped so a corrupt timestamp far in the
+    /// past can't allocate an unbounded series.
+    nonisolated static func chartBuckets(
+        range: AgenticUseRange, interval: DateInterval, calendar: Calendar
+    ) -> [Date] {
+        var bucket = range.bucketUnit == .day
+            ? calendar.startOfDay(for: interval.start)
+            : calendar.dateInterval(of: .hour, for: interval.start)?.start ?? interval.start
+        let stepLimit = range == .all ? 2000 : 400
+        var buckets: [Date] = []
+        while bucket <= interval.end, buckets.count < stepLimit {
+            buckets.append(bucket)
+            guard let next = calendar.date(byAdding: range.bucketUnit, value: 1, to: bucket) else { break }
+            bucket = next
+        }
+        return buckets
+    }
+
+    /// Headline totals for an arbitrary record window, priced the same way
+    /// as the main aggregation so deltas compare like for like.
+    nonisolated static func summarize(
+        _ records: some Sequence<AgenticUsageRecord>,
+        dayCount: Int,
+        rates: [String: AgenticModelRate]
+    ) -> AgenticUsePeriodSummary {
+        var cost = 0.0
+        var fullRate = 0.0
+        var baseline = 0.0
+        var processed = 0
+        var cacheRead = 0
+        var observedInput = 0
+        for record in records {
+            processed += record.totalTokens
+            cacheRead += record.cacheReadTokens
+            observedInput += record.observedInputTokens
+            guard let recordCost = AgenticUsagePricing.cost(of: record, rates: rates) else { continue }
+            cost += recordCost
+            if let full = AgenticUsagePricing.fullRateCost(of: record, rates: rates) {
+                fullRate += full
+                baseline += recordCost
+            }
+        }
+        return AgenticUsePeriodSummary(
+            totalCostUSD: cost,
+            processedTokens: processed,
+            cachedInputShare: observedInput > 0 ? Double(cacheRead) / Double(observedInput) : 0,
+            cacheSavingsUSD: max(0, fullRate - baseline),
+            dayCount: dayCount
         )
     }
 }
