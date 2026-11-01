@@ -25,6 +25,9 @@ struct ContentView: View {
                 Text(sessionDelegate.deliveryStatus)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    // Delivery state cross-fades instead of hard-cutting (MOT-4).
+                    .contentTransition(.opacity)
+                    .animation(.easeOut(duration: 0.15), value: sessionDelegate.deliveryStatus)
             }
             .navigationTitle("Trigger")
             .safeAreaInset(edge: .bottom) {
@@ -32,6 +35,8 @@ struct ContentView: View {
                     Circle()
                         .fill(isConnected ? .green : .red)
                         .frame(width: 8, height: 8)
+                        // The adjacent text already speaks the state.
+                        .accessibilityHidden(true)
                     Text(isConnected ? "Walkie Connected" : "Walkie Disconnected")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -61,7 +66,11 @@ struct ContentView: View {
                 Text(currentGesture)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
             }
+            // Drives the symbol replace and the label cross-fade on each
+            // recorded gesture (MOT-4).
+            .animation(.spring(duration: 0.3, bounce: 0.15), value: currentIcon)
 
             Button {
                 triggerDoublePinch(source: "button")

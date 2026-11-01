@@ -52,6 +52,7 @@ struct PlotterSnapshotWidget: Widget {
 
 struct PlotterSnapshotView: View {
     let entry: SnapshotEntry
+    @Environment(\.widgetRenderingMode) private var renderingMode
 
     private var connected: Bool { entry.status?.isConnected ?? false }
 
@@ -88,13 +89,18 @@ struct PlotterSnapshotView: View {
                 .padding(.bottom, 12)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // Gradient scrim keeps the white caption legible over any
-                // mirrored frame without a hard-edged band (COL-6).
+                // mirrored frame without a hard-edged band (COL-6). Only in
+                // full color: accented (tinted/clear glass) and vibrant modes
+                // render by alpha, so a black scrim would become a light wash
+                // over the caption instead of darkening the frame.
                 .background {
-                    LinearGradient(
-                        colors: [.black.opacity(0), .black.opacity(0.7)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    if renderingMode == .fullColor {
+                        LinearGradient(
+                            colors: [.black.opacity(0), .black.opacity(0.7)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    }
                 }
             }
     }
@@ -110,17 +116,19 @@ struct PlotterSnapshotView: View {
 
 private struct ContentUnavailablePlaceholder: View {
     var body: some View {
-        ZStack {
-            Color.black
-            VStack(spacing: 8) {
-                Image(systemName: "display")
-                    .font(.title2)
-                    .widgetAccentable()
-                Text("No mirror yet")
-                    .font(.caption2)
-            }
-            // Always light-on-black: the container is a fixed dark stage.
-            .foregroundStyle(.white.opacity(0.6))
+        // No opaque fill here: the black stage is the widget's
+        // `containerBackground`, which the system removes for accented
+        // (tinted/clear glass) and vibrant rendering. A `Color.black` layer
+        // would instead render as a solid plate in those modes.
+        VStack(spacing: 8) {
+            Image(systemName: "display")
+                .font(.title2)
+                .widgetAccentable()
+            Text("No mirror yet")
+                .font(.caption2)
         }
+        // Always light-on-black: the container is a fixed dark stage.
+        .foregroundStyle(.white.opacity(0.6))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

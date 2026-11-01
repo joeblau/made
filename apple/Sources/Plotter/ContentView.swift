@@ -6,6 +6,7 @@ import UIKit
 struct ContentView: View {
     var mirror: MirrorModel
     @State private var showsDashboard = false
+    @State private var showsSettings = false
     @State private var dashboardFamily = DashboardFamily.actions
 
     var body: some View {
@@ -28,13 +29,24 @@ struct ContentView: View {
         // Both float over the mirror as Liquid Glass controls; the container
         // lets the neighboring glass shapes blend into one cluster.
         .overlay(alignment: .topLeading) {
-            GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 8) {
-                    SettingsButton()
+            GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    // Same "•••" entry as the shared `SettingsButton`, but the
+                    // sheet is presented outside this cluster's pinned-dark
+                    // environment so Settings follows the system appearance.
+                    Button {
+                        showsSettings = true
+                    } label: {
+                        Image(systemName: "ellipsis")
+                    }
+                    .accessibilityLabel("Settings")
                     Button {
                         showsDashboard = true
                     } label: {
-                        Image(systemName: "square.grid.2x2")
+                        // A titled Label keeps the spoken name with the glyph
+                        // (IMG-1); only the symbol is drawn.
+                        Label("Dashboard", systemImage: "square.grid.2x2")
+                            .labelStyle(.iconOnly)
                     }
                     .help("Dashboard")
                     .accessibilityLabel("Dashboard")
@@ -43,7 +55,19 @@ struct ContentView: View {
                 .font(.title3)
                 .buttonStyle(GlassCircleButtonStyle())
             }
-            .padding(12)
+            // The mirror stage is always black, so its floating chrome stays
+            // dark in both appearances (like `SearchingOverlay`). Light glass
+            // over black renders as flat gray disks that wash out the green
+            // connected glyph (COL-2 dark-mode parity, contrast on glass).
+            // Sheets are presented from the ZStack, so they keep the system
+            // appearance.
+            .environment(\.colorScheme, .dark)
+            // Matches the UIKit annotation toolbar's 12pt inset on the
+            // trailing side, so both clusters share one edge (LAY-3).
+            .padding(LiquidGlassMetrics.Spacing.small)
+        }
+        .sheet(isPresented: $showsSettings) {
+            SettingsScreen()
         }
         .sheet(isPresented: $showsDashboard) {
             PlotterDashboardView(mirror: mirror, selectedFamily: $dashboardFamily)
@@ -76,11 +100,14 @@ struct ContentView: View {
 
 /// System `.glass` circle buttons with a fixed glyph box, so symbols of
 /// different heights (the ellipsis vs. the grid) produce identical circles.
-/// A primitive style so it also reaches the shared `SettingsButton`.
+/// A primitive style, so it wraps every button in the cluster uniformly.
 private struct GlassCircleButtonStyle: PrimitiveButtonStyle {
     /// With the regular control size this yields a 48pt circle, matching the
     /// connection badge and the UIKit annotation toolbar capsule.
     static let glyphSide: CGFloat = 34
+    /// The rendered circle: the glyph box plus the regular glass padding. The
+    /// badge uses it directly so every circle in the cluster is identical.
+    static let circleDiameter: CGFloat = 48
 
     func makeBody(configuration: Configuration) -> some View {
         Button(role: configuration.role) {
@@ -107,8 +134,17 @@ private struct ConnectionStatusBadge: View {
         // neighboring controls, with green reserved for the connected signal.
         Image(systemName: connected ? "laptopcomputer" : "laptopcomputer.slash")
             .foregroundStyle(connected ? Color.green : Color.secondary)
-            .frame(width: 48, height: 48)
+            // The glyph morphs between states instead of hard-swapping (MOT-4).
+            .contentTransition(.symbolEffect(.replace))
+            .frame(
+                width: GlassCircleButtonStyle.circleDiameter,
+                height: GlassCircleButtonStyle.circleDiameter
+            )
             .glassEffect(.regular.interactive(), in: Circle())
+            // Long-press / secondary-click lifts a circle, not a squared-off
+            // rectangle, for the context menu preview.
+            .contentShape(.contextMenuPreview, Circle())
+            .animation(LiquidGlassMetrics.stateChange, value: connected)
             .help(connected ? "Connected to Cockpit" : "Searching for Cockpit")
             .accessibilityLabel(connected ? "Connected to Cockpit" : "Not connected to Cockpit")
             .contextMenu {
@@ -126,18 +162,33 @@ private struct SearchingOverlay: View {
     var mirror: MirrorModel
 
     var body: some View {
-        if mirror.frameCount == 0 {
-            ContentUnavailableView {
-                Label("Searching for Cockpit", systemImage: "antenna.radiowaves.left.and.right")
-            } description: {
-                Text("Make sure Cockpit is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
-            } actions: {
-                ProgressView()
+        let isSearching = mirror.frameCount == 0
+        ZStack {
+            if isSearching {
+                ContentUnavailableView {
+                    Label {
+                        Text("Searching for Cockpit")
+                    } icon: {
+                        // The antenna pulses outward while searching: the one
+                        // designed loading motion (MOT-5, MOT-3), replacing a
+                        // second competing spinner. Opacity-only, so it stays
+                        // calm with Reduce Motion.
+                        Image(systemName: "antenna.radiowaves.left.and.right")
+                            .symbolEffect(.variableColor.iterative)
+                    }
+                } description: {
+                    Text("Make sure Cockpit is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
+                }
+                // The mirror stage is always black (a video surface), so the
+                // placeholder must stay light-on-dark regardless of system mode.
+                .environment(\.colorScheme, .dark)
+                .transition(.opacity)
             }
-            // The mirror stage is always black (a video surface), so the
-            // placeholder must stay light-on-dark regardless of system mode.
-            .environment(\.colorScheme, .dark)
         }
+        // Fade the placeholder out as the first frame lands instead of a hard
+        // cut (MOT-1 context transition). Keyed on the Bool, so per-frame
+        // `frameCount` ticks never start an animation.
+        .animation(LiquidGlassMetrics.stateChange, value: isSearching)
     }
 }
 
@@ -437,6 +488,9 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         glass.isInteractive = true
         toolbarGlass.effect = glass
         toolbarGlass.cornerConfiguration = .capsule()
+        // Pinned dark like the SwiftUI cluster: the mirror stage behind it is
+        // always black, and `.label` glyphs then resolve light on dark glass.
+        toolbarGlass.overrideUserInterfaceStyle = .dark
         toolbarGlass.translatesAutoresizingMaskIntoConstraints = false
         toolbarGlass.contentView.addSubview(toolbar)
 
@@ -467,8 +521,8 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
             toolbar.bottomAnchor.constraint(equalTo: toolbarGlass.contentView.bottomAnchor),
             toolbar.leadingAnchor.constraint(equalTo: toolbarGlass.contentView.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: toolbarGlass.contentView.trailingAnchor),
-            toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 12),
-            toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12)
+            toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LiquidGlassMetrics.Spacing.small),
+            toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -LiquidGlassMetrics.Spacing.small)
         ])
     }
 

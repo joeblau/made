@@ -119,6 +119,7 @@ public struct UsageDashboardWidgetView: View {
             .font(family == .systemSmall ? .title2 : .title)
             .fontWeight(.semibold)
             .monospacedDigit()
+            .contentTransition(.numericText(value: snapshot.estimatedCost))
             .minimumScaleFactor(0.7)
             .lineLimit(1)
             .widgetAccentable()
@@ -411,6 +412,8 @@ private struct DashboardMetric: View {
             Text("\(value)")
                 .font(.headline)
                 .monospacedDigit()
+                // Timeline reloads roll the count instead of hard-cutting (MOT-4).
+                .contentTransition(.numericText(value: Double(value)))
                 .foregroundStyle(tint ?? Color.primary)
                 .lineLimit(1)
                 .widgetAccentable()

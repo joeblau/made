@@ -6,6 +6,7 @@ struct PlotterDashboardView: View {
     @Binding var selectedFamily: DashboardFamily
     @ObservedObject private var activities: DashboardActivityController
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isChangingActivity = false
 
     init(mirror: MirrorModel, selectedFamily: Binding<DashboardFamily>) {
@@ -17,8 +18,9 @@ struct PlotterDashboardView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    VStack(alignment: .leading, spacing: 12) {
+                // 24pt between groups, 12pt inside the header group (LAY-5).
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xLarge) {
+                    VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
                         connectionStatus
                         familyPicker
                     }
@@ -32,9 +34,14 @@ struct PlotterDashboardView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(24)
+                .padding(LiquidGlassMetrics.Spacing.xLarge)
+                // Readable column when the sheet is resized wide (LAY-6).
                 .frame(maxWidth: 900)
                 .frame(maxWidth: .infinity)
+                // Switching family swaps the panel content and its height:
+                // animate that context change instead of a hard cut (MOT-1,
+                // MOT-4).
+                .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: selectedFamily)
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Dashboard")
@@ -86,7 +93,7 @@ struct PlotterDashboardView: View {
 
     @ViewBuilder
     private func dashboardPanel(at now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             switch selectedFamily {
             case .actions:
                 if let snapshot = mirror.dashboardSnapshots.actions {
@@ -98,7 +105,7 @@ struct PlotterDashboardView: View {
                         Label("No runs reported", systemImage: "tray")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .padding([.horizontal, .bottom], 16)
+                            .padding([.horizontal, .bottom], LiquidGlassMetrics.Spacing.medium)
                     }
                 } else {
                     ContentUnavailableView {
@@ -117,7 +124,7 @@ struct PlotterDashboardView: View {
                         Label("No provider summaries", systemImage: "tray")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .padding([.horizontal, .bottom], 16)
+                            .padding([.horizontal, .bottom], LiquidGlassMetrics.Spacing.medium)
                     }
                 } else {
                     ContentUnavailableView {
@@ -136,7 +143,7 @@ struct PlotterDashboardView: View {
                         Label("No runners in the sample", systemImage: "tray")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
-                            .padding([.horizontal, .bottom], 16)
+                            .padding([.horizontal, .bottom], LiquidGlassMetrics.Spacing.medium)
                     }
                 } else {
                     ContentUnavailableView {
@@ -150,75 +157,113 @@ struct PlotterDashboardView: View {
         // The shared activity cards carry their own 16pt inset (they also
         // render on the Lock Screen), so the panel adds only 4pt to land the
         // content on the same 20pt edge as the Live Activity panel below.
-        .padding(4)
+        .padding(LiquidGlassMetrics.Spacing.xxSmall)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Self.panelFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Self.panelFill, in: Self.panelShape)
     }
 
     /// Grouped-content surface: white over the gray grouped background in
     /// light mode, an elevated gray over black in dark mode. Plain
     /// `.background` is black-on-black in dark mode and the panels vanish.
+    /// Content, not controls, so a semantic fill rather than glass.
     private static let panelFill = Color(.secondarySystemGroupedBackground)
+
+    /// The shared card radius token, so both panels match the rest of the
+    /// apps' content cards.
+    private static let panelShape = RoundedRectangle(
+        cornerRadius: LiquidGlassMetrics.Radius.card,
+        style: .continuous
+    )
 
     private var activityControls: some View {
         let isActive = activities.activeFamilies.contains(selectedFamily)
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Label("Live Activity", systemImage: "livephoto")
-                    .font(.headline)
-                Spacer()
-                Text(isActive ? "On" : "Off")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundStyle(isActive ? .green : .secondary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(isActive ? Color.green.opacity(0.12) : Color.secondary.opacity(0.12), in: Capsule())
-            }
-            Text("Show \(selectedFamily.title) on the Lock Screen. Updates use local Cockpit data.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Button {
-                Task { await toggleActivity() }
-            } label: {
-                HStack(spacing: 8) {
-                    if isChangingActivity {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                    Text(isActive ? "Stop Live Activity" : "Start Live Activity")
-                        .frame(maxWidth: .infinity)
+        // Heading + description and button + helper are each tight groups,
+        // with a wider gap between them (LAY-5, FORM-5).
+        return VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                HStack {
+                    Label("Live Activity", systemImage: "livephoto")
+                        .font(.headline)
+                    Spacer()
+                    // Green caption text on a pale green wash fails contrast
+                    // in light mode (TYPE-3); the green fill carries the "on"
+                    // signal and the copy stays primary/secondary text.
+                    Text(isActive ? "On" : "Off")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(isActive ? Color.primary : Color.secondary)
+                        .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                        .background(
+                            isActive ? AnyShapeStyle(Color.green.opacity(0.2)) : AnyShapeStyle(.fill.tertiary),
+                            in: Capsule()
+                        )
                 }
-            }
-            // Start is the sheet's one primary action; Stop is a reversible,
-            // non-destructive toggle, so it drops to neutral glass, not red.
-            .modifier(LiveActivityButtonStyle(isPrimary: !isActive))
-            .controlSize(.large)
-            .disabled(isChangingActivity || (!isActive && !hasSelectedSnapshot))
-            if !isActive && !hasSelectedSnapshot {
-                Text("Start becomes available after the first \(selectedFamily.title) snapshot arrives.")
-                    .font(.caption)
+                Text("Show \(selectedFamily.title) on the Lock Screen. Updates use local Cockpit data.")
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                liveActivityButton(isActive: isActive)
+                if !isActive && !hasSelectedSnapshot {
+                    Text("Start becomes available after the first \(selectedFamily.title) snapshot arrives.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .transition(.opacity)
+                }
+            }
         }
-        .padding(20)
-        .background(Self.panelFill, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(LiquidGlassMetrics.Spacing.large)
+        .background(Self.panelFill, in: Self.panelShape)
+        // On/Off, the button tier, and the helper line change together.
+        .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: isActive)
+        .animation(LiquidGlassMetrics.stateChange, value: isChangingActivity)
+    }
+
+    private func liveActivityButton(isActive: Bool) -> some View {
+        Button {
+            Task { await toggleActivity() }
+        } label: {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                if isChangingActivity {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Text(isActive ? "Stop Live Activity" : "Start Live Activity")
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        // Start is the sheet's one primary action; Stop is a reversible,
+        // non-destructive toggle, so it drops to neutral glass, not red
+        // (BTN-1, COL-4). Full-width capsule tap target (BTN-4).
+        .liquidGlassButtonStyle(prominent: !isActive)
+        .buttonBorderShape(.capsule)
+        .controlSize(.large)
+        .disabled(isChangingActivity || (!isActive && !hasSelectedSnapshot))
     }
 
     @ViewBuilder
     private var errors: some View {
         if let dashboardError = mirror.dashboardError {
-            Label(dashboardError, systemImage: "exclamationmark.triangle.fill")
-                .font(.footnote)
-                .foregroundStyle(.red)
-                .fixedSize(horizontal: false, vertical: true)
+            errorLabel(dashboardError)
         }
         if let activityError = activities.lastError {
-            Label(activityError, systemImage: "exclamationmark.triangle.fill")
-                .font(.footnote)
-                .foregroundStyle(.red)
-                .fixedSize(horizontal: false, vertical: true)
+            errorLabel(activityError)
         }
+    }
+
+    /// The red signal lives on the glyph; footnote-size copy stays primary
+    /// text, since system red on the light grouped background falls below
+    /// small-text contrast (TYPE-3, COL-4).
+    private func errorLabel(_ message: String) -> some View {
+        Label {
+            Text(message)
+        } icon: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+        }
+        .font(.footnote)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private var hasSelectedSnapshot: Bool {
@@ -247,19 +292,6 @@ struct PlotterDashboardView: View {
             }
         } catch {
             // DashboardActivityController publishes the actionable error.
-        }
-    }
-}
-
-/// Liquid Glass button tiers for the Live Activity toggle (BTN-1).
-private struct LiveActivityButtonStyle: ViewModifier {
-    let isPrimary: Bool
-
-    func body(content: Content) -> some View {
-        if isPrimary {
-            content.buttonStyle(.glassProminent)
-        } else {
-            content.buttonStyle(.glass)
         }
     }
 }
