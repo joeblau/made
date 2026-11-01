@@ -32,6 +32,23 @@ extension View {
             buttonStyle(.bordered)
         }
     }
+
+    /// The single primary action in a view (BTN-1): tinted Liquid Glass on
+    /// macOS 26, the prominent bordered style before it.
+    @ViewBuilder
+    func compatGlassProminentButtonStyle() -> some View {
+        if #available(macOS 26.0, *) {
+            buttonStyle(.glassProminent)
+        } else {
+            buttonStyle(.borderedProminent)
+        }
+    }
+
+    /// Glass for a floating control cluster in a capsule — toolbars, pane
+    /// headers, and overlay controls. Never for content surfaces.
+    func compatGlassCapsule(tint: Color? = nil, interactive: Bool = false) -> some View {
+        compatGlassEffect(tint: tint, interactive: interactive, in: Capsule())
+    }
 }
 
 /// `GlassEffectContainer` only coordinates blending between neighboring glass

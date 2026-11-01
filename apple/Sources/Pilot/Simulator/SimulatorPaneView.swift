@@ -226,6 +226,7 @@ private struct SimulatorCaptureContainerView: NSViewRepresentable {
 final class SimulatorCaptureHostView: NSView {
     private let session: SimulatorSession
     private var pressed = false
+    private var screenDrag = DeviceScreenDragGesture()
     private var lastNormalized: (Double, Double)?
     private var lastFlags: NSEvent.ModifierFlags = []
     /// Edge of the active single-finger drag — `.bottom` when it started at the
@@ -291,6 +292,10 @@ final class SimulatorCaptureHostView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        // ⌘-drag drags the screen image out instead of touching the device.
+        if screenDrag.press(at: event.locationInWindow, modifiers: event.modifierFlags, requiresCommand: true) {
+            return
+        }
         guard let point = normalized(for: event) else { return }
         pressed = true
         lastNormalized = point
@@ -300,6 +305,17 @@ final class SimulatorCaptureHostView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if screenDrag.isTracking {
+            if screenDrag.drag(to: event.locationInWindow) {
+                DeviceScreenDrag.begin(
+                    from: self,
+                    event: event,
+                    frame: DeviceScreenDrag.displayedFrame(of: session.displayLayer),
+                    name: "simulator"
+                )
+            }
+            return
+        }
         guard pressed else { return }
         let point = normalized(for: event) ?? lastNormalized
         if let point {
@@ -309,6 +325,10 @@ final class SimulatorCaptureHostView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if screenDrag.isTracking {
+            screenDrag.release()
+            return
+        }
         guard pressed else { return }
         pressed = false
         let point = normalized(for: event) ?? lastNormalized

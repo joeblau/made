@@ -2,9 +2,8 @@ import SwiftUI
 
 /// Historical agent usage from local CLI logs and opted-in Cursor history.
 ///
-/// Header bar over a scrolling stack of cards — hero total plus per-model
-/// breakdown, the daily cost chart, a five-cell stat row, and the breakdown
-/// table. All aggregation lives in `AgenticUsageStore`; this file only draws.
+/// Header bar over the scrolling `AgenticUseDashboard`. All aggregation
+/// lives in `AgenticUsageStore` and `AgenticUseDerived`; views only draw.
 struct AgenticUseView: View {
     @Bindable var store: AgenticUsageStore
 
@@ -20,8 +19,8 @@ struct AgenticUseView: View {
                     .scaledFont(size: 11)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
             }
         }
         .onAppear { store.start() }
@@ -33,13 +32,12 @@ struct AgenticUseView: View {
     // MARK: - Header bar
 
     private var headerBar: some View {
-        HStack(spacing: 10) {
-            Text("Agentic Use")
-                .scaledFont(size: 13, weight: .semibold)
-
+        // The window toolbar already titles the page, so the bar leads with the
+        // date range instead of repeating "Agentic Use".
+        HStack(spacing: 8) {
             if let interval = store.snapshot?.interval {
                 Text((interval.start..<interval.end).formatted(.interval.month(.abbreviated).day()))
-                    .scaledFont(size: 12)
+                    .scaledFont(size: 12, weight: .medium)
                     .foregroundStyle(.secondary)
             }
 
@@ -71,7 +69,7 @@ struct AgenticUseView: View {
             .foregroundStyle(.secondary)
             .help("Refresh usage and pricing")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
     }
 
@@ -91,8 +89,10 @@ struct AgenticUseView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .help("Dismiss")
+            .accessibilityLabel("Dismiss warning")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.1))
     }
@@ -103,8 +103,7 @@ struct AgenticUseView: View {
     private var content: some View {
         switch store.phase {
         case .idle:
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            scanningState(scanned: 0, total: 0)
         case .scanning(let scanned, let total):
             scanningState(scanned: scanned, total: total)
         case .empty:
@@ -119,8 +118,7 @@ struct AgenticUseView: View {
                     dashboard(snapshot)
                 }
             } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                scanningState(scanned: 0, total: 0)
             }
         }
     }
@@ -147,7 +145,7 @@ struct AgenticUseView: View {
             if total > 0 {
                 Text("\(scanned.formatted()) of \(total.formatted()) files")
                     .scaledFont(size: 11)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .contentTransition(.numericText())
             }
@@ -159,10 +157,9 @@ struct AgenticUseView: View {
         ContentUnavailableView {
             Label("No Usage Data", systemImage: "chart.line.uptrend.xyaxis")
         } description: {
-            VStack(spacing: 6) {
+            VStack(spacing: 4) {
                 Text("No usage was found for Claude Code, Codex, Cursor, Grok, or Kimi.")
                 Text("Run an agent session, or enable Cursor usage in Settings.")
-                    .foregroundStyle(.tertiary)
             }
         } actions: {
             Button("Rescan") { store.rescan() }
@@ -174,7 +171,11 @@ struct AgenticUseView: View {
         ContentUnavailableView {
             Label("Nothing in This Range", systemImage: "calendar.badge.exclamationmark")
         } description: {
-            Text("No usage recorded in the last \(rangeDescription). Try a wider range.")
+            Text("No usage recorded in the last \(rangeDescription).")
+        } actions: {
+            if store.range != .all {
+                Button("Show All History") { store.range = .all }
+            }
         }
     }
 
@@ -200,47 +201,112 @@ struct AgenticUseView: View {
 
 // MARK: - Shared card chrome
 
+/// Dashboard spacing and type tokens. Spacing sits on the 4pt grid; text uses
+/// five sizes — display (KPI values), title (card headings), body, meta, and
+/// caption (axis labels and footnotes).
+enum AgenticUseLayout {
+    static let cardPadding: CGFloat = 16
+    static let cardRadius: CGFloat = 12
+}
+
 extension View {
-    /// The dashboard's card treatment, matching the inspector card idiom
-    /// (`.quaternary` fill, continuous 8pt corners).
-    func agenticUseCard(minHeight: CGFloat? = nil) -> some View {
-        padding(12)
+    /// The dashboard's card treatment: a quiet `.quaternary` fill, no border.
+    /// The 12pt gaps between cards separate them; a hairline on every card
+    /// made the page read as border soup.
+    func agenticUseCard(minHeight: CGFloat? = nil, padding inset: CGFloat = AgenticUseLayout.cardPadding) -> some View {
+        padding(inset)
             .frame(maxWidth: .infinity, minHeight: minHeight, alignment: .topLeading)
             .background(
-                .quaternary.opacity(0.4),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .quaternary.opacity(0.5),
+                in: RoundedRectangle(cornerRadius: AgenticUseLayout.cardRadius, style: .continuous)
             )
+    }
+
+    /// Card heading: 14pt semibold, the size every panel title shares.
+    func agenticUseCardTitle() -> some View {
+        scaledFont(size: 14, weight: .semibold)
     }
 }
 
 /// Shared presentation for live usage and deterministic product captures.
+///
+/// KPI cards across the top, the provider-stacked time series below, then
+/// two columns — token flow and insights on the left, provider breakdown and
+/// the Top Models table on the right — collapsing to one column when narrow.
 struct AgenticUseDashboard: View {
     let snapshot: AgenticUseSnapshot
     let pricingStatus: String
 
+    @State private var width: CGFloat = 1200
+
+    private static let twoColumnWidth: CGFloat = 1080
+
+    private var kpiColumns: Int {
+        switch width {
+        case 1000...: 5
+        case 640...: 3
+        default: 2
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    AgenticUseHeroPanel(
-                        totalCost: snapshot.totalCostUSD,
-                        modelTotals: snapshot.modelTotals,
-                        hasUnpricedModels: snapshot.hasUnpricedModels,
-                        unpricedTokens: snapshot.unpricedTokens,
-                        pricingStatus: pricingStatus
-                    )
-                    .frame(width: 300)
-
-                    AgenticUseDailyChartPanel(snapshot: snapshot)
+                AgenticUseKPICards(snapshot: snapshot, columns: kpiColumns)
+                AgenticUseDailyChartPanel(snapshot: snapshot)
+                if width >= Self.twoColumnWidth {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(spacing: 12) {
+                            AgenticUseTokenFlowPanel(snapshot: snapshot)
+                            insights
+                        }
                         .frame(maxWidth: .infinity)
+                        VStack(spacing: 12) {
+                            AgenticUseProviderBreakdown(snapshot: snapshot)
+                            AgenticUseTopModels(snapshot: snapshot)
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    AgenticUseTokenFlowPanel(snapshot: snapshot)
+                    AgenticUseProviderBreakdown(snapshot: snapshot)
+                    AgenticUseTopModels(snapshot: snapshot)
+                    insights
                 }
-                AgenticUseStatRow(stats: snapshot.stats)
-                AgenticUseBreakdownView(
-                    modelTotals: snapshot.modelTotals,
-                    dayTotals: snapshot.dayTotals
-                )
+                footnote
             }
             .padding(12)
         }
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { newWidth in
+            width = newWidth
+        }
+    }
+
+    @ViewBuilder
+    private var insights: some View {
+        let insights = AgenticUseInsights.make(from: snapshot)
+        if !insights.isEmpty {
+            AgenticUseInsightsView(insights: insights)
+        }
+    }
+
+    /// Costs are estimates; keep the pricing source and any unpriced gap
+    /// visible on the page rather than buried in a tooltip.
+    private var footnote: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Costs are API-equivalent estimates at published per-token rates. \(pricingStatus).")
+            if snapshot.hasUnpricedModels {
+                Text("* Partial total: \(AgenticUseFormat.tokens(snapshot.unpricedTokens)) tokens have no published rate.")
+                    .foregroundStyle(.orange)
+            }
+        }
+        // Secondary, not tertiary: the pricing caveat is content and has to
+        // pass contrast at this size.
+        .scaledFont(size: 11)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
     }
 }

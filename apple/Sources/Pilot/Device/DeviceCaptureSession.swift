@@ -422,6 +422,12 @@ final class DeviceCaptureSession: NSObject {
 
     // MARK: - Screenshot
 
+    /// The most recent frame of the live feed, for dragging the screen out.
+    func currentFrame() -> CGImage? {
+        guard status == .streaming else { return nil }
+        return coordinator.latestFrame()
+    }
+
     func takeScreenshot() {
         guard status == .streaming else { return }
         Task { [weak self] in
@@ -1172,6 +1178,8 @@ final class CaptureCoordinator: NSObject,
     private let lock = NSLock()
     private let ciContext = CIContext()
     private var pending: [UUID: CheckedContinuation<CGImage, Error>] = [:]
+    /// Newest video frame (one pooled buffer held) so a screen drag starts synchronously.
+    private var latestImageBuffer: CVImageBuffer?
 
     private var writer: AVAssetWriter?
     private var videoInput: AVAssetWriterInput?
@@ -1188,6 +1196,7 @@ final class CaptureCoordinator: NSObject,
     }
 
     func shutdown() {
+        lock.withLock { latestImageBuffer = nil }
         cancelPendingFrames(reason: .coordinatorReleased)
         stopRecording(reason: "Recording stopped because the capture coordinator closed.")
     }
@@ -1213,6 +1222,12 @@ final class CaptureCoordinator: NSObject,
         } onCancel: { [weak self] in
             self?.resolveFrameRequest(requestID, result: .failure(CaptureFrameError.cancelled))
         }
+    }
+
+    func latestFrame() -> CGImage? {
+        guard let imageBuffer = lock.withLock({ latestImageBuffer }) else { return nil }
+        let ciImage = CIImage(cvImageBuffer: imageBuffer)
+        return ciContext.createCGImage(ciImage, from: ciImage.extent)
     }
 
     func cancelPendingFrames(reason: CaptureFrameError) {
@@ -1302,6 +1317,7 @@ final class CaptureCoordinator: NSObject,
         from connection: AVCaptureConnection
     ) {
         if output is AVCaptureVideoDataOutput {
+            lock.withLock { latestImageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) }
             serveScreenshot(sampleBuffer)
             appendVideo(sampleBuffer)
         } else if output is AVCaptureAudioDataOutput {
