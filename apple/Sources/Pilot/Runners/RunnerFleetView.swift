@@ -73,7 +73,11 @@ struct RunnerFleetView: View {
 
     private func legendItem(_ title: String, color: Color, opacity: Double) -> some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Capsule().fill(color.opacity(opacity)).frame(width: 16, height: 4)
+            // The idle/offline cable grays sit within a few percent of the dark
+            // glass; a hairline rim keeps each swatch's shape legible (TYPE-3).
+            Capsule().fill(color.opacity(opacity))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.5))
+                .frame(width: 16, height: 4)
             Text(title)
         }
     }
@@ -122,8 +126,13 @@ struct RunnerFleetView: View {
             Color.clear
                 .frame(width: 1, height: 1)
                 .popover(isPresented: $showsDetails, arrowEdge: .top) {
+                    // The popover's own glass follows the presentation's
+                    // appearance, not the content environment: forcing only
+                    // the content dark left white text on light glass in the
+                    // light system appearance (TYPE-3). A preferred scheme
+                    // applies to the nearest presentation, so both match.
                     RunnerDetailsPopover(runner: runner, name: name(runner), hardware: hardware(runner))
-                        .environment(\.colorScheme, .dark)
+                        .preferredColorScheme(.dark)
                 }
                 .padding(.leading, hover.point.x)
                 .padding(.top, hover.point.y)

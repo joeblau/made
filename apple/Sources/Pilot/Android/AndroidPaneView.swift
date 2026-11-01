@@ -184,7 +184,10 @@ private struct AndroidPickerView: View {
     var body: some View {
         VStack(spacing: 0) {
             DevicePickerHeader(
-                title: session.target?.pickerTitle ?? "Android Device",
+                // A restored pane has no target (it isn't persisted) and lists
+                // emulators and devices together, so the title stays neutral
+                // instead of claiming "Android Device" over an emulator row.
+                title: session.target?.pickerTitle ?? "Android",
                 systemImage: pickerSystemImage,
                 isRefreshing: session.isRefreshing,
                 refreshHelp: "Re-scan connected Android devices",
@@ -250,7 +253,9 @@ private struct AndroidPickerView: View {
     private func deviceRow(_ device: AndroidDevice) -> some View {
         DevicePickerRow(
             systemImage: device.isEmulator ? "apps.iphone" : "smartphone",
-            title: device.displayName,
+            // Every Google emulator image reports the same model string; the
+            // AVD name is what the user created and recognizes (HIER-5).
+            title: session.displayName(for: device),
             detail: stateHint(device),
             trailingSystemImage: device.isConnectable ? "chevron.right" : "exclamationmark.triangle"
         )

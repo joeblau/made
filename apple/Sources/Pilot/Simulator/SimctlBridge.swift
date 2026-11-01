@@ -113,22 +113,46 @@ enum SimctlBridge {
     }
 
     /// "com.apple.CoreSimulator.SimRuntime.iOS-26-4" -> "iOS 26.4".
+    /// Device-specific runtimes carry a hardware suffix after the version
+    /// ("iOS-27-2-iPhone19-4"); it renders as "iOS 27.2 (iPhone19,4)" so the
+    /// section stays distinct from the general iOS 27.2 runtime instead of
+    /// reading "iOS 27.2.iPhone19.4".
     static func runtimeDisplayName(_ identifier: String) -> String {
-        guard let tail = identifier.split(separator: ".").last else { return identifier }
-        // tail like "iOS-26-4" or "watchOS-11-0"
-        let parts = tail.split(separator: "-")
-        guard let os = parts.first else { return String(tail) }
-        let version = parts.dropFirst().joined(separator: ".")
-        return version.isEmpty ? String(os) : "\(os) \(version)"
+        guard let components = runtimeComponents(identifier) else { return identifier }
+        var name = components.os
+        if !components.version.isEmpty {
+            name += " " + components.version.map(String.init).joined(separator: ".")
+        }
+        if !components.variant.isEmpty {
+            name += " (" + components.variant.joined(separator: ",") + ")"
+        }
+        return name
     }
 
     /// Zero-padded numeric sort key so iOS 9.0 sorts before iOS 26.4 lexically.
     static func runtimeSortKey(_ identifier: String) -> String {
-        guard let tail = identifier.split(separator: ".").last else { return identifier }
-        let parts = tail.split(separator: "-")
-        let os = parts.first.map(String.init) ?? ""
-        let nums = parts.dropFirst().map { String(format: "%04d", Int($0) ?? 0) }.joined(separator: ".")
-        return "\(os)-\(nums)"
+        guard let components = runtimeComponents(identifier) else { return identifier }
+        let numbers = components.version.map { String(format: "%04d", $0) }.joined(separator: ".")
+        let variant = components.variant.isEmpty ? "" : "-" + components.variant.joined(separator: "-")
+        return "\(components.os)-\(numbers)\(variant)"
+    }
+
+    /// Splits a runtime identifier's tail ("iOS-27-2-iPhone19-4") into the OS
+    /// name, the leading numeric version, and any trailing variant fields.
+    private struct RuntimeComponents {
+        let os: String
+        let version: [Int]
+        let variant: [String]
+    }
+
+    private static func runtimeComponents(_ identifier: String) -> RuntimeComponents? {
+        guard let tail = identifier.split(separator: ".").last else { return nil }
+        let parts = tail.split(separator: "-").map(String.init)
+        guard let os = parts.first else { return nil }
+        let rest = parts.dropFirst()
+        let version = rest.prefix { Int($0) != nil }.compactMap { Int($0) }
+        let variant = Array(rest.dropFirst(version.count))
+        return RuntimeComponents(os: os, version: version, variant: variant)
     }
 
     // MARK: - Lifecycle
