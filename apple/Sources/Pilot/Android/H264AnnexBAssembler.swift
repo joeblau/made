@@ -105,6 +105,11 @@ struct H264AnnexBAssembler {
         return events
     }
 
+    /// Whether `flushTrailing` would consume buffered NAL bytes. Lets the
+    /// idle flush tell "flushed a tail" from "nothing buffered" even when the
+    /// tail is a dropped NAL type (SEI, AUD) that yields no event.
+    var hasBufferedTail: Bool { sawFirstStartCode && !buffer.isEmpty }
+
     /// Emit the buffered trailing NALU. Annex-B has no NAL length field, so
     /// byte silence can never prove that a tail is complete: USB scheduling
     /// may pause in the middle of one. The stream owner calls this after
