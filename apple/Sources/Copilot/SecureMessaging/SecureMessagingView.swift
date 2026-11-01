@@ -53,11 +53,20 @@ struct SecureMessagingView: View {
     private var statusSection: some View {
         Section("Status") {
             LabeledContent("Connection") {
-                HStack(spacing: 6) {
-                    Circle().fill(statusColor).frame(width: 8, height: 8)
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    // In-flight stages show activity rather than a static dot
+                    // (MOT-5); settled states keep the colored indicator.
+                    if isConnecting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Circle().fill(statusColor).frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                    }
                     Text(statusText)
                         .foregroundStyle(.secondary)
+                        .contentTransition(.opacity)
                 }
+                .animation(LiquidGlassMetrics.stateChange, value: statusText)
             }
         }
     }
@@ -83,19 +92,33 @@ struct SecureMessagingView: View {
 
     private var pairingSection: some View {
         Section {
-            TextField("Peer public key (base64)", text: $peerKeyInput, axis: .vertical)
+            // Persistent labels above each field; placeholders are only an
+            // instruction or a bare example (FORM-1/FORM-2). Fields keep the
+            // system Form styling.
+            labeledField("Peer public key") {
+                TextField(
+                    "Peer public key",
+                    text: $peerKeyInput,
+                    prompt: Text("Paste your peer's base64 key"),
+                    axis: .vertical
+                )
                 .font(.system(.footnote, design: .monospaced))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .lineLimit(1...3)
-            TextField("Pairing token", text: $tokenInput)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
+            }
+            labeledField("Pairing token") {
+                TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
             Button("Generate secure pairing token") { generateToken() }
-            TextField("Rendezvous URL", text: $rendezvousURL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
+            labeledField("Rendezvous URL") {
+                TextField("Rendezvous URL", text: $rendezvousURL, prompt: Text(verbatim: "https://rendezvous.blau.app"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+            }
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
 
             if let transport, !transport.state.isFailed {
@@ -115,11 +138,17 @@ struct SecureMessagingView: View {
     }
 
     private func messagingSection(_ transport: SecureChannelTransport) -> some View {
+        // The section header is the composer's persistent label (FORM-1).
         Section("Send") {
-            HStack {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 TextField("Message", text: $outgoing)
                     .onSubmit(send)
-                Button("Send", action: send)
+                // Connect is hidden while connected, so Send is the view's one
+                // prominent action (BTN-1): a circular glass icon button in the
+                // Messages idiom. A non-default style also keeps the Form from
+                // routing taps anywhere in the row to it.
+                Button("Send", systemImage: "arrow.up", action: send)
+                    .liquidGlassIconButton(prominent: true)
                     .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             Button {
@@ -133,7 +162,8 @@ struct SecureMessagingView: View {
     private func logSection(_ transport: SecureChannelTransport) -> some View {
         Section("Session log") {
             if transport.log.isEmpty {
-                Text("No activity yet.").foregroundStyle(.secondary)
+                Label("No activity yet.", systemImage: "text.alignleft")
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(transport.log.reversed()) { entry in
                     Text(entry.text)
@@ -142,6 +172,23 @@ struct SecureMessagingView: View {
                 }
             }
         }
+    }
+
+    /// A Form row with a persistent visible label above its field (FORM-1),
+    /// label → input at 8pt (FORM-5). The field's own title stays its
+    /// VoiceOver label, so the visible label is hidden from accessibility.
+    private func labeledField<Field: View>(
+        _ title: LocalizedStringKey,
+        @ViewBuilder field: () -> Field
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            field()
+        }
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
     }
 
     // MARK: - Actions
@@ -233,11 +280,19 @@ struct SecureMessagingView: View {
         }
     }
 
+    private var isConnecting: Bool {
+        switch transport?.state {
+        case .signaling, .holePunching, .handshake: return true
+        case .none, .connected, .failed: return false
+        }
+    }
+
     private var statusColor: Color {
         switch transport?.state {
         case .connected: return .green
         case .failed: return .red
-        case .none: return .gray
+        // Idle reads as the semantic secondary tint in both appearances (COL-2).
+        case .none: return .secondary
         default: return .orange
         }
     }

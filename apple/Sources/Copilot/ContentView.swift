@@ -78,6 +78,9 @@ struct ContentView: View {
             mainContent
             .toolbar {
                 deviceToolbar
+                // Settings/storage and the two dashboards are separate groups
+                // on the shared glass toolbar background.
+                ToolbarSpacer(.fixed, placement: .topBarLeading)
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Dashboard", systemImage: "square.grid.2x2") { showDashboard = true }
                 }
@@ -90,6 +93,9 @@ struct ContentView: View {
             }
             .safeAreaInset(edge: .top) {
                 walkieStatus
+                    .animation(LiquidGlassMetrics.spring, value: walkie.phase)
+                    // An idle status message alone also shows/hides the HUD.
+                    .animation(LiquidGlassMetrics.spring, value: walkie.statusMessage)
             }
         }
         .environment(secureIdentity)
@@ -148,29 +154,13 @@ struct ContentView: View {
         }
         .onDisappear { walkie.interrupt() }
         .overlay(alignment: .top) {
-            if transcription.isModelLoading {
-                HStack(spacing: 12) {
-                    if let fraction = transcription.modelLoadingFraction {
-                        ProgressView(value: fraction)
-                            .frame(width: 72)
-                    } else {
-                        ProgressView()
-                    }
-                    Text(transcription.modelLoadingProgress)
-                        .font(.footnote)
-                    Spacer()
-                    Button("Cancel") {
-                        transcription.cancelModelLoad()
-                        walkie.interrupt()
-                    }
+            ZStack {
+                if transcription.isModelLoading {
+                    modelLoadingBanner
+                        .transition(.move(edge: .top).combined(with: .opacity))
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                // Floating status/control layer above the list: Liquid Glass,
-                // with a plain Cancel inside so glass never stacks on glass.
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding()
             }
+            .animation(LiquidGlassMetrics.spring, value: transcription.isModelLoading)
         }
         .alert("Download Speech Model?", isPresented: $showModelDownloadConfirmation) {
             Button("Not Now", role: .cancel) {
@@ -230,11 +220,47 @@ struct ContentView: View {
         }
     }
 
+    /// Floating download status with its Cancel control beside it: two
+    /// sibling glass shapes in one container, never glass stacked on glass.
+    private var modelLoadingBanner: some View {
+        // Container spacing below the stack gap: the two shapes render
+        // together but stay distinct instead of blending into one blob.
+        GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+                    if let fraction = transcription.modelLoadingFraction {
+                        ProgressView(value: fraction)
+                            .frame(width: 72)
+                    } else {
+                        ProgressView()
+                    }
+                    Text(transcription.modelLoadingProgress)
+                        .font(.footnote)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.small)
+                .glassEffect(.regular, in: RoundedRectangle(
+                    cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous
+                ))
+
+                Button("Cancel") {
+                    transcription.cancelModelLoad()
+                    walkie.interrupt()
+                }
+                .liquidGlassButtonStyle()
+                .controlSize(.large)
+            }
+        }
+        .padding(LiquidGlassMetrics.Spacing.medium)
+    }
+
     @ViewBuilder
     private var mainContent: some View {
         if !isPeerConnected && workspaces.isEmpty {
             ContentUnavailableView {
                 Label("Looking for Cockpit…", systemImage: "antenna.radiowaves.left.and.right")
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
             } description: {
                 Text("Make sure Cockpit is running on your Mac.")
             } actions: {
@@ -287,13 +313,21 @@ struct ContentView: View {
     @ViewBuilder
     private var walkieStatus: some View {
         if !demoMode, walkie.phase != .idle || walkie.statusMessage != nil {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 switch walkie.phase {
                 case .preparing:
                     Label("Preparing microphone…", systemImage: "mic")
                 case .recording:
-                    Label("Recording — release Volume Down to send", systemImage: "mic.fill")
-                        .foregroundStyle(.red)
+                    // The pulsing red glyph carries the recording signal
+                    // (COL-4); the footnote copy stays primary so it keeps
+                    // contrast on the glass HUD (TYPE-3).
+                    Label {
+                        Text("Recording — release Volume Down to send")
+                    } icon: {
+                        Image(systemName: "mic.fill")
+                            .foregroundStyle(.red)
+                            .symbolEffect(.pulse, options: .repeating)
+                    }
                 case .finishing:
                     Label("Finishing transcription…", systemImage: "waveform")
                 case .idle:
@@ -310,12 +344,15 @@ struct ContentView: View {
             }
             .font(.footnote)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+            .padding(LiquidGlassMetrics.Spacing.medium)
             // Transient HUD floating over the list, not a full-bleed slab
             // under the (already glass) navigation bar.
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .padding(.horizontal)
-            .padding(.bottom, 8)
+            .glassEffect(.regular, in: RoundedRectangle(
+                cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous
+            ))
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+            .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
@@ -338,12 +375,12 @@ struct ContentView: View {
                     .font(.caption.weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
                     .padding(.vertical, 2)
                     .background(.red, in: Capsule())
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
     }
 
     private var workspaceSections: [VolumeScrollSection<WorkspaceSummary>] {
@@ -367,12 +404,11 @@ struct ContentView: View {
             SettingsButton()
         }
         ToolbarItem(placement: .topBarLeading) {
-            Button {
+            // Titled like its neighbors; the toolbar shows the symbol only
+            // and the title stays the VoiceOver name.
+            Button("Speech Model Storage", systemImage: "waveform.badge.magnifyingglass") {
                 showSpeechStorage = true
-            } label: {
-                Image(systemName: "waveform.badge.magnifyingglass")
             }
-            .accessibilityLabel("Speech Model Storage")
         }
         // Device connection status, top-right.
         // Status glyphs, not controls: keep them off the glass control layer
@@ -396,8 +432,8 @@ struct ContentView: View {
     @ViewBuilder
     private var trackpadInset: some View {
         if isPeerConnected {
-            GlassEffectContainer(spacing: 12) {
-                VStack(spacing: 12) {
+            GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.small) {
+                VStack(spacing: LiquidGlassMetrics.Spacing.small) {
                     // Always rendered (fixed height) so the bottom doesn't flash
                     // in/out as workspace state syncs each second; degrades to a
                     // disabled state when the selection has no tabs.
@@ -491,6 +527,21 @@ private struct SpeechModelStorageView: View {
                     LabeledContent("Model", value: SpeechModelCache.displayName)
                     LabeledContent("Download size", value: SpeechModelCache.downloadSize)
                     LabeledContent("Stored", value: transcription.cachedModelSize)
+                    if transcription.isModelLoading {
+                        // Designed loading state while the sheet covers the
+                        // main screen's download banner (MOT-5).
+                        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+                            if let fraction = transcription.modelLoadingFraction {
+                                ProgressView(value: fraction)
+                                    .frame(width: 72)
+                            } else {
+                                ProgressView()
+                            }
+                            Text(transcription.modelLoadingProgress)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     if transcription.hasStoredModel || transcription.isModelLoaded {
                         Button("Remove Download", role: .destructive) {
                             Task { await transcription.removeCachedModel() }
@@ -537,6 +588,10 @@ private struct TabSwitcherBar: View {
     /// Same feel as volume up/down list navigation (VolumeObserver.tapHaptic).
     private let selectHaptic = UIImpactFeedbackGenerator(style: .medium)
 
+    /// A capsule of this height has the trackpad's corner radius
+    /// (height / 2 = 32) so the pair reads as one control group.
+    private let barHeight: CGFloat = 64
+
     private var tabs: [TabSummary] { workspace?.tabs ?? [] }
 
     private var currentIndex: Int {
@@ -555,8 +610,8 @@ private struct TabSwitcherBar: View {
         ZStack {
             // Two full-height tap halves drive prev/next.
             HStack(spacing: 0) {
-                half(systemImage: "chevron.left", delta: -1, alignment: .leading)
-                half(systemImage: "chevron.right", delta: 1, alignment: .trailing)
+                half(title: "Previous Tab", systemImage: "chevron.left", delta: -1, alignment: .leading)
+                half(title: "Next Tab", systemImage: "chevron.right", delta: 1, alignment: .trailing)
             }
             // Centered label sits on top but passes touches through to the
             // halves below.
@@ -564,18 +619,23 @@ private struct TabSwitcherBar: View {
                 .padding(.horizontal, 56)
                 .allowsHitTesting(false)
         }
-        .frame(height: 64)
+        .frame(height: barHeight)
+        // The halves are full rectangles (every point of the bar stays a
+        // tap target); clipping to the capsule makes each pressed wash
+        // exactly one half of the glass shape (concentric by construction,
+        // LAY-4).
+        .clipShape(Capsule())
         // Floating control: interactive Liquid Glass capsule (height 64,
         // radius 32 — the trackpad's radius) sharing the trackpad's
         // horizontal insets so the two controls line up as a pair.
         .glassEffect(.regular.interactive(), in: Capsule())
-        .padding(.horizontal)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
     }
 
     @ViewBuilder
     private var centerLabel: some View {
         if let current {
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Image(systemName: current.systemImageName)
                     .font(.subheadline)
                 Text(current.title)
@@ -590,7 +650,7 @@ private struct TabSwitcherBar: View {
     }
 
     @ViewBuilder
-    private func half(systemImage: String, delta: Int, alignment: Alignment) -> some View {
+    private func half(title: LocalizedStringKey, systemImage: String, delta: Int, alignment: Alignment) -> some View {
         let target = currentIndex + delta
         let enabled = tabs.indices.contains(target)
         Button {
@@ -603,14 +663,18 @@ private struct TabSwitcherBar: View {
                 .overlay(alignment: alignment) {
                     Image(systemName: systemImage)
                         .font(.body.weight(.semibold))
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, LiquidGlassMetrics.Spacing.xLarge)
                         // Monochrome on glass; tint is reserved for state (COL-4).
                         .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 }
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Each half is a segment of the glass capsule: a rectangular pressed
+        // wash, clipped to the capsule by the bar, instead of a dead plain
+        // style (BTN-5). A rounded wash here would also round the hit shape
+        // and leave dead corners at the bar's center.
+        .buttonStyle(.liquidGlassPressable(cornerRadius: 0))
         .disabled(!enabled)
+        .accessibilityLabel(Text(title))
     }
 }
 

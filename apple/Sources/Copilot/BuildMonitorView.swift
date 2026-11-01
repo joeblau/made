@@ -30,9 +30,12 @@ struct BuildMonitorView: View {
                                 ? "Open a GitHub project in Cockpit. Its workflow runs will appear here."
                                 : "Open Cockpit on your Mac to choose a workflow run.")
                         )
+                        // Float the empty state on the grouped background
+                        // instead of boxing it in a row card (LAY-1/MOT-6).
+                        .listRowBackground(Color.clear)
                     }
                     ForEach(monitor.runs) { run in
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
                             runDetails(run)
                             if !run.state.isComplete, monitor.followedRun?.id != run.id {
                                 Button("Follow Build", systemImage: "livephoto") {
@@ -42,11 +45,12 @@ struct BuildMonitorView: View {
                                 // keeps the List from routing taps anywhere in the
                                 // row (including its GitHub link) to this button.
                                 .buttonStyle(.glass)
+                                .buttonBorderShape(.capsule)
                                 .controlSize(.small)
                                 .disabled(!connected || monitor.isStarting)
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
                     }
                 } header: {
                     Text("Workflow runs")
@@ -56,17 +60,29 @@ struct BuildMonitorView: View {
                     Text("Follow one run on your Lock Screen and Dynamic Island. Updates continue while Cockpit is running and your Mac is awake. Starting another monitor replaces the current one.")
                 }
             }
+            // Following/unfollowing and new runs reflow the list with a
+            // settle instead of an instant swap (MOT-4).
+            .animation(LiquidGlassMetrics.spring, value: monitor.followedRun?.id)
+            .animation(LiquidGlassMetrics.spring, value: monitor.runs.map(\.id))
             .navigationTitle("Builds")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
 
     private func runDetails(_ run: BuildWorkflowRun) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             Text(run.workflow).font(.headline)
             Text("\(run.repository) · \(run.branch)").font(.subheadline).foregroundStyle(.secondary)
             HStack {
-                Label(run.state.label, systemImage: run.state.symbol)
+                Label {
+                    Text(run.state.label)
+                } icon: {
+                    // Same state color as the Live Activity card, so runs
+                    // scan by glyph shape and color before text (HIER-3).
+                    Image(systemName: run.state.symbol)
+                        .foregroundStyle(run.state.buildTint)
+                        .contentTransition(.symbolEffect(.replace))
+                }
                 Spacer()
                 BuildElapsedTime(state: run.state)
             }
