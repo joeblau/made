@@ -261,13 +261,39 @@ Not capturable here:
 - Wireless live stream: it needs a Screen Mirroring sender. The only one available is a macOS VM, and its Screen Mirroring menu lists no receivers. The simulator has no Screen Mirroring, and every other sender is a physical device. Every other wireless state is covered.
 - Actions "No Actions" empty state: the test `gh` stand-in can't return zero runs; the overlay logic is unit-tested.
 
-Left open:
-- Chromium wallet popup (P2, Chromium build only, predates this branch): the popup shows only Rabby's loading skeleton. It asks for Chrome-style CEF but is hosted as a child of an `NSView`, which CEF doesn't support, so it falls back to Alloy style without an extension process. This needs a hosting change, not a style fix.
-- When a terminal has keyboard focus, the first click into a Chromium page field doesn't take keyboard focus (predates this branch).
-- White text on the system prominent blue button measures 3.8–4.0:1 app-wide; it's the platform's style.
-- Not captured: iOS tinted and StandBy widget modes, Secure Messaging's live-session sections, and the Chromium quit timeout and logout paths.
+Left open: see the control audit below, which resolves the wallet popup, the quit and logout paths, and the widget modes.
 
 Verification: `build-ci.sh`, `test.sh all` (PilotTests 864 passed with 2 CEF skips, SharedTests 232, PlotterTests 4), `lint-swift.sh --all` (0 violations in 359 files), `app-icon-tool.swift validate`, `check-docs.sh`, the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators, the Chromium configuration build, and an XcodeGen drift check all pass.
+
+### Control audit and final round
+
+Every button, field, menu, picker and toggle in Cockpit, Walkie, Kneeboard and Trigger was listed and checked one by one: 380 controls. 162 use the repo's glass styles (`compatGlassButtonStyle`, `compatGlassProminentButtonStyle`, `compatGlassIconButton`, `liquidGlassField` and the glass containers). 144 are system controls that the 27 SDK already draws in Liquid Glass (segmented pickers, toggles, menus, toolbar items, alert and sheet buttons). 64 stay plain on purpose: inline text links, list rows, the terminal and editor surfaces, and controls drawn by web content. The other 10 had a squared or plain style and now use glass with a capsule shape: the extension window buttons, the Notes Word Wrap menu, the GitHub task "#N" button, the Agentic Use daily-chart controls, the Runners toolbar, Setup, the Wireless and Device pane buttons, and Remote Desktop.
+
+Fixes from the audit, each checked in the macOS 27.2 VM or the 27.2 simulators:
+
+- Cockpit:
+  - Selected segmented-picker labels were white on the system accent at 3.9:1 dark and 4.2:1 light. `.legibleSegmentedPicker()` darkens the user's own accent until white text reaches 5.2:1, which measures 5.0–5.6:1 on screen across all five segmented pickers. Unit tests cover every system accent.
+  - The Wireless pane switches to its compact layout in narrow panes in every state. The pane width now comes from a `GeometryReader`; before, the overflowing content reported its own width, so the compact layout never appeared and the header clipped. Checked at 60–160pt, stopped and waiting.
+  - Secondary text in the Edit Device and Add Runner sheets and in the runner and model popovers measures 6.7–7.0:1 (3.95:1 before). Text that sets `.secondary` itself needs the legible gray set directly; a sheet-wide `legibleSecondaryHierarchy()` doesn't reach it.
+  - Workspace tab titles, note tabs, Remote Desktop titles and the sidebar LLM gauge were tap-only. They now expose the button trait and the same action to VoiceOver. The tab reads as `AXButton` with its selection state in the VM accessibility tree.
+  - The Notes gutter and color-chip buttons respond to VoiceOver presses, and the Walkie transcript has a Share button.
+  - The Chromium wallet popup shows the real Rabby UI. It opens Chrome-style in its own CEF-owned window, because CEF forces Alloy style on a browser hosted inside an `NSView`. Windows an extension opens on its own are hidden and closed, and the popup can't navigate outside the extension.
+  - Quit paths, run in the VM: ⌘Q with Chromium panes ends with `exit_type` Normal. A logout exits at once, and a cancelled logout followed by ⌘Q also ends Normal. If Chromium hangs the main thread during a quit, a backstop ends the process (6.5s in the VM).
+  - After one unclean exit, Chromium kept `profile.exit_type` at "Crashed" forever, because CEF never shows Chrome's "Restore pages?" prompt. That brought the previous session's session cookies back on every launch. A clean shutdown now records "Normal" before `CefShutdown`; a kill, logout or backstop exit still reads as a crash. This cause is inferred from the VM runs; there was no Chromium source to read.
+- Widgets: tinted (accented), clear (vibrant) and StandBy night modes can't be set in the simulator, so every widget family was rendered offline in each mode (293 renders). The fixes from those renders: accent-group status text in tinted mode, the Actions title, Build Activity captions, the Kneeboard snapshot gradient, and the Mirror status line, which now sits in its own strip in accented and vibrant modes (9.8–16.3:1, and 5.6:1 in StandBy night). The Mirror still renders in full color in tinted mode, like a photo. Keeping `.accentedDesaturated`, as the Photos widget does, is a product call.
+
+Not capturable here:
+- USB Device stream and wireless live stream, for the reasons above.
+- Tinted Home Screen and StandBy on device; the offline renders approximate the system compositor.
+- The sidebar LLM gauge's button role on screen: it needs a coding agent under tmux, and the VM has no tmux without a download.
+- VoiceOver itself; the button traits were checked in the accessibility tree.
+
+Left open:
+- When a terminal has keyboard focus, the first click into a Chromium page field doesn't take keyboard focus (predates this branch).
+- White text on the system prominent blue button measures 3.8–4.0:1 app-wide; it's the platform's style.
+- The Inspector "Repository" header measures 3.2:1 in its no-repository state, and "Chromium is unavailable" hyphenates "available" in very narrow panes.
+
+Verification: `build-ci.sh`, `test.sh all` (PilotTests 876 passed with 2 CEF skips, SharedTests 232, PlotterTests 4), `lint-swift.sh --all` (0 violations in 359 files), `app-icon-tool.swift validate`, `check-docs.sh`, the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators, the Chromium configuration build, and an XcodeGen drift check all pass.
 
 ### Open items from round 1 (resolved above unless noted)
 
