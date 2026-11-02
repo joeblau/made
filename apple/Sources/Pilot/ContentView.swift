@@ -835,17 +835,32 @@ struct ContentView: View {
     }
 
     private var selectedWorkspaceInspectorPresentedBinding: Binding<Bool> {
-        Binding(
-            get: { isInspectorPresentedForSelectedWorkspace },
+        Self.makeInspectorPresentedBinding(for: store.selectedWorkspace, in: store)
+    }
+
+    @MainActor
+    static func makeInspectorPresentedBinding(
+        for workspace: Workspace?,
+        in store: WorkspaceStore
+    ) -> Binding<Bool> {
+        let allowsPresentation = store.isWorkspaceDetailVisible
+        return Binding(
+            get: {
+                guard allowsPresentation,
+                      store.isWorkspaceDetailVisible,
+                      let workspace,
+                      store.selectedWorkspace === workspace else { return false }
+                return workspace.isInspectorPresented
+            },
             set: { isPresented in
-                // The global modes transiently hide the inspector by forcing
-                // `get` to false. SwiftUI echoes that back through this setter,
-                // which would otherwise persist `false` into the workspace and
-                // lose its real state. Ignore writes while a global mode is
-                // showing; only genuine in-workspace toggles persist — so the
-                // panel restores to what it was on return.
-                guard store.isWorkspaceDetailVisible else { return }
-                store.selectedWorkspace?.setInspectorPresented(isPresented)
+                // SwiftUI can deliver a hide echo after a global mode has
+                // already closed or another workspace has been selected. Only
+                // accept writes for the workspace and mode that made this binding.
+                guard allowsPresentation,
+                      store.isWorkspaceDetailVisible,
+                      let workspace,
+                      store.selectedWorkspace === workspace else { return }
+                workspace.setInspectorPresented(isPresented)
             }
         )
     }

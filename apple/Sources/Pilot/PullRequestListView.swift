@@ -13,6 +13,7 @@ struct InspectorTabSelector: View {
             }
         }
         .legibleSegmentedPicker()
+        .buttonBorderShape(.capsule)
         .font(.title3)
         .labelsHidden()
     }
