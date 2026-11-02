@@ -296,3 +296,39 @@ struct WalletPopupPlacementTests {
         #expect(origin.y > anchor.maxY)
     }
 }
+
+@Suite("Wallet popup navigation policy")
+struct WalletPopupNavigationPolicyTests {
+    private let wallet = "acmacodkjbdgmoleebolmdjonilkdbch"
+
+    @Test("Only a chrome-extension URL has a wallet origin")
+    func originRequiresTheExtensionScheme() {
+        #expect(WalletPopupNavigationPolicy.origin(
+            of: URL(string: "chrome-extension://\(wallet)/popup.html")!) == wallet)
+        #expect(WalletPopupNavigationPolicy.origin(
+            of: URL(string: "CHROME-EXTENSION://\(wallet.uppercased())/popup.html")!) == wallet)
+        #expect(WalletPopupNavigationPolicy.origin(of: URL(string: "https://\(wallet)/")!) == nil)
+        #expect(WalletPopupNavigationPolicy.origin(of: URL(string: "about:blank")!) == nil)
+    }
+
+    @Test("The popup may load its own wallet's pages and about:blank")
+    func allowsTheWalletAndBlank() {
+        #expect(WalletPopupNavigationPolicy.allows(
+            URL(string: "chrome-extension://\(wallet)/index.html#/unlock")!, walletOrigin: wallet))
+        #expect(WalletPopupNavigationPolicy.allows(URL(string: "about:blank")!, walletOrigin: wallet))
+        #expect(WalletPopupNavigationPolicy.allows(URL(string: "about:blank")!, walletOrigin: nil))
+    }
+
+    @Test("The popup never becomes another extension or a web page")
+    func refusesEverythingElse() {
+        let other = "nkbihfbeogaeaoehlefnkodbefgpgknn"
+        #expect(!WalletPopupNavigationPolicy.allows(
+            URL(string: "chrome-extension://\(other)/popup.html")!, walletOrigin: wallet))
+        #expect(!WalletPopupNavigationPolicy.allows(
+            URL(string: "https://rabby.io/")!, walletOrigin: wallet))
+        #expect(!WalletPopupNavigationPolicy.allows(
+            URL(string: "chrome-extension://\(wallet)/popup.html")!, walletOrigin: nil))
+        #expect(!WalletPopupNavigationPolicy.allows(
+            URL(string: "about:srcdoc")!, walletOrigin: wallet))
+    }
+}

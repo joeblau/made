@@ -2,21 +2,21 @@
 import AppKit
 import SwiftUI
 
-/// The floating panel a wallet's action popup is drawn in.
+/// Presents one wallet action popup at a time, anchored under its toolbar button.
 ///
 /// Chrome renders extension popups outside the page's own surface, and that is a
 /// security property rather than a style choice: a page that could paint over a
-/// wallet's UI could forge a connection or signing prompt. This panel is a real
-/// window above the browser view, so page content can never occupy or obscure
-/// the same pixels.
-final class WalletPopupWindow: NSPanel {
-    // Importing a key means typing into the popup, so it has to take key focus —
-    // a non-activating panel would leave the keystrokes in the browser pane.
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
-}
-
-/// Presents one wallet action popup at a time, anchored under its toolbar button.
+/// wallet's UI could forge a connection or signing prompt. The popup is a real
+/// top-level window above the browser, so page content can never occupy or
+/// obscure the same pixels.
+///
+/// The window is CEF's own, not an `NSPanel` of ours: the popup page only works
+/// as a Chrome-style browser (CEF 150 runs extensions only through Chrome's
+/// extension system), and CEF supports Chrome style only in windows it creates
+/// through its Views framework. A browser parented to one of Pilot's views is
+/// always Alloy style, which renders the page without extension bindings, so it
+/// never gets past its loading skeleton. See
+/// `ChromiumBrowserHostView(extensionPopupScreenFrame:)`.
 @MainActor
 final class WalletPopupController: NSObject {
     static let shared = WalletPopupController()
@@ -25,16 +25,21 @@ final class WalletPopupController: NSObject {
     /// Chrome caps action popups at 800×600.
     private static let popupSize = NSSize(width: 400, height: 600)
 
-    private var panel: WalletPopupWindow?
+    /// A full extension page (onboarding, approval) the extension asked to
+    /// open as a Chrome tab or window. See `presentExtensionPage(_:)`.
+    private static let pageSize = NSSize(width: 1000, height: 760)
+
     private var hostView: ChromiumBrowserHostView?
     private var presentedWalletID: String?
-    private var resignObserver: (any NSObjectProtocol)?
+    private var presentedOrigin: String?
+    private var pageHostView: ChromiumBrowserHostView?
+    private var pageOrigin: String?
 
     private override init() {
         super.init()
     }
 
-    var isPresenting: Bool { panel != nil }
+    var isPresenting: Bool { hostView != nil }
 
     /// Clicking the same wallet again closes the popup, matching how a toolbar
     /// button behaves in Chrome.
@@ -50,71 +55,108 @@ final class WalletPopupController: NSObject {
         guard let popupURL = wallet.popupURL else { return }
         dismiss()
 
-        let host = ChromiumBrowserHostView(
-            frame: NSRect(origin: .zero, size: Self.popupSize)
+        let topLeft = WalletPopupPlacement.originBelow(
+            anchor: anchor,
+            size: Self.popupSize,
+            screenFrame: NSScreen.main?.visibleFrame
         )
+        let frame = NSRect(
+            x: topLeft.x,
+            y: topLeft.y - Self.popupSize.height,
+            width: Self.popupSize.width,
+            height: Self.popupSize.height
+        )
+        let host = ChromiumBrowserHostView(extensionPopupScreenFrame: frame)
         host.delegate = self
-        host.autoresizingMask = [.width, .height]
 
-        let panel = WalletPopupWindow(
-            contentRect: NSRect(origin: .zero, size: Self.popupSize),
-            styleMask: [.titled, .fullSizeContentView, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        panel.titleVisibility = .hidden
-        panel.titlebarAppearsTransparent = true
-        panel.standardWindowButton(.closeButton)?.isHidden = true
-        panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
-        panel.standardWindowButton(.zoomButton)?.isHidden = true
-        panel.isMovableByWindowBackground = false
-        panel.hidesOnDeactivate = true
-        panel.level = .floating
-        panel.isReleasedWhenClosed = false
-        panel.contentView = host
-        panel.setFrameTopLeftPoint(
-            WalletPopupPlacement.originBelow(
-                anchor: anchor,
-                size: Self.popupSize,
-                screenFrame: NSScreen.main?.visibleFrame
-            )
-        )
-
-        self.panel = panel
-        self.hostView = host
-        self.presentedWalletID = wallet.id
-
+        hostView = host
+        presentedWalletID = wallet.id
+        presentedOrigin = WalletPopupNavigationPolicy.origin(of: popupURL)
         host.loadURL(popupURL)
-        panel.makeKeyAndOrderFront(nil)
-        host.focusBrowser()
-
-        // Clicking anywhere outside dismisses, the way a menu does. Escape is
-        // handled by the panel's own cancel action.
-        resignObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification,
-            object: panel,
-            queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.dismiss() }
-        }
     }
 
     func dismiss() {
-        if let resignObserver {
-            NotificationCenter.default.removeObserver(resignObserver)
-            self.resignObserver = nil
-        }
-        // Close the CEF browser before tearing down the window: the host view
-        // owns a native child window whose teardown is asynchronous.
+        // Closing the browser closes its CEF-owned window; teardown is
+        // asynchronous and reported (and ignored) through didClose.
         hostView?.delegate = nil
         hostView?.close()
         hostView = nil
-        panel?.orderOut(nil)
-        panel?.contentView = nil
-        panel = nil
         presentedWalletID = nil
+        presentedOrigin = nil
     }
 
+    /// Routes extension pages that a wallet asks Chrome to open in a new tab or
+    /// window (Rabby's onboarding, for example) into a managed window. Chrome
+    /// would otherwise open them in its own browser window, with an omnibox,
+    /// outside every pane and policy; ChromiumKit closes that window either way.
+    func installExtensionPageRouting() {
+        ChromiumEngine.shared.extensionPageRequestHandler = { url in
+            MainActor.assumeIsolated {
+                WalletPopupController.shared.presentExtensionPage(url)
+            }
+        }
+    }
+
+    /// Shows `url` in the extension page window if it belongs to a wallet Pilot
+    /// side-loaded; anything else is dropped.
+    func presentExtensionPage(_ url: URL) {
+        let walletIDs = Set(WalletExtensionRegistry.discover().map(\.id))
+        guard let origin = WalletPopupNavigationPolicy.origin(of: url),
+              walletIDs.contains(origin) else { return }
+        dismiss()
+        if let pageHostView, pageOrigin == origin {
+            pageHostView.loadURL(url)
+            pageHostView.focusBrowser()
+            return
+        }
+        dismissExtensionPage()
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(origin: .zero, size: Self.pageSize)
+        let size = NSSize(
+            width: min(Self.pageSize.width, visible.width),
+            height: min(Self.pageSize.height, visible.height)
+        )
+        let frame = NSRect(
+            x: visible.midX - size.width / 2,
+            y: visible.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+        let host = ChromiumBrowserHostView(extensionWindowScreenFrame: frame)
+        host.delegate = self
+        pageHostView = host
+        pageOrigin = origin
+        host.loadURL(url)
+    }
+
+    func dismissExtensionPage() {
+        pageHostView?.delegate = nil
+        pageHostView?.close()
+        pageHostView = nil
+        pageOrigin = nil
+    }
+
+    fileprivate func allowedOrigin(for browserView: ChromiumBrowserHostView) -> String? {
+        if browserView === hostView { return presentedOrigin }
+        if browserView === pageHostView { return pageOrigin }
+        return nil
+    }
+}
+
+/// What the popup's main frame may load: the wallet's own pages and nothing
+/// else. A wallet that links out (docs, explorers) gets no navigation instead of
+/// turning its trusted popup window into an arbitrary web page.
+enum WalletPopupNavigationPolicy {
+    static func origin(of url: URL) -> String? {
+        guard url.scheme?.lowercased() == "chrome-extension",
+              let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        return host
+    }
+
+    static func allows(_ url: URL, walletOrigin: String?) -> Bool {
+        if url.absoluteString == "about:blank" { return true }
+        guard let walletOrigin else { return false }
+        return origin(of: url) == walletOrigin
+    }
 }
 
 /// Where the popup sits relative to its toolbar button. Pure geometry, kept off
@@ -157,10 +199,48 @@ extension WalletPopupController: ChromiumBrowserHostViewDelegate {
         // Intentionally ignored — no new window is created.
     }
 
-    nonisolated func chromiumBrowserHostViewDidClose(_ browserView: ChromiumBrowserHostView) {
+    @objc(chromiumBrowserHostView:decideNavigationToURL:userGesture:isRedirect:)
+    nonisolated func chromiumBrowserHostView(
+        _ browserView: ChromiumBrowserHostView,
+        decideNavigationTo url: URL,
+        userGesture: Bool,
+        isRedirect: Bool
+    ) -> ChromiumNavigationDecision {
+        MainActor.assumeIsolated {
+            guard let origin = allowedOrigin(for: browserView),
+                  WalletPopupNavigationPolicy.allows(url, walletOrigin: origin)
+            else { return .cancel }
+            return .allow
+        }
+    }
+
+    nonisolated func chromiumBrowserHostViewDidCreate(_ browserView: ChromiumBrowserHostView) {
+        MainActor.assumeIsolated {
+            guard browserView === hostView || browserView === pageHostView else { return }
+            // Importing a key means typing into the popup, so it takes key focus.
+            browserView.focusBrowser()
+        }
+    }
+
+    /// Clicking anywhere outside dismisses, the way a menu does. Escape is
+    /// handled by the popup window itself.
+    @objc(chromiumBrowserHostViewPopupDidResignActive:)
+    nonisolated func chromiumBrowserHostViewPopupDidResignActive(
+        _ browserView: ChromiumBrowserHostView
+    ) {
         MainActor.assumeIsolated {
             guard browserView === hostView else { return }
             dismiss()
+        }
+    }
+
+    nonisolated func chromiumBrowserHostViewDidClose(_ browserView: ChromiumBrowserHostView) {
+        MainActor.assumeIsolated {
+            if browserView === hostView {
+                dismiss()
+            } else if browserView === pageHostView {
+                dismissExtensionPage()
+            }
         }
     }
 }

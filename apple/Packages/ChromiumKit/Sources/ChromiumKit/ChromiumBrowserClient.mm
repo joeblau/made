@@ -8,6 +8,194 @@
 
 namespace chromiumkit {
 
+namespace {
+
+/// Chrome style without Chrome's toolbar: the window shows only the extension
+/// page, as Chrome's own toolbar popups do.
+class ExtensionBrowserViewDelegate final : public CefBrowserViewDelegate {
+ public:
+    ExtensionBrowserViewDelegate() = default;
+
+    cef_runtime_style_t GetBrowserRuntimeStyle() override {
+        return CEF_RUNTIME_STYLE_CHROME;
+    }
+    ChromeToolbarType GetChromeToolbarType(
+        CefRefPtr<CefBrowserView> browser_view) override {
+        return CEF_CTT_NONE;
+    }
+
+ private:
+    IMPLEMENT_REFCOUNTING(ExtensionBrowserViewDelegate);
+};
+
+/// The CEF-owned top-level window an extension popup or window lives in.
+/// Holds its client until CEF destroys the window, so window callbacks never
+/// reach a released client.
+class ExtensionWindowDelegate final : public CefWindowDelegate {
+ public:
+    ExtensionWindowDelegate(CefRefPtr<BrowserClient> client,
+                            CefRefPtr<CefBrowserView> browser_view,
+                            const CefRect& bounds,
+                            bool popup)
+        : client_(client),
+          browser_view_(browser_view),
+          bounds_(bounds),
+          popup_(popup) {}
+
+    void OnWindowCreated(CefRefPtr<CefWindow> window) override {
+        if (client_) client_->ViewsWindowCreated(window);
+    }
+    void OnWindowDestroyed(CefRefPtr<CefWindow> window) override {
+        browser_view_ = nullptr;
+        CefRefPtr<BrowserClient> client = client_;
+        client_ = nullptr;
+        if (client) client->ViewsWindowDestroyed();
+    }
+    void OnWindowActivationChanged(CefRefPtr<CefWindow> window,
+                                   bool active) override {
+        if (client_) client_->ViewsWindowActivationChanged(active);
+    }
+    bool CanClose(CefRefPtr<CefWindow> window) override {
+        // The standard Views close handshake: the window may close once the
+        // browser has run its unload handlers (DoClose returned false).
+        CefRefPtr<CefBrowser> browser =
+            browser_view_ ? browser_view_->GetBrowser() : nullptr;
+        return browser ? browser->GetHost()->TryCloseBrowser() : true;
+    }
+    CefRect GetInitialBounds(CefRefPtr<CefWindow> window) override {
+        return bounds_;
+    }
+    bool IsFrameless(CefRefPtr<CefWindow> window) override { return popup_; }
+    bool CanResize(CefRefPtr<CefWindow> window) override { return !popup_; }
+    bool CanMaximize(CefRefPtr<CefWindow> window) override { return false; }
+    bool CanMinimize(CefRefPtr<CefWindow> window) override { return !popup_; }
+    cef_runtime_style_t GetWindowRuntimeStyle() override {
+        return CEF_RUNTIME_STYLE_CHROME;
+    }
+
+ private:
+    CefRefPtr<BrowserClient> client_;
+    CefRefPtr<CefBrowserView> browser_view_;
+    const CefRect bounds_;
+    const bool popup_;
+    IMPLEMENT_REFCOUNTING(ExtensionWindowDelegate);
+};
+
+}  // namespace
+
+bool BrowserClient::CreateViewsBrowser(ChromiumBrowserHostView *host) {
+    // Views uses DIP screen coordinates with the origin at the top-left of
+    // the primary display; AppKit's origin is that display's bottom-left.
+    const NSRect frame = host.extensionScreenFrame;
+    NSScreen *primary = NSScreen.screens.firstObject;
+    const CGFloat primary_top = primary ? NSMaxY(primary.frame) : NSMaxY(frame);
+    const CefRect bounds(
+        static_cast<int>(std::lround(NSMinX(frame))),
+        static_cast<int>(std::lround(primary_top - NSMaxY(frame))),
+        std::max(1, static_cast<int>(std::lround(NSWidth(frame)))),
+        std::max(1, static_cast<int>(std::lround(NSHeight(frame)))));
+    CefBrowserSettings settings;
+    views_browser_view_ = CefBrowserView::CreateBrowserView(
+        this, "about:blank", settings, nullptr, nullptr,
+        new ExtensionBrowserViewDelegate());
+    if (!views_browser_view_) {
+        return false;
+    }
+    views_window_ = CefWindow::CreateTopLevelWindow(new ExtensionWindowDelegate(
+        this, views_browser_view_, bounds, views_popup_));
+    if (!views_window_) {
+        views_browser_view_ = nullptr;
+        return false;
+    }
+    return true;
+}
+
+void BrowserClient::ViewsWindowCreated(CefRefPtr<CefWindow> window) {
+    CEF_REQUIRE_UI_THREAD();
+    if (!views_browser_view_) {
+        window->Close();
+        return;
+    }
+    // Adding the view creates the browser (OnAfterCreated follows).
+    window->AddChildView(views_browser_view_);
+    NSView *handle =
+        CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(window->GetWindowHandle());
+    NSWindow *native = [handle isKindOfClass:NSWindow.class]
+        ? (NSWindow *)handle
+        : handle.window;
+    if (views_popup_) {
+        // Above ordinary windows, and gone when Pilot is not active, so page
+        // content in a pane can never draw over or stand in for wallet UI.
+        native.level = NSFloatingWindowLevel;
+        native.hidesOnDeactivate = YES;
+    }
+    window->Show();
+    // On macOS the window CEF builds from GetInitialBounds came out about a
+    // title bar taller than asked and not where asked, even frameless, so
+    // the exact AppKit frame Pilot computed is applied once it is shown.
+    ChromiumBrowserHostView *host = host_;
+    if (native && host) {
+        [native setFrame:host.extensionScreenFrame display:YES];
+    }
+    views_browser_view_->RequestFocus();
+}
+
+void BrowserClient::ViewsWindowActivationChanged(bool active) {
+    CEF_REQUIRE_UI_THREAD();
+    if (views_popup_ && !active && !closing_ && browser_) {
+        [host_ cefPopupDidResignActive];
+    }
+}
+
+void BrowserClient::ViewsWindowDestroyed() {
+    CEF_REQUIRE_UI_THREAD();
+    views_window_ = nullptr;
+    views_browser_view_ = nullptr;
+    if (!browser_ && !closed_) {
+        // The window went away before a browser was ever created.
+        FinishWithoutBrowser(nil);
+    }
+}
+
+bool BrowserClient::OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                                  const CefKeyEvent& event,
+                                  CefEventHandle os_event,
+                                  bool* is_keyboard_shortcut) {
+    CEF_REQUIRE_UI_THREAD();
+    // Escape dismisses an extension popup before the page sees it, as
+    // Chrome's own toolbar popups do. (Chrome style otherwise maps Escape to
+    // its Stop command, which OnChromeCommand refuses.)
+    constexpr int kEscapeKeyCode = 0x1B;
+    if (views_popup_ && !closing_ && IsCurrent(browser) &&
+        event.type == KEYEVENT_RAWKEYDOWN &&
+        event.windows_key_code == kEscapeKeyCode &&
+        (event.modifiers & (EVENTFLAG_SHIFT_DOWN | EVENTFLAG_CONTROL_DOWN |
+                            EVENTFLAG_ALT_DOWN | EVENTFLAG_COMMAND_DOWN)) == 0) {
+        Close(false);
+        return true;
+    }
+    return false;
+}
+
+bool BrowserClient::OnChromeCommand(CefRefPtr<CefBrowser> browser,
+                                    int command_id,
+                                    cef_window_open_disposition_t disposition) {
+    CEF_REQUIRE_UI_THREAD();
+    // Only Chrome-style browsers (extension popups and windows) reach this.
+    // Clipboard editing keeps Chrome's implementation; every other Chrome
+    // command (new tab/window, incognito, settings, history, downloads,
+    // DevTools, print, save, ...) is refused so extension UI cannot open
+    // browser UI that bypasses Pilot's panes and policies.
+    switch (command_id) {
+        case IDC_CUT:
+        case IDC_COPY:
+        case IDC_PASTE:
+            return false;
+        default:
+            return true;
+    }
+}
+
 void BrowserClient::Create() {
     CEF_REQUIRE_UI_THREAD();
     if (create_requested_ || closed_) {
@@ -19,14 +207,25 @@ void BrowserClient::Create() {
     }
 
     ChromiumBrowserHostView *host = host_;
+    if (views_hosted_) {
+        create_requested_ = true;
+        if (!CreateViewsBrowser(host)) {
+            FinishWithoutBrowser(ChromiumKitError(
+                ChromiumKitErrorBrowserCreationFailed,
+                @"CEF rejected the extension window.", nil));
+        }
+        return;
+    }
     CefWindowInfo window_info;
     const int width = std::max(1, static_cast<int>(NSWidth(host.bounds)));
     const int height = std::max(1, static_cast<int>(NSHeight(host.bounds)));
     window_info.SetAsChild(CAST_NSVIEW_TO_CEF_WINDOW_HANDLE(host),
                            CefRect(0, 0, width, height));
-    // SPIKE(rabby-extension): Chrome-style windows so extension UI (action
-    // popups, tabs APIs) behaves; was CEF_RUNTIME_STYLE_ALLOY.
-    window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+    // CEF always uses Alloy style for a browser with an application-provided
+    // parent view (cef_window_info_t.runtime_style), so say so instead of
+    // requesting Chrome style and having CEF log a fallback. Extension UI
+    // that needs Chrome style uses an extension popup or window host.
+    window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
     CefBrowserSettings settings;
     create_requested_ = true;
     if (!CefBrowserHost::CreateBrowser(window_info, this, "about:blank",
@@ -98,6 +297,11 @@ bool BrowserClient::DoClose(CefRefPtr<CefBrowser> browser) {
     }
     closing_ = true;
     [host_ cefWillClose];
+    if (views_hosted_) {
+        // Returning false makes CEF close the host's CefWindow, which
+        // destroys the browser view; its view hierarchy is CEF's own.
+        return false;
+    }
     NSView *browser_view =
         CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
     [browser_view removeFromSuperview];
@@ -385,6 +589,11 @@ void BrowserClient::Stop() {
 }
 void BrowserClient::Focus() {
     if (!browser_ || closing_) return;
+    if (views_hosted_) {
+        if (views_window_) views_window_->Activate();
+        if (views_browser_view_) views_browser_view_->RequestFocus();
+        return;
+    }
     browser_->GetHost()->SetFocus(true);
     NSView *view =
         CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser_->GetHost()->GetWindowHandle());
@@ -477,7 +686,8 @@ bool BrowserClient::SendMouseClick(NSPoint point) {
     return true;
 }
 void BrowserClient::Layout() {
-    if (!browser_) return;
+    // An extension host's CefWindow lays out its own browser view.
+    if (!browser_ || views_hosted_) return;
     ChromiumBrowserHostView *host = host_;
     NSView *view =
         CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser_->GetHost()->GetWindowHandle());

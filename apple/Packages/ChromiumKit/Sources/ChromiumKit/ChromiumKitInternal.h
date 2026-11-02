@@ -36,6 +36,11 @@ FOUNDATION_EXTERN NSError *ChromiumKitUnavailableError(void);
 @property (nonatomic) NSUInteger chromiumToken;
 @property (nonatomic, nullable) NSURL *pendingURL;
 @property (nonatomic) BOOL closeDelivered;
+@property (nonatomic, readwrite, getter=isExtensionPopup) BOOL extensionPopup;
+@property (nonatomic, readwrite, getter=isExtensionWindow) BOOL extensionWindow;
+/// AppKit screen coordinates (bottom-left origin) of an extension popup or
+/// window's CEF-owned top-level window.
+@property (nonatomic) NSRect extensionScreenFrame;
 /// The dialog the delegate currently owns. Weak: the delegate keeps it alive
 /// until it decides, and releasing it unresolved cancels it.
 @property (nonatomic, weak, nullable)
@@ -75,6 +80,8 @@ FOUNDATION_EXTERN NSError *ChromiumKitUnavailableError(void);
 - (void)cefDidResetJavaScriptDialogs;
 - (void)cefWillClose;
 - (void)cefDidClose;
+/// Extension popups only: the popup's own window lost key status.
+- (void)cefPopupDidResignActive;
 @end
 
 @interface ChromiumContextMenuRequest ()

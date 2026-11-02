@@ -115,6 +115,11 @@ typedef NS_ENUM(NSInteger, ChromiumDownloadState) {
 - (void)chromiumBrowserHostView:(ChromiumBrowserHostView *)browserView
  rendererTerminatedWithStatus:(ChromiumRendererTerminationStatus)status;
 - (void)chromiumBrowserHostViewDidClose:(ChromiumBrowserHostView *)browserView;
+/// Extension popups only: the popup's window stopped being the active
+/// window (the user clicked elsewhere or switched apps). Popups dismiss on
+/// this the way Chrome's toolbar popups do.
+- (void)chromiumBrowserHostViewPopupDidResignActive:
+    (ChromiumBrowserHostView *)browserView;
 - (ChromiumNavigationDecision)
     chromiumBrowserHostView:(ChromiumBrowserHostView *)browserView
       decideNavigationToURL:(NSURL *)URL
@@ -274,6 +279,19 @@ typedef NS_ENUM(NSInteger, ChromiumDownloadState) {
 - (void)setExtensionDirectories:(NSArray<NSURL *> *)directories
     NS_SWIFT_NAME(setExtensionDirectories(_:));
 
+/// Called on the main thread with the chrome-extension:// URL an extension
+/// asked Chrome to show in a new tab or window (chrome.tabs.create,
+/// chrome.windows.create, openOptionsPage, ...).
+///
+/// Chrome would show such a page in a Chrome UI browser window (tab strip,
+/// omnibox, menus) that is outside every Pilot pane and request policy.
+/// ChromiumKit never lets one load: each such browser is hidden, its
+/// navigations are cancelled, and it is closed. Only the extension URL is
+/// reported here, so the app can show it in a managed extension window after
+/// checking that the extension is one it loaded. Any other URL is dropped.
+@property (nonatomic, copy, nullable)
+    void (^extensionPageRequestHandler)(NSURL *URL);
+
 - (BOOL)startWithProfileDirectory:(NSURL *)profileDirectory
                             error:(NSError * _Nullable * _Nullable)error
     NS_SWIFT_NAME(start(profileDirectory:));
@@ -285,6 +303,13 @@ typedef NS_ENUM(NSInteger, ChromiumDownloadState) {
 
 /// A native, windowed CEF child view. Commands are main-thread-only. Creation
 /// and close are asynchronous; close completion is reported by didClose.
+///
+/// A host made with initWithFrame: embeds an Alloy-style browser as a child of
+/// this view: CEF always uses Alloy style for a browser with an application-
+/// provided parent view (cef_window_info_t.runtime_style). A host made with
+/// initExtensionPopupWithScreenFrame: or initExtensionWindowWithScreenFrame:
+/// is instead a Chrome-style browser in its own CEF-owned top-level window;
+/// see those initializers.
 @interface ChromiumBrowserHostView : NSView
 
 @property (nonatomic, weak, nullable) id<ChromiumBrowserHostViewDelegate> delegate;
@@ -296,6 +321,34 @@ typedef NS_ENUM(NSInteger, ChromiumDownloadState) {
 @property (nonatomic, readonly) BOOL canGoBack;
 @property (nonatomic, readonly) BOOL canGoForward;
 @property (nonatomic, readonly) double zoomLevel;
+/// YES for a host made with initExtensionPopupWithScreenFrame:.
+@property (nonatomic, readonly, getter=isExtensionPopup) BOOL extensionPopup;
+/// YES for a host made with initExtensionWindowWithScreenFrame:.
+@property (nonatomic, readonly, getter=isExtensionWindow) BOOL extensionWindow;
+
+/// A host for a side-loaded extension's action popup (a chrome-extension://
+/// page). Its browser is created through the CEF Views framework as a
+/// Chrome-style CefBrowserView in a frameless top-level CefWindow at
+/// |screenFrame| (AppKit screen coordinates), with no Chrome toolbar.
+///
+/// Chrome style is required: CEF 150 runs extensions only through Chrome's
+/// own extension system, and an Alloy-style browser renders an extension
+/// page in an ordinary renderer without extension bindings, so a popup that
+/// talks to its background script never loads. CEF supports Chrome style
+/// only for its own windows, never for a child of an application NSView.
+///
+/// This view is never shown; it is the command and delegate handle for the
+/// browser. Every request policy of an embedded host applies unchanged, and
+/// Chrome commands (new tab or window, settings, history, DevTools, and the
+/// like) are refused so the popup cannot open browser UI of its own.
+- (instancetype)initExtensionPopupWithScreenFrame:(NSRect)screenFrame
+    NS_SWIFT_NAME(init(extensionPopupScreenFrame:));
+/// Like an extension popup, but in an ordinary titled, resizable window that
+/// stays open when it loses focus: for full extension pages (onboarding,
+/// approval windows) that an extension would otherwise open as a Chrome tab
+/// or window. See ChromiumEngine.extensionPageRequestHandler.
+- (instancetype)initExtensionWindowWithScreenFrame:(NSRect)screenFrame
+    NS_SWIFT_NAME(init(extensionWindowScreenFrame:));
 
 - (void)loadURL:(NSURL *)URL;
 - (void)back;

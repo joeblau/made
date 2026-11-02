@@ -197,6 +197,101 @@ class ExternalMessagePump final {
     std::atomic<uint64_t> watchdog_work_count_{0};
 };
 
+/// The client CEF gives browsers that Chrome creates by itself in Chrome UI
+/// windows (GetDefaultClient). Returning no client would leave them
+/// unmanaged, with no callbacks, and block shutdown until someone closed the
+/// window by hand. Instead each one is hidden as soon as it exists, every
+/// navigation and popup is cancelled, every Chrome command is refused, and
+/// the browser is closed once its target URL is known (or after a short
+/// fallback delay).
+class ChromeUIBrowserClient final : public CefClient,
+                                    public CefCommandHandler,
+                                    public CefDisplayHandler,
+                                    public CefLifeSpanHandler,
+                                    public CefRequestHandler {
+ public:
+    explicit ChromeUIBrowserClient(EngineCore *engine) : engine_(engine) {}
+
+    CefRefPtr<CefCommandHandler> GetCommandHandler() override { return this; }
+    CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+    CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+
+    void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        CEF_REQUIRE_UI_THREAD();
+        NSView *view =
+            CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
+        [view.window orderOut:nil];
+        if (g_engine != engine_) {
+            browser->GetHost()->CloseBrowser(true);
+            return;
+        }
+        engine_->ChromeUIBrowserCreated(browser);
+        CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+        if (frame) Consider(browser, frame->GetURL());
+        // Whatever happens to the navigation, the browser does not stay.
+        CefRefPtr<CefBrowser> retained = browser;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
+                       dispatch_get_main_queue(), ^{
+            if (g_engine != nullptr) g_engine->CloseChromeUIBrowser(retained);
+        });
+    }
+    bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
+                       CefRefPtr<CefFrame> frame,
+                       int popup_id,
+                       const CefString& target_url,
+                       const CefString& target_frame_name,
+                       WindowOpenDisposition target_disposition,
+                       bool user_gesture,
+                       const CefPopupFeatures& popup_features,
+                       CefWindowInfo& window_info,
+                       CefRefPtr<CefClient>& client,
+                       CefBrowserSettings& settings,
+                       CefRefPtr<CefDictionaryValue>& extra_info,
+                       bool* no_javascript_access) override {
+        return true;
+    }
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        CEF_REQUIRE_UI_THREAD();
+        if (g_engine == engine_) engine_->ChromeUIBrowserClosed(browser);
+    }
+    bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                        CefRefPtr<CefFrame> frame,
+                        CefRefPtr<CefRequest> request,
+                        bool user_gesture,
+                        bool is_redirect) override {
+        CEF_REQUIRE_UI_THREAD();
+        if (frame->IsMain()) Consider(browser, request->GetURL());
+        return true;
+    }
+    void OnAddressChange(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefFrame> frame,
+                         const CefString& url) override {
+        CEF_REQUIRE_UI_THREAD();
+        if (frame->IsMain()) Consider(browser, url);
+    }
+    bool OnChromeCommand(CefRefPtr<CefBrowser> browser,
+                         int command_id,
+                         cef_window_open_disposition_t disposition) override {
+        return true;
+    }
+
+ private:
+    void Consider(CefRefPtr<CefBrowser> browser, const CefString& url) {
+        const std::string value = url.ToString();
+        if (handled_ || value.empty() || value == "about:blank" ||
+            g_engine != engine_) {
+            return;
+        }
+        handled_ = true;
+        engine_->ChromeUIBrowserRequested(browser, url);
+    }
+
+    EngineCore *engine_;
+    bool handled_ = false;
+    IMPLEMENT_REFCOUNTING(ChromeUIBrowserClient);
+};
+
 class ChromiumApp final : public CefApp,
                           public CefBrowserProcessHandler {
  public:
@@ -246,6 +341,10 @@ class ChromiumApp final : public CefApp,
 
     void OnScheduleMessagePumpWork(int64_t delay_ms) override {
         ExternalMessagePump::Shared().Schedule(delay_ms);
+    }
+
+    CefRefPtr<CefClient> GetDefaultClient() override {
+        return new ChromeUIBrowserClient(engine_);
     }
 
  private:
@@ -383,6 +482,50 @@ void EngineCore::ClientClosed(uint64_t token) {
     FinishShutdownIfReady();
 }
 
+void EngineCore::ChromeUIBrowserCreated(CefRefPtr<CefBrowser> browser) {
+    chrome_ui_browsers_.push_back(browser);
+    if (shutting_down_) {
+        browser->GetHost()->CloseBrowser(true);
+    }
+}
+
+void EngineCore::ChromeUIBrowserRequested(CefRefPtr<CefBrowser> browser,
+                                          const CefString& url) {
+    NSURL *URL = NSURLFromCef(url);
+    ChromiumEngine *owner = owner_;
+    void (^handler)(NSURL *) = owner.extensionPageRequestHandler;
+    if (!shutting_down_ && handler && URL &&
+        [URL.scheme.lowercaseString isEqualToString:@"chrome-extension"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            handler(URL);
+        });
+    }
+    // Not from inside the navigation callback that reported the URL.
+    CefRefPtr<CefBrowser> retained = browser;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_engine != nullptr) g_engine->CloseChromeUIBrowser(retained);
+    });
+}
+
+void EngineCore::CloseChromeUIBrowser(CefRefPtr<CefBrowser> browser) {
+    for (const auto& candidate : chrome_ui_browsers_) {
+        if (candidate->IsSame(browser)) {
+            browser->GetHost()->CloseBrowser(true);
+            return;
+        }
+    }
+}
+
+void EngineCore::ChromeUIBrowserClosed(CefRefPtr<CefBrowser> browser) {
+    chrome_ui_browsers_.erase(
+        std::remove_if(chrome_ui_browsers_.begin(), chrome_ui_browsers_.end(),
+                       [&](const CefRefPtr<CefBrowser>& candidate) {
+                           return candidate->IsSame(browser);
+                       }),
+        chrome_ui_browsers_.end());
+    FinishShutdownIfReady();
+}
+
 void EngineCore::Shutdown() {
     NSCAssert(NSThread.isMainThread, @"CEF must shut down on main");
     if (!initialized_ || shutting_down_) {
@@ -397,11 +540,16 @@ void EngineCore::Shutdown() {
     for (const auto& client : active) {
         client->Close(true);
     }
+    const std::vector<CefRefPtr<CefBrowser>> chrome_ui = chrome_ui_browsers_;
+    for (const auto& browser : chrome_ui) {
+        browser->GetHost()->CloseBrowser(true);
+    }
     FinishShutdownIfReady();
 }
 
 void EngineCore::FinishShutdownIfReady() {
-    if (!shutting_down_ || !clients_.empty() || finish_scheduled_) {
+    if (!shutting_down_ || !clients_.empty() ||
+        !chrome_ui_browsers_.empty() || finish_scheduled_) {
         return;
     }
     finish_scheduled_ = true;
@@ -413,7 +561,7 @@ void EngineCore::FinishShutdownIfReady() {
 }
 
 void EngineCore::FinishShutdown() {
-    if (!initialized_ || !clients_.empty()) {
+    if (!initialized_ || !clients_.empty() || !chrome_ui_browsers_.empty()) {
         finish_scheduled_ = false;
         return;
     }
