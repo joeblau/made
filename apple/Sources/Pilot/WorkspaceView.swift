@@ -140,7 +140,7 @@ struct WorkspaceView: View {
                 CompatGlassContainer(spacing: 0) {
                     HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                         ForEach(sorted) { pane in
-                            tabItem(pane)
+                            tabItem(pane, paneCount: sorted.count)
                                 .frame(width: pane.isCollapsed ? PaneLayoutMetrics.collapsedPaneThickness : nil)
                                 .frame(maxWidth: pane.isCollapsed ? nil : .infinity)
                         }
@@ -155,7 +155,7 @@ struct WorkspaceView: View {
         .background(.bar)
     }
 
-    private func tabItem(_ pane: Pane) -> some View {
+    private func tabItem(_ pane: Pane, paneCount: Int) -> some View {
         let isSelected = workspace.selectedPaneID == pane.id && !pane.isCollapsed
         let isDropTarget = dropTargetPaneID == pane.id
         let glassTint: Color? = if isDropTarget {
@@ -171,10 +171,9 @@ struct WorkspaceView: View {
             isSelected: isSelected,
             isHovering: hoveredPaneID == pane.id,
             isWorkspaceActive: isActive,
-            // `Workspace.requestRemovePane` and `removePane` keep a
-            // workspace's last pane on both surfaces, so the last tab offers
-            // no close button rather than one that does nothing.
-            canClose: workspace.sortedPanes.count > 1,
+            // The extension surface may close its last pane (its empty state
+            // invites re-adding); the main window always keeps one.
+            canClose: paneCount > 1 || surface == .extension,
             onSelect: { workspace.selectedPaneID = pane.id },
             onClose: { workspace.requestRemovePane(pane) },
             onHide: { workspace.collapsePane(pane) },
@@ -258,12 +257,9 @@ struct WorkspaceView: View {
             Button("Close", role: .destructive) {
                 workspace.requestRemovePane(pane)
             }
-            // `Workspace.removePane` keeps every workspace's last pane, on
-            // both surfaces, so an enabled Close on the last pane was a
-            // silent no-op in Extendo.
-            .disabled(workspace.sortedPanes.count <= 1)
+            .disabled(paneCount <= 1 && surface != .extension)
 
-            if workspace.sortedPanes.count > 1 {
+            if paneCount > 1 {
                 Divider()
                 Button("Reset Pane Sizes") {
                     workspace.resetPaneSizes()
@@ -436,7 +432,7 @@ private extension WorkspaceView {
                     ForEach(Array(sorted.enumerated()), id: \.element.id) { index, pane in
                         let tabWidth = layout.sizes[pane.id] ?? 0
 
-                        tabItem(pane)
+                        tabItem(pane, paneCount: sorted.count)
                             .frame(width: max(0, tabWidth))
 
                         if index < sorted.count - 1 {

@@ -1046,7 +1046,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
         ) {
             MainActor.assumeIsolated {
                 _ = browserView
-                state.estimatedProgress = min(max(progress, 0), 1)
+                state.updateEstimatedProgress(progress)
             }
         }
 

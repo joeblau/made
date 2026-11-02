@@ -320,3 +320,34 @@ struct CompatGlassContainer<Content: View>: View {
         }
     }
 }
+
+/// The shared glass tab/chip shape used by tab strips (Remote Desktop groups,
+/// Notes), so tabs, icon buttons, and labeled actions share one height and radius.
+struct GlassChip: ViewModifier {
+    var tint: Color?
+    static let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .contentShape(Self.shape)
+            .compatGlassEffect(tint: tint, interactive: true, in: Self.shape)
+    }
+}
+
+extension View {
+    func glassChip(tint: Color? = nil) -> some View { modifier(GlassChip(tint: tint)) }
+}
+
+/// An icon sized to a text line, so icon-only chips match labeled ones.
+struct GlassChipIcon: View {
+    let systemName: String
+
+    var body: some View {
+        Text(verbatim: "M")
+            .hidden()
+            .overlay { Image(systemName: systemName) }
+            .accessibilityHidden(true)
+    }
+}

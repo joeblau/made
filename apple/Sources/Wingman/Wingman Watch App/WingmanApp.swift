@@ -57,8 +57,8 @@ final class WatchSessionDelegate: NSObject, WCSessionDelegate, @unchecked Sendab
 
     @MainActor
     private func updateReachability(_ isReachable: Bool) {
-        self.isReachable = isReachable
-        if !isReachable, !deliveryState.isInFlight {
+        if self.isReachable != isReachable { self.isReachable = isReachable }
+        if !isReachable, !deliveryState.isInFlight, deliveryStatus != "Walkie unavailable" {
             deliveryStatus = "Walkie unavailable"
         }
     }

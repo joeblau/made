@@ -56,12 +56,28 @@ struct AgenticUseDashboardTests {
         #expect(Set(snapshot.providerSeries.map(\.provider)) == [.claude, .codex])
         // Zero-filled: every bucket carries every present provider.
         #expect(snapshot.providerSeries.count == snapshot.bucketTotals.count * 2)
+        #expect(snapshot.cachedBucketTotals == snapshot.bucketTotals)
         for total in snapshot.modelTotals {
             #expect(total.inputTokens + total.cacheWriteTokens + total.cacheReadTokens + total.outputTokens == total.tokens)
         }
         #expect(snapshot.modelTotals.first { $0.model == "gpt-6.1-sol" }?.provider == .codex)
         let savings = snapshot.bucketTotals.reduce(0) { $0 + $1.cacheSavings }
         #expect(abs(savings - snapshot.stats.cacheSavingsUSD) < 1e-9)
+    }
+
+    @Test("Model trends are grouped in one pass without changing their values")
+    func modelTrendsMatchIndividualSeries() {
+        let snapshot = snapshot([
+            record(.claude, "claude-opus-5-5", daysAgo: 1, cacheRead: 500),
+            record(.codex, "gpt-6.1-sol", daysAgo: 2, cacheRead: 700),
+            record(.claude, "claude-opus-5-5", daysAgo: 3, cacheRead: 900),
+        ])
+        let trends = snapshot.tokenTrends
+
+        #expect(Set(trends.keys) == ["claude-opus-5-5", "gpt-6.1-sol"])
+        for model in trends.keys {
+            #expect(trends[model] == snapshot.tokenTrend(for: model))
+        }
     }
 
     @Test("Previous window covers the equally long span before the range and excludes it")

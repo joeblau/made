@@ -125,6 +125,7 @@ struct EditorPaneView: View {
     private static let bannerDismissSize: CGFloat = 24
     private static let bannerInset = LiquidGlassMetrics.Spacing.xSmall
     private static let bannerCornerRadius = bannerDismissSize / 2 + bannerInset
+    private static let editorFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
 
     var body: some View {
         ZStack {
@@ -232,7 +233,7 @@ struct EditorPaneView: View {
                 configuration: SourceEditorConfiguration(
                     appearance: .init(
                         theme: PilotEditorTheme.theme(for: colorScheme),
-                        font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                        font: Self.editorFont,
                         wrapLines: true
                     ),
                     behavior: .init(indentOption: .spaces(count: 4)),
@@ -442,9 +443,8 @@ struct EditorPaneView: View {
                 .scaledFont(size: 13)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            let directory = directoryPortion(of: item.relativePath)
-            if !directory.isEmpty {
-                Text(directory)
+            if !item.directoryPath.isEmpty {
+                Text(item.directoryPath)
                     .scaledFont(size: 11)
                     .glassLegibleForeground(.secondary)
                     .lineLimit(1)
@@ -517,11 +517,6 @@ struct EditorPaneView: View {
         .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
         .padding(.top, LiquidGlassMetrics.Spacing.small)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    private func directoryPortion(of relativePath: String) -> String {
-        let directory = (relativePath as NSString).deletingLastPathComponent
-        return directory
     }
 
     // MARK: - Hidden keyboard shortcuts

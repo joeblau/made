@@ -13,11 +13,18 @@ enum RelativeTime {
     }
 
     static func string(from date: Date) -> String {
+        relativeFormatterLock.lock()
+        defer { relativeFormatterLock.unlock() }
+        return relativeFormatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private static let relativeFormatterLock = NSLock()
+    private nonisolated(unsafe) static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         formatter.locale = .autoupdatingCurrent
-        return formatter.localizedString(for: date, relativeTo: Date())
-    }
+        return formatter
+    }()
 
     static func parseISODate(_ value: String) -> Date? {
         isoFractionalFormatter.date(from: value) ?? isoFormatter.date(from: value)

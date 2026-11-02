@@ -21,6 +21,8 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     private let role: Role
     private let peerID: MCPeerID
     private let session: MCSession
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
     private let transportQueue = DispatchQueue(
         label: "app.blau.peersync.transport",
         qos: .userInitiated
@@ -91,9 +93,9 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     }
 
     func send(_ message: SyncMessage, reliable: Bool = true) {
-        guard let data = try? JSONEncoder().encode(message) else { return }
         transportQueue.async { [weak self] in
-            self?.sendAuthenticated(data, mode: reliable ? .reliable : .unreliable)
+            guard let self, let data = try? self.encoder.encode(message) else { return }
+            self.sendAuthenticated(data, mode: reliable ? .reliable : .unreliable)
         }
     }
 
@@ -102,9 +104,9 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     /// Cancellation prevents submission while the command is still queued.
     /// This is a transport result, not an acknowledgement from the remote UI.
     func sendReliably(_ message: SyncMessage) async -> Bool {
-        guard let data = try? JSONEncoder().encode(message) else { return false }
-        return await PeerSyncReliableSend.perform(on: transportQueue) { [weak self] in
-            self?.sendAuthenticated(data, mode: .reliable) ?? false
+        await PeerSyncReliableSend.perform(on: transportQueue) { [weak self] in
+            guard let self, let data = try? self.encoder.encode(message) else { return false }
+            return self.sendAuthenticated(data, mode: .reliable)
         }
     }
 
@@ -238,13 +240,13 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     }
 
     private func invitationContext() -> Data? {
-        try? JSONEncoder().encode(InvitationContext(publicKey: authenticator.localPublicKeyBase64))
+        try? encoder.encode(InvitationContext(publicKey: authenticator.localPublicKeyBase64))
     }
 
     private func publicKey(from context: Data?) -> String? {
         guard let context,
               context.count <= 1_024 else { return nil }
-        return try? JSONDecoder().decode(InvitationContext.self, from: context).publicKey
+        return try? decoder.decode(InvitationContext.self, from: context).publicKey
     }
 
     private func requestPairing(
@@ -413,7 +415,7 @@ private extension PeerSyncService {
 
         case .message(let payload):
             guard authenticator.isAuthenticated,
-                  let message = try? JSONDecoder().decode(SyncMessage.self, from: payload) else {
+                  let message = try? decoder.decode(SyncMessage.self, from: payload) else {
                 updateStatus("Rejected invalid sync message")
                 return
             }

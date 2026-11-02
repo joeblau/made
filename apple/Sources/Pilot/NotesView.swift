@@ -486,7 +486,7 @@ private struct NoteTab: View {
     var body: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             Text(title)
-                .scaledFont(size: 12, weight: isSelected ? .semibold : .regular)
+                .font(isSelected ? .body.weight(.semibold) : .body)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 // The capsule selects on a plain tap (the close button stays

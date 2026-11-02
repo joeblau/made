@@ -541,6 +541,13 @@ final class BrowserState {
         engine.supports(capability)
     }
 
+    func updateEstimatedProgress(_ progress: Double) {
+        let value = min(max(progress, 0), 1)
+        guard value != estimatedProgress,
+              value == 1 || abs(value - estimatedProgress) >= 0.01 else { return }
+        estimatedProgress = value
+    }
+
     @discardableResult
     func perform(_ command: BrowserPaneCommand) -> Bool {
         guard supports(command.requiredCapability) else { return false }

@@ -233,6 +233,7 @@ struct AgenticUseSnapshot: Sendable, Equatable {
     /// Zero-filled provider series: every bucket x every provider present,
     /// sorted by bucket then `AgenticProvider.allCases` order.
     var providerSeries: [AgenticProviderPoint] = []
+    var cachedBucketTotals: [AgenticBucketTotal]? = nil
     /// The selected window's headline totals.
     var current: AgenticUsePeriodSummary?
     /// The equally long window before it; `nil` for `.all`.
@@ -793,6 +794,7 @@ final class AgenticUsageStore {
             totalCostUSD: totalCost,
             providerTotals: providerTotals,
             providerSeries: providerSeries,
+            cachedBucketTotals: AgenticUseSnapshot.makeBucketTotals(providerSeries),
             current: current,
             previous: previous,
             modelTotals: modelTotals,

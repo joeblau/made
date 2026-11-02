@@ -170,7 +170,7 @@ private struct RunnerFleetSceneView: NSViewRepresentable {
         view.pointOfView = fleet.cameraNode
         view.backgroundColor = RunnerFleetScene.background
         view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 60
+        view.preferredFramesPerSecond = 120
         return view
     }
 
@@ -186,7 +186,12 @@ private final class FleetSCNView: SCNView {
     var onHover: ((RunnerFleetHover?) -> Void)?
     var onEdit: ((Int) -> Void)?
     var content: ([RunnerFleetItem], String, Bool) = ([], "", true) {
-        didSet { applyContent() }
+        didSet {
+            guard content.0 != oldValue.0 || content.1 != oldValue.1 || content.2 != oldValue.2 else {
+                return
+            }
+            applyContent()
+        }
     }
     private var columns = 0
     private var hoveredID: Int?

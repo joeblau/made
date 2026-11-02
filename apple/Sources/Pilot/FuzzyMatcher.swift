@@ -59,10 +59,9 @@ enum FuzzyMatcher {
         let basenameStart = lastSeparatorIndex(in: candidateScalars).map { $0 + 1 } ?? 0
 
         var previous = [Int](repeating: impossible, count: candidateScalars.count)
+        var current = [Int](repeating: impossible, count: candidateScalars.count)
 
         for queryIndex in query.scalars.indices {
-            var current = [Int](repeating: impossible, count: candidateScalars.count)
-
             // For a gapped transition from candidate index j to i:
             //   previous[j] + gapPenalty * (i - j - 1)
             // = previous[j] - gapPenalty*j + gapPenalty*(i - 1)
@@ -71,6 +70,7 @@ enum FuzzyMatcher {
             var bestGappedPrefix = impossible
 
             for candidateIndex in candidateScalars.indices {
+                current[candidateIndex] = impossible
                 if queryIndex > 0, candidateIndex >= 2 {
                     let priorIndex = candidateIndex - 2
                     if previous[priorIndex] != impossible {
@@ -111,7 +111,7 @@ enum FuzzyMatcher {
                 }
             }
 
-            previous = current
+            swap(&previous, &current)
         }
 
         let best = previous.max() ?? impossible

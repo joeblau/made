@@ -356,6 +356,8 @@ private struct FileSystemOutlineView: NSViewRepresentable {
         private var expandedIDs: Set<String> = []
         private var rootURL: URL
         private var rowFont: NSFont
+        private var loadedEntries: [FileSystemEntry]?
+        private var loadedUIZoom: Double?
 
         init(entries: [FileSystemEntry], rootPath: String, uiZoom: Double) {
             self.nodes = entries.map(FileSystemNode.init(entry:))
@@ -370,12 +372,17 @@ private struct FileSystemOutlineView: NSViewRepresentable {
             uiZoom: Double
         ) {
             let newRootURL = URL(fileURLWithPath: rootPath, isDirectory: true)
+            guard entries != loadedEntries || newRootURL.path != rootURL.path || uiZoom != loadedUIZoom else {
+                return
+            }
             if rootURL.path == newRootURL.path {
                 captureExpandedIDs(from: outlineView)
             } else {
                 expandedIDs.removeAll()
             }
             rootURL = newRootURL
+            loadedEntries = entries
+            loadedUIZoom = uiZoom
             nodes = entries.map(FileSystemNode.init(entry:))
             rowFont = Self.fileTreeFont(uiZoom: uiZoom)
             outlineView.rowHeight = max(

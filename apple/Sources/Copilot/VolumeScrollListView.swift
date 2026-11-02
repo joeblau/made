@@ -66,11 +66,6 @@ struct VolumeScrollListView<Item: Identifiable, RowContent: View>: View {
         sections.flatMap(\.items)
     }
 
-    private var highlightedIndex: Int? {
-        guard let selectedID else { return nil }
-        return items.firstIndex(where: { $0.id == selectedID })
-    }
-
     var body: some View {
         ScrollViewReader { proxy in
             List {
@@ -86,8 +81,11 @@ struct VolumeScrollListView<Item: Identifiable, RowContent: View>: View {
             }
             .onChange(of: volumeObserver.tapEventID) {
                 let directions = volumeObserver.consumeTapDirections()
+                let items = items
                 guard !items.isEmpty else { return }
-                var currentIndex = highlightedIndex
+                var currentIndex = selectedID.flatMap { id in
+                    items.firstIndex(where: { $0.id == id })
+                }
                 for direction in directions {
                     guard let newIndex = VolumeListNavigation.nextIndex(
                         from: currentIndex,

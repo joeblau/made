@@ -74,12 +74,20 @@ private struct AgenticUseTokenFlowDiagram: View {
                         } else {
                             0.4
                         }
-                        let from = color(for: ribbon.link.source)
-                        let to = color(for: ribbon.link.target)
+                        let from = color(for: ribbon.link.source).opacity(emphasis)
+                        let to = color(for: ribbon.link.target).opacity(emphasis)
+                        // Hold the source color for most of the run and blend
+                        // only on approach: a full-length blend between two hues
+                        // muddies to gray, so the model→type half read dimmer
+                        // than the provider→model half.
                         context.fill(
                             ribbon.path,
                             with: .linearGradient(
-                                Gradient(colors: [from.opacity(emphasis), to.opacity(emphasis)]),
+                                Gradient(stops: [
+                                    .init(color: from, location: 0),
+                                    .init(color: from, location: 0.45),
+                                    .init(color: to, location: 1),
+                                ]),
                                 startPoint: CGPoint(x: ribbon.startX, y: 0),
                                 endPoint: CGPoint(x: ribbon.endX, y: 0)
                             )
@@ -162,16 +170,20 @@ private struct AgenticUseTokenFlowDiagram: View {
         case .model(let model):
             if let total = modelTotals.first(where: { $0.model == model }) {
                 modelNode(
+                    id,
                     title: total.displayName,
                     provider: total.provider,
+                    tokens: total.tokens,
                     help: "\(total.displayName): \(AgenticUseFormat.tokens(total.tokens)) tokens"
                         + (total.isUnpriced ? " (unpriced)" : " · \(AgenticUseFormat.cost(total.cost))")
                 )
             }
         case .otherModels:
             modelNode(
+                id,
                 title: "Other Models",
                 provider: nil,
+                tokens: graph.models.first { $0.id == id }?.tokens ?? 0,
                 help: graph.otherModelNames.joined(separator: ", ")
             )
         case .tokenType(let type):
@@ -219,8 +231,18 @@ private struct AgenticUseTokenFlowDiagram: View {
         .nodeChrome(tint: tint, dimmed: isDimmed(.provider(provider)))
     }
 
-    private func modelNode(title: String, provider: AgenticProvider?, help: String) -> some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+    /// Model nodes get the same tinted card as the provider and token-type
+    /// columns (in their provider's color) so the middle column reads as part
+    /// of the flow rather than a strip of plain labels.
+    private func modelNode(
+        _ id: NodeID,
+        title: String,
+        provider: AgenticProvider?,
+        tokens: Int,
+        help: String
+    ) -> some View {
+        let tint = provider.map(AgenticUseModelPalette.providerColor(for:))
+        return HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Group {
                 if let provider {
                     Image(provider.brandSymbol)
@@ -237,12 +259,18 @@ private struct AgenticUseTokenFlowDiagram: View {
                 .agenticUseFont(.meta, weight: .medium)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Spacer(minLength: 0)
+                .layoutPriority(1)
+            Spacer(minLength: 4)
+            Text(AgenticUseFormat.tokens(tokens))
+                .scaledFont(size: 10)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
         // Model nodes are short, so the concentric node radius renders them
         // as capsules; pad a little more so the text clears the round ends.
         .padding(.horizontal, NodeMetrics.padding + LiquidGlassMetrics.Spacing.xxSmall)
-        .nodeChrome(tint: nil, dimmed: false)
+        .nodeChrome(tint: tint, dimmed: isDimmed(id))
         .help(help)
     }
 

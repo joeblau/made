@@ -6,8 +6,13 @@ function initHeader() {
   const header = document.querySelector('[data-site-header]');
   if (!header) return;
   let queued = false;
+  let scrolled;
   const update = () => {
-    header.dataset.scrolled = String(window.scrollY > 24);
+    const next = window.scrollY > 24;
+    if (next !== scrolled) {
+      scrolled = next;
+      header.dataset.scrolled = String(next);
+    }
     queued = false;
   };
   window.addEventListener('scroll', () => {
@@ -83,9 +88,15 @@ function initRail(reducedMotion) {
     const gap = Number.parseFloat(getComputedStyle(rail).columnGap) || 0;
     rail.scrollBy({ left: direction * (firstCard.getBoundingClientRect().width + gap), behavior: reducedMotion ? 'auto' : 'smooth' });
   };
+  let atStart;
+  let atEnd;
   const update = () => {
-    if (previous) previous.disabled = rail.scrollLeft <= 4;
-    if (next) next.disabled = rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 4;
+    const nextAtStart = rail.scrollLeft <= 4;
+    const nextAtEnd = rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 4;
+    if (previous && nextAtStart !== atStart) previous.disabled = nextAtStart;
+    if (next && nextAtEnd !== atEnd) next.disabled = nextAtEnd;
+    atStart = nextAtStart;
+    atEnd = nextAtEnd;
   };
   previous?.addEventListener('click', () => move(-1));
   next?.addEventListener('click', () => move(1));
@@ -121,10 +132,14 @@ function initHeroParallax(reducedMotion) {
   );
   animation.pause();
   let queued = false;
+  let previousProgress = -1;
   const update = () => {
     const rect = hero.getBoundingClientRect();
     const progress = Math.max(0, Math.min(1, -rect.top / (window.innerHeight * 0.8)));
-    animation.currentTime = progress * 1000;
+    if (progress !== previousProgress) {
+      previousProgress = progress;
+      animation.currentTime = progress * 1000;
+    }
     queued = false;
   };
   window.addEventListener('scroll', () => {
