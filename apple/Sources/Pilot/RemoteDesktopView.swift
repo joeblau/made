@@ -550,7 +550,7 @@ private struct RemoteComputerPicker: View {
         VStack(spacing: 0) {
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Image(systemName: "wifi")
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                 Text("Computers on This Network")
                     .font(.headline)
                 Spacer()
@@ -576,9 +576,10 @@ private struct RemoteComputerPicker: View {
         .frame(width: 520)
         // The panel floats over the always-black screen grid, where light glass
         // turned mid-gray (title 5.9:1, secondary 4.5:1) and dark system
-        // secondary measured 3.2:1. Always dark, like `connectingOverlay`, with
-        // the legible gray for `.secondary` (TYPE-3, COL-2).
-        .legibleSecondaryHierarchy()
+        // secondary measured 3.2:1. Always dark, like `connectingOverlay`.
+        // Secondary copy sets the legible gray itself: glass drew text styled
+        // `.secondary` at 3.15:1 even under `legibleSecondaryHierarchy()`, and
+        // that modifier dimmed the host field's placeholder to 2.6:1 (TYPE-3).
         .compatFloatingGlass(in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous))
         .environment(\.colorScheme, .dark)
         // A browser left `.waiting` keeps reporting denied after access is
@@ -598,7 +599,7 @@ private struct RemoteComputerPicker: View {
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Text("Host Address")
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+                .glassLegibleForeground(.secondary)
                 .accessibilityHidden(true)
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 // Glass like every other free-standing field: the panel is a
@@ -633,7 +634,7 @@ private struct RemoteComputerPicker: View {
                         } label: {
                             HStack(spacing: LiquidGlassMetrics.Spacing.small) {
                                 Image(systemName: "macbook")
-                                    .foregroundStyle(.secondary)
+                                    .glassLegibleForeground(.secondary)
                                 Text(service.name)
                                     .font(.body)
                                     .foregroundStyle(.primary)
@@ -669,20 +670,20 @@ private struct RemoteComputerPicker: View {
             case .needsPermission, .failed:
                 Image(systemName: "wifi.exclamationmark")
                     .font(.largeTitle)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                 Text("Cockpit can't browse the local network")
                     .font(.callout.weight(.medium))
             default:
                 ProgressView().controlSize(.small)
                 Text("Looking for computers with Screen Sharing enabled…")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                     .multilineTextAlignment(.center)
             }
 
             Text("The target Mac needs Screen Sharing on (System Settings → General → Sharing), and Cockpit needs Local Network access. You can still connect by typing a host below.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .glassLegibleForeground(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
 
