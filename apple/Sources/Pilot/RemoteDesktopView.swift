@@ -211,6 +211,10 @@ struct RemoteDesktopView: View {
                     Image(systemName: "display")
                         .foregroundStyle(.secondary)
                     Text(connection.displayTitle).lineLimit(1)
+                        // The header row selects on a plain tap below; the
+                        // title gives VoiceOver the same button action.
+                        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityAction { store.selectedRemoteConnectionID = id }
                     Spacer()
                     // Icon-only overflow menu: a small circular glass button
                     // matching the other icon controls (BTN-1 tertiary tier).

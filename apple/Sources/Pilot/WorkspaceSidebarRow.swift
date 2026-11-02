@@ -212,6 +212,10 @@ private struct WorkspaceLLMGauge: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(gaugeDescription)
             .accessibilityHidden(!isVisible)
+            // The tap below has no button of its own, so VoiceOver gets the
+            // trait and the same action while it can jump to a pane.
+            .accessibilityAddTraits(running > 0 ? .isButton : [])
+            .accessibilityAction { selectRunningPane() }
             // Tappable only while an agent is running; an idle ring has
             // no pane to jump to.
             .contentShape(Rectangle())

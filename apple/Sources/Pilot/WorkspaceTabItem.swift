@@ -6,6 +6,9 @@ struct TabItemContent: View {
     let isHovering: Bool
     let isWorkspaceActive: Bool
     let canClose: Bool
+    /// Selects the pane. The capsule's tap does this for the pointer; the
+    /// title group exposes it to VoiceOver as the tab's button action.
+    let onSelect: () -> Void
     let onClose: () -> Void
     let onHide: () -> Void
     let onUnhide: () -> Void
@@ -47,19 +50,28 @@ struct TabItemContent: View {
                     .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
 
-            Image(systemName: pane.kind.systemImageName)
-                .scaledFont(size: 11)
-                .foregroundStyle(isSelected ? .primary : .secondary)
+            // One button for assistive tech: the capsule selects on a plain
+            // tap (no Button, so the close and hide buttons stay separate
+            // targets), and that tap had no button trait or action.
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                Image(systemName: pane.kind.systemImageName)
+                    .scaledFont(size: 11)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .accessibilityHidden(true)
 
-            Text(pane.displayTitle)
-                .scaledFont(size: 12)
-                .lineLimit(1)
-                .foregroundStyle(isSelected ? .primary : .secondary)
+                Text(pane.displayTitle)
+                    .scaledFont(size: 12)
+                    .lineLimit(1)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
 
-            if pane.kind == .terminal {
-                TerminalAgentBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
-                TerminalDirtyBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
+                if pane.kind == .terminal {
+                    TerminalAgentBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
+                    TerminalDirtyBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { onSelect() }
 
             Spacer(minLength: 0)
 

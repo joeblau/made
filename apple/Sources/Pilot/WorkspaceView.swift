@@ -175,6 +175,7 @@ struct WorkspaceView: View {
             // workspace's last pane on both surfaces, so the last tab offers
             // no close button rather than one that does nothing.
             canClose: workspace.sortedPanes.count > 1,
+            onSelect: { workspace.selectedPaneID = pane.id },
             onClose: { workspace.requestRemovePane(pane) },
             onHide: { workspace.collapsePane(pane) },
             onUnhide: { workspace.expandPane(pane) }

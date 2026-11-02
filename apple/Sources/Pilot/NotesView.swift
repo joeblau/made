@@ -489,6 +489,10 @@ private struct NoteTab: View {
                 .scaledFont(size: 12, weight: isSelected ? .semibold : .regular)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // The capsule selects on a plain tap (the close button stays
+                // its own target), so the title carries the button semantics.
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+                .accessibilityAction { onSelect() }
 
             // Plain inside the tab (the tab is the glass), with its own
             // hover/press feedback (BTN-5).
