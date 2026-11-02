@@ -79,38 +79,101 @@ struct CopilotDashboardTests {
     }
 }
 
-/// Light-mode widget numbers and status glyphs must read on the white
-/// widget (TYPE-3). `mix(with:by:)` blends perceptually, so the amounts are
-/// checked on the resolved colors, not derived from sRGB math.
+/// Light-mode widget numbers, status glyphs, and secondary copy must read
+/// on the white widget (TYPE-3). The light variants are asset colors
+/// resolved at draw time, so a macOS desktop widget archived in one
+/// appearance still draws the other appearance's variant.
 @Suite("Dashboard state tones")
 struct DashboardToneTests {
     private static func luminance(_ color: Color.Resolved) -> Double {
         0.2126 * Double(color.linearRed) + 0.7152 * Double(color.linearGreen) + 0.0722 * Double(color.linearBlue)
     }
 
-    private static func contrastOnWhite(_ color: Color, scheme: ColorScheme) -> Double {
+    private static func resolved(_ color: Color, scheme: ColorScheme) -> Color.Resolved {
         var environment = EnvironmentValues()
         environment.colorScheme = scheme
-        let resolved = color.resolve(in: environment)
+        return color.resolve(in: environment)
+    }
+
+    private static func contrastOnWhite(_ color: Color, scheme: ColorScheme) -> Double {
+        let resolved = resolved(color, scheme: scheme)
         // Composite over white in case a system color carries opacity.
         let alpha = Double(resolved.opacity)
         let luminance = luminance(resolved) * alpha + (1 - alpha)
         return 1.05 / (luminance + 0.05)
     }
 
-    @Test("Full-color light mode clears 4.5:1 on white", arguments: DashboardTone.allCases)
-    func lightModeContrast(tone: DashboardTone) {
-        let tinted = tone.color(colorScheme: .light, renderingMode: .fullColor)
-        #expect(Self.contrastOnWhite(tinted, scheme: .light) >= 4.5)
-        // Not darker than needed: stays a recognizable state color.
-        #expect(Self.contrastOnWhite(tinted, scheme: .light) < 6)
+    private static func matches(_ lhs: Color.Resolved, _ rhs: Color.Resolved) -> Bool {
+        abs(lhs.red - rhs.red) < 0.005 && abs(lhs.green - rhs.green) < 0.005
+            && abs(lhs.blue - rhs.blue) < 0.005 && abs(lhs.opacity - rhs.opacity) < 0.005
     }
 
-    @Test("Dark, accented, and vibrant rendering keep the system color", arguments: DashboardTone.allCases)
-    func otherModesKeepSystemColor(tone: DashboardTone) {
-        #expect(tone.color(colorScheme: .dark, renderingMode: .fullColor) == tone.systemColor)
-        #expect(tone.color(colorScheme: .light, renderingMode: .accented) == tone.systemColor)
-        #expect(tone.color(colorScheme: .light, renderingMode: .vibrant) == tone.systemColor)
+    @Test("Asset colors are bundled with the shared dashboard code", arguments: DashboardTone.allCases)
+    func assetsResolve(tone: DashboardTone) {
+        #expect(UIColor(named: tone.assetName, in: DashboardAssets.bundle, compatibleWith: nil) != nil)
+        #expect(UIColor(named: DashboardText.secondaryAssetName, in: DashboardAssets.bundle, compatibleWith: nil) != nil)
+    }
+
+    @Test("Light mode clears 4.5:1 on white", arguments: DashboardTone.allCases)
+    func lightModeContrast(tone: DashboardTone) {
+        let contrast = Self.contrastOnWhite(tone.adaptiveColor, scheme: .light)
+        #expect(contrast >= 4.5)
+        // Not darker than needed: stays a recognizable state color.
+        #expect(contrast < 6)
+        // The undarkened system color is the failure this guards against.
+        #expect(Self.contrastOnWhite(tone.systemColor, scheme: .light) < contrast)
+    }
+
+    @Test("Dark mode keeps the system color", arguments: DashboardTone.allCases)
+    func darkModeKeepsSystemColor(tone: DashboardTone) {
+        #expect(Self.matches(
+            Self.resolved(tone.adaptiveColor, scheme: .dark),
+            Self.resolved(tone.systemColor, scheme: .dark)
+        ))
+    }
+
+    @Test("Accented rendering keeps the system color; full color and vibrant adapt", arguments: DashboardTone.allCases)
+    func renderingModes(tone: DashboardTone) {
+        #expect(tone.color(for: .accented) == tone.systemColor)
+        #expect(tone.color(for: .fullColor) == tone.adaptiveColor)
+        #expect(tone.color(for: .vibrant) == tone.adaptiveColor)
+    }
+
+    @Test("Secondary text clears 4.5:1 in light mode and keeps the system secondary in dark")
+    func secondaryText() {
+        let light = Self.contrastOnWhite(DashboardText.secondaryColor, scheme: .light)
+        #expect(light >= 4.5)
+        // Still lighter than primary text, so the two levels stay apart.
+        #expect(light < Self.contrastOnWhite(.primary, scheme: .light))
+        #expect(Self.matches(
+            Self.resolved(DashboardText.secondaryColor, scheme: .dark),
+            Self.resolved(Color(uiColor: .secondaryLabel), scheme: .dark)
+        ))
+    }
+
+    @Test("Utilization meters turn orange at 75% and red at 90%")
+    func utilizationTones() {
+        #expect(DashboardTone.utilization(0) == .purple)
+        #expect(DashboardTone.utilization(0.74) == .purple)
+        #expect(DashboardTone.utilization(0.75) == .orange)
+        #expect(DashboardTone.utilization(0.9) == .red)
+        #expect(DashboardTone.utilization(1) == .red)
+    }
+
+    @Test("Large usage meters list the window, then the plan, only when reported")
+    func providerMeters() {
+        let both = UsageDashboardProviderSummary(
+            id: "claude", name: "Claude",
+            planName: "Max", plan: UsageDashboardUtilization(utilization: 0.4),
+            windowName: "5h", window: UsageDashboardUtilization(utilization: 0.8, resetAt: 1_000)
+        )
+        #expect(both.meters.map(\.name) == ["5h", "Max"])
+        #expect(both.meters.first?.resetAt == 1_000)
+        let planOnly = UsageDashboardProviderSummary(
+            id: "cursor", name: "Cursor", plan: UsageDashboardUtilization(utilization: 0.2)
+        )
+        #expect(planOnly.meters.map(\.name) == ["Plan"])
+        #expect(UsageDashboardProviderSummary(id: "codex", name: "Codex").meters.isEmpty)
     }
 
     @Test("Run and runner states map to their tones; neutral runs stay secondary")

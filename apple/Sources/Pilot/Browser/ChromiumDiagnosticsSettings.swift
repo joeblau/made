@@ -2,7 +2,6 @@ import ChromiumKit
 import Combine
 import Foundation
 import SwiftUI
-import WidgetKit
 
 /// Checked-in Swift constants mirrored from
 /// `apple/Packages/ChromiumKit/cef-artifacts.json`.
@@ -247,7 +246,6 @@ struct ChromiumDiagnosticsSettingsSection: View {
     @State private var isConfirmingClear = false
     @State private var isClearing = false
     @State private var resultMessage: String?
-    @Environment(\.colorScheme) private var colorScheme
 
     // Secondary text uses the legible gray: the system secondary measured
     // 3.9:1 here in light mode, and the system green "Running" 2.1:1 (TYPE-3).
@@ -346,9 +344,9 @@ struct ChromiumDiagnosticsSettingsSection: View {
     private var runtimeTint: Color {
         switch diagnostics.runtimeStatus {
         case .running:
-            DashboardTone.green.color(colorScheme: colorScheme, renderingMode: .fullColor)
+            DashboardTone.green.adaptiveColor
         case .unavailable, .rendererTerminated:
-            DashboardTone.red.color(colorScheme: colorScheme, renderingMode: .fullColor)
+            DashboardTone.red.adaptiveColor
         case .notStarted, .starting:
             GlassLegibleText.secondaryColor
         }

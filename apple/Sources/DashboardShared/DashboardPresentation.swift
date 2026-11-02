@@ -99,15 +99,19 @@ public struct UsageDashboardWidgetView: View {
                     } else {
                         Text("Estimated cost")
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .dashboardSecondaryForeground()
                     }
-                    ForEach(snapshot.providers.prefix(rowLimit), id: \.id) { provider in
-                        DashboardProviderRow(provider: provider, detail: DashboardRowDetail(family))
+                    if family == .systemLarge {
+                        largeBody(snapshot)
+                    } else {
+                        ForEach(snapshot.providers.prefix(rowLimit), id: \.id) { provider in
+                            DashboardProviderRow(provider: provider, detail: DashboardRowDetail(family))
+                        }
                     }
                     if snapshot.providers.isEmpty {
                         Text("No provider summaries")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .dashboardSecondaryForeground()
                     }
                 }
             } else {
@@ -121,6 +125,51 @@ public struct UsageDashboardWidgetView: View {
         case .systemSmall: 1
         case .systemLarge: 5
         default: 2
+        }
+    }
+
+    /// The large family has room for the input/output split and a meter per
+    /// plan or window, which the list rows only summarize as a percentage.
+    /// Rows alone left about 40% of the widget empty on macOS. When every
+    /// provider's meters no longer fit (four or five providers with two
+    /// meters each, accessibility sizes), meters drop from the last provider
+    /// up, and those rows keep their one-line summary, so nothing clips.
+    @ViewBuilder
+    private func largeBody(_ snapshot: UsageDashboardSnapshot) -> some View {
+        if snapshot.inputTokens > 0 || snapshot.outputTokens > 0 {
+            DashboardMetricColumns(spacing: 8) {
+                DashboardTextMetric(value: DashboardFormat.tokens(snapshot.inputTokens), label: "Input")
+                DashboardTextMetric(value: DashboardFormat.tokens(snapshot.outputTokens), label: "Output")
+            }
+        }
+        if !snapshot.providers.isEmpty {
+            Divider()
+        }
+        let providers = Array(snapshot.providers.prefix(rowLimit))
+        ViewThatFits(in: .vertical) {
+            ForEach((0...providers.count).reversed(), id: \.self) { metered in
+                providerList(providers, meteredCount: metered)
+            }
+        }
+    }
+
+    private func providerList(_ providers: [UsageDashboardProviderSummary], meteredCount: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(providers.enumerated()), id: \.element.id) { index, provider in
+                if index < meteredCount, !provider.meters.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        DashboardProviderRow(provider: provider, detail: .stacked, showsUtilization: false)
+                        // A grid so a provider's bars start on one edge.
+                        Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
+                            ForEach(provider.meters, id: \.name) { meter in
+                                DashboardUtilizationMeter(meter: meter)
+                            }
+                        }
+                    }
+                } else {
+                    DashboardProviderRow(provider: provider, detail: .stacked)
+                }
+            }
         }
     }
 
@@ -138,7 +187,7 @@ public struct UsageDashboardWidgetView: View {
     private func usageTokens(_ snapshot: UsageDashboardSnapshot) -> some View {
         Text("\(DashboardFormat.tokens(snapshot.totalTokens)) tokens")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .dashboardSecondaryForeground()
             .lineLimit(1)
             .fixedSize()
     }
@@ -188,7 +237,7 @@ public struct RunnersDashboardWidgetView: View {
                     if snapshot.runners.isEmpty {
                         Text("No runners in the sample")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .dashboardSecondaryForeground()
                     }
                 }
             } else {
@@ -208,6 +257,7 @@ public struct RunnersDashboardWidgetView: View {
 }
 
 public struct ActionsDashboardActivityCard: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
     private let projection: ActionsDashboardActivityProjection
     private let isStale: Bool
     private let compact: Bool
@@ -241,14 +291,14 @@ public struct ActionsDashboardActivityCard: View {
             if !islandExpanded {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(DashboardTone.blue)
+                        .foregroundStyle(DashboardTone.blue.color(for: renderingMode))
                         .widgetAccentable()
                     Text("Actions")
                         .font(.headline)
                     Spacer()
                     Text("\(projection.activeCount) active · \(projection.runCount) runs")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .dashboardSecondaryForeground()
                         .lineLimit(1)
                 }
             }
@@ -269,6 +319,7 @@ public struct ActionsDashboardActivityCard: View {
 }
 
 public struct UsageDashboardActivityCard: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
     private let projection: UsageDashboardActivityProjection
     private let isStale: Bool
     private let compact: Bool
@@ -324,7 +375,7 @@ public struct UsageDashboardActivityCard: View {
     private var usageHeader: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles")
-                .foregroundStyle(DashboardTone.purple)
+                .foregroundStyle(DashboardTone.purple.color(for: renderingMode))
                 .widgetAccentable()
             Text("AI Usage")
                 .font(.headline)
@@ -335,13 +386,14 @@ public struct UsageDashboardActivityCard: View {
                     .monospacedDigit()
                 Text("\(DashboardFormat.tokens(projection.totalTokens)) tokens")
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .dashboardSecondaryForeground()
             }
         }
     }
 }
 
 public struct RunnersDashboardActivityCard: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
     private let projection: RunnersDashboardActivityProjection
     private let isStale: Bool
     private let compact: Bool
@@ -375,7 +427,7 @@ public struct RunnersDashboardActivityCard: View {
             if !islandExpanded {
                 HStack(spacing: 8) {
                     Image(systemName: "server.rack")
-                        .foregroundStyle(DashboardTone.blue)
+                        .foregroundStyle(DashboardTone.blue.color(for: renderingMode))
                         .widgetAccentable()
                     Text(projection.enterpriseName.isEmpty ? "Runners" : projection.enterpriseName)
                         .font(.headline)
@@ -383,7 +435,7 @@ public struct RunnersDashboardActivityCard: View {
                     Spacer()
                     Text("\(projection.idleCount) idle / \(projection.totalCount)")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .dashboardSecondaryForeground()
                 }
             }
             // State colors live on the glyphs; the counts stay secondary text
@@ -475,6 +527,7 @@ enum DashboardRowDetail {
 
 private struct DashboardWidgetFrame<Content: View>: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetRenderingMode) private var renderingMode
     let title: String
     let systemImage: String
     let tint: DashboardTone
@@ -517,7 +570,7 @@ private struct DashboardWidgetFrame<Content: View>: View {
     private var titleLabel: some View {
         HStack(spacing: 4) {
             Image(systemName: systemImage)
-                .foregroundStyle(tint)
+                .foregroundStyle(tint.color(for: renderingMode))
                 .widgetAccentable()
             Text(title)
                 .font(.headline)
@@ -534,7 +587,7 @@ private struct DashboardWidgetFrame<Content: View>: View {
         } else {
             Text(footerText)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .dashboardSecondaryForeground()
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
         }
@@ -549,6 +602,7 @@ private struct DashboardWidgetFrame<Content: View>: View {
 }
 
 private struct DashboardMetric: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
     let value: Int
     let label: String
     /// A state color, or `nil` for a neutral total / an absent state.
@@ -561,14 +615,14 @@ private struct DashboardMetric: View {
                 .monospacedDigit()
                 // Timeline reloads roll the count instead of hard-cutting (MOT-4).
                 .contentTransition(.numericText(value: Double(value)))
-                // Light mode darkens the tint so the number keeps 4.5:1 on
-                // the white widget; tinted mode recolors it as an accent.
-                .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.primary))
+                // The light variant keeps the number at 4.5:1 on the white
+                // widget; tinted mode recolors it as an accent.
+                .foregroundStyle(tint.map { AnyShapeStyle($0.color(for: renderingMode)) } ?? AnyShapeStyle(.primary))
                 .lineLimit(1)
                 .widgetAccentable()
             Text(label)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .dashboardSecondaryForeground()
                 .lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -622,6 +676,7 @@ private struct DashboardWarningLabel: View {
 }
 
 private struct DashboardStatusLabel: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
     let text: String
     let systemImage: String
     /// The glyph's state color, or `nil` for an absent state (secondary).
@@ -630,10 +685,10 @@ private struct DashboardStatusLabel: View {
     var body: some View {
         Label {
             Text(text)
-                .foregroundStyle(.secondary)
+                .dashboardSecondaryForeground()
         } icon: {
             Image(systemName: systemImage)
-                .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
+                .foregroundStyle(tint.map { AnyShapeStyle($0.color(for: renderingMode)) } ?? DashboardText.secondaryStyle(for: renderingMode))
         }
         .font(.caption2)
         .lineLimit(1)
@@ -673,7 +728,7 @@ private struct DashboardEmptyView: View {
                 .fontWeight(.medium)
             Text(detail)
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .dashboardSecondaryForeground()
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -701,7 +756,7 @@ private struct DashboardRunRow: View {
                 if detail != .hidden {
                     Text(run.label)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .dashboardSecondaryForeground()
                         .lineLimit(1)
                 }
             }
@@ -712,13 +767,15 @@ private struct DashboardRunRow: View {
 private struct DashboardProviderRow: View {
     let provider: UsageDashboardProviderSummary
     let detail: DashboardRowDetail
+    /// `false` when meters under the row already show plan and window use.
+    var showsUtilization = true
 
     var body: some View {
         DashboardRowFit(detail: detail) { showsSubtitle in
             HStack(spacing: 8) {
                 DashboardRowText(
                     title: provider.name.isEmpty ? "Provider" : provider.name,
-                    subtitle: showsSubtitle ? utilizationText : nil,
+                    subtitle: showsSubtitle && showsUtilization ? utilizationText : nil,
                     detail: detail
                 )
                 Spacer(minLength: 4)
@@ -729,7 +786,7 @@ private struct DashboardProviderRow: View {
                     if detail == .stacked {
                         Text(DashboardFormat.tokens(provider.totalTokens))
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .dashboardSecondaryForeground()
                     }
                 }
             }
@@ -744,6 +801,107 @@ private struct DashboardProviderRow: View {
             return "\(provider.planName ?? "Plan") · \(DashboardFormat.percent(value))"
         }
         return nil
+    }
+}
+
+/// One plan or window's use, for the large AI Usage widget.
+struct DashboardUtilizationMeterModel: Hashable {
+    let name: String
+    let utilization: Double
+    let resetAt: Double?
+}
+
+extension UsageDashboardProviderSummary {
+    /// The window first (it resets soonest), then the plan, each only when
+    /// it reports a utilization.
+    var meters: [DashboardUtilizationMeterModel] {
+        var meters: [DashboardUtilizationMeterModel] = []
+        if let value = window?.utilization {
+            meters.append(DashboardUtilizationMeterModel(name: windowName ?? "Window", utilization: value, resetAt: window?.resetAt))
+        }
+        if let value = plan?.utilization {
+            meters.append(DashboardUtilizationMeterModel(name: planName ?? "Plan", utilization: value, resetAt: plan?.resetAt))
+        }
+        return meters
+    }
+}
+
+private struct DashboardUtilizationMeter: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
+    let meter: DashboardUtilizationMeterModel
+    @ScaledMetric(relativeTo: .caption2) private var barHeight: CGFloat = 4
+
+    var body: some View {
+        GridRow {
+            Text(meter.name)
+                .dashboardSecondaryForeground()
+                .lineLimit(1)
+                .layoutPriority(1)
+            DashboardMeterBar(
+                fraction: meter.utilization,
+                tint: DashboardTone.utilization(meter.utilization).color(for: renderingMode)
+            )
+            .frame(minWidth: 40, maxWidth: .infinity)
+            .frame(height: barHeight)
+            Text(valueText)
+                .monospacedDigit()
+                .dashboardSecondaryForeground()
+                .lineLimit(1)
+                .fixedSize()
+                .gridColumnAlignment(.trailing)
+        }
+        .font(.caption2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(meter.name), \(valueText)")
+    }
+
+    private var valueText: String {
+        let percent = DashboardFormat.percent(meter.utilization)
+        guard let resetAt = meter.resetAt else { return percent }
+        let reset = Date(timeIntervalSince1970: resetAt)
+        guard reset > Date() else { return percent }
+        let relative = reset.formatted(.relative(presentation: .numeric, unitsStyle: .abbreviated))
+        return "\(percent) · resets \(relative)"
+    }
+}
+
+/// A capsule track with the used share filled; the fill joins the accent
+/// group so tinted rendering keeps it visible against the track.
+private struct DashboardMeterBar: View {
+    let fraction: Double
+    let tint: Color
+
+    var body: some View {
+        GeometryReader { proxy in
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.primary.opacity(0.12))
+                Capsule()
+                    .fill(tint)
+                    .frame(width: proxy.size.width * min(max(fraction, 0), 1))
+                    .widgetAccentable()
+            }
+        }
+    }
+}
+
+/// A preformatted value over a caption label, matching ``DashboardMetric``.
+private struct DashboardTextMetric: View {
+    let value: String
+    let label: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(value)
+                .font(.headline)
+                .monospacedDigit()
+                .lineLimit(1)
+            Text(label)
+                .font(.caption2)
+                .dashboardSecondaryForeground()
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -763,7 +921,7 @@ private struct DashboardRunnerRow: View {
                 Spacer(minLength: 4)
                 Text(runner.label)
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .dashboardSecondaryForeground()
                     .lineLimit(1)
             }
         }
@@ -775,6 +933,7 @@ private struct DashboardRunnerRow: View {
 /// the title, so every row's title starts on the same edge at every Dynamic
 /// Type size.
 private struct DashboardRowGlyph: View {
+    @Environment(\.widgetRenderingMode) private var renderingMode
     let systemName: String
     /// The state color, or `nil` for a neutral state (secondary).
     let tint: DashboardTone?
@@ -784,7 +943,7 @@ private struct DashboardRowGlyph: View {
         Image(systemName: systemName)
             .resizable()
             .scaledToFit()
-            .foregroundStyle(tint.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
+            .foregroundStyle(tint.map { AnyShapeStyle($0.color(for: renderingMode)) } ?? DashboardText.secondaryStyle(for: renderingMode))
             .frame(width: side, height: side)
     }
 }
@@ -846,7 +1005,7 @@ private struct DashboardRowText: View {
         if let subtitle {
             Text(subtitle)
                 .font(.caption2)
-                .foregroundStyle(.secondary)
+                .dashboardSecondaryForeground()
                 .lineLimit(1)
         }
     }
@@ -899,12 +1058,22 @@ extension RunnersDashboardRunner {
 
 /// The dashboards' state colors. The system tints are tuned for glyphs on
 /// dark and fall to about 2.2:1 (green, orange) and 3.5:1 (red, blue) as
-/// text on a light widget, so full-color light mode mixes each one with
-/// black until it clears 4.5:1 on white (TYPE-3). Dark mode keeps the
-/// system color, and accented (tinted) and vibrant rendering keep it too:
-/// there `.widgetAccentable()` and the system recolor the content, and a
-/// darkened source would only dim the vibrant result.
-enum DashboardTone: CaseIterable, ShapeStyle {
+/// text on a light widget, so light mode uses a darker variant that clears
+/// 4.5:1 on white (TYPE-3) while dark mode keeps the system color.
+///
+/// The variants live in `DashboardColors.xcassets` rather than being picked
+/// from `colorScheme`: a macOS desktop widget is archived by the extension
+/// and drawn later by the system, so the color scheme (and rendering mode)
+/// the extension sees is not the one the desktop draws with. A
+/// `colorScheme`-gated tint came out as the undarkened system color on the
+/// macOS 27.2 light desktop (blue 3.52, green 2.22, orange 2.31:1). An asset
+/// color is archived by name and resolved at draw time, so the light
+/// variant follows the desktop's real appearance.
+///
+/// Accented (tinted) rendering keeps the system color: there
+/// `.widgetAccentable()` and the system recolor the content, and a darkened
+/// source would only dim the result.
+enum DashboardTone: CaseIterable {
     case blue, green, orange, red, purple
 
     var systemColor: Color {
@@ -917,28 +1086,80 @@ enum DashboardTone: CaseIterable, ShapeStyle {
         }
     }
 
-    /// How far toward black the light-mode tint is mixed. `mix(with:by:)`
-    /// blends in perceptual space, so each amount was picked by resolving
-    /// the result and computing its WCAG contrast on white rather than from
-    /// sRGB math: blue 4.79, green 4.89, orange 4.91, red 4.85 and purple
-    /// 4.82:1 on the iOS 27 and macOS system colors (from 3.52, 2.22, 2.31,
-    /// 3.57 and 4.17:1). `DashboardToneTests` holds the 4.5:1 floor.
-    var lightModeDarkening: Double {
+    var assetName: String {
         switch self {
-        case .blue: 0.12
-        case .green: 0.27
-        case .orange: 0.26
-        case .red: 0.12
-        case .purple: 0.06
+        case .blue: "DashboardToneBlue"
+        case .green: "DashboardToneGreen"
+        case .orange: "DashboardToneOrange"
+        case .red: "DashboardToneRed"
+        case .purple: "DashboardTonePurple"
         }
     }
 
-    func color(colorScheme: ColorScheme, renderingMode: WidgetRenderingMode) -> Color {
-        guard colorScheme == .light, renderingMode == .fullColor else { return systemColor }
-        return systemColor.mix(with: .black, by: lightModeDarkening)
+    /// Light: the darkened tint (blue 4.79, green 4.89, orange 4.91, red
+    /// 4.85 and purple 4.82:1 on white). Dark: the system color itself, by
+    /// reference, so it tracks system palette and Increase Contrast changes.
+    /// `DashboardToneTests` holds the 4.5:1 floor and the dark identity.
+    var adaptiveColor: Color {
+        Color(assetName, bundle: DashboardAssets.bundle)
     }
 
-    func resolve(in environment: EnvironmentValues) -> Color {
-        color(colorScheme: environment.colorScheme, renderingMode: environment.widgetRenderingMode)
+    /// The tint to draw for a widget rendering mode, read by the view from
+    /// `@Environment(\.widgetRenderingMode)`.
+    func color(for renderingMode: WidgetRenderingMode) -> Color {
+        renderingMode == .accented ? systemColor : adaptiveColor
+    }
+
+    /// A utilization meter's tone: the family color until the window or
+    /// plan is nearly spent, then the caution and failure colors.
+    static func utilization(_ value: Double) -> DashboardTone {
+        switch value {
+        case 0.9...: .red
+        case 0.75..<0.9: .orange
+        default: .purple
+        }
+    }
+}
+
+/// Secondary copy in the dashboards. System secondary text measured 3.95:1
+/// on the light macOS widget; the light variant is an opaque gray at
+/// 5.3:1 on white, and dark keeps the system secondary label by reference.
+enum DashboardText {
+    static let secondaryAssetName = "DashboardSecondaryText"
+
+    static var secondaryColor: Color {
+        Color(secondaryAssetName, bundle: DashboardAssets.bundle)
+    }
+
+    /// Tinted rendering draws non-accent content in its own hierarchy, so
+    /// it keeps the system secondary; a fixed gray would fight it.
+    static func secondaryStyle(for renderingMode: WidgetRenderingMode) -> AnyShapeStyle {
+        renderingMode == .accented ? AnyShapeStyle(.secondary) : AnyShapeStyle(secondaryColor)
+    }
+}
+
+/// The bundle that holds `DashboardColors.xcassets`: the app or widget
+/// extension this shared source is compiled into.
+enum DashboardAssets {
+    private final class Token {}
+
+    static let bundle = Bundle(for: Token.self)
+}
+
+private struct DashboardSecondaryForeground: ViewModifier {
+    @Environment(\.widgetRenderingMode) private var renderingMode
+
+    func body(content: Content) -> some View {
+        content.foregroundStyle(DashboardText.secondaryStyle(for: renderingMode))
+    }
+}
+
+extension View {
+    /// Secondary copy in the legible ``DashboardText/secondaryColor``. A
+    /// parent `foregroundStyle(_:_:)` hierarchy does not reach a child's own
+    /// `.foregroundStyle(.secondary)` (measured: still 3.95:1), so each
+    /// secondary view applies this instead.
+    func dashboardSecondaryForeground() -> some View {
+        modifier(DashboardSecondaryForeground())
     }
 }
