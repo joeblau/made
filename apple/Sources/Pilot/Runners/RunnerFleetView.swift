@@ -66,7 +66,7 @@ struct RunnerFleetView: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: Capsule())
+        .compatGlassCapsule()
     }
 
     private func legendItem(_ title: String, color: Color, opacity: Double) -> some View {
@@ -76,6 +76,8 @@ struct RunnerFleetView: View {
         }
     }
 
+    /// A Maps-style glass pill floating over the scene; the hairline dividers
+    /// keep the four actions distinct inside one control.
     private var cameraControls: some View {
         VStack(spacing: 0) {
             controlButton("plus", help: "Zoom in") { fleet.zoom(by: 1.3, animated: true) }
@@ -86,18 +88,18 @@ struct RunnerFleetView: View {
             Divider().frame(width: 20)
             controlButton("arrow.up.to.line", help: "Back to GitHub") { fleet.frameTop() }
         }
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .compatGlassEffect(interactive: true, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private func controlButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 12, weight: .semibold))
-                .frame(width: 32, height: 30)
+                .frame(width: 32, height: 32)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
+        .foregroundStyle(.primary)
         .help(help)
         .accessibilityLabel(help)
     }

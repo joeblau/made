@@ -61,13 +61,13 @@ struct AgenticUseView: View {
                 store.rescan()
             } label: {
                 Image(systemName: "arrow.clockwise")
-                    .scaledFont(size: 12, weight: .medium)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .buttonBorderShape(.circle)
+            .compatGlassButtonStyle()
+            .controlSize(.small)
+            .disabled(store.isRefreshing)
             .help("Refresh usage and pricing")
+            .accessibilityLabel("Refresh usage and pricing")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
@@ -163,7 +163,7 @@ struct AgenticUseView: View {
             }
         } actions: {
             Button("Rescan") { store.rescan() }
-                .buttonStyle(.borderedProminent)
+                .compatGlassProminentButtonStyle()
         }
     }
 
@@ -175,6 +175,7 @@ struct AgenticUseView: View {
         } actions: {
             if store.range != .all {
                 Button("Show All History") { store.range = .all }
+                    .compatGlassProminentButtonStyle()
             }
         }
     }
@@ -194,7 +195,7 @@ struct AgenticUseView: View {
             Text(reason)
         } actions: {
             Button("Retry") { store.rescan() }
-                .buttonStyle(.borderedProminent)
+                .compatGlassProminentButtonStyle()
         }
     }
 }

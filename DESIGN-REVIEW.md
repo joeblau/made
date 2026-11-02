@@ -63,13 +63,14 @@ or a forced material fallback in `GlassCompat`) is follow-up work.
 
 ### Deferred
 
-- Glass pass for Agentic Use and the runner fleet scene (landed via #313 while
-  this pass ran).
+- ~~Glass pass for Agentic Use and the runner fleet scene~~ — done in the
+  follow-up: fleet legend and camera controls float as glass; Agentic Use
+  refresh, empty-state, and "View All Models" actions use glass button styles.
 - Loading skeletons (MOT-5) and illustrated empty states (MOT-6): new design
   work rather than cleanup.
 - Pairing alert wording ("Reject") and Walkie's "Remove Download" /
-  "Regenerate & re-sync" confirmations: behavior or security decisions.
-- Ink color swatches still lack accessibility labels.
+  "Regenerate & re-sync" confirmations: reviewed and kept as-is by the owner.
+- ~~Ink color swatches lack accessibility labels~~ — now buttons named by color.
 ## 2026-10-31 — Cockpit Agentic Use dashboard
 
 Scope: the Agentic Use tab as redesigned in #310 (`apple/Sources/Pilot/AgenticUse/*View*`,
