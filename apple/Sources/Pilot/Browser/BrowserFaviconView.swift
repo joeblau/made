@@ -42,6 +42,13 @@ final class BrowserRuntimeState {
     var stopFindingRequestID: Int = 0
     var findMatchCount: Int = 0
     var activeFindMatchOrdinal: Int = 0
+    /// The in-pane find bar: its draft query survives Done so ⌘G can repeat
+    /// it, and each focus request is an edge.
+    var isFindBarVisible: Bool = false
+    var findBarText: String = ""
+    var findFieldFocusRequestID: Int = 0
+    /// The page dialog awaiting an answer, presented as a window sheet.
+    var javaScriptDialog: BrowserJavaScriptDialog? = nil
     var printRequestID: Int = 0
     var savePageRequestID: Int = 0
     var downloadStatusText: String = ""

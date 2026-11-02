@@ -258,8 +258,6 @@ struct BrowserToolsToolbarControls: View {
 
     @State private var isConfirmingWebsiteDataReset = false
     @State private var isClearingWebsiteData = false
-    @State private var isShowingFind = false
-    @State private var findText = ""
 
     var body: some View {
 
@@ -292,21 +290,24 @@ struct BrowserToolsToolbarControls: View {
             )
         }
 
-        if state.engine == .chromium {
-            ControlGroup {
-                Button {
-                    findText = state.findQuery
-                    isShowingFind = true
-                } label: {
-                    Label("Find in Page", systemImage: "magnifyingglass")
+        ControlGroup {
+            // Toggles the in-pane find bar. A `.popover` anchored here never
+            // presented: SwiftUI cannot anchor one to a button inside a
+            // toolbar `ControlGroup`.
+            Button {
+                if state.isFindBarVisible {
+                    state.hideFindBar()
+                } else {
+                    state.showFindBar()
                 }
-                .disabled(!hasLoadedPage)
-                .help("Find in Page")
-                .accessibilityIdentifier("browser.find")
-                .popover(isPresented: $isShowingFind, arrowEdge: .bottom) {
-                    chromiumFindPopover
-                }
+            } label: {
+                Label("Find in Page", systemImage: "magnifyingglass")
+            }
+            .disabled(!hasLoadedPage || !state.supports(.findInPage))
+            .help(state.isFindBarVisible ? "Hide Find Bar" : "Find in Page (⌘F)")
+            .accessibilityIdentifier("browser.find")
 
+            if state.engine == .chromium {
                 Button {
                     state.requestPrint()
                 } label: {
@@ -325,8 +326,10 @@ struct BrowserToolsToolbarControls: View {
                 .help("Save Page")
                 .accessibilityIdentifier("browser.save-page")
             }
-            .controlGroupStyle(.navigation)
+        }
+        .controlGroupStyle(.navigation)
 
+        if state.engine == .chromium {
             if let progress = state.downloadProgress {
                 ProgressView(value: progress)
                     .frame(width: 44)
@@ -384,75 +387,6 @@ struct BrowserToolsToolbarControls: View {
         }
         .controlGroupStyle(.navigation)
         .accessibilityIdentifier("browser.tools")
-    }
-
-    private var chromiumFindPopover: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
-            // Persistent label above the field; the placeholder is only a
-            // hint (FORM-1). Label → field sits tight, field → actions wider
-            // (FORM-5).
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Text("Find in Page")
-                    .font(.headline)
-
-                TextField("Find", text: $findText)
-                    .onSubmit {
-                        state.requestFind(findText)
-                    }
-                    .accessibilityLabel("Find in Page")
-                    .accessibilityIdentifier("browser.find-field")
-                    .liquidGlassField(systemImage: "magnifyingglass")
-            }
-
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Text(findResultSummary)
-                    .font(.callout)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        Button {
-                            state.requestFind(findText, forward: false, findNext: true)
-                        } label: {
-                            Label("Previous Match", systemImage: "chevron.up")
-                        }
-                        .compatGlassIconButton(controlSize: .small)
-                        .disabled(findText.isEmpty)
-                        .help("Previous Match")
-                        .accessibilityIdentifier("browser.find-previous")
-
-                        Button {
-                            state.requestFind(findText, forward: true, findNext: true)
-                        } label: {
-                            Label("Next Match", systemImage: "chevron.down")
-                        }
-                        .compatGlassIconButton(controlSize: .small)
-                        .disabled(findText.isEmpty)
-                        .help("Next Match")
-                        .accessibilityIdentifier("browser.find-next")
-
-                        Button("Done") {
-                            isShowingFind = false
-                        }
-                        .compatGlassButtonStyle()
-                        .buttonBorderShape(.capsule)
-                        .controlSize(.small)
-                    }
-                }
-            }
-        }
-        .padding(LiquidGlassMetrics.Spacing.medium)
-        .frame(width: 320)
-        .onDisappear {
-            state.stopFinding()
-        }
-    }
-
-    private var findResultSummary: String {
-        guard state.findMatchCount > 0 else { return "No matches" }
-        return "\(state.activeFindMatchOrdinal) of \(state.findMatchCount)"
     }
 
     private var hasLoadedPage: Bool {

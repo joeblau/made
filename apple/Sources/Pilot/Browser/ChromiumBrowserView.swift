@@ -219,6 +219,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
         private var isPresentingCertificateWarning = false
         private var rejectedCertificateOrigin: ChromiumOrigin?
         private let confirmCertificate: @MainActor (BrowserCertificateIdentity) -> Bool
+        private var javaScriptDialogThrottle = BrowserJavaScriptDialogThrottle()
         private(set) var lastDiagnostic: ChromiumDiagnosticRecord?
 
         init(
@@ -309,6 +310,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
             certificateNavigationGeneration += 1
             certificateNavigationURL = nil
             certificateExceptions.removeAll()
+            state.javaScriptDialog?.cancel()
             host?.delegate = nil
             host?.performBrowserCommand(.close)
             host = nil
@@ -683,6 +685,80 @@ struct ChromiumBrowserView: NSViewRepresentable {
             }
         }
 
+        @objc(chromiumBrowserHostView:didRequestJavaScriptDialog:)
+        nonisolated func chromiumBrowserHostView(
+            _ browserView: ChromiumBrowserHostView,
+            didRequestJavaScriptDialog request: ChromiumJavaScriptDialogRequest
+        ) {
+            MainActor.assumeIsolated {
+                guard host === browserView else {
+                    request.cancel()
+                    return
+                }
+                let kind: BrowserJavaScriptDialogKind
+                switch request.kind {
+                case .alert: kind = .alert
+                case .confirm: kind = .confirm
+                case .prompt: kind = .prompt(defaultText: request.defaultPromptText)
+                case .beforeUnload: kind = .beforeUnload(isReload: request.isReload)
+                @unknown default:
+                    request.cancel()
+                    return
+                }
+                presentJavaScriptDialog(
+                    kind: kind,
+                    originURL: request.originURL,
+                    message: request.message
+                ) { accepted, input in
+                    if accepted {
+                        request.accept(userInput: input)
+                    } else {
+                        request.cancel()
+                    }
+                }
+            }
+        }
+
+        /// Shows a page dialog as this pane's sheet, or answers Cancel when
+        /// the page is over its dialog budget (Leave, for beforeunload) or
+        /// one is already waiting.
+        func presentJavaScriptDialog(
+            kind: BrowserJavaScriptDialogKind,
+            originURL: URL?,
+            message: String,
+            now: Date = Date(),
+            respond: @escaping (_ accepted: Bool, _ input: String?) -> Void
+        ) {
+            guard javaScriptDialogThrottle.admit(at: now) else {
+                // A suppressed beforeunload proceeds, as in Chrome: answering
+                // Stay would let a page that spent its budget block every
+                // navigation and reload away from it.
+                if case .beforeUnload = kind {
+                    respond(true, nil)
+                } else {
+                    respond(false, nil)
+                }
+                return
+            }
+            let content = BrowserJavaScriptDialogContent(
+                kind: kind,
+                originURL: originURL,
+                message: message
+            )
+            state.presentJavaScriptDialog(content, respond: respond)
+        }
+
+        @objc(chromiumBrowserHostViewDidResetJavaScriptDialogs:)
+        nonisolated func chromiumBrowserHostViewDidResetJavaScriptDialogs(
+            _ browserView: ChromiumBrowserHostView
+        ) {
+            MainActor.assumeIsolated {
+                guard host === browserView else { return }
+                // CEF already cancelled the request; this only dismisses.
+                state.javaScriptDialog?.cancel()
+            }
+        }
+
         @objc(chromiumBrowserHostView:didUpdateFindMatchCount:activeMatchOrdinal:finalUpdate:)
         nonisolated func chromiumBrowserHostView(
             _ browserView: ChromiumBrowserHostView,
@@ -945,6 +1021,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
                 _ = browserView
                 state.isLoading = isLoading
                 if isLoading {
+                    javaScriptDialogThrottle.reset()
                     container?.runtimeState = .ready
                     ChromiumDiagnosticsCenter.shared.recordRunning()
                 } else {
@@ -1010,7 +1087,17 @@ struct ChromiumBrowserView: NSViewRepresentable {
             if let origin = rejectedCertificateOrigin {
                 container?.runtimeState = .certificateRejected(origin.serialized)
             } else {
-                container?.runtimeState = .navigationFailed
+                switch ChromiumLoadFailurePresentation(error) {
+                case .enginePage:
+                    // Chromium draws its own error page with a Reload
+                    // button; a native overlay on top would be a second
+                    // prominent recovery action (BTN-1).
+                    container?.runtimeState = .ready
+                case .ignored:
+                    break
+                case .nativeOverlay:
+                    container?.runtimeState = .navigationFailed
+                }
             }
             lastDiagnostic = ChromiumDiagnosticRecord.make(
                 event: .navigationFailed,
@@ -1058,6 +1145,33 @@ struct ChromiumBrowserView: NSViewRepresentable {
                 )
             }
         }
+    }
+}
+
+/// How Pilot presents a failed Chromium load. Chromium renders its own error
+/// page, with a Reload button, for every network error except an aborted
+/// navigation (a stop, a policy cancel, or a download), so the native
+/// "could not load" overlay is only for failures with no engine page, such
+/// as an unavailable runtime.
+enum ChromiumLoadFailurePresentation: Equatable, Sendable {
+    /// Chromium's error page is the recovery surface; hide the overlay.
+    case enginePage
+    /// Nothing failed from the user's point of view; keep the pane as is.
+    case ignored
+    /// No engine page exists; show the native message and Retry.
+    case nativeOverlay
+
+    /// Chromium's `net::ERR_ABORTED`.
+    static let abortedNetError = -3
+
+    init(_ error: NSError) {
+        guard error.domain == ChromiumKitError.errorDomain,
+              error.code == ChromiumKitError.navigationFailed.rawValue,
+              let netError = (error.userInfo["ChromiumNetError"] as? NSNumber)?.intValue else {
+            self = .nativeOverlay
+            return
+        }
+        self = netError == Self.abortedNetError ? .ignored : .enginePage
     }
 }
 

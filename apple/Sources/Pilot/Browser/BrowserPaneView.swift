@@ -25,13 +25,38 @@ struct BrowserPaneView: View {
             .background(Color(nsColor: .windowBackgroundColor))
             .onAppear { captureInitialURLState() }
         } else {
-            browserSurface
-            .id("\(state.websiteDataResetRequestID):\(state.runtimeRetryRequestID)")
+            VStack(spacing: 0) {
+                // Above the page rather than over it, so the bar never hides
+                // a match and its glass never samples page content.
+                if state.isFindBarVisible, state.supports(.findInPage) {
+                    BrowserFindBar(state: state)
+                    Divider()
+                }
+                browserSurface
+                    .id("\(state.websiteDataResetRequestID):\(state.runtimeRetryRequestID)")
+            }
             .onAppear {
                 captureInitialURLState()
                 hasLoadedAnyURL = true
             }
+            // Page dialogs attach to this pane's window as a sheet instead
+            // of floating free over the page.
+            .sheet(item: javaScriptDialogBinding) { dialog in
+                BrowserJavaScriptDialogSheet(dialog: dialog)
+            }
         }
+    }
+
+    /// SwiftUI writes nil only when it dismisses the sheet itself; that
+    /// dismissal answers the page with Cancel. Answered dialogs clear their
+    /// own slot, so a newer dialog is never cancelled by an older sheet.
+    private var javaScriptDialogBinding: Binding<BrowserJavaScriptDialog?> {
+        Binding(
+            get: { state.javaScriptDialog },
+            set: { newValue in
+                if newValue == nil { state.javaScriptDialog?.cancel() }
+            }
+        )
     }
 
     @ViewBuilder
@@ -42,6 +67,8 @@ struct BrowserPaneView: View {
                 state: state,
                 navigationRequestID: state.navigationRequestID,
                 inspectorToggleRequestID: state.inspectorToggleRequestID,
+                findRequestID: state.findRequestID,
+                stopFindingRequestID: state.stopFindingRequestID,
                 annotateMode: state.annotateMode,
                 annotateToggleRequestID: state.annotateToggleRequestID,
                 appearanceMode: state.appearanceMode,

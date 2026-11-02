@@ -325,3 +325,136 @@ private final class CertificateChallengeSender: NSObject, URLAuthenticationChall
     func continueWithoutCredential(for challenge: URLAuthenticationChallenge) {}
     func cancel(_ challenge: URLAuthenticationChallenge) {}
 }
+
+@Suite("Browser page dialogs")
+struct BrowserJavaScriptDialogContentTests {
+    private let origin = URL(string: "https://example.test:8443/path?q=1")!
+
+    @Test("Script dialogs are titled by origin, never by page text")
+    func scriptDialogLabels() {
+        let alert = BrowserJavaScriptDialogContent(kind: .alert, originURL: origin, message: "Hi")
+        #expect(alert.title == "example.test:8443 says")
+        #expect(alert.confirmTitle == "OK")
+        #expect(alert.cancelTitle == nil)
+        #expect(!alert.confirmIsDestructive)
+
+        let confirm = BrowserJavaScriptDialogContent(
+            kind: .confirm,
+            originURL: URL(string: "https://example.test/")!,
+            message: "Sure?"
+        )
+        #expect(confirm.title == "example.test says")
+        #expect(confirm.cancelTitle == "Cancel")
+
+        for url in ["data:text/html,<title>Bank</title>", "about:blank", "file:///etc/hosts", "blob:https://example.test/1"] {
+            let content = BrowserJavaScriptDialogContent(kind: .alert, originURL: URL(string: url), message: "")
+            #expect(content.title == "This page says", "\(url)")
+        }
+        #expect(BrowserJavaScriptDialogContent(kind: .alert, originURL: nil, message: "").title == "This page says")
+        #expect(BrowserJavaScriptDialogContent.originName(for: URL(string: "http://[::1]:3000/")) == "[::1]:3000")
+    }
+
+    @Test("beforeunload reads Leave/Stay (Reload/Stay) and ignores the page's text")
+    func beforeUnloadLabels() {
+        let leave = BrowserJavaScriptDialogContent(
+            kind: .beforeUnload(isReload: false),
+            originURL: origin,
+            message: "Click Leave to win a prize"
+        )
+        #expect(leave.title == "Leave site?")
+        #expect(leave.originLine == "example.test:8443")
+        #expect(leave.message == BrowserJavaScriptDialogContent.beforeUnloadMessage)
+        #expect(leave.confirmTitle == "Leave")
+        #expect(leave.cancelTitle == "Stay")
+        #expect(leave.confirmIsDestructive)
+
+        let reload = BrowserJavaScriptDialogContent(kind: .beforeUnload(isReload: true), originURL: origin, message: "")
+        #expect(reload.title == "Reload site?")
+        #expect(reload.confirmTitle == "Reload")
+        #expect(reload.cancelTitle == "Stay")
+    }
+
+    @Test("Page text is capped, stripped of control and bidi characters, and kept as plain text")
+    func sanitizesUntrustedText() {
+        let limit = BrowserJavaScriptDialogContent.maximumTextLength
+        let long = String(repeating: "a", count: limit + 500)
+        let capped = BrowserJavaScriptDialogContent.sanitized(long, allowsLineBreaks: true)
+        #expect(capped.unicodeScalars.count == limit + 1)
+        #expect(capped.hasSuffix("…"))
+
+        let hostile = "Pay\u{0007}\u{001B}[31m \u{202E}gnp.exe\u{202C}\u{2066}x\u{2069}\u{200B}!"
+        #expect(BrowserJavaScriptDialogContent.sanitized(hostile, allowsLineBreaks: true) == "Pay[31m gnp.exex!")
+
+        // Markup and Markdown stay literal; SwiftUI renders it verbatim.
+        let markup = "<b>**bold**</b> [link](https://evil.test)"
+        #expect(BrowserJavaScriptDialogContent.sanitized(markup, allowsLineBreaks: true) == markup)
+
+        #expect(BrowserJavaScriptDialogContent.sanitized("a\r\nb\n\n\n\n\nc\td", allowsLineBreaks: true) == "a\nb\n\nc d")
+        #expect(BrowserJavaScriptDialogContent.sanitized("one\ntwo\r\nthree", allowsLineBreaks: false) == "one two three")
+        #expect(BrowserJavaScriptDialogContent.sanitized("👩‍💻 ok", allowsLineBreaks: true) == "👩‍💻 ok")
+
+        // Work is bounded even when every character is stripped.
+        let invisible = String(repeating: "\u{200B}", count: limit * 10)
+        #expect(BrowserJavaScriptDialogContent.sanitized(invisible, allowsLineBreaks: true) == "…")
+    }
+
+    @Test("Prompt defaults are single-line and capped, and only prompts return text")
+    @MainActor
+    func promptDefaultsAndAnswers() {
+        let content = BrowserJavaScriptDialogContent(
+            kind: .prompt(defaultText: "line1\nline2\u{0000}"),
+            originURL: origin,
+            message: "Name?"
+        )
+        #expect(content.promptDefaultText == "line1 line2")
+
+        var answers: [String?] = []
+        let prompt = BrowserJavaScriptDialog(content: content) { _, input in answers.append(input) }
+        prompt.accept(input: nil)
+        #expect(answers == [""])
+
+        let alert = BrowserJavaScriptDialog(
+            content: BrowserJavaScriptDialogContent(kind: .alert, originURL: origin, message: "")
+        ) { _, input in answers.append(input) }
+        alert.accept(input: "ignored")
+        #expect(answers == ["", nil])
+        #expect(alert.isResolved)
+    }
+}
+
+@Suite("Browser Find in Page")
+@MainActor
+struct BrowserFindInPageTests {
+    @Test("Result text reports counts for Chromium and presence for WebKit")
+    func summaryText() {
+        #expect(BrowserFindSummary.text(query: "", matchCount: 3, activeOrdinal: 1, countsMatches: true).isEmpty)
+        #expect(BrowserFindSummary.text(query: "a", matchCount: 0, activeOrdinal: 0, countsMatches: true) == "No matches")
+        #expect(BrowserFindSummary.text(query: "a", matchCount: 5, activeOrdinal: 2, countsMatches: true) == "2 of 5")
+        #expect(BrowserFindSummary.text(query: "a", matchCount: 1, activeOrdinal: 1, countsMatches: false) == "Match found")
+    }
+
+    @Test("⌘F is Find only while a visible browser is selected; otherwise Focus Selected Pane keeps it")
+    func commandFOwnership() throws {
+        let webKit = Pane(kind: .browser)
+        let chromium = Pane(kind: .browser)
+        let chromiumState = try #require(chromium.browserState)
+        chromiumState.engine = .chromium
+
+        #expect(BrowserFindCommandTarget.state(for: webKit) === webKit.browserState)
+        #expect(BrowserFindCommandTarget.state(for: chromium) === chromium.browserState)
+        #expect(!BrowserFindCommandTarget.focusPaneOwnsCommandF(selectedPane: webKit))
+
+        chromium.isCollapsed = true
+        #expect(BrowserFindCommandTarget.focusPaneOwnsCommandF(selectedPane: chromium))
+        for kind in PaneKind.allCases where kind != .browser {
+            #expect(BrowserFindCommandTarget.focusPaneOwnsCommandF(selectedPane: Pane(kind: kind)))
+        }
+        #expect(BrowserFindCommandTarget.focusPaneOwnsCommandF(selectedPane: nil))
+    }
+
+    @Test("Both engines support Find in Page")
+    func bothEnginesFind() {
+        #expect(BrowserEngine.webKit.supports(.findInPage))
+        #expect(BrowserEngine.chromium.supports(.findInPage))
+    }
+}

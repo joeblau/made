@@ -299,6 +299,34 @@ using namespace chromiumkit;
                                         port:port];
     }
 }
+- (BOOL)cefHandlesJavaScriptDialogs {
+    return !self.closeDelivered &&
+        [self.delegate respondsToSelector:
+            @selector(chromiumBrowserHostView:didRequestJavaScriptDialog:)];
+}
+- (BOOL)cefPresentJavaScriptDialog:(ChromiumJavaScriptDialogRequest *)request {
+    if (self.lifecycleState != ChromiumBrowserLifecycleStateCreated ||
+        ![self cefHandlesJavaScriptDialogs]) {
+        return NO;
+    }
+    // CEF runs one dialog per browser; a stale request is answered first.
+    [self.activeJavaScriptDialog cancel];
+    self.activeJavaScriptDialog = request;
+    [self.delegate chromiumBrowserHostView:self
+                didRequestJavaScriptDialog:request];
+    return YES;
+}
+- (void)cefDidResetJavaScriptDialogs {
+    ChromiumJavaScriptDialogRequest *active = self.activeJavaScriptDialog;
+    self.activeJavaScriptDialog = nil;
+    if (!active || active.resolved) return;
+    [active invalidate];
+    id<ChromiumBrowserHostViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:
+            @selector(chromiumBrowserHostViewDidResetJavaScriptDialogs:)]) {
+        [delegate chromiumBrowserHostViewDidResetJavaScriptDialogs:self];
+    }
+}
 - (void)cefWillClose {
     if (self.lifecycleState != ChromiumBrowserLifecycleStateClosed) {
         self.lifecycleState = ChromiumBrowserLifecycleStateClosing;

@@ -150,6 +150,107 @@ void BrowserClient::OnFindResult(CefRefPtr<CefBrowser> browser,
     }
 }
 
+// JavaScript dialogs are presented by the delegate (Pilot attaches them to
+// its window) instead of CEF's free-floating default alert. The bridge passes
+// page strings through untouched; the delegate treats them as untrusted.
+bool BrowserClient::OnJSDialog(CefRefPtr<CefBrowser> browser,
+                               const CefString& origin_url,
+                               JSDialogType dialog_type,
+                               const CefString& message_text,
+                               const CefString& default_prompt_text,
+                               CefRefPtr<CefJSDialogCallback> callback,
+                               bool& suppress_message) {
+    CEF_REQUIRE_UI_THREAD();
+    suppress_message = false;
+    ChromiumBrowserHostView *host = host_;
+    if (closing_ || !IsCurrent(browser) || host == nil) {
+        // A closing or detached browser has no window to attach a dialog
+        // to; the page receives the default (false or null) result.
+        suppress_message = true;
+        return false;
+    }
+    if (![host cefHandlesJavaScriptDialogs]) {
+        return false;
+    }
+    ChromiumJavaScriptDialogKind kind;
+    switch (dialog_type) {
+        case JSDIALOGTYPE_ALERT:
+            kind = ChromiumJavaScriptDialogKindAlert;
+            break;
+        case JSDIALOGTYPE_CONFIRM:
+            kind = ChromiumJavaScriptDialogKindConfirm;
+            break;
+        case JSDIALOGTYPE_PROMPT:
+            kind = ChromiumJavaScriptDialogKindPrompt;
+            break;
+        default:
+            suppress_message = true;
+            return false;
+    }
+    CefRefPtr<CefJSDialogCallback> retained = callback;
+    ChromiumJavaScriptDialogRequest *request =
+        [[ChromiumJavaScriptDialogRequest alloc]
+                 initWithKind:kind
+                    originURL:NSURLFromCef(origin_url)
+                      message:NSStringFromCef(message_text)
+            defaultPromptText:NSStringFromCef(default_prompt_text)
+                       reload:NO
+              decisionHandler:^(BOOL accepted, NSString *userInput) {
+                  retained->Continue(
+                      accepted,
+                      CefString(userInput.UTF8String ?: ""));
+              }];
+    if (![host cefPresentJavaScriptDialog:request]) {
+        [request invalidate];
+        return false;
+    }
+    return true;
+}
+
+bool BrowserClient::OnBeforeUnloadDialog(
+    CefRefPtr<CefBrowser> browser,
+    const CefString& message_text,
+    bool is_reload,
+    CefRefPtr<CefJSDialogCallback> callback) {
+    CEF_REQUIRE_UI_THREAD();
+    if (closing_) {
+        // Pilot already removed the pane, so there is nowhere to stay: a
+        // "Stay" answer would keep an invisible browser alive. Leave.
+        callback->Continue(true, CefString());
+        return true;
+    }
+    ChromiumBrowserHostView *host = host_;
+    if (!IsCurrent(browser) || host == nil ||
+        ![host cefHandlesJavaScriptDialogs]) {
+        return false;
+    }
+    CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+    NSURL *origin = frame ? NSURLFromCef(frame->GetURL()) : nil;
+    CefRefPtr<CefJSDialogCallback> retained = callback;
+    ChromiumJavaScriptDialogRequest *request =
+        [[ChromiumJavaScriptDialogRequest alloc]
+                 initWithKind:ChromiumJavaScriptDialogKindBeforeUnload
+                    originURL:origin
+                      message:NSStringFromCef(message_text)
+            defaultPromptText:@""
+                       reload:is_reload
+              decisionHandler:^(BOOL accepted, NSString *userInput) {
+                  retained->Continue(accepted, CefString());
+              }];
+    if (![host cefPresentJavaScriptDialog:request]) {
+        [request invalidate];
+        return false;
+    }
+    return true;
+}
+
+void BrowserClient::OnResetDialogState(CefRefPtr<CefBrowser> browser) {
+    CEF_REQUIRE_UI_THREAD();
+    if (IsCurrent(browser)) {
+        [host_ cefDidResetJavaScriptDialogs];
+    }
+}
+
 void BrowserClient::OnTitleChange(CefRefPtr<CefBrowser> browser,
                                   const CefString& title) {
     CEF_REQUIRE_UI_THREAD();

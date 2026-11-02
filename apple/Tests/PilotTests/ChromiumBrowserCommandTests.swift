@@ -34,8 +34,8 @@ struct ChromiumBrowserCommandTests {
         #expect(second.savePageRequestID == 0)
     }
 
-    @Test("WebKit ignores Chromium-only page commands")
-    func webKitDoesNotQueueChromiumCommands() {
+    @Test("WebKit queues Find in Page but ignores Chromium-only print and save")
+    func webKitQueuesFindButNotChromiumCommands() {
         let state = BrowserState(engine: .webKit)
 
         state.requestFind("pilot")
@@ -43,10 +43,90 @@ struct ChromiumBrowserCommandTests {
         state.requestSavePage()
         state.stopFinding()
 
-        #expect(state.findRequestID == 0)
+        #expect(state.findRequestID == 1)
+        #expect(state.stopFindingRequestID == 1)
+        #expect(!state.findCountsMatches)
         #expect(state.printRequestID == 0)
         #expect(state.savePageRequestID == 0)
-        #expect(state.stopFindingRequestID == 0)
+    }
+
+    @Test("The find bar starts a new search for a new query and steps through a repeated one")
+    func findBarSearchSemantics() {
+        let state = BrowserState(engine: .chromium)
+
+        state.showFindBar()
+        #expect(state.isFindBarVisible)
+        #expect(state.findFieldFocusRequestID == 1)
+        #expect(!state.canFindAgain)
+
+        state.findBarText = "pil"
+        state.findInPage()
+        #expect(state.findQuery == "pil")
+        #expect(!state.findNext)
+
+        state.findBarText = "pilot"
+        state.findInPage()
+        #expect(!state.findNext, "a changed query restarts from the top")
+
+        state.findInPage(forward: false)
+        #expect(state.findNext)
+        #expect(!state.findForward)
+        #expect(state.findRequestID == 3)
+
+        state.hideFindBar()
+        #expect(!state.isFindBarVisible)
+        #expect(state.findQuery.isEmpty)
+        #expect(state.stopFindingRequestID == 1)
+        #expect(state.findBarText == "pilot", "Done keeps the draft for ⌘G")
+
+        #expect(state.canFindAgain)
+        state.findAgain(forward: true)
+        #expect(state.isFindBarVisible)
+        #expect(state.findFieldFocusRequestID == 1, "⌘G does not steal focus")
+        #expect(state.findQuery == "pilot")
+        #expect(state.findRequestID == 4)
+
+        state.findBarText = ""
+        state.findInPage()
+        #expect(state.findQuery.isEmpty, "clearing the field clears the highlights")
+        #expect(state.stopFindingRequestID == 2)
+    }
+
+    @Test("Find requests reach the Chromium host with the bar's direction")
+    func findRequestsReachChromiumHost() {
+        let state = BrowserState(engine: .chromium)
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {})
+        let host = FakeChromiumBrowserHost()
+        coordinator.attach(
+            host, navigationRequestID: 0, inspectorToggleRequestID: 0,
+            findRequestID: 0, stopFindingRequestID: 0, printRequestID: 0, savePageRequestID: 0,
+            initialURL: nil, zoom: 1, isActive: true, isSelected: true
+        )
+        state.findBarText = "pilot"
+        state.findInPage()
+        update(coordinator, state)
+        state.findInPage(forward: false)
+        update(coordinator, state)
+        state.hideFindBar()
+        update(coordinator, state)
+
+        #expect(host.events.filter { if case .command = $0 { false } else { true } } == [
+            .find(text: "pilot", forward: true, matchCase: false, findNext: false),
+            .find(text: "pilot", forward: false, matchCase: false, findNext: true),
+            .stopFinding(clearSelection: true),
+        ])
+    }
+
+    private func update(_ coordinator: ChromiumBrowserView.Coordinator, _ state: BrowserState) {
+        coordinator.update(
+            navigationRequestID: state.navigationRequestID,
+            inspectorToggleRequestID: state.inspectorToggleRequestID,
+            findRequestID: state.findRequestID,
+            stopFindingRequestID: state.stopFindingRequestID,
+            printRequestID: state.printRequestID,
+            savePageRequestID: state.savePageRequestID,
+            zoom: 1, isActive: true, isSelected: true
+        )
     }
 
     @Test("Back and forward requests reach the Chromium host")
@@ -402,6 +482,149 @@ struct ChromiumCertificateWarningTests {
         ]))
         #expect(container.runtimeState == .navigationFailed)
         #expect(!state.isLoading)
+    }
+}
+
+@MainActor
+@Suite("Chromium load failures and page dialogs")
+struct ChromiumLoadFailureAndDialogTests {
+    private let url = URL(string: "http://127.0.0.1:4321/")!
+
+    private func makeAttached() -> (BrowserState, ChromiumBrowserView.Coordinator, ChromiumBrowserContainerView) {
+        let state = BrowserState(engine: .chromium)
+        let container = ChromiumBrowserContainerView()
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {})
+        coordinator.container = container
+        coordinator.attach(
+            FakeChromiumBrowserHost(), navigationRequestID: 0, inspectorToggleRequestID: 0,
+            findRequestID: 0, stopFindingRequestID: 0, printRequestID: 0, savePageRequestID: 0,
+            initialURL: url, zoom: 1, isActive: true, isSelected: true
+        )
+        return (state, coordinator, container)
+    }
+
+    private func netError(_ code: Int, url: URL) -> NSError {
+        NSError(domain: ChromiumKitError.errorDomain, code: ChromiumKitError.navigationFailed.rawValue, userInfo: [
+            "ChromiumNetError": NSNumber(value: code),
+            NSURLErrorFailingURLErrorKey: url,
+        ])
+    }
+
+    @Test("A network error leaves recovery to Chromium's own error page")
+    func engineErrorPageHidesNativeOverlay() {
+        let (state, coordinator, container) = makeAttached()
+        coordinator.handleNavigationFailure(netError(-102, url: url)) // ERR_CONNECTION_REFUSED
+
+        #expect(container.runtimeState == .ready, "one Reload button, not Reload plus Retry (BTN-1)")
+        #expect(!state.isLoading)
+        #expect(coordinator.lastDiagnostic?.event == .navigationFailed)
+    }
+
+    @Test("An aborted navigation shows no error at all")
+    func abortedNavigationIsIgnored() {
+        #expect(ChromiumLoadFailurePresentation(netError(-3, url: url)) == .ignored)
+        let (_, coordinator, container) = makeAttached()
+        coordinator.handleNavigationFailure(netError(-3, url: url))
+        #expect(container.runtimeState == .ready)
+    }
+
+    @Test("Failures with no engine page keep the native message and Retry")
+    func bridgeFailuresKeepNativeOverlay() {
+        let unavailable = NSError(domain: ChromiumKitError.errorDomain, code: ChromiumKitError.runtimeUnavailable.rawValue)
+        #expect(ChromiumLoadFailurePresentation(unavailable) == .nativeOverlay)
+        let missingNetCode = NSError(domain: ChromiumKitError.errorDomain, code: ChromiumKitError.navigationFailed.rawValue)
+        #expect(ChromiumLoadFailurePresentation(missingNetCode) == .nativeOverlay)
+        let foreign = NSError(domain: "Other", code: ChromiumKitError.navigationFailed.rawValue, userInfo: [
+            "ChromiumNetError": NSNumber(value: -102),
+        ])
+        #expect(ChromiumLoadFailurePresentation(foreign) == .nativeOverlay)
+
+        let (_, coordinator, container) = makeAttached()
+        coordinator.handleNavigationFailure(NSError(domain: ChromiumKitError.errorDomain, code: ChromiumKitError.engineNotRunning.rawValue, userInfo: [
+            NSURLErrorFailingURLErrorKey: url,
+        ]))
+        #expect(container.runtimeState == .navigationFailed)
+    }
+
+    @Test("A page dialog is presented once and answers the page exactly once")
+    func dialogAnswersOnce() throws {
+        let (state, coordinator, _) = makeAttached()
+        var answers: [(Bool, String?)] = []
+        coordinator.presentJavaScriptDialog(kind: .prompt(defaultText: "seed"), originURL: url, message: "Name?") {
+            answers.append(($0, $1))
+        }
+        let dialog = try #require(state.javaScriptDialog)
+        #expect(dialog.content.title == "127.0.0.1:4321 says")
+        #expect(dialog.content.promptDefaultText == "seed")
+
+        // A second dialog while one waits is cancelled, not stacked.
+        var secondAnswer: Bool?
+        coordinator.presentJavaScriptDialog(kind: .alert, originURL: url, message: "again") { accepted, _ in
+            secondAnswer = accepted
+        }
+        #expect(secondAnswer == false)
+        #expect(state.javaScriptDialog === dialog)
+
+        dialog.accept(input: "cockpit")
+        dialog.cancel()
+        #expect(answers.count == 1)
+        #expect(answers.first?.0 == true)
+        #expect(answers.first?.1 == "cockpit")
+        #expect(state.javaScriptDialog == nil, "an answered dialog clears its slot")
+    }
+
+    @Test("Closing the pane answers a waiting dialog with Cancel")
+    func closeCancelsDialog() {
+        let (state, coordinator, _) = makeAttached()
+        var answer: Bool?
+        coordinator.presentJavaScriptDialog(kind: .confirm, originURL: url, message: "Sure?") { accepted, _ in
+            answer = accepted
+        }
+        coordinator.close()
+        #expect(answer == false)
+        #expect(state.javaScriptDialog == nil)
+    }
+
+    @Test("Dialog spam is cancelled until the next page load")
+    func dialogSpamIsThrottled() {
+        let (state, coordinator, _) = makeAttached()
+        let start = Date(timeIntervalSinceReferenceDate: 1_000)
+        var cancelled = 0
+        for index in 0..<(BrowserJavaScriptDialogThrottle.limit + 2) {
+            coordinator.presentJavaScriptDialog(
+                kind: .alert, originURL: url, message: "\(index)",
+                now: start.addingTimeInterval(Double(index))
+            ) { accepted, _ in
+                if !accepted { cancelled += 1 }
+            }
+            state.javaScriptDialog?.accept()
+        }
+        #expect(cancelled == 2)
+        #expect(state.javaScriptDialog == nil)
+
+        // A suppressed page cannot trap the user: beforeunload proceeds.
+        var leaveAnswer: Bool?
+        coordinator.presentJavaScriptDialog(
+            kind: .beforeUnload(isReload: false), originURL: url, message: "",
+            now: start.addingTimeInterval(8)
+        ) { accepted, _ in
+            leaveAnswer = accepted
+        }
+        #expect(leaveAnswer == true)
+        #expect(state.javaScriptDialog == nil)
+
+        var throttle = BrowserJavaScriptDialogThrottle()
+        let admitted = (0..<BrowserJavaScriptDialogThrottle.limit).map {
+            throttle.admit(at: start.addingTimeInterval(Double($0)))
+        }
+        #expect(admitted.allSatisfy { $0 })
+        let overBudget = throttle.admit(at: start.addingTimeInterval(5))
+        let later = throttle.admit(at: start.addingTimeInterval(60))
+        #expect(!overBudget)
+        #expect(!later, "suppression lasts until reset")
+        throttle.reset()
+        let afterReset = throttle.admit(at: start.addingTimeInterval(61))
+        #expect(afterReset)
     }
 }
 

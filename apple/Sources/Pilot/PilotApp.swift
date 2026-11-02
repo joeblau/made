@@ -781,15 +781,10 @@ struct PilotApp: App {
                 .keyboardShortcut("0", modifiers: [.command, .control])
 
                 Button(store.isRunnersMode ? "Hide Runners" : "Show Runners") { store.isRunnersMode.toggle() }
-
-                Button("Focus Selected Pane") {
-                    guard let workspace = store.selectedWorkspace,
-                          let pane = workspace.selectedPane else { return }
-                    workspace.focusPane(pane)
-                }
-                .keyboardShortcut("f", modifiers: .command)
-                .disabled(store.selectedWorkspace?.selectedPane == nil)
             }
+            // Edit ▸ Find… / Find Next / Find Previous, and View ▸ Focus
+            // Selected Pane, which shares ⌘F with Find (see the type).
+            PilotBrowserFindCommands(store: store)
             CommandGroup(after: .toolbar) {
                 Button("Increase Text Size") {
                     uiZoom = UIZoomLadder.next(after: uiZoom)

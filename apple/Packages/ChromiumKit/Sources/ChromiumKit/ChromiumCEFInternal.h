@@ -37,6 +37,7 @@
 #include "include/cef_display_handler.h"
 #include "include/cef_download_handler.h"
 #include "include/cef_find_handler.h"
+#include "include/cef_jsdialog_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_permission_handler.h"
@@ -74,6 +75,7 @@ class BrowserClient final : public CefClient,
                             public CefDisplayHandler,
                             public CefDownloadHandler,
                             public CefFindHandler,
+                            public CefJSDialogHandler,
                             public CefLifeSpanHandler,
                             public CefLoadHandler,
                             public CefPermissionHandler,
@@ -92,6 +94,9 @@ class BrowserClient final : public CefClient,
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
     CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
+    CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override {
+        return this;
+    }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
     CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
@@ -195,6 +200,18 @@ class BrowserClient final : public CefClient,
                       const CefRect& selection_rect,
                       int active_match_ordinal,
                       bool final_update) override;
+    bool OnJSDialog(CefRefPtr<CefBrowser> browser,
+                    const CefString& origin_url,
+                    JSDialogType dialog_type,
+                    const CefString& message_text,
+                    const CefString& default_prompt_text,
+                    CefRefPtr<CefJSDialogCallback> callback,
+                    bool& suppress_message) override;
+    bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
+                              const CefString& message_text,
+                              bool is_reload,
+                              CefRefPtr<CefJSDialogCallback> callback) override;
+    void OnResetDialogState(CefRefPtr<CefBrowser> browser) override;
     bool GetAuthCredentials(CefRefPtr<CefBrowser> browser,
                             const CefString& origin_url,
                             bool is_proxy,

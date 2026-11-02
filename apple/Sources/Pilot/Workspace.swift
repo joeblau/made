@@ -56,7 +56,7 @@ enum BrowserEngine: String, Codable, CaseIterable, Sendable {
             true
         case .chromium:
             switch capability {
-            case .navigation, .addressFocus, .developerTools:
+            case .navigation, .addressFocus, .developerTools, .findInPage:
                 true
             case .appearanceOverride, .annotation, .websiteDataReset:
                 false
@@ -72,6 +72,7 @@ enum BrowserCapability: Hashable, Sendable {
     case developerTools
     case annotation
     case websiteDataReset
+    case findInPage
 }
 
 enum BrowserPaneCommand: Sendable {
@@ -488,7 +489,9 @@ final class BrowserState {
     /// stayed mounted never saw ⌘L, Lasso, loading, or history updates.
     /// The values live in an `@Observable` object instead; the forwarding
     /// properties below are computed, so the persisted schema is unchanged.
-    @Transient private var runtime = BrowserRuntimeState()
+    /// Readable (never replaceable) outside this file so feature extensions,
+    /// such as Find in Page, can forward to it.
+    @Transient private(set) var runtime = BrowserRuntimeState()
     var pendingURL: URL? { get { runtime.pendingURL } set { runtime.pendingURL = newValue } }
     var canGoBack: Bool { get { runtime.canGoBack } set { runtime.canGoBack = newValue } }
     var canGoForward: Bool { get { runtime.canGoForward } set { runtime.canGoForward = newValue } }
@@ -511,15 +514,8 @@ final class BrowserState {
     var websiteDataResetRequestID: Int { get { runtime.websiteDataResetRequestID } set { runtime.websiteDataResetRequestID = newValue } }
     /// Recreates an unavailable Chromium surface without changing its engine.
     var runtimeRetryRequestID: Int { get { runtime.runtimeRetryRequestID } set { runtime.runtimeRetryRequestID = newValue } }
-    /// Chromium-only page command state. Counters make every action edge-triggered.
-    var findQuery: String { get { runtime.findQuery } set { runtime.findQuery = newValue } }
-    var findForward: Bool { get { runtime.findForward } set { runtime.findForward = newValue } }
-    var findMatchCase: Bool { get { runtime.findMatchCase } set { runtime.findMatchCase = newValue } }
-    var findNext: Bool { get { runtime.findNext } set { runtime.findNext = newValue } }
-    var findRequestID: Int { get { runtime.findRequestID } set { runtime.findRequestID = newValue } }
-    var stopFindingRequestID: Int { get { runtime.stopFindingRequestID } set { runtime.stopFindingRequestID = newValue } }
-    var findMatchCount: Int { get { runtime.findMatchCount } set { runtime.findMatchCount = newValue } }
-    var activeFindMatchOrdinal: Int { get { runtime.activeFindMatchOrdinal } set { runtime.activeFindMatchOrdinal = newValue } }
+    /// Chromium-only page command state. Counters make every action
+    /// edge-triggered. Find in Page lives in `BrowserFindInPage.swift`.
     var printRequestID: Int { get { runtime.printRequestID } set { runtime.printRequestID = newValue } }
     var savePageRequestID: Int { get { runtime.savePageRequestID } set { runtime.savePageRequestID = newValue } }
     var downloadStatusText: String { get { runtime.downloadStatusText } set { runtime.downloadStatusText = newValue } }
@@ -642,28 +638,6 @@ final class BrowserState {
         isLoading = !urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         estimatedProgress = 0
         runtimeRetryRequestID += 1
-    }
-
-    func requestFind(
-        _ query: String,
-        forward: Bool = true,
-        matchCase: Bool = false,
-        findNext: Bool = false
-    ) {
-        guard engine == .chromium, !query.isEmpty else { return }
-        findQuery = query
-        findForward = forward
-        findMatchCase = matchCase
-        self.findNext = findNext
-        findRequestID += 1
-    }
-
-    func stopFinding() {
-        guard engine == .chromium else { return }
-        findQuery = ""
-        findMatchCount = 0
-        activeFindMatchOrdinal = 0
-        stopFindingRequestID += 1
     }
 
     func requestPrint() {

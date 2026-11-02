@@ -163,6 +163,11 @@
                               forURL:(NSURL *)URL {}
 - (void)cefDidRejectClientCertificateForHost:(NSString *)host
                                         port:(NSInteger)port {}
+- (BOOL)cefHandlesJavaScriptDialogs { return NO; }
+- (BOOL)cefPresentJavaScriptDialog:(ChromiumJavaScriptDialogRequest *)request {
+    return NO;
+}
+- (void)cefDidResetJavaScriptDialogs {}
 - (void)cefWillClose {
     self.lifecycleState = ChromiumBrowserLifecycleStateClosing;
 }
