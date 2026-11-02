@@ -26,6 +26,10 @@ struct AgenticBucketTotal: Sendable, Equatable {
 extension AgenticUseSnapshot {
     /// `providerSeries` collapsed to one total per bucket, oldest first.
     var bucketTotals: [AgenticBucketTotal] {
+        cachedBucketTotals ?? Self.makeBucketTotals(providerSeries)
+    }
+
+    static func makeBucketTotals(_ providerSeries: [AgenticProviderPoint]) -> [AgenticBucketTotal] {
         var order: [Date] = []
         var sums: [Date: (Double, Int, Double, Int, Int)] = [:]
         for point in providerSeries {
@@ -47,8 +51,17 @@ extension AgenticUseSnapshot {
         }
     }
 
-    /// One model's token usage per bucket, oldest first — the Top Models
-    /// trend column.
+    /// Token usage per bucket for every model, oldest first. Building all
+    /// trends together keeps the Top Models table from rescanning the complete
+    /// daily series once per row.
+    var tokenTrends: [String: [Double]] {
+        var trends: [String: [Double]] = [:]
+        for point in dailySeries {
+            trends[point.model, default: []].append(Double(point.tokens))
+        }
+        return trends
+    }
+
     func tokenTrend(for model: String) -> [Double] {
         dailySeries.filter { $0.model == model }.map { Double($0.tokens) }
     }

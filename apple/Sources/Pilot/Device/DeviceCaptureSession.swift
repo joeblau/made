@@ -1327,11 +1327,13 @@ final class CaptureCoordinator: NSObject,
 
     private func serveScreenshot(_ sampleBuffer: CMSampleBuffer) {
         lock.lock()
+        guard !pending.isEmpty else {
+            lock.unlock()
+            return
+        }
         let continuations = Array(pending.values)
         pending.removeAll()
         lock.unlock()
-
-        guard !continuations.isEmpty else { return }
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             continuations.forEach {
                 $0.resume(throwing: CaptureFrameError.timedOut)

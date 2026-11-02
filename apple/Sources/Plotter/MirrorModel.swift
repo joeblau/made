@@ -91,6 +91,9 @@ final class MirrorModel {
         }
         receiver.onFrameCountChanged = { [weak self] count in
             Task { @MainActor in
+                // The count drives only connection/searching indicators. Keep the
+                // first frame immediate, then avoid invalidating them at video rate.
+                guard count == 0 || count == 1 || count.isMultiple(of: 10) else { return }
                 self?.frameCount = count
             }
         }
@@ -315,11 +318,13 @@ final class MirrorModel {
                 self.acknowledgeAnnotation(seq)
                 return
             case .configuration(let config):
-                self.videoSize = CGSize(width: config.width, height: config.height)
+                let size = CGSize(width: config.width, height: config.height)
+                if self.videoSize != size { self.videoSize = size }
             case .sample(let sample):
                 self.trackForFeedback(sample.frameID)
             case .appearance(let isDark):
-                self.pilotColorScheme = isDark ? .dark : .light
+                let scheme: ColorScheme = isDark ? .dark : .light
+                if self.pilotColorScheme != scheme { self.pilotColorScheme = scheme }
                 return
             case .annotation(_, let message):
                 // A command from Pilot (undo/clear) — apply to the local canvas.

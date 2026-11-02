@@ -213,7 +213,7 @@ private final class CountingGroupDefaults: UserDefaults, @unchecked Sendable {
 @Suite("Remote desktop group layout", .serialized)
 @MainActor
 struct RemoteDesktopGroupLayoutTests {
-    @Test("Two machines leave the bottom row black at desktop and compact window sizes",
+    @Test("Two machines leave visible blank cards at desktop and compact window sizes",
            arguments: [CGSize(width: 1000, height: 800), CGSize(width: 640, height: 480)])
     func twoMachinesLeaveBlankSlots(size: CGSize) async throws {
         let suite = "RemoteDesktopGrid-\(UUID().uuidString)"
@@ -250,8 +250,8 @@ struct RemoteDesktopGroupLayoutTests {
         view.cacheDisplay(in: view.bounds, to: bitmap)
         let left = try #require(bitmap.colorAt(x: bitmap.pixelsWide / 4, y: bitmap.pixelsHigh * 3 / 4)?.usingColorSpace(.deviceRGB))
         let right = try #require(bitmap.colorAt(x: bitmap.pixelsWide * 3 / 4, y: bitmap.pixelsHigh * 3 / 4)?.usingColorSpace(.deviceRGB))
-        #expect(left.redComponent < 0.02 && left.greenComponent < 0.02 && left.blueComponent < 0.02)
-        #expect(right.redComponent < 0.02 && right.greenComponent < 0.02 && right.blueComponent < 0.02)
+        #expect(left.redComponent > 0.02 && left.greenComponent > 0.02 && left.blueComponent > 0.02)
+        #expect(right.redComponent > 0.02 && right.greenComponent > 0.02 && right.blueComponent > 0.02)
         if let png = bitmap.representation(using: .png, properties: [:]) {
             try png.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("remote-desktop-grid-\(Int(size.width)).png"))
         }

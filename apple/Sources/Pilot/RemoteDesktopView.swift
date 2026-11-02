@@ -7,6 +7,8 @@ struct RemoteDesktopView: View {
     var sessions: RemoteDesktopSessionManager = .shared
     @State private var groups: RemoteDesktopGroups
     @State private var pickerGroupID: UUID?
+    /// The empty grid slot that opened the picker, so the new computer lands there.
+    @State private var pickerSlot: Int?
     @State private var discovery = RemoteScreenDiscovery()
     @State private var renamingGroupID: UUID?
     @State private var groupName = ""
@@ -25,7 +27,7 @@ struct RemoteDesktopView: View {
             groupBar
             grid
         }
-        .background(.black)
+        .background(Color(nsColor: .windowBackgroundColor))
         .overlay {
             ZStack {
                 if let groupID = pickerGroupID {
@@ -74,7 +76,12 @@ struct RemoteDesktopView: View {
             Text("“\(connection.displayTitle)” will be removed from your saved connections.")
         }
         .onChange(of: pickerGroupID) {
-            if pickerGroupID != nil { discovery.start() } else { discovery.stop() }
+            if pickerGroupID != nil {
+                discovery.start()
+            } else {
+                pickerSlot = nil
+                discovery.stop()
+            }
         }
         .onChange(of: store.remoteConnections.map(\.id), initial: true) {
             groups.reconcile(connectionIDs: store.remoteConnections.map(\.id))
@@ -102,7 +109,7 @@ struct RemoteDesktopView: View {
                 guard let group = groups.groups.first(where: { $0.id == groupID }),
                       !group.isFull else { pickerGroupID = nil; return }
                 let connection = store.addRemoteConnection(host: host, port: port, nickname: nickname)
-                groups.place(connection.id, in: groupID)
+                groups.place(connection.id, in: groupID, slot: pickerSlot)
                 pickerGroupID = nil
             },
             onCancel: { pickerGroupID = nil }
@@ -180,24 +187,30 @@ struct RemoteDesktopView: View {
         .animation(LiquidGlassMetrics.stateChange, value: groups.selectedGroupID)
     }
 
+    /// Outer margin and gutter of the 2×2 grid. Each machine is its own card.
+    private static let gridInset: CGFloat = 16
+    private static let gridGap: CGFloat = 12
+    static let cardShape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+
     private var grid: some View {
         GeometryReader { geometry in
             if let group = groups.selectedGroup {
-                let width = max(0, (geometry.size.width - 1) / 2)
-                let height = max(0, (geometry.size.height - 1) / 2)
-                VStack(spacing: 1) {
+                let inset = Self.gridInset
+                let gap = Self.gridGap
+                let width = max(0, (geometry.size.width - inset * 2 - gap) / 2)
+                let height = max(0, (geometry.size.height - inset * 2 - gap) / 2)
+                VStack(spacing: gap) {
                     ForEach(0..<2) { row in
-                        HStack(spacing: 1) {
+                        HStack(spacing: gap) {
                             ForEach(0..<2) { column in
                                 let slot = row * 2 + column
                                 cell(group: group, slot: slot)
                                     .frame(width: width, height: height)
-                                    .clipped()
                             }
                         }
                     }
                 }
-                .background(Color(nsColor: .separatorColor))
+                .padding(inset)
             }
         }
     }
@@ -265,23 +278,28 @@ struct RemoteDesktopView: View {
                 )
                 .id(id)
             }
-        } else {
-            // A quiet placeholder so an empty slot reads as a drop target
-            // rather than a dead black tile (MOT-6).
-            ZStack {
-                Color.black
-                // Secondary, not tertiary: tertiary label on pure black is
-                // about 2:1 and drops below the TYPE-3 contrast floor.
-                Label("Empty Slot", systemImage: "display")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .environment(\.colorScheme, .dark)
+            // Matches the Usage cards: a tinted fill, no resting stroke.
+            .background(.quaternary.opacity(0.4), in: Self.cardShape)
+            .clipShape(Self.cardShape)
+            .overlay {
+                // Selection is a state signal: an accent ring, not a fill.
+                if store.selectedRemoteConnectionID == id {
+                    Self.cardShape.strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 2)
+                }
             }
+        } else {
+            Button {
+                pickerSlot = slot
+                pickerGroupID = group.id
+            } label: {
+                EmptyComputerSlot(shape: Self.cardShape)
+            }
+            .buttonStyle(.plain)
             .dropDestination(for: String.self) { items, _ in
                 return moveDroppedMachine(items, to: group.id, slot: slot)
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Empty computer slot \(slot + 1)")
+            .help("Add a computer to this slot")
+            .accessibilityLabel("Add a computer to slot \(slot + 1)")
         }
     }
 
@@ -328,6 +346,74 @@ private struct RemoteConnectionPane: View {
     @State private var didTryAutoConnect = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            screen
+                // The remote screen runs edge to edge across the card; the
+                // card's own clip shape rounds it.
+                .clipShape(Rectangle())
+            footer
+        }
+        .onAppear {
+            shareClipboard = VNCPreferences.isClipboardRedirectionEnabled(id: connection.id)
+            restoreSavedPasswordAndConnect()
+        }
+        // The connection is only *recorded* once the server has accepted it, so
+        // a tab that never authenticated does not claim a connection time.
+        .onChange(of: session.status) { _, status in
+            guard status == .connected else { return }
+            connection.lastConnectedAt = Date()
+            _ = connection.modelContext?.saveReporting(operation: "Recording remote desktop connection")
+        }
+        .onChange(of: session.credentialRejected) { _, rejected in
+            if rejected { password = "" }
+        }
+        .onChange(of: shareClipboard) { _, enabled in
+            VNCPreferences.setClipboardRedirectionEnabled(enabled, id: connection.id)
+        }
+    }
+
+    /// RoyalVNCKit fixes clipboard redirection when the connection opens, so a
+    /// change made while live only applies after reconnecting.
+    private var clipboardNeedsReconnect: Bool {
+        guard session.isLive, let live = session.activeConnection else { return false }
+        return live.settings.isClipboardRedirectionEnabled != shareClipboard
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            Toggle("Share clipboard", isOn: $shareClipboard)
+                .toggleStyle(.checkbox)
+                .help("Off by default. Enabling this lets the remote VNC server read and replace your Mac clipboard.")
+            Spacer(minLength: 8)
+            if clipboardNeedsReconnect {
+                Button("Reconnect", action: reconnect)
+                    .compatGlassButtonStyle()
+                    .help("Reconnect to apply the clipboard setting")
+            } else {
+                statusLabel
+            }
+        }
+        .font(.caption)
+        .controlSize(.small)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var statusLabel: some View {
+        let (text, color): (String, Color) = switch session.status {
+        case .connected: ("Connected", .green)
+        case .connecting: ("Connecting…", .orange)
+        case .failed: ("Not connected", .red)
+        case .idle, .disconnected: ("Not connected", .secondary)
+        }
+        return HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(text).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var screen: some View {
         ZStack {
             switch session.status {
             case .idle, .disconnected:
@@ -348,20 +434,16 @@ private struct RemoteConnectionPane: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            shareClipboard = VNCPreferences.isClipboardRedirectionEnabled(id: connection.id)
-            restoreSavedPasswordAndConnect()
-        }
-        // The connection is only *recorded* once the server has accepted it, so
-        // a tab that never authenticated does not claim a connection time.
-        .onChange(of: session.status) { _, status in
-            guard status == .connected else { return }
-            connection.lastConnectedAt = Date()
-            _ = connection.modelContext?.saveReporting(operation: "Recording remote desktop connection")
-        }
-        .onChange(of: session.credentialRejected) { _, rejected in
-            if rejected { password = "" }
-        }
+    }
+
+    /// Drop the live socket and reconnect with the current clipboard choice.
+    /// Without a saved password the connect form comes back for re-entry.
+    private func reconnect() {
+        session.disconnect()
+        guard let saved = VNCKeychain.load(id: connection.id), !saved.isEmpty else { return }
+        password = saved
+        savePassword = true
+        connect()
     }
 
     /// Auto-connect when a password was saved. A session that is already live
@@ -416,7 +498,7 @@ private struct RemoteConnectionPane: View {
                     .frame(minHeight: geometry.size.height)
             }
         }
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
     }
 
     /// Width of the connect form's single column.
@@ -447,30 +529,18 @@ private struct RemoteConnectionPane: View {
                 }
             }
 
-            VStack(alignment: .leading, spacing: compact ? LiquidGlassMetrics.Spacing.medium : LiquidGlassMetrics.Spacing.large) {
-                fieldGroup("Username", detail: "Optional") {
-                    TextField("Username", text: Bindable(connection).username, prompt: Text("Enter username"))
-                        .liquidGlassField()
-                }
-                fieldGroup("Password") {
-                    SecureField("Password", text: $password, prompt: Text("Enter password"))
-                        .onSubmit(connect)
-                        .liquidGlassField()
-                }
-                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    Toggle("Save password & auto-connect", isOn: $savePassword)
-                        .toggleStyle(.checkbox)
-                        .controlSize(.small)
-                    VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                        Toggle("Share clipboard with remote Mac", isOn: $shareClipboard)
-                            .toggleStyle(.checkbox)
-                            .controlSize(.small)
-                        Text("Off by default. Enabling this lets the remote VNC server read and replace your Mac clipboard.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
+            VStack(spacing: 12) {
+                TextField("Username (optional)", text: Bindable(connection).username)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 280)
+                SecureField("Password", text: $password)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 280)
+                    .onSubmit(connect)
+                Toggle("Save password & auto-connect", isOn: $savePassword)
+                    .toggleStyle(.checkbox)
+                    .controlSize(.small)
+                    .frame(maxWidth: 280, alignment: .leading)
 
                 if let error {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -758,5 +828,29 @@ private struct RemoteComputerPicker: View {
             return (String(input[..<colon]), port)
         }
         return (input, defaultPort)
+    }
+}
+
+/// A blank grid cell. Clicking it opens the computer picker for that slot.
+private struct EmptyComputerSlot: View {
+    let shape: RoundedRectangle
+    @State private var isHovering = false
+
+    var body: some View {
+        shape
+            .fill(.quaternary.opacity(isHovering ? 0.35 : 0.2))
+            .overlay {
+                VStack(spacing: 8) {
+                    Image(systemName: "display")
+                        .scaledFont(size: 28, weight: .light)
+                    Label("Add Computer", systemImage: "plus")
+                        .font(.callout)
+                        .opacity(isHovering ? 1 : 0)
+                }
+                .foregroundStyle(isHovering ? AnyShapeStyle(.secondary) : AnyShapeStyle(.quaternary))
+            }
+            .contentShape(shape)
+            .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
     }
 }

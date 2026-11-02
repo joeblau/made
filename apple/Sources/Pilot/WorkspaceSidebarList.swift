@@ -13,6 +13,7 @@ struct WorkspaceSidebarList<WorkspaceRow: View>: View {
 
     var body: some View {
         let workspaces = store.workspaces
+        let workspacesByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
         List(selection: $selection) {
             let pinned = workspaces.filter(\.isPinned)
 
@@ -49,7 +50,7 @@ struct WorkspaceSidebarList<WorkspaceRow: View>: View {
                 ForEach(rows) { row in
                     switch row {
                     case .workspace(let id, let groupID):
-                        if let workspace = workspaces.first(where: { $0.id == id }) {
+                        if let workspace = workspacesByID[id] {
                             workspaceRow(workspace)
                                 .padding(.leading, groupID == nil ? 0 : 16)
                                 .onDrop(of: [.pilotWorkspace], isTargeted: nil) { providers in

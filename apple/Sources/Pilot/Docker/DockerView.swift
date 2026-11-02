@@ -58,7 +58,8 @@ struct DockerView: View {
 
             Toggle("Show stopped", isOn: $store.showsStopped)
                 .toggleStyle(.switch)
-                .controlSize(.mini)
+                .controlSize(.small)
+                .scaledFont(size: 13)
 
             // The spinner for a manual or background refresh runs inside the
             // control itself rather than beside the engine status (MOT-5).
@@ -158,6 +159,7 @@ struct DockerView: View {
         case .unavailable(let reason):
             unavailableState(reason: reason)
         case .connected:
+            let visibleContainers = store.visibleContainers
             if store.containers.isEmpty {
                 ContentUnavailableView {
                     Label("No Containers", systemImage: "shippingbox")
@@ -166,7 +168,7 @@ struct DockerView: View {
                 }
                 .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if store.visibleContainers.isEmpty {
+            } else if visibleContainers.isEmpty {
                 ContentUnavailableView {
                     Label("Nothing Matches", systemImage: "line.3.horizontal.decrease.circle")
                 } description: {
@@ -177,44 +179,52 @@ struct DockerView: View {
                 .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                containerList
+                containerList(visibleContainers)
             }
         }
     }
 
-    private var containerList: some View {
-        List(selection: $store.selectedContainerID) {
-            ForEach(store.groupedContainers) { group in
-                Section {
-                    ForEach(group.containers) { container in
-                        DockerContainerRow(
-                            container: container,
-                            isBusy: store.busyContainerIDs.contains(container.id),
-                            perform: { action in
-                                if action == .remove {
-                                    store.requestRemoval(of: container)
-                                } else {
-                                    store.perform(action, on: container)
-                                }
+    /// Each container is its own card; sections are separated by whitespace
+    /// and a plain title, not a rule (LAY-2).
+    private func containerList(_ visibleContainers: [DockerContainerSummary]) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 24) {
+                ForEach(store.groupedContainers(from: visibleContainers)) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 6) {
+                            if group.isCompose {
+                                Image(systemName: "square.stack.3d.up")
+                                    .scaledFont(size: 10)
                             }
-                        )
-                        .tag(container.id)
-                        // Whitespace, not a rule under every row, separates containers (LAY-2).
-                        .listRowSeparator(.hidden)
-                    }
-                } header: {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                        if group.isCompose {
-                            Image(systemName: "square.stack.3d.up")
-                                .font(.caption)
-                                .accessibilityHidden(true)
+                            Text(group.title)
                         }
-                        Text(group.title)
+                        .scaledFont(size: 12, weight: .semibold)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 4)
+                        .accessibilityAddTraits(.isHeader)
+
+                        ForEach(group.containers) { container in
+                            DockerContainerRow(
+                                container: container,
+                                isBusy: store.busyContainerIDs.contains(container.id),
+                                isSelected: store.selectedContainerID == container.id,
+                                perform: { action in
+                                    if action == .remove {
+                                        store.requestRemoval(of: container)
+                                    } else {
+                                        store.perform(action, on: container)
+                                    }
+                                }
+                            )
+                            .onTapGesture { store.selectedContainerID = container.id }
+                        }
                     }
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
         }
-        .listStyle(.inset)
     }
 
     private func unavailableState(reason: String) -> some View {
@@ -265,6 +275,7 @@ struct DockerView: View {
 private struct DockerContainerRow: View {
     let container: DockerContainerSummary
     let isBusy: Bool
+    let isSelected: Bool
     let perform: (DockerContainerAction) -> Void
 
     @State private var isHovering = false
@@ -278,6 +289,8 @@ private struct DockerContainerRow: View {
     private var revealsActions: Bool {
         isHovering || focusedAction != nil || voiceOverEnabled
     }
+
+    private static let cardShape = RoundedRectangle(cornerRadius: 10, style: .continuous)
 
     var body: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.small) {
@@ -333,8 +346,17 @@ private struct DockerContainerRow: View {
                 }
             }
         }
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-        .contentShape(Rectangle())
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        // Matches the Usage cards: a tinted fill, no resting stroke.
+        .background(.quaternary.opacity(isHovering ? 0.6 : 0.4), in: Self.cardShape)
+        .overlay {
+            // Selection is a state signal: an accent ring, not a fill (COL-4).
+            if isSelected {
+                Self.cardShape.strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 2)
+            }
+        }
+        .contentShape(Self.cardShape)
         .onHover { isHovering = $0 }
         .animation(LiquidGlassMetrics.stateChange, value: isHovering)
         .animation(LiquidGlassMetrics.stateChange, value: focusedAction)
@@ -342,6 +364,7 @@ private struct DockerContainerRow: View {
         // The same actions from the row itself in the VoiceOver actions
         // menu, so they do not depend on finding the trailing buttons.
         .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityActions {
             if !isBusy {
                 ForEach(availableActions, id: \.self) { action in

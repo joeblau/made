@@ -279,8 +279,8 @@ final class DockerStore {
         listTask = nil
         switch result {
         case .success(let fetched):
-            containers = fetched
-            actionError = nil
+            if containers != fetched { containers = fetched }
+            if actionError != nil { actionError = nil }
             if let selectedContainerID, !fetched.contains(where: { $0.id == selectedContainerID }) {
                 self.selectedContainerID = nil
             }
@@ -421,6 +421,10 @@ final class DockerStore {
     }
 
     var groupedContainers: [ContainerGroup] {
+        groupedContainers(from: visibleContainers)
+    }
+
+    func groupedContainers(from visibleContainers: [DockerContainerSummary]) -> [ContainerGroup] {
         let grouped = Dictionary(grouping: visibleContainers) { $0.composeProject }
         var groups = grouped
             .compactMap { project, items -> ContainerGroup? in

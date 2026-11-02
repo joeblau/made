@@ -6,19 +6,23 @@ struct FileItem: Identifiable, Hashable {
     let path: String          // absolute
     let relativePath: String  // path relative to root, shown in the UI
     let name: String          // basename
+    let directoryPath: String
     /// Case-folded forms, cached once at index time. Filtering runs over the
     /// whole index on every keystroke, so re-lowercasing up to 200k candidates
     /// per pass dominated finder latency; these are pure functions of the
     /// fields above and cost one extra copy of each string.
     let foldedRelativePath: String
     let foldedName: String
+    let foldedNameStem: String
 
     init(path: String, relativePath: String, name: String) {
         self.path = path
         self.relativePath = relativePath
         self.name = name
+        self.directoryPath = (relativePath as NSString).deletingLastPathComponent
         self.foldedRelativePath = relativePath.lowercased()
         self.foldedName = name.lowercased()
+        self.foldedNameStem = (foldedName as NSString).deletingPathExtension
     }
 }
 
@@ -278,12 +282,14 @@ final class FileFinder {
             term: term,
             candidate: item.name,
             foldedCandidate: item.foldedName,
+            foldedCandidateStem: item.foldedNameStem,
             isBasename: true
         )
         let pathScore = smartScore(
             term: term,
             candidate: item.relativePath,
             foldedCandidate: item.foldedRelativePath,
+            foldedCandidateStem: nil,
             isBasename: false
         )
         switch (nameScore, pathScore) {
@@ -298,6 +304,7 @@ final class FileFinder {
         term: SearchTerm,
         candidate: String,
         foldedCandidate: String,
+        foldedCandidateStem: String?,
         isBasename: Bool
     ) -> Int? {
         guard let fuzzyScore = FuzzyMatcher.score(query: term.fuzzy, candidate: candidate) else {
@@ -309,7 +316,7 @@ final class FileFinder {
         if isBasename {
             if foldedCandidate == term.folded {
                 tierBonus = basenameExactBonus
-            } else if (foldedCandidate as NSString).deletingPathExtension == term.folded {
+            } else if foldedCandidateStem == term.folded {
                 tierBonus = basenameStemExactBonus
             } else if foldedCandidate.hasPrefix(term.folded) {
                 tierBonus = basenamePrefixBonus

@@ -64,7 +64,7 @@ struct GitRun: Identifiable {
     }
 }
 
-struct FileSystemEntry: Identifiable {
+struct FileSystemEntry: Identifiable, Equatable {
     let id: String
     let name: String
     let path: String

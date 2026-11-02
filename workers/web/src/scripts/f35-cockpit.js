@@ -35,6 +35,7 @@ export function initCockpit(root = document) {
   const rand = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const lerp = (a, b, t) => a + (b - a) * t;
+  const integerFormat = new Intl.NumberFormat('en-US');
   const D2R = Math.PI / 180;
 
   /* ============================== renderer ============================== */
@@ -808,7 +809,7 @@ export function initCockpit(root = document) {
     g.textAlign = 'center';
     g.fillStyle = GRN2;
     g.font = 'bold 24px Consolas,monospace';
-    g.fillText('FUEL  ' + Math.round(S.fuel).toLocaleString('en-US').replace(/,/g, ' ') + ' LB', cx, 505);
+    g.fillText('FUEL  ' + integerFormat.format(Math.round(S.fuel)).replace(/,/g, ' ') + ' LB', cx, 505);
     g.font = '13px Consolas,monospace';
     g.fillStyle = GRN;
     const f1 = Math.round(S.fuel * 0.248), f2 = Math.round(S.fuel * 0.244);
@@ -1184,7 +1185,7 @@ export function initCockpit(root = document) {
     hg.font = '600 15px Consolas,monospace';
     hg.strokeRect(ax, by, 96, 26);
     hg.textAlign = 'right';
-    hg.fillText(Math.round(S.alt).toLocaleString(), ax + 84, by + 19);
+    hg.fillText(integerFormat.format(Math.round(S.alt)), ax + 84, by + 19);
     hg.textAlign = 'left';
     hg.font = '12px Consolas,monospace';
     hg.fillText('VV ' + (S.vs >= 0 ? '+' : '') + Math.round(S.vs / 10) * 10, ax, by + 46);
@@ -1225,10 +1226,23 @@ export function initCockpit(root = document) {
   const interactionRoot = root.closest('[data-hero]') ?? root;
   const coarsePointer = matchMedia('(pointer: coarse)').matches;
   if (!coarsePointer) {
+    let bounds = root.getBoundingClientRect();
+    let boundsQueued = false;
+    const updateBounds = () => {
+      bounds = root.getBoundingClientRect();
+      boundsQueued = false;
+    };
+    const queueBounds = () => {
+      if (boundsQueued) return;
+      boundsQueued = true;
+      requestAnimationFrame(updateBounds);
+    };
+    interactionRoot.addEventListener('mouseenter', updateBounds, { passive: true });
+    addEventListener('resize', queueBounds, { passive: true });
+    addEventListener('scroll', queueBounds, { passive: true });
     // Desktop: absolute mouse position steers the view. Skipped on touch
     // devices so iOS's synthetic mousemove after a tap can't snap the camera.
     interactionRoot.addEventListener('mousemove', (e) => {
-      const bounds = root.getBoundingClientRect();
       tgtX = clamp(((e.clientX - bounds.left) / bounds.width - 0.5) * 2, -1, 1);
       tgtY = clamp(((e.clientY - bounds.top) / bounds.height - 0.5) * 2, -1, 1);
     });

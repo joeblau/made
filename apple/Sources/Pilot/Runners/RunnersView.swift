@@ -93,13 +93,16 @@ struct RunnersView: View {
     }
 
     private var summaryBar: some View {
-        ViewThatFits(in: .horizontal) {
+        let counts = store.snapshot.runners.reduce(into: [GitHubRunner.State: Int]()) { counts, runner in
+            counts[runner.state, default: 0] += 1
+        }
+        return ViewThatFits(in: .horizontal) {
             HStack(spacing: 16) {
-                summaryCounts.fixedSize()
+                summaryCounts(counts).fixedSize()
                 searchControls
             }
             VStack(alignment: .leading, spacing: 12) {
-                summaryCounts
+                summaryCounts(counts)
                 searchControls
             }
         }
@@ -107,7 +110,7 @@ struct RunnersView: View {
         .padding(.vertical, 12)
     }
 
-    private var summaryCounts: some View {
+    private func summaryCounts(_ counts: [GitHubRunner.State: Int]) -> some View {
         HStack(spacing: 16) {
             // While filtering, the headline says how many cards match, so it
             // never reads "12 runners" over a grid of four.
@@ -117,10 +120,9 @@ struct RunnersView: View {
                 .font(.headline)
                 .contentTransition(.numericText())
             ForEach(GitHubRunner.State.allCases, id: \.rawValue) { state in
-                let count = store.snapshot.runners.filter { $0.state == state }.count
                 HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     Circle().fill(state.color).frame(width: 8, height: 8)
-                    Text("\(count) \(state.rawValue.lowercased())")
+                    Text("\(counts[state, default: 0]) \(state.rawValue.lowercased())")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -191,6 +193,7 @@ struct RunnersView: View {
 
     @ViewBuilder
     private var content: some View {
+        let runners = store.visibleRunners
         if store.snapshot.updatedAt == nil && store.isRefreshing {
             ProgressView("Loading runners…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.snapshot.runners.isEmpty {
@@ -203,13 +206,13 @@ struct RunnersView: View {
             )
             .legibleSecondaryHierarchy()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if store.visibleRunners.isEmpty {
+        } else if runners.isEmpty {
             ContentUnavailableView.search(text: store.searchText)
                 .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if layout == .fleet {
             RunnerFleetView(
-                runners: store.visibleRunners,
+                runners: runners,
                 scopeName: store.selectedScope?.name ?? "",
                 name: store.displayName(for:),
                 hardware: store.hardware(for:),
@@ -224,7 +227,7 @@ struct RunnersView: View {
                     columns: [GridItem(.adaptive(minimum: layout.minimumWidth), spacing: layout.spacing)],
                     spacing: layout.spacing
                 ) {
-                    ForEach(store.visibleRunners) { runner in
+                    ForEach(runners) { runner in
                         let name = store.displayName(for: runner)
                         let hardware = store.hardware(for: runner)
                         switch layout {

@@ -6,6 +6,7 @@ import SwiftUI
 /// Xcode's Default Dark/Light presets. CodeEditSourceEditor wants an
 /// `EditorTheme` of raw `NSColor` values (not SwiftUI `Color`), so everything
 /// here is built from sRGB literals and resolved per `ColorScheme`.
+@MainActor
 enum PilotEditorTheme {
     /// Picks the dark or light variant for the current appearance.
     static func theme(for colorScheme: ColorScheme) -> EditorTheme {
@@ -14,7 +15,7 @@ enum PilotEditorTheme {
 
     // MARK: - Dark (Xcode Default Dark Reminiscent)
 
-    private static var dark: EditorTheme {
+    private static let dark: EditorTheme =
         EditorTheme(
             text: .init(color: srgb(0.86, 0.86, 0.86)),                 // near-white foreground
             insertionPoint: srgb(0.86, 0.86, 0.86),
@@ -33,11 +34,10 @@ enum PilotEditorTheme {
             characters: .init(color: srgb(0.60, 0.72, 1.0)),
             comments: .init(color: srgb(0.46, 0.55, 0.46), italic: true) // muted green comments
         )
-    }
 
     // MARK: - Light (Xcode Default Light Reminiscent)
 
-    private static var light: EditorTheme {
+    private static let light: EditorTheme =
         EditorTheme(
             text: .init(color: srgb(0.0, 0.0, 0.0)),                   // black foreground
             insertionPoint: srgb(0.0, 0.0, 0.0),
@@ -56,7 +56,6 @@ enum PilotEditorTheme {
             characters: .init(color: srgb(0.11, 0.0, 0.81)),
             comments: .init(color: srgb(0.0, 0.46, 0.17), italic: true) // green comments
         )
-    }
 
     private static func srgb(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, _ a: CGFloat = 1.0) -> NSColor {
         NSColor(srgbRed: r, green: g, blue: b, alpha: a)

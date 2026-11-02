@@ -1,11 +1,11 @@
 import SwiftUI
 
 /// Sums per-event drag deltas so moves go out at most once per display frame
-/// instead of once per 120 Hz gesture event. Delta summing is lossless: the
-/// Pilot receiver applies each move additively to the current cursor position.
+/// on high-refresh devices instead of once per gesture event. Delta summing is
+/// lossless: the Pilot receiver applies each move additively to the cursor.
 struct TrackpadMoveCoalescer: Sendable {
-    /// Minimum spacing between coalesced sends (~one 60 Hz frame).
-    static let sendInterval: Duration = .milliseconds(16)
+    /// Minimum spacing between coalesced sends (~one 120 Hz frame).
+    static let sendInterval: Duration = .milliseconds(8)
 
     private var pendingDX: Float = 0
     private var pendingDY: Float = 0

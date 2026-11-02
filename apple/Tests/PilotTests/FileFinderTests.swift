@@ -156,6 +156,8 @@ struct FileFinderTests {
         let file = item("Apple/Sources/Pilot/FileFinder.swift")
         #expect(file.foldedRelativePath == "apple/sources/pilot/filefinder.swift")
         #expect(file.foldedName == "filefinder.swift")
+        #expect(file.foldedNameStem == "filefinder")
+        #expect(file.directoryPath == "Apple/Sources/Pilot")
     }
 
     /// Tier bonuses compare the query against the *cached* folds, so matching

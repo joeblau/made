@@ -31,7 +31,15 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
         var regionCount: Int
     }
 
-    var baseSize: CGFloat
+    var baseSize: CGFloat {
+        didSet {
+            guard baseSize != oldValue else { return }
+            bodyFont = NSFont.monospacedSystemFont(ofSize: baseSize, weight: .regular)
+            headingFonts = Self.makeHeadingFonts(baseSize: baseSize)
+        }
+    }
+    private var bodyFont: NSFont
+    private var headingFonts: [Int: NSFont]
     private var isStyling = false
     /// Document-wide structure from the last pass, in that pass's coordinates.
     /// `nil` forces the next edit to take a full pass.
@@ -44,6 +52,8 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
 
     init(baseSize: CGFloat) {
         self.baseSize = baseSize
+        self.bodyFont = NSFont.monospacedSystemFont(ofSize: baseSize, weight: .regular)
+        self.headingFonts = Self.makeHeadingFonts(baseSize: baseSize)
     }
 
     func textStorage(_ textStorage: NSTextStorage,
@@ -204,8 +214,7 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
         // Clean slate: body font + label color across the region, dropping
         // any background/underline/strikethrough/paragraph spacing.
         storage.setAttributes(
-            [.font: NSFont.monospacedSystemFont(ofSize: baseSize, weight: .regular),
-             .foregroundColor: NSColor.labelColor],
+            [.font: bodyFont, .foregroundColor: NSColor.labelColor],
             range: region
         )
 
@@ -225,7 +234,7 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
             }
         }
 
-        let codeFont = NSFont.monospacedSystemFont(ofSize: baseSize, weight: .regular)
+        let codeFont = bodyFont
 
         // --- Code (claim ranges first) ---------------------------------------
         for fence in structure.fences {
@@ -394,24 +403,22 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
 
     // MARK: - Attribute helpers
 
-    private func headingFont(level: Int) -> NSFont {
-        let scale: CGFloat
-        switch level {
-        case 1: scale = 1.8
-        case 2: scale = 1.5
-        case 3: scale = 1.3
-        case 4: scale = 1.15
-        case 5: scale = 1.05
-        default: scale = 1.0
+    private static func makeHeadingFonts(baseSize: CGFloat) -> [Int: NSFont] {
+        let scales: [Int: CGFloat] = [0: 1.0, 1: 1.8, 2: 1.5, 3: 1.3, 4: 1.15, 5: 1.05]
+        return scales.mapValues { scale in
+            NSFont.monospacedSystemFont(ofSize: baseSize * scale, weight: .bold)
         }
-        return NSFont.monospacedSystemFont(ofSize: baseSize * scale, weight: .bold)
+    }
+
+    private func headingFont(level: Int) -> NSFont {
+        headingFonts[level] ?? headingFonts[0]!
     }
 
     /// Adds a symbolic trait (bold/italic) to the *existing* font at each run,
     /// so e.g. bold inside an H1 keeps the H1 size and just gains weight.
     private func addTrait(_ trait: NSFontDescriptor.SymbolicTraits, over range: NSRange, in storage: NSTextStorage) {
         storage.enumerateAttribute(.font, in: range) { value, subRange, _ in
-            let current = (value as? NSFont) ?? NSFont.monospacedSystemFont(ofSize: baseSize, weight: .regular)
+            let current = (value as? NSFont) ?? bodyFont
             var traits = current.fontDescriptor.symbolicTraits
             traits.insert(trait)
             let descriptor = current.fontDescriptor.withSymbolicTraits(traits)

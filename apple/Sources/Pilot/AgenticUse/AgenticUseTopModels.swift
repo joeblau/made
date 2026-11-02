@@ -14,6 +14,7 @@ struct AgenticUseTopModels: View {
     var body: some View {
         let models = snapshot.modelTotals
         let visible = showsAll ? models : Array(models.prefix(Self.collapsedCount))
+        let trends = snapshot.tokenTrends
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
             HStack {
                 Text("Top Models").agenticUseCardTitle()
@@ -50,7 +51,7 @@ struct AgenticUseTopModels: View {
                 }
                 Divider().gridCellUnsizedAxes(.horizontal)
                 ForEach(Array(visible.enumerated()), id: \.element.id) { index, total in
-                    row(rank: index + 1, total: total)
+                    row(rank: index + 1, total: total, trend: trends[total.model] ?? [])
                 }
             }
         }
@@ -61,7 +62,7 @@ struct AgenticUseTopModels: View {
         snapshot.range == .day ? "24h Trend" : "\(snapshot.range.label) Trend"
     }
 
-    private func row(rank: Int, total: AgenticModelTotal) -> some View {
+    private func row(rank: Int, total: AgenticModelTotal, trend: [Double]) -> some View {
         let tint = AgenticUseModelPalette.providerColor(for: total.provider)
         return GridRow {
             Text("\(rank)")
@@ -91,7 +92,7 @@ struct AgenticUseTopModels: View {
             number(AgenticUseFormat.tokens(total.tokens))
             number(total.costPerMillionTokens.map(AgenticUseFormat.cost) ?? "—")
                 .help("Effective cost per million processed tokens, cache reads included")
-            AgenticUseSparkline(values: snapshot.tokenTrend(for: total.model), tint: tint, lineWidth: 1.25)
+            AgenticUseSparkline(values: trend, tint: tint, lineWidth: 1.25)
                 .frame(minWidth: 64, idealWidth: 120, maxWidth: 140)
                 .frame(height: 24)
                 .help("Tokens per \(snapshot.range.bucketUnit == .hour ? "hour" : "day")")

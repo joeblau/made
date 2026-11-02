@@ -65,6 +65,25 @@ struct BrowserControllerTests {
         #expect(background.commands.isEmpty)
     }
 
+    @Test("Progress updates coalesce invisible changes but always publish completion")
+    func coalescesProgressUpdates() {
+        let state = BrowserState()
+        state.updateEstimatedProgress(0.004)
+        #expect(state.estimatedProgress == 0)
+        state.updateEstimatedProgress(0.01)
+        #expect(state.estimatedProgress == 0.01)
+        state.updateEstimatedProgress(0.011)
+        #expect(state.estimatedProgress == 0.01)
+        state.updateEstimatedProgress(0.5)
+        #expect(state.estimatedProgress == 0.5)
+        state.updateEstimatedProgress(0.996)
+        #expect(state.estimatedProgress == 0.996)
+        state.updateEstimatedProgress(0.997)
+        #expect(state.estimatedProgress == 0.996)
+        state.updateEstimatedProgress(1)
+        #expect(state.estimatedProgress == 1)
+    }
+
     @Test("Chromium zoom conversion preserves Pilot's linear scale")
     func convertsChromiumZoomLevels() {
         #expect(

@@ -215,7 +215,7 @@ final class GhosttyRuntime: @unchecked Sendable {
     private static func handleAction(_ app: ghostty_app_t?, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
         switch action.tag {
         case GHOSTTY_ACTION_RENDER:
-            NotificationCenter.default.post(name: .ghosttyNeedsDisplay, object: nil)
+            NotificationCenter.default.post(name: .ghosttyNeedsDisplay, object: nil, userInfo: ["surfaceID": UInt(bitPattern: target.target.surface)])
             return true
         case GHOSTTY_ACTION_PWD:
             guard target.tag == GHOSTTY_TARGET_SURFACE else { return true }
@@ -468,15 +468,15 @@ class GhosttyMetalView: NSView, CALayerDelegate {
         self.callbackSurface = surface
         Self.registry[pane.id] = self
 
-        // Listen for render notifications
+        // Redraw only the surface Ghostty invalidated, not every open terminal.
         renderObserver = NotificationCenter.default.addObserver(
             forName: .ghosttyNeedsDisplay,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.needsDisplay = true
+        ) { [weak self] notification in
+            guard let self, let surfaceID = notification.userInfo?["surfaceID"] as? UInt else { return }
+            MainActor.assumeIsolated {
+                if let surface = self.surface, surfaceID == UInt(bitPattern: surface) { self.needsDisplay = true }
             }
         }
 

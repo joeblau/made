@@ -171,23 +171,37 @@ enum UsageJSON {
         if let numeric = number(any) { return unixDate(numeric) }
         guard let string = any as? String, !string.isEmpty else { return nil }
 
-        for options in [ISO8601DateFormatter.Options([.withInternetDateTime, .withFractionalSeconds]),
-                        ISO8601DateFormatter.Options([.withInternetDateTime])] {
-            let iso = ISO8601DateFormatter()
-            iso.formatOptions = options
-            if let parsed = iso.date(from: string) { return parsed }
+        dateFormatterLock.lock()
+        defer { dateFormatterLock.unlock() }
+        for formatter in isoFormatters {
+            if let parsed = formatter.date(from: string) { return parsed }
         }
-        for pattern in ["yyyy-MM-dd'T'HH:mm:ss.SSSSSSZZZZZ",
-                        "yyyy-MM-dd'T'HH:mm:ssZZZZZ",
-                        "yyyy-MM-dd HH:mm:ssZZZZZ",
-                        "EEE',' dd MMM yyyy HH':'mm':'ss zzz"] {
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "en_US_POSIX")
-            formatter.dateFormat = pattern
+        for formatter in dateFormatters {
             if let parsed = formatter.date(from: string) { return parsed }
         }
         return nil
     }
+
+    private static let dateFormatterLock = NSLock()
+    private nonisolated(unsafe) static let isoFormatters: [ISO8601DateFormatter] = {
+        let optionSets: [ISO8601DateFormatter.Options] = [[.withFractionalSeconds], []]
+        return optionSets.map { options in
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = options.union(.withInternetDateTime)
+            return formatter
+        }
+    }()
+    private static let dateFormatters: [DateFormatter] = {
+        ["yyyy-MM-dd'T'HH:mm:ss.SSSSSSZZZZZ",
+         "yyyy-MM-dd'T'HH:mm:ssZZZZZ",
+         "yyyy-MM-dd HH:mm:ssZZZZZ",
+         "EEE',' dd MMM yyyy HH':'mm':'ss zzz"].map { pattern in
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = pattern
+            return formatter
+        }
+    }()
 
     private static func unixDate(_ value: Double) -> Date? {
         guard value.isFinite, value > 0 else { return nil }

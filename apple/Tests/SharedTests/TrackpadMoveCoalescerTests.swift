@@ -20,13 +20,13 @@ struct TrackpadMoveCoalescerTests {
     func deltasWithinFrameAreAccumulated() {
         var coalescer = TrackpadMoveCoalescer()
         _ = coalescer.accumulate(dx: 1, dy: 1, now: start)
-        let gatedA = coalescer.accumulate(dx: 2, dy: -1, now: start.advanced(by: .milliseconds(5)))
-        let gatedB = coalescer.accumulate(dx: 4, dy: 3, now: start.advanced(by: .milliseconds(10)))
+        let gatedA = coalescer.accumulate(dx: 2, dy: -1, now: start.advanced(by: .milliseconds(3)))
+        let gatedB = coalescer.accumulate(dx: 4, dy: 3, now: start.advanced(by: .milliseconds(6)))
         #expect(gatedA == nil)
         #expect(gatedB == nil)
         #expect(coalescer.hasPendingDelta)
 
-        let flushed = coalescer.flush(now: start.advanced(by: .milliseconds(16)))
+        let flushed = coalescer.flush(now: start.advanced(by: .milliseconds(8)))
         #expect(flushed?.dx == 6)
         #expect(flushed?.dy == 2)
         #expect(!coalescer.hasPendingDelta)
@@ -36,8 +36,8 @@ struct TrackpadMoveCoalescerTests {
     func deltaAfterIntervalSendsPendingSum() {
         var coalescer = TrackpadMoveCoalescer()
         _ = coalescer.accumulate(dx: 1, dy: 0, now: start)
-        _ = coalescer.accumulate(dx: 2, dy: 2, now: start.advanced(by: .milliseconds(8)))
-        let move = coalescer.accumulate(dx: 3, dy: 1, now: start.advanced(by: .milliseconds(16)))
+        _ = coalescer.accumulate(dx: 2, dy: 2, now: start.advanced(by: .milliseconds(4)))
+        let move = coalescer.accumulate(dx: 3, dy: 1, now: start.advanced(by: .milliseconds(8)))
         #expect(move?.dx == 5)
         #expect(move?.dy == 3)
         #expect(!coalescer.hasPendingDelta)
@@ -55,12 +55,12 @@ struct TrackpadMoveCoalescerTests {
     func flushRestartsPacing() {
         var coalescer = TrackpadMoveCoalescer()
         _ = coalescer.accumulate(dx: 1, dy: 1, now: start)
-        _ = coalescer.accumulate(dx: 1, dy: 1, now: start.advanced(by: .milliseconds(5)))
-        _ = coalescer.flush(now: start.advanced(by: .milliseconds(10)))
+        _ = coalescer.accumulate(dx: 1, dy: 1, now: start.advanced(by: .milliseconds(3)))
+        _ = coalescer.flush(now: start.advanced(by: .milliseconds(6)))
 
-        let gated = coalescer.accumulate(dx: 2, dy: 2, now: start.advanced(by: .milliseconds(12)))
+        let gated = coalescer.accumulate(dx: 2, dy: 2, now: start.advanced(by: .milliseconds(7)))
         #expect(gated == nil)
-        let flushed = coalescer.flush(now: start.advanced(by: .milliseconds(26)))
+        let flushed = coalescer.flush(now: start.advanced(by: .milliseconds(15)))
         #expect(flushed?.dx == 2)
         #expect(flushed?.dy == 2)
     }
