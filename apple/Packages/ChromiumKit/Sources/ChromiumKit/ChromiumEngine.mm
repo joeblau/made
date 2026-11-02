@@ -104,6 +104,30 @@ BOOL InstallApplicationIntegration() {
     return YES;
 }
 
+/// Marks the profile's last session as cleanly exited.
+///
+/// Chrome's ExitTypeService keeps `profile.exit_type` at "Crashed" while a
+/// session runs and writes "Normal" when the profile is destroyed after a
+/// clean shutdown, except when the previous session crashed. Then it holds
+/// "Crashed" until the user responds to Chrome's crash-recovery ("Restore
+/// pages?") UI. CEF never shows that UI, so after one unclean exit (kill,
+/// logout, quit backstop) every later clean quit still left "Crashed"
+/// (observed in the macOS 27 VM). A stale "Crashed" makes Chrome restore
+/// the previous session's session cookies at every launch (observed), so
+/// session cookies outlived clean quits despite persist_session_cookies
+/// being off. Only a clean shutdown calls this: an unclean exit still reads
+/// as a crash on the next launch, as it should. Best effort: if the pref
+/// cannot be set, the profile keeps Chrome's own value.
+void RecordCleanProfileExit() {
+    CEF_REQUIRE_UI_THREAD();
+    CefRefPtr<CefRequestContext> context = CefRequestContext::GetGlobalContext();
+    if (!context) return;
+    CefRefPtr<CefValue> value = CefValue::Create();
+    value->SetString("Normal");
+    CefString error;
+    context->SetPreference("profile.exit_type", value, error);
+}
+
 class ExternalMessagePump final {
  public:
     static ExternalMessagePump& Shared() {
@@ -565,6 +589,10 @@ void EngineCore::FinishShutdown() {
         finish_scheduled_ = false;
         return;
     }
+    // Every browser has closed: this is a clean exit. Record it before
+    // CefShutdown destroys the profile, which commits its preferences. A
+    // quit before OnContextInitialized has no initialized profile to mark.
+    if (context_ready_) RecordCleanProfileExit();
     ExternalMessagePump::Shared().Stop();
     CefShutdown();
     initialized_ = false;
