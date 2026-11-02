@@ -123,8 +123,15 @@ struct PlotterSnapshotView: View {
                 // over the caption instead of darkening the frame.
                 .background {
                     if renderingMode == .fullColor {
+                        // The fade finishes above the caption's cap height:
+                        // an even 0 to 0.7 ramp left the text over 0.35-0.5
+                        // black, 2.4:1 on a white mirrored window.
                         LinearGradient(
-                            colors: [.black.opacity(0), .black.opacity(0.7)],
+                            stops: [
+                                .init(color: .black.opacity(0), location: 0),
+                                .init(color: .black.opacity(0.62), location: 0.45),
+                                .init(color: .black.opacity(0.75), location: 1)
+                            ],
                             startPoint: .top,
                             endPoint: .bottom
                         )

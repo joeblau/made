@@ -293,8 +293,12 @@ public struct ActionsDashboardActivityCard: View {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .foregroundStyle(DashboardTone.blue.color(for: renderingMode))
                         .widgetAccentable()
+                    // In the small (Smart Stack / CarPlay) card the counts
+                    // truncate first; unlimited, the title hyphenated "Ac-tions".
                     Text("Actions")
                         .font(.headline)
+                        .lineLimit(1)
+                        .layoutPriority(1)
                     Spacer()
                     Text("\(projection.activeCount) active · \(projection.runCount) runs")
                         .font(.caption)
@@ -616,10 +620,12 @@ private struct DashboardMetric: View {
                 // Timeline reloads roll the count instead of hard-cutting (MOT-4).
                 .contentTransition(.numericText(value: Double(value)))
                 // The light variant keeps the number at 4.5:1 on the white
-                // widget; tinted mode recolors it as an accent.
+                // widget. Only a present state joins the accent group, so
+                // tinted mode keeps full color's emphasis: neutral totals and
+                // zero counts stay in the default group.
                 .foregroundStyle(tint.map { AnyShapeStyle($0.color(for: renderingMode)) } ?? AnyShapeStyle(.primary))
                 .lineLimit(1)
-                .widgetAccentable()
+                .widgetAccentable(tint != nil)
             Text(label)
                 .font(.caption2)
                 .dashboardSecondaryForeground()

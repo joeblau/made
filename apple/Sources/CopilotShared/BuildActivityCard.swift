@@ -16,7 +16,7 @@ struct BuildActivityCard: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(attributes.workflow).font(.headline).lineLimit(1)
                 Text(compact ? attributes.branch : "\(attributes.repository) · \(attributes.branch)")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(.caption).dashboardSecondaryForeground().lineLimit(1)
                 HStack {
                     if isStale && !state.isComplete {
                         // Same caution treatment as the dashboard activities:
@@ -24,7 +24,7 @@ struct BuildActivityCard: View {
                         // secondary so caption text keeps contrast (COL-2).
                         Label {
                             Text("Updates delayed")
-                                .foregroundStyle(.secondary)
+                                .dashboardSecondaryForeground()
                         } icon: {
                             Image(systemName: "wifi.slash")
                                 .foregroundStyle(.orange)
