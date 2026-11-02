@@ -899,9 +899,9 @@ final class WorkspaceStore {
 /// DEBUG-only review fixtures. Each one needs `-demoMode YES` plus its own
 /// launch argument, and drives presentation that otherwise needs a live peer:
 /// `-demoPairingPrompt walkie|walkieKeyChange|kneeboard|kneeboardKeyChange`,
-/// `-demoPeerRecording YES`, `-demoPeersConnected YES`, and
-/// `-demoSecureMessaging YES`. None of them touches pairing, keys, or the
-/// network, and release builds compile none of this.
+/// `-demoPeerRecording YES`, `-demoPeersConnected YES`,
+/// `-demoSecureMessaging YES`, and `-demoPersistenceFailure YES`. None of them
+/// touches pairing, keys, or the network, and release builds compile none of this.
 enum DemoReviewFixture {
     static var isDemo: Bool { UserDefaults.standard.bool(forKey: "demoMode") }
 
@@ -931,6 +931,28 @@ enum DemoReviewFixture {
         )
     }
     static let secureMessagingWindowID = "demo.secure-messaging"
+
+    @MainActor private static var didPostPersistenceFailure = false
+
+    /// `-demoPersistenceFailure YES`: posts one realistic save failure shortly
+    /// after launch so the "Changes could not be saved" alert can be reviewed.
+    /// Nothing failed, so its Retry is a real `saveReporting` of whatever is
+    /// pending: harmless, and it reports genuinely if that save ever fails.
+    @MainActor static func postPersistenceFailureOnce() async {
+        guard flag("demoPersistenceFailure"), !didPostPersistenceFailure else { return }
+        didPostPersistenceFailure = true
+        // Let the main window subscribe before the post.
+        guard (try? await Task.sleep(for: .seconds(1))) != nil else {
+            didPostPersistenceFailure = false
+            return
+        }
+        let error = CocoaError(.fileWriteOutOfSpace, userInfo: [NSFilePathErrorKey: "default.store"])
+        NotificationCenter.default.post(
+            name: .pilotPersistenceSaveFailed,
+            object: nil,
+            userInfo: ["operation": "Saving note", "message": error.localizedDescription]
+        )
+    }
 }
 
 /// Opens the review-only Secure Messaging window once for

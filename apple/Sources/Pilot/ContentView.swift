@@ -533,6 +533,9 @@ struct ContentView: View {
             let message = notification.userInfo?["message"] as? String ?? "Unknown persistence error"
             persistenceFailure = PersistenceFailure(operation: operation, message: message)
         }
+        #if DEBUG
+        .task { await DemoReviewFixture.postPersistenceFailureOnce() }
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: UsageConsent.changedNotification)) { _ in
             usageStore.reload()
         }
