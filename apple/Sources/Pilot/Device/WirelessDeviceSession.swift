@@ -61,75 +61,79 @@ struct WirelessDeviceView: View {
     let useUSB: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            // The header floats on the dark stage, so it renders in the dark
-            // scheme in both appearances (COL-2). Its two secondary actions
-            // are neighboring glass buttons (BTN-1). A narrow pane steps down
-            // a whole row at a time: shorter title, then the glyph alone,
-            // then icon-only buttons, so nothing clips at the pane edge.
-            ViewThatFits(in: .horizontal) {
-                header(title: "Wireless Device", iconOnlyButtons: false)
-                header(title: "Wireless", iconOnlyButtons: false)
-                header(title: nil, iconOnlyButtons: false)
-                header(title: nil, iconOnlyButtons: true)
-                header(title: nil, iconOnlyButtons: true, showsGlyph: false)
-            }
-            .padding(LiquidGlassMetrics.Spacing.small)
-            .environment(\.colorScheme, .dark)
-            ZStack {
-                Color.black
-                if let renderer = session.renderer {
-                    WirelessDeviceVideoView(renderer: renderer)
-                        .opacity(session.status == .streaming ? 1 : 0)
-                }
-                if session.status != .streaming {
-                    Group {
-                        if instructionsWidth < instructionsWordFloor {
-                            compactInstructions
-                        } else {
-                            instructions(probing: false)
-                        }
+        // The pane's width is read from a GeometryReader, which always takes
+        // the width it is offered. The stage content can't report it: the
+        // full layout's fixed-size words and buttons overflow a narrow pane,
+        // so the content's own width never dropped below the word floor and
+        // a ~73pt pane kept the full layout, clipped ("haring Is Of").
+        GeometryReader { proxy in
+            let layout = instructionsLayout(paneWidth: proxy.size.width)
+            VStack(spacing: 0) {
+                header(paneWidth: proxy.size.width)
+                ZStack {
+                    Color.black
+                    if let renderer = session.renderer {
+                        WirelessDeviceVideoView(renderer: renderer)
+                            .opacity(session.status == .streaming ? 1 : 0)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { instructionsWidth = $0 }
-                    .background {
-                        WordFloorProbe { instructionsProbeWidth = $0 } content: {
-                            instructions(probing: true)
+                    if session.status != .streaming {
+                        Group {
+                            switch layout {
+                            case .compact:
+                                compactInstructions
+                            case .full(let margin):
+                                instructions(probing: false, margin: margin)
+                            }
                         }
-                        WordFloorProbe { receiverNameWidth = $0 } content: {
-                            // Same zoom as inside `instructions`, applied once.
-                            receiverName.uiZoomedDynamicType()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background {
+                            WordFloorProbe { instructionsProbeWidth = $0 } content: {
+                                instructions(probing: true, margin: LiquidGlassMetrics.Spacing.small)
+                            }
+                            WordFloorProbe { receiverNameWidth = $0 } content: {
+                                // Same zoom as inside `instructions`, applied once.
+                                receiverName.uiZoomedDynamicType()
+                            }
                         }
                     }
                 }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
     }
 
-    @State private var instructionsWidth: CGFloat = .infinity
     /// Ideal width of the instructions laid out one word per line at the
     /// narrow (`small`) margin: the widest word, code, or button plus margins.
     @State private var instructionsProbeWidth: CGFloat = 0
     /// Unscaled width of the receiver name, which may shrink to half size.
     @State private var receiverNameWidth: CGFloat = 0
 
-    /// The narrowest pane that shows the full instructions without breaking
-    /// inside a word or the receiver name at the current UI zoom and Dynamic
-    /// Type (TYPE-2). Below it the compact layout takes over.
-    private var instructionsWordFloor: CGFloat {
-        max(
-            instructionsProbeWidth,
-            receiverNameWidth * Self.receiverNameMinimumScale + 2 * LiquidGlassMetrics.Spacing.small
+    private func instructionsLayout(paneWidth: CGFloat) -> WirelessInstructionsLayout {
+        WirelessInstructionsLayout.resolve(
+            paneWidth: paneWidth,
+            probeWidth: instructionsProbeWidth,
+            receiverNameWidth: receiverNameWidth * Self.receiverNameMinimumScale
         )
     }
 
-    /// The stage margin: wide when the words still fit inside it, otherwise
-    /// the narrow margin, so the text gets the width before the margin does.
-    private var instructionsPadding: CGFloat {
-        let wideMarginExtra = 2 * (LiquidGlassMetrics.Spacing.xxLarge - LiquidGlassMetrics.Spacing.small)
-        return instructionsWidth < max(240, instructionsWordFloor + wideMarginExtra)
-            ? LiquidGlassMetrics.Spacing.small
-            : LiquidGlassMetrics.Spacing.xxLarge
+    /// The header floats on the dark stage, so it renders in the dark scheme
+    /// in both appearances (COL-2). Its two secondary actions are neighboring
+    /// glass buttons (BTN-1). A narrow pane steps down a whole row at a time:
+    /// shorter title, then the glyph alone, then icon-only buttons, then the
+    /// buttons stacked, so nothing clips at the pane edge. Offered exactly the
+    /// pane width, so `ViewThatFits` compares against the real edge.
+    private func header(paneWidth: CGFloat) -> some View {
+        ViewThatFits(in: .horizontal) {
+            header(title: "Wireless Device", iconOnlyButtons: false)
+            header(title: "Wireless", iconOnlyButtons: false)
+            header(title: nil, iconOnlyButtons: false)
+            header(title: nil, iconOnlyButtons: true)
+            header(title: nil, iconOnlyButtons: true, showsGlyph: false)
+            stackedHeaderButtons
+        }
+        .padding(LiquidGlassMetrics.Spacing.small)
+        .frame(width: paneWidth)
+        .environment(\.colorScheme, .dark)
     }
 
     private static let receiverNameMinimumScale: CGFloat = 0.5
@@ -180,6 +184,24 @@ struct WirelessDeviceView: View {
         // pane, while `ViewThatFits` still compares each row's ideal width.
     }
 
+    /// Last resort for a pane narrower than the two icon buttons side by
+    /// side: one above the other, centered.
+    private var stackedHeaderButtons: some View {
+        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                headerButton("Use USB", systemImage: "cable.connector", iconOnly: true, action: useUSB)
+                if session.status != .stopped {
+                    headerButton("Stop", systemImage: "stop.fill", iconOnly: true) {
+                        session.stop()
+                    }
+                }
+            }
+            .controlSize(.small)
+        }
+        .fixedSize()
+        .frame(maxWidth: .infinity)
+    }
+
     @ViewBuilder
     private func headerButton(
         _ title: String,
@@ -216,7 +238,7 @@ struct WirelessDeviceView: View {
     /// The full instructions. `probing` is the hidden measuring copy: one
     /// word per line, the receiver name left out (measured on its own), and
     /// the short Start button, at the narrow margin.
-    private func instructions(probing: Bool) -> some View {
+    private func instructions(probing: Bool, margin: CGFloat) -> some View {
         let words = { (text: String) in Text(WordFloorText.oneWordPerLine(text, probing: probing)) }
         return VStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             Image(systemName: "airplay.video")
@@ -270,7 +292,7 @@ struct WirelessDeviceView: View {
         // A narrow pane trades the stage margin for text width, so the
         // receiver name ("Cockpit F78D") fits whole instead of losing the
         // suffix that tells receivers apart.
-        .padding(probing ? LiquidGlassMetrics.Spacing.small : instructionsPadding)
+        .padding(margin)
         .frame(maxWidth: 480)
     }
 
@@ -343,6 +365,44 @@ struct WirelessDeviceView: View {
         case .starting, .waiting: true
         default: false
         }
+    }
+}
+
+/// Which instructions layout the wireless stage shows, decided from the
+/// pane's offered width and the measured word floor. Pure, so the switch is
+/// unit-tested without rendering.
+enum WirelessInstructionsLayout: Equatable {
+    /// The full text, inset by `margin` on every side.
+    case full(margin: CGFloat)
+    /// Glyph, pairing code, and icon-only action; the text moves to the
+    /// tooltip and VoiceOver label.
+    case compact
+
+    static let narrowMargin = LiquidGlassMetrics.Spacing.small
+    static let wideMargin = LiquidGlassMetrics.Spacing.xxLarge
+    /// The wide margin also waits for a comfortable pane, not just a fit.
+    static let wideMarginMinimumPaneWidth: CGFloat = 240
+
+    /// - Parameters:
+    ///   - paneWidth: the width offered to the stage, never the content's
+    ///     own width (a clipped full layout reports its overflow width).
+    ///   - probeWidth: the instructions' one-word-per-line ideal width at the
+    ///     narrow margin, or 0 before the first measurement.
+    ///   - receiverNameWidth: the receiver name at its minimum scale.
+    static func resolve(paneWidth: CGFloat, probeWidth: CGFloat, receiverNameWidth: CGFloat) -> Self {
+        let floor = wordFloor(probeWidth: probeWidth, receiverNameWidth: receiverNameWidth)
+        guard paneWidth.isFinite, paneWidth >= floor else { return .compact }
+        let wideMarginExtra = 2 * (wideMargin - narrowMargin)
+        return paneWidth >= max(wideMarginMinimumPaneWidth, floor + wideMarginExtra)
+            ? .full(margin: wideMargin)
+            : .full(margin: narrowMargin)
+    }
+
+    /// The narrowest pane that shows the full instructions without breaking
+    /// inside a word or the receiver name at the current UI zoom and Dynamic
+    /// Type (TYPE-2). Below it the compact layout takes over.
+    static func wordFloor(probeWidth: CGFloat, receiverNameWidth: CGFloat) -> CGFloat {
+        max(probeWidth, receiverNameWidth + 2 * narrowMargin)
     }
 }
 
