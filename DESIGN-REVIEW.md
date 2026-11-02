@@ -293,8 +293,7 @@ Not capturable here:
 - USB Device stream and wireless live stream, for the reasons above.
 - Tinted Home Screen and StandBy on a device; the offline renders approximate the system compositor.
 
-Left open:
-- The selected-row green LLM ring measures 2.2:1 in light mode; the "1/1" label inside it carries the information.
+- The sidebar LLM ring keeps 3:1 as a meaningful graphic: a deeper green in light mode (3.5:1 on the selected-row glass captured in the VM, from 2.2:1), the legible accent for partial progress, and white on an accent-filled selection. The idle ring stays quaternary on purpose; its "0/1" label carries the state.
 
 Verification: `build-ci.sh`, `test.sh all` (PilotTests 882 passed with 2 CEF skips, SharedTests 235, PlotterTests 4), `lint-swift.sh --all` (0 violations in 360 files), `app-icon-tool.swift validate`, `check-docs.sh`, the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators, the Chromium configuration build, and an XcodeGen drift check all pass.
 

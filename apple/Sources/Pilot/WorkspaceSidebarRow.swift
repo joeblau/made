@@ -174,6 +174,8 @@ private struct WorkspaceLLMGauge: View {
     /// the background, so polling gates on window activity the way the tab
     /// badges gate on `isWorkspaceActive`.
     @Environment(\.appearsActive) private var appearsActive
+    /// An accent-filled selection draws white text; the ring follows it.
+    @Environment(\.backgroundProminence) private var backgroundProminence
     @State private var running = 0
     @State private var started = 0
     @State private var runningPaneIDs: Set<UUID> = []
@@ -318,10 +320,23 @@ private struct WorkspaceLLMGauge: View {
     /// Idle drops to the quaternary label color so quiet workspaces recede
     /// into the sidebar instead of every ring sitting at accent strength. Use
     /// a concrete dynamic NSColor so selected-row appearances resolve it too.
+    ///
+    /// Active rings are meaningful graphics, so they keep 3:1 against the
+    /// sidebar glass: system green measured 2.2:1 on a selected light row,
+    /// so light mode uses a deeper green, and partial progress uses the
+    /// legible accent. On an accent-filled selection the ring turns white
+    /// like the row's text.
     private var gaugeTint: Color {
         if running == 0 { return Color(nsColor: .quaternaryLabelColor) }
-        if running == started { return .green }
-        return .accentColor
+        if backgroundProminence == .increased { return .white }
+        if running == started { return Color(nsColor: Self.legibleGreen) }
+        return LegibleAccent.color
+    }
+
+    /// System green in dark mode; a deeper green (5.1:1 on white) in light.
+    private static let legibleGreen = NSColor(name: "WorkspaceLLMGaugeGreen") { appearance in
+        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return isDark ? .systemGreen : NSColor(srgbRed: 0.0, green: 0.50, blue: 0.20, alpha: 1)
     }
 
     /// Spell out both sides for the tooltip and VoiceOver.
