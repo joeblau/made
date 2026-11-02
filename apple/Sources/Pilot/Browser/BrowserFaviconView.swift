@@ -37,7 +37,6 @@ final class BrowserRuntimeState {
     var findQuery: String = ""
     var findForward: Bool = true
     var findMatchCase: Bool = false
-    var findNext: Bool = false
     var findRequestID: Int = 0
     var stopFindingRequestID: Int = 0
     var findMatchCount: Int = 0

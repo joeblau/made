@@ -15,13 +15,11 @@ struct ChromiumBrowserCommandTests {
         #expect(first.findRequestID == 1)
         #expect(first.findQuery == "pilot")
         #expect(first.findForward)
-        #expect(!first.findNext)
         #expect(second.findRequestID == 0)
 
-        first.requestFind("pilot", forward: false, findNext: true)
+        first.requestFind("pilot", forward: false)
         #expect(first.findRequestID == 2)
         #expect(!first.findForward)
-        #expect(first.findNext)
 
         first.requestPrint()
         first.requestSavePage()
@@ -62,14 +60,13 @@ struct ChromiumBrowserCommandTests {
         state.findBarText = "pil"
         state.findInPage()
         #expect(state.findQuery == "pil")
-        #expect(!state.findNext)
 
         state.findBarText = "pilot"
         state.findInPage()
-        #expect(!state.findNext, "a changed query restarts from the top")
+        #expect(state.findQuery == "pilot")
+        #expect(state.findForward)
 
         state.findInPage(forward: false)
-        #expect(state.findNext)
         #expect(!state.findForward)
         #expect(state.findRequestID == 3)
 
@@ -92,7 +89,7 @@ struct ChromiumBrowserCommandTests {
         #expect(state.stopFindingRequestID == 2)
     }
 
-    @Test("Find requests reach the Chromium host with the bar's direction")
+    @Test("Typing then Return selects match 1 then advances: every Chromium find activates a match")
     func findRequestsReachChromiumHost() {
         let state = BrowserState(engine: .chromium)
         let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {})
@@ -102,16 +99,28 @@ struct ChromiumBrowserCommandTests {
             findRequestID: 0, stopFindingRequestID: 0, printRequestID: 0, savePageRequestID: 0,
             initialURL: nil, zoom: 1, isActive: true, isSelected: true
         )
+        // Live typing: each keystroke is a new query.
+        state.findBarText = "pil"
+        state.findInPage()
+        update(coordinator, state)
         state.findBarText = "pilot"
         state.findInPage()
+        update(coordinator, state)
+        // Return, then Shift-Return.
+        state.findInPage(forward: true)
         update(coordinator, state)
         state.findInPage(forward: false)
         update(coordinator, state)
         state.hideFindBar()
         update(coordinator, state)
 
+        // CEF's `findNext` is Chromium's `find_match`. A typed query sent
+        // with `false` would only highlight, so the first Return would
+        // activate match 1 instead of advancing to match 2.
         #expect(host.events.filter { if case .command = $0 { false } else { true } } == [
-            .find(text: "pilot", forward: true, matchCase: false, findNext: false),
+            .find(text: "pil", forward: true, matchCase: false, findNext: true),
+            .find(text: "pilot", forward: true, matchCase: false, findNext: true),
+            .find(text: "pilot", forward: true, matchCase: false, findNext: true),
             .find(text: "pilot", forward: false, matchCase: false, findNext: true),
             .stopFinding(clearSelection: true),
         ])
@@ -239,7 +248,7 @@ struct ChromiumBrowserCommandTests {
                 text: "pilot",
                 forward: true,
                 matchCase: true,
-                findNext: false
+                findNext: true
             ),
             .print,
             .save,

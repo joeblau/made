@@ -11,7 +11,6 @@ extension BrowserState {
     var findQuery: String { get { runtime.findQuery } set { runtime.findQuery = newValue } }
     var findForward: Bool { get { runtime.findForward } set { runtime.findForward = newValue } }
     var findMatchCase: Bool { get { runtime.findMatchCase } set { runtime.findMatchCase = newValue } }
-    var findNext: Bool { get { runtime.findNext } set { runtime.findNext = newValue } }
     var findRequestID: Int { get { runtime.findRequestID } set { runtime.findRequestID = newValue } }
     var stopFindingRequestID: Int { get { runtime.stopFindingRequestID } set { runtime.stopFindingRequestID = newValue } }
     var findMatchCount: Int { get { runtime.findMatchCount } set { runtime.findMatchCount = newValue } }
@@ -24,17 +23,18 @@ extension BrowserState {
     /// whether a match exists.
     var findCountsMatches: Bool { engine == .chromium }
 
+    /// Queues one search. Neither engine needs a "new session" flag: both
+    /// restart from the top when the query or case changes and step to the
+    /// next or previous match when it repeats.
     func requestFind(
         _ query: String,
         forward: Bool = true,
-        matchCase: Bool = false,
-        findNext: Bool = false
+        matchCase: Bool = false
     ) {
         guard supports(.findInPage), !query.isEmpty else { return }
         findQuery = query
         findForward = forward
         findMatchCase = matchCase
-        self.findNext = findNext
         findRequestID += 1
     }
 
@@ -61,8 +61,9 @@ extension BrowserState {
         if !findQuery.isEmpty { stopFinding() }
     }
 
-    /// Searches for the bar's text. A changed query starts a new search from
-    /// the top; the same query moves to the next or previous match.
+    /// Searches for the bar's text, as Safari and Chrome do: typing selects
+    /// the first match of the changed query, and Return (the same query)
+    /// moves to the next or previous match.
     func findInPage(forward: Bool = true) {
         guard supports(.findInPage) else { return }
         let query = findBarText
@@ -70,7 +71,7 @@ extension BrowserState {
             if !findQuery.isEmpty { stopFinding() }
             return
         }
-        requestFind(query, forward: forward, findNext: query == findQuery)
+        requestFind(query, forward: forward)
     }
 
     /// Whether Find Next / Find Previous (⌘G / ⇧⌘G) have a query to repeat.

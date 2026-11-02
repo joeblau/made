@@ -414,11 +414,15 @@ struct ChromiumBrowserView: NSViewRepresentable {
             guard lastFindRequestID != requestID else { return }
             lastFindRequestID = requestID
             guard !state.findQuery.isEmpty else { return }
+            // CEF's `findNext` is Chromium's `find_match`, not "same session":
+            // CEF itself restarts when the text or case changes. `false` only
+            // highlights without activating a match, so the first Return after
+            // typing would land on match 1 instead of moving to match 2.
             host?.findText(
                 state.findQuery,
                 forward: state.findForward,
                 matchCase: state.findMatchCase,
-                findNext: state.findNext
+                findNext: true
             )
         }
 
