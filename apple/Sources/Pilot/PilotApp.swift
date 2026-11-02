@@ -152,6 +152,9 @@ struct PilotPaneNavigationCommands: Commands {
 
 @main
 struct PilotApp: App {
+    #if BLAU_CHROMIUM_CEF_ENABLED
+    @NSApplicationDelegateAdaptor(PilotAppDelegate.self) private var appDelegate
+    #endif
     let modelContainer: ModelContainer
     /// Construct without starting so update UI cannot interrupt first-run
     /// setup. Starting after setup honors Sparkle's persisted preference.

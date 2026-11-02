@@ -19,7 +19,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>NSPrincipalClass</key>
-	<string>PilotApplication</string>
+	<string>NSApplication</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<!-- Isolate installer launchd calls from Cockpit's main thread. This is

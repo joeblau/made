@@ -7,6 +7,8 @@
 #if defined(BLAU_CHROMIUM_CEF_ENABLED) && BLAU_CHROMIUM_CEF_ENABLED
 
 #import <crt_externs.h>
+#import <objc/runtime.h>
+#include "include/cef_application_mac.h"
 #include "include/cef_request_context.h"
 
 namespace chromiumkit {
@@ -20,6 +22,87 @@ namespace {
 /// "set before start" contract.
 std::string g_extension_load_paths;
 std::string ExtensionLoadPaths() { return g_extension_load_paths; }
+
+/// CEF's CefAppProtocol state for NSApp. SwiftUI's App lifecycle owns NSApp
+/// (a private SwiftUI NSApplication subclass, ignoring NSPrincipalClass), so
+/// the protocol is grafted onto that class at runtime instead of subclassing.
+/// Read and written only on the main thread, where AppKit sends events.
+BOOL g_handling_send_event = NO;
+BOOL g_application_integration_installed = NO;
+
+BOOL ApplicationIsHandlingSendEvent(id, SEL) {
+    return g_handling_send_event;
+}
+
+void ApplicationSetHandlingSendEvent(id, SEL, BOOL handling) {
+    g_handling_send_event = handling;
+}
+
+bool AddProtocolMethod(Class cls, Protocol *protocol, SEL selector, IMP imp) {
+    const objc_method_description description =
+        protocol_getMethodDescription(protocol, selector, YES, YES);
+    if (description.types == nullptr) {
+        return false;
+    }
+    // A class that already implements the selector (an earlier install, or
+    // an NSApplication subclass that adopted the protocol itself) keeps it.
+    if (class_getInstanceMethod(cls, selector) != nullptr) {
+        return true;
+    }
+    return class_addMethod(cls, selector, imp, description.types);
+}
+
+/// Wraps -sendEvent: of NSApp's real class (KVO-safe: -class, not
+/// object_getClass) in CefScopedSendingEvent, which Chromium's message pump
+/// uses to tell nested run loops started from event dispatch apart. The
+/// wrapper is installed on that class only, so the change is confined to the
+/// one NSApplication instance the process has.
+bool WrapSendEvent(Class cls) {
+    const SEL selector = @selector(sendEvent:);
+    Method method = class_getInstanceMethod(cls, selector);
+    if (method == nullptr) {
+        return false;
+    }
+    using SendEventIMP = void (*)(id, SEL, NSEvent *);
+    const SendEventIMP original =
+        reinterpret_cast<SendEventIMP>(method_getImplementation(method));
+    IMP wrapped = imp_implementationWithBlock(^(id application, NSEvent *event) {
+        CefScopedSendingEvent sending_event;
+        original(application, selector, event);
+    });
+    // An inherited -sendEvent: gets an override on this class that forwards
+    // to the inherited implementation; an own one is replaced in place.
+    if (!class_addMethod(cls, selector, wrapped, method_getTypeEncoding(method))) {
+        method_setImplementation(method, wrapped);
+    }
+    return true;
+}
+
+BOOL InstallApplicationIntegration() {
+    NSCAssert(NSThread.isMainThread, @"NSApp integration requires main");
+    if (g_application_integration_installed) {
+        return YES;
+    }
+    // Never create the shared application here: that would preempt the class
+    // SwiftUI instantiates. Callers run after NSApp exists.
+    NSApplication *application = NSApp;
+    if (application == nil) {
+        return NO;
+    }
+    Class cls = [application class];
+    if (!AddProtocolMethod(cls, @protocol(CrAppProtocol),
+                           @selector(isHandlingSendEvent),
+                           reinterpret_cast<IMP>(ApplicationIsHandlingSendEvent)) ||
+        !AddProtocolMethod(cls, @protocol(CrAppControlProtocol),
+                           @selector(setHandlingSendEvent:),
+                           reinterpret_cast<IMP>(ApplicationSetHandlingSendEvent)) ||
+        !WrapSendEvent(cls)) {
+        return NO;
+    }
+    class_addProtocol(cls, @protocol(CefAppProtocol));
+    g_application_integration_installed = YES;
+    return YES;
+}
 
 class ExternalMessagePump final {
  public:
@@ -223,6 +306,19 @@ bool EngineCore::Start(NSURL *profile, NSError **error) {
     CefString(&settings.browser_subprocess_path) =
         helperURL.path.fileSystemRepresentation;
 
+    // Chromium calls -[NSApp isHandlingSendEvent] from its message pump; an
+    // NSApp without CefAppProtocol crashes on the first nested event loop.
+    if (!InstallApplicationIntegration()) {
+        if (error) {
+            *error = ChromiumKitError(
+                ChromiumKitErrorInitializationFailed,
+                @"The application object could not be prepared for Chromium.",
+                nil);
+        }
+        loader_.reset();
+        return false;
+    }
+
     app_ = new ChromiumApp(this);
     ExternalMessagePump::Shared().Start();
     CefMainArgs main_args(*_NSGetArgc(), *_NSGetArgv());
@@ -368,6 +464,10 @@ using namespace chromiumkit;
         _shutdownCompletions = [NSMutableArray array];
     }
     return self;
+}
+
++ (BOOL)installApplicationIntegration {
+    return InstallApplicationIntegration();
 }
 
 - (BOOL)isRunning {

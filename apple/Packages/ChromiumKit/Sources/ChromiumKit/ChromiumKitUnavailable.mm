@@ -23,6 +23,11 @@
     return self;
 }
 
++ (BOOL)installApplicationIntegration {
+    // No CEF is linked, so NSApp is left exactly as AppKit created it.
+    return NO;
+}
+
 - (BOOL)isRunning {
     return self.state == ChromiumEngineStateInitializing ||
            self.state == ChromiumEngineStateRunning;

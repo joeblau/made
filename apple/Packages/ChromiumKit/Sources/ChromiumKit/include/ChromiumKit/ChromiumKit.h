@@ -241,6 +241,14 @@ typedef NS_ENUM(NSInteger, ChromiumDownloadState) {
 @interface ChromiumEngine : NSObject
 
 @property (class, nonatomic, readonly) ChromiumEngine *shared;
+/// Adds CEF's CefAppProtocol (isHandlingSendEvent/setHandlingSendEvent and a
+/// CefScopedSendingEvent around -sendEvent:) to the class of the existing
+/// NSApp. SwiftUI's App lifecycle instantiates its own NSApplication subclass,
+/// so the app cannot supply one through NSPrincipalClass. Main thread only and
+/// idempotent; start(profileDirectory:) also calls it before CEF initializes.
+/// Returns NO when NSApp does not exist yet or no CEF runtime is linked.
++ (BOOL)installApplicationIntegration
+    NS_SWIFT_NAME(installApplicationIntegration());
 /// YES only when this ChromiumKit build contains the verified CEF-backed
 /// implementation. The artifact-free bridge returns NO without attempting
 /// process-wide initialization.
