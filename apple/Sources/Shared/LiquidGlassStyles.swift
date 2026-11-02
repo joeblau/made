@@ -511,3 +511,22 @@ private struct HoverHighlight<S: Shape>: View {
             .animation(LiquidGlassMetrics.stateChange, value: isPressed)
     }
 }
+
+// MARK: - Legible secondary text
+
+#if os(iOS)
+/// The iOS counterpart of Pilot's `GlassLegibleText.secondaryColor`, for
+/// secondary text in light grouped `Form`s. On iOS 27 the system grays all
+/// measured under TYPE-3's 4.5:1: `.secondary` (127,127,127) 4.0:1 and
+/// `LabeledContent` values (138,138,142) 3.5:1 on a white row, section
+/// headers and footers (133,133,139) 3.3:1 on the grouped background. Light mode uses Pilot's 0.36 gray (6.7:1 on white, 6.0:1 on the
+/// grouped background), still clearly below primary; dark mode keeps the
+/// system secondary label, which already passes.
+enum LegibleSecondaryText {
+    static let color = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor.secondaryLabel.resolvedColor(with: traits)
+            : UIColor(white: 0.36, alpha: 1)
+    })
+}
+#endif

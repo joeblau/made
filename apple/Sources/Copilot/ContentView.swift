@@ -638,6 +638,9 @@ struct ContentView: View {
             transcription.modelLoadingFraction = nil
             transcription.isLoadingFromCache = true
             transcription.modelLoadingProgress = "Loading cached speech model…"
+            // A cached load has a stored model; without this the sheet's
+            // Stored row reads "Not downloaded" beside it.
+            transcription.applyDemoStoredModel(bytes: 632_000_000)
         case .storageSheetError:
             storageErrorMessage = "The speech-model download stopped because the network became "
                 + "unavailable or restricted."
@@ -762,22 +765,27 @@ private struct SpeechModelStorageView: View {
                             // Separator starts at the glyph, like every other row.
                             .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                     }
-                    LabeledContent("Model", value: SpeechModelCache.displayName)
-                    LabeledContent("Download size", value: SpeechModelCache.downloadSize)
-                    LabeledContent("Stored", value: transcription.cachedModelSize)
+                    valueRow("Model", SpeechModelCache.displayName)
+                    valueRow("Download size", SpeechModelCache.downloadSize)
+                    valueRow("Stored", transcription.cachedModelSize)
                     if transcription.isModelLoading {
                         loadingRow
                     }
                     storageControls
                 } header: {
                     Text("On-device Speech Model")
+                        .foregroundStyle(LegibleSecondaryText.color)
                 } footer: {
                     Text("The model stays on this iPhone and transcription audio is processed on-device.")
+                        .foregroundStyle(LegibleSecondaryText.color)
                 }
-                Section("Model Credits") {
+                Section {
                     Text("Parakeet Ultra by Moondream, based on NVIDIA Parakeet v3. Core ML conversion and quantization by Fluid Inference.")
                     Link("Model and attribution", destination: URL(string: "https://huggingface.co/FluidInference/parakeet-ultra-coreml")!)
                     Link("CC BY 4.0 license", destination: URL(string: "https://creativecommons.org/licenses/by/4.0/")!)
+                } header: {
+                    Text("Model Credits")
+                        .foregroundStyle(LegibleSecondaryText.color)
                 }
             }
             .navigationTitle("Speech Storage")
@@ -787,6 +795,17 @@ private struct SpeechModelStorageView: View {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    /// A value row whose value stays secondary under its label but in the
+    /// legible gray. Every secondary gray in this sheet measured under 4.5:1
+    /// in light mode: values (138,138,142) 3.5:1 on the white row, section
+    /// headers and footer (133,133,139) 3.3:1 on the grouped background, the
+    /// loading status (127,127,127) 4.0:1 (TYPE-3).
+    private func valueRow(_ title: LocalizedStringKey, _ value: String) -> some View {
+        LabeledContent(title) {
+            Text(value).foregroundStyle(LegibleSecondaryText.color)
         }
     }
 
@@ -805,9 +824,10 @@ private struct SpeechModelStorageView: View {
             } else {
                 ProgressView()
             }
+            // Secondary under the row labels, in the legible gray (`valueRow`).
             Text(transcription.modelLoadingProgress)
                 .font(.footnote)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(LegibleSecondaryText.color)
                 .fixedSize(horizontal: false, vertical: true)
         }
         // The separator below starts under the bar or spinner, the row's
