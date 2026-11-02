@@ -420,6 +420,7 @@ class GhosttyMetalView: NSView, CALayerDelegate {
     private var pendingSurfaceResize: DispatchWorkItem?
     private var pendingGeometryRefresh = false
     private var isPresentationActive = true
+    private var lastReportedSurfaceVisibility: Bool?
     private var deferredLeftMouseDown: DeferredLeftMouseDown?
 
     init(app: ghostty_app_t, pane: Pane) {
@@ -601,6 +602,7 @@ class GhosttyMetalView: NSView, CALayerDelegate {
 
     func setPresentationActive(_ isActive: Bool) {
         isPresentationActive = isActive
+        syncSurfaceOcclusion()
         if isActive {
             if isHidden { isHidden = false }
             requestSurfaceGeometryRefresh()
@@ -687,44 +689,42 @@ class GhosttyMetalView: NSView, CALayerDelegate {
     private func configureWindowObservers() {
         tearDownWindowObservers()
 
-        guard let window else { return }
+        guard let window else { return syncSurfaceOcclusion() }
         let center = NotificationCenter.default
         // Notifications are delivered on `.main` already; just call the
         // refresh directly via `MainActor.assumeIsolated` instead of a
         // `Task { @MainActor }` hop, which previously delayed every
         // screen-change response by an extra run-loop tick.
-        let refresh: () -> Void = { [weak self] in
+        let refresh: @Sendable () -> Void = { [weak self] in
             MainActor.assumeIsolated {
                 self?.requestSurfaceGeometryRefresh()
             }
         }
-        windowObservers = [
-            center.addObserver(
-                forName: NSWindow.didResizeNotification,
-                object: window,
-                queue: .main
-            ) { _ in refresh() },
-            center.addObserver(
-                forName: NSWindow.didEndLiveResizeNotification,
-                object: window,
-                queue: .main
-            ) { _ in refresh() },
-            center.addObserver(
-                forName: NSWindow.didChangeBackingPropertiesNotification,
-                object: window,
-                queue: .main
-            ) { _ in refresh() },
-            center.addObserver(
-                forName: NSWindow.didChangeScreenNotification,
-                object: window,
-                queue: .main
-            ) { _ in refresh() },
-            center.addObserver(
-                forName: NSApplication.didChangeScreenParametersNotification,
-                object: nil,
-                queue: .main
-            ) { _ in refresh() },
+        let windowNotifications: [Notification.Name] = [
+            NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
+            NSWindow.didChangeBackingPropertiesNotification, NSWindow.didChangeScreenNotification,
         ]
+        windowObservers = windowNotifications.map { name in
+            center.addObserver(forName: name, object: window, queue: .main) { _ in refresh() }
+        } + [
+            center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
+                refresh()
+            },
+            center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.syncSurfaceOcclusion() }
+            },
+        ]
+        syncSurfaceOcclusion()
+    }
+
+    /// Tells Ghostty whether this surface can be seen, so hidden workspaces and
+    /// occluded windows stop rendering (true = visible, as Ghostty's own app passes).
+    private func syncSurfaceOcclusion() {
+        guard let surface else { return }
+        let visible = isPresentationActive && window?.occlusionState.contains(.visible) == true
+        guard visible != lastReportedSurfaceVisibility else { return }
+        lastReportedSurfaceVisibility = visible
+        ghostty_surface_set_occlusion(surface, visible)
     }
 
     private func tearDownWindowObservers() {
