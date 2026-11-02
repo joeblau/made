@@ -1,5 +1,7 @@
 import AppKit
+@preconcurrency import ChromiumKit
 import SwiftUI
+import WebKit
 
 /// Hosts one browser pane: the local-server start page until a URL loads,
 /// then the engine-specific surface (WebKit or Chromium) for `state.engine`.
@@ -122,4 +124,50 @@ enum BrowserStartPageVisibility {
         if hasPendingPageNavigation { return false }
         return openedWithBlankURL ?? urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+}
+
+/// Keyboard-focus rules for selecting a browser pane.
+///
+/// A click into a page makes the engine's content view first responder on
+/// mouse down; the pane only becomes selected on mouse up. Selection side
+/// effects must then leave that focus alone, or the clicked field loses it
+/// and only a second click focuses it.
+@MainActor
+enum BrowserPaneFocus {
+    /// Whether `responder` is `view` itself or a view inside it.
+    static func responder(_ responder: NSResponder?, isWithin view: NSView) -> Bool {
+        (responder as? NSView)?.isDescendant(of: view) ?? false
+    }
+
+    /// Whether keyboard focus already sits in page content: inside a Chromium
+    /// host view (CEF's content views are its descendants) or a `WKWebView`.
+    static func isInWebContent(_ responder: NSResponder?) -> Bool {
+        webContentView(containing: responder) != nil
+    }
+
+    /// Whether keyboard focus sits in the page of the pane whose state is
+    /// `state`. Focus left in another pane's page (the selection moved by
+    /// keyboard or a tab click) does not count, so keys never keep flowing
+    /// to a page the user moved away from.
+    static func isInWebContent(_ responder: NSResponder?, ownedBy state: BrowserState?) -> Bool {
+        guard let state,
+              let owner = webContentView(containing: responder) as? BrowserPaneContent else { return false }
+        return owner.browserState === state
+    }
+
+    private static func webContentView(containing responder: NSResponder?) -> NSView? {
+        var view = responder as? NSView
+        while let current = view {
+            if current is ChromiumBrowserHostView || current is WKWebView { return current }
+            view = current.superview
+        }
+        return nil
+    }
+}
+
+/// An engine view that knows which pane's `BrowserState` it shows, so focus
+/// rules can tell this pane's page from another pane's.
+@MainActor
+protocol BrowserPaneContent: AnyObject {
+    var browserState: BrowserState? { get }
 }

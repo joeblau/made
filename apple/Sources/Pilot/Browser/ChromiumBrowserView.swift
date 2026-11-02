@@ -57,6 +57,10 @@ extension ChromiumBrowserHostView: BrowserControlling {
                 )
             )
         case .focus:
+            // Selecting the pane by clicking into the page arrives after
+            // Chromium's content view already took focus on mouse down;
+            // bouncing first responder through the host would blur the page.
+            guard !BrowserPaneFocus.responder(window?.firstResponder, isWithin: self) else { return }
             window?.makeFirstResponder(self)
             focusBrowser()
         case let .setDeveloperToolsVisible(isVisible):
@@ -137,6 +141,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
 
         let host = PilotChromiumBrowserHostView(frame: .zero)
         host.onSelect = onSelect
+        host.browserState = state
         container.install(host)
         context.coordinator.attach(
             host,
@@ -1399,8 +1404,10 @@ final class ChromiumBrowserContainerView: NSView {
 @MainActor
 final class PilotChromiumBrowserHostView:
     ChromiumBrowserHostView,
-    ChromiumBrowserHosting {
+    ChromiumBrowserHosting,
+    BrowserPaneContent {
     var onSelect: (() -> Void)?
+    weak var browserState: BrowserState?
 
     override func mouseDown(with event: NSEvent) {
         onSelect?()

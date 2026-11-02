@@ -64,6 +64,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         webView.isPaneSelected = isActive && isSelected
         webView.onReload = { state.requestNavigationCommand("blau://reload") }
         webView.onSelect = onSelect
+        webView.browserState = state
         webView.performBrowserCommand(.setZoom(uiZoom))
         context.coordinator.lastFindRequestID = findRequestID
         context.coordinator.lastStopFindingRequestID = stopFindingRequestID
@@ -87,6 +88,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             browserView.isPaneSelected = isActive && isSelected
             browserView.onReload = { state.requestNavigationCommand("blau://reload") }
             browserView.onSelect = onSelect
+            browserView.browserState = state
         }
 
         nsView.isHidden = !isActive
