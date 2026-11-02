@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import SwiftUI
 import Testing
 @testable import Pilot
 
@@ -118,6 +119,62 @@ struct WorkspaceGlobalModeTests {
 
         store.isDockerMode = true
         #expect(!store.isWorkspaceDetailVisible)
+    }
+
+    @Test("A delayed inspector hide cannot escape a global mode")
+    func delayedGlobalModeHideDoesNotPersist() throws {
+        let fixture = try makeFixture()
+        let store = fixture.store
+        defer { clearModes(store) }
+        store.addWorkspace()
+        let workspace = try #require(store.selectedWorkspace)
+        workspace.setInspectorPresented(true)
+
+        store.enterNotesMode()
+        let hiddenBinding = ContentView.makeInspectorPresentedBinding(for: workspace, in: store)
+        #expect(!hiddenBinding.wrappedValue)
+
+        store.toggleNotesMode()
+        hiddenBinding.wrappedValue = false
+
+        #expect(workspace.isInspectorPresented)
+    }
+
+    @Test("An inspector write cannot cross workspace selection")
+    func staleSelectionWriteDoesNotPersist() throws {
+        let fixture = try makeFixture()
+        let store = fixture.store
+        defer { clearModes(store) }
+        store.addWorkspace()
+        let first = try #require(store.selectedWorkspace)
+        first.setInspectorPresented(true)
+        let firstBinding = ContentView.makeInspectorPresentedBinding(for: first, in: store)
+
+        store.addWorkspace()
+        let second = try #require(store.selectedWorkspace)
+        second.setInspectorPresented(true)
+        firstBinding.wrappedValue = false
+
+        #expect(first.isInspectorPresented)
+        #expect(second.isInspectorPresented)
+    }
+
+    @Test("The current workspace inspector binding accepts user changes")
+    func currentWorkspaceBindingPersistsChanges() throws {
+        let fixture = try makeFixture()
+        let store = fixture.store
+        defer { clearModes(store) }
+        store.addWorkspace()
+        let workspace = try #require(store.selectedWorkspace)
+        let binding = ContentView.makeInspectorPresentedBinding(for: workspace, in: store)
+
+        binding.wrappedValue = true
+        #expect(workspace.isInspectorPresented)
+        #expect(binding.wrappedValue)
+
+        binding.wrappedValue = false
+        #expect(!workspace.isInspectorPresented)
+        #expect(!binding.wrappedValue)
     }
 
     /// The container is returned alongside the store, not dropped: `ModelContext`
