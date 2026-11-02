@@ -28,9 +28,10 @@ struct CopilotDashboardView: View {
                     VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
                         if !connected {
                             // Orange glyph carries the caution; footnote copy
-                            // stays secondary so it passes contrast (TYPE-3).
+                            // uses the legible secondary gray: the system
+                            // `.secondary` is 4.0:1 on the light sheet (TYPE-3).
                             cautionLabel(Text("Cockpit disconnected · showing last-good data"), systemImage: "wifi.slash")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(LegibleSecondaryText.color)
                         }
 
                         selectedCard
@@ -59,7 +60,7 @@ struct CopilotDashboardView: View {
 
                         Text("Aggregate Live Activities update from Cockpit while connected. They do not use APNs or push notifications.")
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LegibleSecondaryText.color)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -97,7 +98,7 @@ struct CopilotDashboardView: View {
             // green text never has to pass contrast on its own (TYPE-3).
             Label {
                 Text(isActive ? "Live Activity is on" : "Live Activity is off")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LegibleSecondaryText.color)
             } icon: {
                 Image(systemName: isActive ? "livephoto" : "livephoto.slash")
                     .foregroundStyle(isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
@@ -122,7 +123,7 @@ struct CopilotDashboardView: View {
             if !isActive && !hasSelectedSnapshot {
                 Text("Start becomes available after the first Cockpit update.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LegibleSecondaryText.color)
             }
         }
     }

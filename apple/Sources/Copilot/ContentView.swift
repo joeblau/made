@@ -344,6 +344,7 @@ struct ContentView: View {
                     .symbolEffect(.variableColor.iterative, options: .repeating)
             } description: {
                 Text("Make sure Cockpit is running on your Mac.")
+                    .foregroundStyle(LegibleSecondaryText.color)
             }
             // The pulsing antenna is the one loading motion, as in
             // Kneeboard's Searching overlay; a spinner beside it competed
@@ -353,6 +354,7 @@ struct ContentView: View {
                 "No Workspaces",
                 systemImage: "rectangle.on.rectangle.slash",
                 description: Text("Create a workspace in Cockpit.")
+                    .foregroundStyle(LegibleSecondaryText.color)
             )
         } else {
             workspaceList

@@ -31,7 +31,7 @@ struct PlotterDashboardView: View {
                     errors
                     Text("Live Activities show the latest aggregate received locally from Cockpit. Keep Kneeboard connected for updates.")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LegibleSecondaryText.color)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(LiquidGlassMetrics.Spacing.xLarge)
@@ -59,15 +59,16 @@ struct PlotterDashboardView: View {
 
     private var connectionStatus: some View {
         let connected = mirror.isCockpitConnected || mirror.isDemoConnected
-        // Green marks only the state glyph; the sentence stays secondary text
-        // so it keeps body contrast on the grouped background.
+        // Green marks only the state glyph; the sentence is the legible
+        // secondary gray (the system `.secondary` is 4.0:1 on the light
+        // grouped background, TYPE-3).
         return Label {
             Text(
                 connected
                     ? "Connected to Cockpit · Local aggregate updates"
                     : "Local aggregate updates · Waiting for Cockpit"
             )
-            .foregroundStyle(.secondary)
+            .foregroundStyle(LegibleSecondaryText.color)
         } icon: {
             Image(systemName: connected ? "laptopcomputer.and.arrow.down" : "laptopcomputer.slash")
                 .foregroundStyle(connected ? Color.green : Color.secondary)
@@ -104,7 +105,7 @@ struct PlotterDashboardView: View {
                     if snapshot.runs.isEmpty {
                         Label("No runs reported", systemImage: "tray")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LegibleSecondaryText.color)
                             .padding([.horizontal, .bottom], LiquidGlassMetrics.Spacing.medium)
                     }
                 } else {
@@ -112,6 +113,7 @@ struct PlotterDashboardView: View {
                         Label("No Actions yet", systemImage: "arrow.triangle.2.circlepath")
                     } description: {
                         Text("Runs from Cockpit will appear here.")
+                            .foregroundStyle(LegibleSecondaryText.color)
                     }
                 }
             case .usage:
@@ -123,7 +125,7 @@ struct PlotterDashboardView: View {
                     if snapshot.providers.isEmpty {
                         Label("No provider summaries", systemImage: "tray")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LegibleSecondaryText.color)
                             .padding([.horizontal, .bottom], LiquidGlassMetrics.Spacing.medium)
                     }
                 } else {
@@ -131,6 +133,7 @@ struct PlotterDashboardView: View {
                         Label("No AI usage yet", systemImage: "sparkles")
                     } description: {
                         Text("Aggregate cost, tokens, and plan utilization will appear here.")
+                            .foregroundStyle(LegibleSecondaryText.color)
                     }
                 }
             case .runners:
@@ -142,7 +145,7 @@ struct PlotterDashboardView: View {
                     if snapshot.runners.isEmpty {
                         Label("No runners in the sample", systemImage: "tray")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(LegibleSecondaryText.color)
                             .padding([.horizontal, .bottom], LiquidGlassMetrics.Spacing.medium)
                     }
                 } else {
@@ -150,6 +153,7 @@ struct PlotterDashboardView: View {
                         Label("No runner data", systemImage: "server.rack")
                     } description: {
                         Text("Enterprise fleet status from Cockpit will appear here.")
+                            .foregroundStyle(LegibleSecondaryText.color)
                     }
                 }
             }
@@ -187,11 +191,13 @@ struct PlotterDashboardView: View {
                     Spacer()
                     // Green caption text on a pale green wash fails contrast
                     // in light mode (TYPE-3); the green fill carries the "on"
-                    // signal and the copy stays primary/secondary text.
+                    // signal and the copy stays primary text. The dark-mode
+                    // secondary label is translucent and blends with the
+                    // chip's own fill (4.4:1), so "Off" is primary too.
                     Text(isActive ? "On" : "Off")
                         .font(.caption)
                         .fontWeight(.semibold)
-                        .foregroundStyle(isActive ? Color.primary : Color.secondary)
+                        .foregroundStyle(Color.primary)
                         .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
                         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
                         .background(
@@ -201,14 +207,14 @@ struct PlotterDashboardView: View {
                 }
                 Text("Show \(selectedFamily.title) on the Lock Screen. Updates use local Cockpit data.")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LegibleSecondaryText.color)
             }
             VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 liveActivityButton(isActive: isActive)
                 if !isActive && !hasSelectedSnapshot {
                     Text("Start becomes available after the first \(selectedFamily.title) snapshot arrives.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(LegibleSecondaryText.color)
                         .transition(.opacity)
                 }
             }

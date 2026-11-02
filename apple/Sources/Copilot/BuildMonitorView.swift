@@ -53,9 +53,13 @@ struct BuildMonitorView: View {
                         ContentUnavailableView(
                             connected ? "No Recent Builds" : "Connect to Cockpit",
                             systemImage: "hammer",
+                            // The system description gray is 3.3:1 on the
+                            // light grouped background; the legible gray is
+                            // 6.0:1 (TYPE-3).
                             description: Text(connected
                                 ? "Open a GitHub project in Cockpit. Its workflow runs will appear here."
                                 : "Open Cockpit on your Mac to choose a workflow run.")
+                                .foregroundStyle(LegibleSecondaryText.color)
                         )
                         // Float the empty state on the grouped background
                         // instead of boxing it in a row card (LAY-1/MOT-6).
