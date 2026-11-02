@@ -1321,13 +1321,33 @@ final class ChromiumBrowserContainerView: NSView {
         runtimeState = .ready
     }
 
+    /// Wraps the status message at word boundaries only. A wrapping label
+    /// hyphenates by default, which split "avail- / able" in narrow panes.
+    private func applyUnhyphenatedMessage() {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.hyphenationFactor = 0
+        paragraph.usesDefaultHyphenation = false
+        messageLabel.attributedStringValue = NSAttributedString(
+            string: messageLabel.stringValue,
+            attributes: [
+                .font: messageLabel.font ?? NSFont.preferredFont(forTextStyle: .body),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ]
+        )
+    }
+
     @objc
     private func retry() {
         onRetry?()
     }
 
     private func updateMessage() {
-        defer { updateStartingIndicator() }
+        defer {
+            applyUnhyphenatedMessage()
+            updateStartingIndicator()
+        }
         switch runtimeState {
         case .starting:
             messageLabel.stringValue = "Starting Chromium..."

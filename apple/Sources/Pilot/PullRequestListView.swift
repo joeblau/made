@@ -117,7 +117,9 @@ struct InspectorSectionHeader: View {
                     .accessibilityHidden(true)
             }
         }
-        .foregroundStyle(.secondary)
+        // System secondary measured 3.2:1 on inspector glass in both modes
+        // (TYPE-3); the legible gray clears 4.5:1 for the title and glyph.
+        .glassLegibleForeground(.secondary)
         // No filled box: a tinted header directly above tinted cards read as
         // boxes inside boxes (LAY-1). 16pt lines the glyph up with the
         // Files outline's disclosure column and the cards' leading icons.
