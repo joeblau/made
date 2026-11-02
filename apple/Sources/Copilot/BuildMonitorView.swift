@@ -18,7 +18,7 @@ struct BuildMonitorView: View {
                             TimelineView(.periodic(from: .now, by: 15)) { context in
                                 if !followed.state.isComplete && followed.state.staleDate < context.date {
                                     Label("Updates delayed. Check that Cockpit is awake and online.", systemImage: "wifi.slash")
-                                        .font(.footnote).foregroundStyle(.secondary)
+                                        .font(.footnote).legibleSecondaryRowText()
                                 }
                             }
                             // Same glass capsule as Follow Build: stopping is
@@ -33,11 +33,11 @@ struct BuildMonitorView: View {
                         }
                         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
                     } header: {
-                        Text("Following")
+                        Text("Following").legibleSectionText()
                     } footer: {
                         // Monitor status rides the section it describes
                         // instead of a separate boxed section (LAY-1).
-                        if let message = monitor.message { Text(message) }
+                        if let message = monitor.message { Text(message).legibleSectionText() }
                     }
                 } else if let message = monitor.message {
                     // A glyph anchors the status line instead of a bare
@@ -45,7 +45,7 @@ struct BuildMonitorView: View {
                     Section {
                         Label(message, systemImage: "info.circle")
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .legibleSecondaryRowText()
                     }
                 }
                 Section {
@@ -92,11 +92,12 @@ struct BuildMonitorView: View {
                         .alignmentGuide(.listRowSeparatorLeading) { dimensions in dimensions[.leading] }
                     }
                 } header: {
-                    Text("Workflow runs")
+                    Text("Workflow runs").legibleSectionText()
                 } footer: {
                     // Explanatory copy rides the section footer instead of its
                     // own boxed section.
                     Text("Follow one run on your Lock Screen and Dynamic Island. Updates continue while Cockpit is running and your Mac is awake. Starting another monitor replaces the current one.")
+                        .legibleSectionText()
                 }
             }
             // Following/unfollowing and new runs reflow the list with a
@@ -114,7 +115,7 @@ struct BuildMonitorView: View {
     private func runDetails(_ run: BuildWorkflowRun) -> some View {
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             Text(run.workflow).font(.headline)
-            Text("\(run.repository) · \(run.branch)").font(.subheadline).foregroundStyle(.secondary)
+            Text("\(run.repository) · \(run.branch)").font(.subheadline).legibleSecondaryRowText()
             HStack {
                 // A plain glyph + text pair rather than a Label: inside a List,
                 // Label reserves the row-icon column, which parks the status

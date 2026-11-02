@@ -56,7 +56,7 @@ struct SecureMessagingView: View {
     // MARK: - Sections
 
     private var statusSection: some View {
-        Section("Status") {
+        Section {
             LabeledContent("Connection") {
                 HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     // In-flight stages show activity rather than a static dot
@@ -68,11 +68,13 @@ struct SecureMessagingView: View {
                             .accessibilityHidden(true)
                     }
                     Text(statusText)
-                        .foregroundStyle(.secondary)
+                        .legibleSecondaryRowText()
                         .contentTransition(.opacity)
                 }
                 .animation(LiquidGlassMetrics.stateChange, value: statusText)
             }
+        } header: {
+            Text("Status").legibleSectionText()
         }
     }
 
@@ -89,9 +91,10 @@ struct SecureMessagingView: View {
                 Label("Share my key", systemImage: "key")
             }
         } header: {
-            Text("My public key")
+            Text("My public key").legibleSectionText()
         } footer: {
             Text("Send this to your peer; they paste it as the peer key on their device.")
+                .legibleSectionText()
         }
     }
 
@@ -190,15 +193,16 @@ struct SecureMessagingView: View {
             .buttonBorderShape(.capsule)
             .controlSize(.large)
         } header: {
-            Text("Peer")
+            Text("Peer").legibleSectionText()
         } footer: {
             Text("The pairing token must match on both devices. Peer key is pinned and authenticated by the handshake.")
+                .legibleSectionText()
         }
     }
 
     private func messagingSection(_ transport: SecureChannelTransport) -> some View {
         // The section header is the composer's persistent label (FORM-1).
-        Section("Send") {
+        Section {
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 TextField("Message", text: $outgoing)
                     .onSubmit(send)
@@ -219,14 +223,16 @@ struct SecureMessagingView: View {
             .liquidGlassButtonStyle()
             .buttonBorderShape(.capsule)
             .controlSize(.small)
+        } header: {
+            Text("Send").legibleSectionText()
         }
     }
 
     private func logSection(_ transport: SecureChannelTransport) -> some View {
-        Section("Session log") {
+        Section {
             if transport.log.isEmpty {
                 Label("No activity yet.", systemImage: "text.alignleft")
-                    .foregroundStyle(.secondary)
+                    .legibleSecondaryRowText()
             } else {
                 ForEach(transport.log.reversed()) { entry in
                     Text(entry.text)
@@ -234,6 +240,8 @@ struct SecureMessagingView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+        } header: {
+            Text("Session log").legibleSectionText()
         }
     }
 
@@ -249,7 +257,7 @@ struct SecureMessagingView: View {
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Text(title)
                 .font(.subheadline)
-                .foregroundStyle(.secondary)
+                .legibleSecondaryRowText()
                 .accessibilityHidden(true)
             // Input → helper/error text at 4pt (FORM-5); the error is the
             // field's designed error state (FORM-4).

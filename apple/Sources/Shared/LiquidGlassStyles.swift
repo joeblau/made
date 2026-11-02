@@ -530,3 +530,30 @@ enum LegibleSecondaryText {
     })
 }
 #endif
+
+extension View {
+    /// A grouped `List`/`Form` section header or footer in the legible
+    /// secondary gray on iOS: the system header gray (133,133,139) is 3.3:1
+    /// on the light grouped background, this is 6.0:1 (TYPE-3). Dark mode
+    /// keeps the system secondary label. macOS keeps its own header styling.
+    @ViewBuilder
+    func legibleSectionText() -> some View {
+        #if os(iOS)
+        foregroundStyle(LegibleSecondaryText.color)
+        #else
+        self
+        #endif
+    }
+
+    /// Secondary text inside a grouped `List`/`Form` row. On iOS it uses the
+    /// legible gray (`.secondary` is 4.0:1 on a white row); elsewhere it stays
+    /// the platform `.secondary`.
+    @ViewBuilder
+    func legibleSecondaryRowText() -> some View {
+        #if os(iOS)
+        foregroundStyle(LegibleSecondaryText.color)
+        #else
+        foregroundStyle(.secondary)
+        #endif
+    }
+}

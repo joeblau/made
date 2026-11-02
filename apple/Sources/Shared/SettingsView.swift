@@ -46,7 +46,7 @@ struct SettingsSections: View {
                         keyValue(peer, tint: .green)
                     } else {
                         Text("Waiting to sync…")
-                            .foregroundStyle(.secondary)
+                            .legibleSecondaryRowText()
                     }
                 }
                 // The only control: roll a new identity key and push it to the
@@ -81,16 +81,30 @@ struct SettingsSections: View {
                     }
                     Text("Identity & Keys")
                 }
+                // The "Synced" caption keeps its explicit primary style.
+                .legibleSectionText()
                 .animation(LiquidGlassMetrics.spring, value: identity.isSynced)
             } footer: {
                 Text("Your device key is generated automatically and exchanged with your paired device over the encrypted connection — no setup required.")
+                    .legibleSectionText()
             }
         }
 
-        Section("About") {
-            LabeledContent("App", value: AppInfo.name)
-            LabeledContent("Version", value: AppInfo.version)
-            LabeledContent("Build", value: AppInfo.build)
+        Section {
+            aboutRow("App", AppInfo.name)
+            aboutRow("Version", AppInfo.version)
+            aboutRow("Build", AppInfo.build)
+        } header: {
+            Text("About").legibleSectionText()
+        }
+    }
+
+    /// A value row whose value stays secondary, in the legible gray on iOS:
+    /// the system `LabeledContent` value gray (138,138,142) is 3.5:1 on a
+    /// white row (TYPE-3).
+    private func aboutRow(_ title: LocalizedStringKey, _ value: String) -> some View {
+        LabeledContent(title) {
+            Text(value).legibleSecondaryRowText()
         }
     }
 
@@ -104,7 +118,7 @@ struct SettingsSections: View {
                 .foregroundStyle(tint ?? .primary)
                 .textSelection(.enabled)
         } else {
-            Text(placeholder).foregroundStyle(.secondary)
+            Text(placeholder).legibleSecondaryRowText()
         }
     }
 }

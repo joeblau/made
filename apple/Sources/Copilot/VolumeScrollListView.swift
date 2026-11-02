@@ -130,8 +130,12 @@ struct VolumeScrollListView<Item: Identifiable, RowContent: View>: View {
     @ViewBuilder
     private func sectionContent(_ section: VolumeScrollSection<Item>) -> some View {
         if let title = section.title {
-            Section(title) {
+            Section {
                 rows(for: section.items)
+            } header: {
+                // "Pinned"/"Workspaces" in the legible gray: the system
+                // header gray is 3.3:1 on the light grouped background.
+                Text(title).legibleSectionText()
             }
         } else {
             rows(for: section.items)
