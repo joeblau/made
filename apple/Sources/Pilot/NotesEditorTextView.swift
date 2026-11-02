@@ -13,6 +13,13 @@ final class GutterButton: NSButton {
         onClick?()
     }
 
+    /// The click is handled in `mouseDown` with no target/action, so a
+    /// VoiceOver press would otherwise do nothing.
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
+    }
+
     override func resetCursorRects() {
         addCursorRect(bounds, cursor: .pointingHand)
     }
@@ -26,6 +33,13 @@ final class ColorChipButton: NSButton {
 
     override func mouseDown(with event: NSEvent) {
         onClick?()
+    }
+
+    /// The click is handled in `mouseDown` with no target/action, so a
+    /// VoiceOver press would otherwise do nothing.
+    override func accessibilityPerformPress() -> Bool {
+        onClick?()
+        return true
     }
 
     override func resetCursorRects() {
@@ -587,6 +601,7 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
             let chip = ColorChipButton(frame: spec.frame)
             chip.swatch = spec.color
             chip.toolTip = "Copy \(spec.value)"
+            chip.setAccessibilityLabel("Copy \(spec.value)")
             let value = spec.value
             chip.onClick = { [weak self] in
                 let pasteboard = NSPasteboard.general
