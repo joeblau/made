@@ -101,6 +101,98 @@ struct WalletExtensionTests {
         #expect(WalletExtensionRegistry.sanitizedRelativePath(String(repeating: "a", count: 300)) == nil)
     }
 
+    // MARK: - Localized names
+
+    private let localizedManifest =
+        #"{"name":"__MSG_appName__","default_locale":"en","action":{"default_popup":"popup.html"}}"#
+
+    @Test("A __MSG_ name resolves from the default locale's messages")
+    func resolvesLocalizedName() throws {
+        let fixture = try makeExtension(
+            manifest: localizedManifest,
+            messages: ["en": #"{"appName":{"message":"Rabby Wallet","description":"x"}}"#]
+        )
+        #expect(fixture.walletExtension?.name == "Rabby Wallet")
+        #expect(fixture.walletExtension?.systemImageName == "hare")
+    }
+
+    @Test("Message names match case-insensitively, as in Chrome")
+    func messageNamesIgnoreCase() throws {
+        let fixture = try makeExtension(
+            manifest: localizedManifest,
+            messages: ["en": #"{"APPNAME":{"message":"Backpack"}}"#]
+        )
+        #expect(fixture.walletExtension?.name == "Backpack")
+    }
+
+    @Test("An unresolvable __MSG_ name falls back to the folder name")
+    func unresolvedNameFallsBackToFolder() throws {
+        let missingCatalog = try makeExtension(manifest: localizedManifest)
+        #expect(missingCatalog.walletExtension?.name == "wallet")
+
+        let missingKey = try makeExtension(
+            manifest: localizedManifest,
+            messages: ["en": #"{"other":{"message":"Nope"}}"#]
+        )
+        #expect(missingKey.walletExtension?.name == "wallet")
+
+        let traversal = try makeExtension(
+            manifest: #"{"name":"__MSG_appName__","default_locale":"../en","action":{"default_popup":"p.html"}}"#,
+            messages: ["en": #"{"appName":{"message":"Escaped"}}"#]
+        )
+        #expect(traversal.walletExtension?.name == "wallet")
+
+        let selfReference = try makeExtension(
+            manifest: localizedManifest,
+            messages: ["en": #"{"appName":{"message":"__MSG_appName__"}}"#]
+        )
+        #expect(selfReference.walletExtension?.name == "wallet")
+    }
+
+    @Test("A resolved name is untrusted text: control characters stripped, length capped")
+    func resolvedNameIsSanitized() throws {
+        let long = String(repeating: "W", count: 500)
+        let fixture = try makeExtension(
+            manifest: localizedManifest,
+            messages: ["en": #"{"appName":{"message":"Ra\u0007bby\u202E \#(long)"}}"#]
+        )
+        let name = try #require(fixture.walletExtension?.name)
+        #expect(name.hasPrefix("Rabby W"))
+        #expect(name.count <= 61)
+        #expect(!name.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) })
+    }
+
+    @Test("An oversized or out-of-root messages file is not read")
+    func boundsTheMessagesFile() throws {
+        let oversized = try makeExtension(
+            manifest: localizedManifest,
+            messages: ["en": #"{"appName":{"message":"Big"},"pad":""# + String(repeating: "x", count: 4 * 1024 * 1024) + #""}"#]
+        )
+        #expect(oversized.walletExtension?.name == "wallet")
+
+        let outside = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: outside) }
+        let target = outside.appending(path: "messages.json")
+        try Data(#"{"appName":{"message":"Outside"}}"#.utf8).write(to: target)
+        let linked = try makeExtension(manifest: localizedManifest)
+        let localeDirectory = linked.directory.appending(path: "_locales/en")
+        try FileManager.default.createDirectory(at: localeDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(
+            at: localeDirectory.appending(path: "messages.json"), withDestinationURL: target
+        )
+        #expect(WalletExtensionRegistry.load(directory: linked.directory)?.name == "wallet")
+    }
+
+    @Test("Only a whole-string __MSG_key__ is a message reference")
+    func recognizesMessageReferences() {
+        #expect(WalletExtensionRegistry.messageKey(in: "__MSG_appName__") == "appName")
+        #expect(WalletExtensionRegistry.messageKey(in: "__MSG_app@name_2__") == "app@name_2")
+        #expect(WalletExtensionRegistry.messageKey(in: "Rabby") == nil)
+        #expect(WalletExtensionRegistry.messageKey(in: "__MSG___") == nil)
+        #expect(WalletExtensionRegistry.messageKey(in: "x __MSG_appName__") == nil)
+        #expect(WalletExtensionRegistry.messageKey(in: "__MSG_app/../name__") == nil)
+    }
+
     // MARK: - Discovery
 
     @Test("Discovery returns readable extensions sorted by name")
@@ -148,10 +240,15 @@ struct WalletExtensionTests {
         let walletExtension: WalletExtension?
     }
 
-    private func makeExtension(manifest: String) throws -> Fixture {
+    private func makeExtension(manifest: String, messages: [String: String] = [:]) throws -> Fixture {
         let root = try temporaryDirectory()
         let directory = root.appending(path: "wallet")
         try write(manifest: manifest, into: directory)
+        for (locale, catalog) in messages {
+            let localeDirectory = directory.appending(path: "_locales").appending(path: locale)
+            try FileManager.default.createDirectory(at: localeDirectory, withIntermediateDirectories: true)
+            try Data(catalog.utf8).write(to: localeDirectory.appending(path: "messages.json"))
+        }
         return Fixture(
             directory: directory,
             walletExtension: WalletExtensionRegistry.load(directory: directory)

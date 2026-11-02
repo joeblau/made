@@ -108,10 +108,6 @@ enum WalletExtensionRegistry {
             return nil
         }
 
-        let rawName = (manifest["name"] as? String) ?? directory.lastPathComponent
-        let name = UntrustedText.sanitized(rawName, limit: 60)
-        guard !name.isEmpty else { return nil }
-
         guard let popupPath = popupPath(in: manifest) else { return nil }
 
         // Chrome derives an unpacked extension's ID from its absolute path, so
@@ -119,12 +115,109 @@ enum WalletExtensionRegistry {
         // is why nothing here may be hardcoded: moving the directory changes the
         // identifier, and a stale constant silently addresses a nonexistent
         // extension.
+        let id = identifier(forDirectory: directory)
         return WalletExtension(
-            id: identifier(forDirectory: directory),
-            name: name,
+            id: id,
+            name: displayName(manifest: manifest, directory: directory, id: id, fileManager: fileManager),
             directory: directory,
             popupPath: popupPath
         )
+    }
+
+    /// The manifest name, resolved the way Chrome does when it is a
+    /// `__MSG_key__` reference, otherwise the folder name, otherwise the ID.
+    /// Every candidate is third-party text, so it is length-capped and has
+    /// control and format characters (including bidi overrides) removed.
+    static func displayName(
+        manifest: [String: Any],
+        directory: URL,
+        id: String,
+        fileManager: FileManager = .default
+    ) -> String {
+        var candidates: [String] = []
+        if let raw = manifest["name"] as? String {
+            if let key = messageKey(in: raw) {
+                if let resolved = localizedMessage(
+                    key: key, manifest: manifest, directory: directory, fileManager: fileManager
+                ) {
+                    candidates.append(resolved)
+                }
+            } else {
+                candidates.append(raw)
+            }
+        }
+        candidates.append(directory.lastPathComponent)
+        for candidate in candidates {
+            let name = UntrustedText.sanitized(String(candidate.prefix(maximumRawNameLength)), limit: 60)
+            if !name.isEmpty, messageKey(in: name) == nil { return name }
+        }
+        return id
+    }
+
+    /// The key of a whole-string Chrome i18n reference (`__MSG_appName__`),
+    /// or nil when `raw` is ordinary text. Chrome message names are ASCII
+    /// letters, digits, `_` and `@`.
+    static func messageKey(in raw: String) -> String? {
+        let prefix = "__MSG_", suffix = "__"
+        guard raw.hasPrefix(prefix), raw.hasSuffix(suffix),
+              raw.count > prefix.count + suffix.count,
+              raw.count <= prefix.count + suffix.count + 128 else { return nil }
+        let key = raw.dropFirst(prefix.count).dropLast(suffix.count)
+        guard key.unicodeScalars.allSatisfy({
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "@")
+        }) else { return nil }
+        return String(key)
+    }
+
+    /// Looks `key` up in `_locales/<default_locale>/messages.json`. Chrome
+    /// matches message names case-insensitively. Nil when the locale is
+    /// missing or malformed, the file is absent, oversized, outside the
+    /// extension root, or has no such message.
+    static func localizedMessage(
+        key: String,
+        manifest: [String: Any],
+        directory: URL,
+        fileManager: FileManager = .default
+    ) -> String? {
+        guard let locale = manifest["default_locale"] as? String,
+              (1...16).contains(locale.count),
+              locale.unicodeScalars.allSatisfy({
+                  $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-")
+              }) else { return nil }
+        let messagesURL = directory
+            .appending(path: "_locales", directoryHint: .isDirectory)
+            .appending(path: locale, directoryHint: .isDirectory)
+            .appending(path: "messages.json", directoryHint: .notDirectory)
+        guard let data = boundedContents(
+            of: messagesURL, confinedTo: directory, limit: maximumMessagesBytes, fileManager: fileManager
+        ), let messages = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let entry = messages[key]
+            ?? messages.first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
+        return (entry as? [String: Any])?["message"] as? String
+    }
+
+    /// Reads a regular file of at most `limit` bytes whose resolved path stays
+    /// inside `root`, so a symlink cannot point the read anywhere else and the
+    /// read itself, not a prior size check, enforces the bound.
+    private static func boundedContents(
+        of url: URL,
+        confinedTo root: URL,
+        limit: Int,
+        fileManager: FileManager
+    ) -> Data? {
+        let resolvedRoot = root.standardizedFileURL.resolvingSymlinksInPath().path(percentEncoded: false)
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+        let rootPrefix = resolvedRoot.hasSuffix("/") ? resolvedRoot : resolvedRoot + "/"
+        guard resolved.path(percentEncoded: false).hasPrefix(rootPrefix),
+              let attributes = try? fileManager.attributesOfItem(atPath: resolved.path(percentEncoded: false)),
+              attributes[.type] as? FileAttributeType == .typeRegular,
+              let handle = try? FileHandle(forReadingFrom: resolved) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: limit + 1),
+              !data.isEmpty, data.count <= limit else { return nil }
+        return data
     }
 
     /// Chrome's unpacked-extension identifier: the first 16 bytes of the
@@ -172,4 +265,9 @@ enum WalletExtensionRegistry {
 
     /// A manifest is a small JSON file; anything larger is not one.
     private static let maximumManifestBytes = 1024 * 1024
+    /// A wallet's default-locale catalog holds every UI string (Rabby's is a
+    /// few hundred KB), so allow more than a manifest but still bound it.
+    private static let maximumMessagesBytes = 4 * 1024 * 1024
+    /// Caps the work `UntrustedText.sanitized` does on a third-party string.
+    private static let maximumRawNameLength = 1024
 }
