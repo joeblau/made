@@ -208,8 +208,11 @@ struct RemoteDesktopView: View {
             let isSelected = store.selectedRemoteConnectionID == id
             VStack(spacing: 0) {
                 HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    // Decorative: VoiceOver read the glyph as "Mac image"
+                    // before every slot title.
                     Image(systemName: "display")
                         .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
                     Text(connection.displayTitle).lineLimit(1)
                         // The header row selects on a plain tap below; the
                         // title gives VoiceOver the same button action.
@@ -432,6 +435,7 @@ private struct RemoteConnectionPane: View {
                     Image(systemName: "display")
                         .font(.largeTitle.weight(.light))
                         .foregroundStyle(.tertiary)
+                        .accessibilityHidden(true)
                 }
 
                 VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
