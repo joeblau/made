@@ -397,53 +397,67 @@ struct ContentView: View {
     @ViewBuilder
     private var walkieStatus: some View {
         if !demoMode || CopilotDemoScenario.showsWalkieHUD, walkie.phase != .idle || walkie.statusMessage != nil {
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Group {
-                switch walkie.phase {
-                case .preparing:
-                    Label("Preparing microphone…", systemImage: "mic")
-                case .recording:
-                    // The pulsing red glyph carries the recording signal
-                    // (COL-4); the footnote copy stays primary so it keeps
-                    // contrast on the glass HUD (TYPE-3).
-                    Label {
-                        Text("Recording — release Volume Down to send")
-                    } icon: {
-                        Image(systemName: "mic.fill")
-                            .foregroundStyle(.red)
-                            .symbolEffect(.pulse, options: .repeating)
+            // The HUD panel and its Share button are sibling glass shapes in
+            // one container, like the download banner and its Cancel: the
+            // button gets real glass without stacking it on the panel's.
+            GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    walkieStatusPanel
+                    if walkie.phase == .idle, !walkie.transcript.isEmpty {
+                        ShareLink("Copy or Share Transcript", item: walkie.transcript)
+                            .font(.footnote)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .liquidGlassButtonStyle()
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.small)
                     }
-                case .finishing:
-                    Label("Finishing transcription…", systemImage: "waveform")
-                case .idle:
-                    if let message = walkie.statusMessage { Text(message) }
-                }
-                }
-                // Status lines wrap rather than truncate; under pressure the
-                // transcript below gives up height first (TYPE-4).
-                .fixedSize(horizontal: false, vertical: true)
-                let text = walkie.displayedTranscript(liveText: transcription.combinedText)
-                if !text.isEmpty || walkie.phase == .recording {
-                    WalkieTranscriptView(text: text, isRecording: walkie.phase == .recording)
-                }
-                if walkie.phase == .idle, !walkie.transcript.isEmpty {
-                    ShareLink("Copy or Share Transcript", item: walkie.transcript)
-                        .font(.caption)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            .font(.footnote)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(LiquidGlassMetrics.Spacing.medium)
-            // Transient HUD floating over the list, not a full-bleed slab
-            // under the (already glass) navigation bar.
-            .glassEffect(.regular, in: RoundedRectangle(
-                cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous
-            ))
             .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
             .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
+    }
+
+    private var walkieStatusPanel: some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Group {
+            switch walkie.phase {
+            case .preparing:
+                Label("Preparing microphone…", systemImage: "mic")
+            case .recording:
+                // The pulsing red glyph carries the recording signal
+                // (COL-4); the footnote copy stays primary so it keeps
+                // contrast on the glass HUD (TYPE-3).
+                Label {
+                    Text("Recording — release Volume Down to send")
+                } icon: {
+                    Image(systemName: "mic.fill")
+                        .foregroundStyle(.red)
+                        .symbolEffect(.pulse, options: .repeating)
+                }
+            case .finishing:
+                Label("Finishing transcription…", systemImage: "waveform")
+            case .idle:
+                if let message = walkie.statusMessage { Text(message) }
+            }
+            }
+            // Status lines wrap rather than truncate; under pressure the
+            // transcript below gives up height first (TYPE-4).
+            .fixedSize(horizontal: false, vertical: true)
+            let text = walkie.displayedTranscript(liveText: transcription.combinedText)
+            if !text.isEmpty || walkie.phase == .recording {
+                WalkieTranscriptView(text: text, isRecording: walkie.phase == .recording)
+            }
+        }
+        .font(.footnote)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(LiquidGlassMetrics.Spacing.medium)
+        // Transient HUD floating over the list, not a full-bleed slab
+        // under the (already glass) navigation bar.
+        .glassEffect(.regular, in: RoundedRectangle(
+            cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous
+        ))
     }
 
     private func prepareSpeechModel(allowRestrictedNetwork: Bool) {
