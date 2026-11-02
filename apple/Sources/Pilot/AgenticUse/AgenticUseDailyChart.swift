@@ -139,7 +139,7 @@ struct AgenticUseDailyChartPanel: View {
         Picker("Metric", selection: $metric) {
             ForEach(Metric.allCases) { Text($0.rawValue).tag($0) }
         }
-        .pickerStyle(.segmented)
+        .legibleSegmentedPicker()
         .labelsHidden()
         .controlSize(.small)
         .fixedSize()

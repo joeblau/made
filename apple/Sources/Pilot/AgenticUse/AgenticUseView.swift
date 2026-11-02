@@ -64,7 +64,7 @@ struct AgenticUseView: View {
                             Text(range.label).tag(range)
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .legibleSegmentedPicker()
                     .controlSize(.small)
                     .labelsHidden()
                     .fixedSize()
