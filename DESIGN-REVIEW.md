@@ -276,11 +276,12 @@ Fixes from the audit, each checked in the macOS 27.2 VM or the 27.2 simulators:
   - The Wireless pane switches to its compact layout in narrow panes in every state. The pane width now comes from a `GeometryReader`; before, the overflowing content reported its own width, so the compact layout never appeared and the header clipped. Checked at 60–160pt, stopped and waiting.
   - Secondary text in the Edit Device and Add Runner sheets and in the runner and model popovers measures 6.7–7.0:1 (3.95:1 before). Text that sets `.secondary` itself needs the legible gray set directly; a sheet-wide `legibleSecondaryHierarchy()` doesn't reach it.
   - Workspace tab titles, note tabs, Remote Desktop titles and the sidebar LLM gauge were tap-only. They now expose the button trait and the same action to VoiceOver. The tab reads as `AXButton` with its selection state in the VM accessibility tree.
+  - Inspector section headers use the legible gray instead of system secondary (3.2:1 on inspector glass), and Chromium status messages wrap at word boundaries instead of hyphenating ("avail- / able").
   - The Notes gutter and color-chip buttons respond to VoiceOver presses, and the Walkie transcript has a Share button.
   - The Chromium wallet popup shows the real Rabby UI. It opens Chrome-style in its own CEF-owned window, because CEF forces Alloy style on a browser hosted inside an `NSView`. Windows an extension opens on its own are hidden and closed, and the popup can't navigate outside the extension.
   - Quit paths, run in the VM: ⌘Q with Chromium panes ends with `exit_type` Normal. A logout exits at once, and a cancelled logout followed by ⌘Q also ends Normal. If Chromium hangs the main thread during a quit, a backstop ends the process (6.5s in the VM).
   - After one unclean exit, Chromium kept `profile.exit_type` at "Crashed" forever, because CEF never shows Chrome's "Restore pages?" prompt. That brought the previous session's session cookies back on every launch. A clean shutdown now records "Normal" before `CefShutdown`; a kill, logout or backstop exit still reads as a crash. This cause is inferred from the VM runs; there was no Chromium source to read.
-- Widgets: tinted (accented), clear (vibrant) and StandBy night modes can't be set in the simulator, so every widget family was rendered offline in each mode (293 renders). The fixes from those renders: accent-group status text in tinted mode, the Actions title, Build Activity captions, the Kneeboard snapshot gradient, and the Mirror status line, which now sits in its own strip in accented and vibrant modes (9.8–16.3:1, and 5.6:1 in StandBy night). The Mirror still renders in full color in tinted mode, like a photo. Keeping `.accentedDesaturated`, as the Photos widget does, is a product call.
+- Widgets: tinted (accented), clear (vibrant) and StandBy night modes can't be set in the simulator, so every widget family was rendered offline in each mode (293 renders). The fixes from those renders: accent-group status text in tinted mode, the Actions title, Build Activity captions, the Kneeboard snapshot gradient, and the Mirror status line, which now sits in its own strip in accented and vibrant modes (9.8–16.3:1, and 5.6:1 in StandBy night). In tinted mode the mirrored still renders in full color, like a photo: `.accentedDesaturated` flattened a bright window into a near-solid tinted plate, so the Mac screen it mirrors was no longer recognizable.
 
 Not capturable here:
 - USB Device stream and wireless live stream, for the reasons above.
@@ -291,7 +292,6 @@ Not capturable here:
 Left open:
 - When a terminal has keyboard focus, the first click into a Chromium page field doesn't take keyboard focus (predates this branch).
 - White text on the system prominent blue button measures 3.8–4.0:1 app-wide; it's the platform's style.
-- The Inspector "Repository" header measures 3.2:1 in its no-repository state, and "Chromium is unavailable" hyphenates "available" in very narrow panes.
 
 Verification: `build-ci.sh`, `test.sh all` (PilotTests 876 passed with 2 CEF skips, SharedTests 232, PlotterTests 4), `lint-swift.sh --all` (0 violations in 359 files), `app-icon-tool.swift validate`, `check-docs.sh`, the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators, the Chromium configuration build, and an XcodeGen drift check all pass.
 
