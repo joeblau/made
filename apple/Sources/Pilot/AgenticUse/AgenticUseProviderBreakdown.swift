@@ -140,7 +140,10 @@ private struct AgenticUseProviderLegendEntry: View {
                             .monospacedDigit()
                         Text(AgenticUseFormat.tokens(total.tokens))
                             .agenticUseFont(.meta)
-                            .foregroundStyle(.secondary)
+                            // Secondary on popover glass (TYPE-3). Set
+                            // directly: `legibleSecondaryHierarchy()` does
+                            // not reach text that names `.secondary` itself.
+                            .foregroundStyle(GlassLegibleText.secondaryColor)
                             .monospacedDigit()
                             .frame(minWidth: 44, alignment: .trailing)
                     }

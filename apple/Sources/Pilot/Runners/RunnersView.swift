@@ -141,7 +141,7 @@ struct RunnersView: View {
                     Label(layout.title, systemImage: layout.symbol).labelStyle(.iconOnly).tag(layout)
                 }
             }
-            .pickerStyle(.segmented)
+            .legibleSegmentedPicker()
             .labelsHidden()
             .fixedSize()
             .help("Switch between the 3D fleet, compact tiles, and detailed cards")
@@ -399,7 +399,7 @@ struct RunnerDetailsPopover: View {
                 if name != runner.name { detailRow("Runner", runner.name) }
                 if !runner.labels.isEmpty {
                     GridRow {
-                        Text("Labels").foregroundStyle(.secondary)
+                        Text("Labels").foregroundStyle(GlassLegibleText.secondaryColor)
                         Text(runner.labelLine)
                             .font(.caption.monospaced())
                             .fixedSize(horizontal: false, vertical: true)
@@ -414,7 +414,10 @@ struct RunnerDetailsPopover: View {
 
     private func detailRow(_ title: String, _ value: String) -> some View {
         GridRow {
-            Text(title).foregroundStyle(.secondary)
+            // Row titles are secondary on popover glass (TYPE-3). Set
+            // directly: `legibleSecondaryHierarchy()` does not reach text
+            // that names `.secondary` itself.
+            Text(title).foregroundStyle(GlassLegibleText.secondaryColor)
             Text(value).textSelection(.enabled)
         }
     }
@@ -521,7 +524,7 @@ private struct AddRunnerScopeSheet: View {
             Picker("Source", selection: $kind) {
                 ForEach(RunnerScope.Kind.allCases, id: \.self) { kind in Text(kind.title).tag(kind) }
             }
-            .pickerStyle(.segmented)
+            .legibleSegmentedPicker()
             .labelsHidden()
             VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 // Persistent label above the field; the placeholder is only
@@ -536,7 +539,10 @@ private struct AddRunnerScopeSheet: View {
                     Text(kind == .enterprise
                          ? "Uses your GitHub CLI account. Enterprise runners need the manage_runners:enterprise token scope."
                          : "Uses your GitHub CLI account. You’ll need access to view this source’s self-hosted runners.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        // System secondary measured 3.95:1 on the light sheet
+                        // (TYPE-3); a sheet-wide `legibleSecondaryHierarchy()`
+                        // does not reach text that names `.secondary` itself.
+                        .font(.caption).foregroundStyle(GlassLegibleText.secondaryColor)
                 }
             }
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
@@ -582,7 +588,7 @@ private struct RunnerDetailsSheet: View {
                     .runnerThumbnail(size: 56, cornerRadius: LiquidGlassMetrics.Radius.field)
                 VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     Text("Edit Device").font(.title2.weight(.semibold))
-                    Text(runner.name).font(.subheadline).foregroundStyle(.secondary)
+                    Text(runner.name).font(.subheadline).foregroundStyle(GlassLegibleText.secondaryColor)
                 }
             }
             // Persistent labels stacked above each control (FORM-1), matching
@@ -617,7 +623,7 @@ private struct RunnerDetailsSheet: View {
                 }
             }
             Text("Device names and images are saved in Cockpit. Runner labels come from GitHub.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(GlassLegibleText.secondaryColor)
             HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Button("Reset to Defaults") { presentation = RunnerPresentation() }
                     .compatGlassButtonStyle()
@@ -632,6 +638,12 @@ private struct RunnerDetailsSheet: View {
         }
         .padding(LiquidGlassMetrics.Spacing.xLarge)
         .frame(width: 440)
+        // The "Display name" and "Hardware" labels, the runner name, and the
+        // footnote measured 3.95:1 in system secondary on the light sheet
+        // (TYPE-3), so they set the legible gray directly. A sheet-wide
+        // `legibleSecondaryHierarchy()` left explicit `.secondary` text at
+        // 3.95:1 and turned the Hardware menu's glass into a solid
+        // primary-colored pill (2.0:1 dark, 2.8:1 light).
     }
 
     private var automaticHardwareTitle: String {
@@ -647,7 +659,7 @@ private struct RunnerDetailsSheet: View {
         VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Text(title)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(GlassLegibleText.secondaryColor)
                 .accessibilityHidden(true)
             control()
         }
