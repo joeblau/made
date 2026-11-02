@@ -31,6 +31,10 @@ final class AndroidDeviceSession {
     /// Installed AVDs that are not currently running, offered as "boot one" rows
     /// in the Simulator picker. Only populated for the `.simulator` target.
     var bootableAVDs: [String] = []
+    /// Serial → AVD name for running emulators, so the picker can say
+    /// "Pixel 9 API 36" instead of every Google image's shared model string
+    /// ("sdk gphone64 arm64"). Mirrors the scan cache; empty for `.device`.
+    private(set) var runningAVDNames: [String: String] = [:]
     var isRefreshing = false
     var lastError: String?
     var isRecording = false
@@ -123,6 +127,12 @@ final class AndroidDeviceSession {
 
     // MARK: - Device list
 
+    /// The picker/status title for a device: the AVD name for a running
+    /// emulator when known, else the model from `adb devices -l`.
+    func displayName(for device: AndroidDevice) -> String {
+        runningAVDNames[device.serial].map(EmulatorBridge.displayName(for:)) ?? device.displayName
+    }
+
     /// Forget cached serial→AVD-name mappings. Called whenever picker polling
     /// (re)starts: while scans are paused — streaming, pane collapsed or
     /// inactive, session suspended — adb can reuse an emulator serial
@@ -132,6 +142,7 @@ final class AndroidDeviceSession {
     func invalidateAVDSerialCache() {
         avdCacheGeneration &+= 1
         avdCache.avdNamesBySerial = [:]
+        runningAVDNames = [:]
     }
 
     func refreshDevices() {
@@ -150,6 +161,9 @@ final class AndroidDeviceSession {
                 merged.avdNamesBySerial = [:]
             }
             self.avdCache = merged
+            if self.runningAVDNames != merged.avdNamesBySerial {
+                self.runningAVDNames = merged.avdNamesBySerial
+            }
             self.bootableAVDs = scan.bootableAVDs
             switch scan.devices {
             case .success(let devices):
@@ -275,7 +289,9 @@ final class AndroidDeviceSession {
                 }
             }
             var bootable: [String] = []
-            if target == .simulator, let adbURL = AdbBridge.resolveAdbURL() {
+            // An untargeted (restored) pane lists emulators too, so it also
+            // resolves their AVD names; only `.simulator` shows bootable AVDs.
+            if target != .device, let adbURL = AdbBridge.resolveAdbURL() {
                 let homeModified = avdHomeModificationDate()
                 if cache.installedAVDs == nil || homeModified != cache.avdHomeModified,
                    let installed = try? EmulatorBridge.listAVDs() {
@@ -288,8 +304,10 @@ final class AndroidDeviceSession {
                         runningSerials: running.filter(\.isEmulator).map(\.serial),
                         query: { AdbBridge.emulatorAVDName(adbURL: adbURL, serial: $0) }
                     )
-                    let runningAVDNames = Set(cache.avdNamesBySerial.values)
-                    bootable = installed.filter { !runningAVDNames.contains($0) }
+                    if target == .simulator {
+                        let runningAVDNames = Set(cache.avdNamesBySerial.values)
+                        bootable = installed.filter { !runningAVDNames.contains($0) }
+                    }
                 }
             }
             return DeviceScan(devices: deviceResult, bootableAVDs: bootable, cache: cache)
@@ -404,8 +422,9 @@ final class AndroidDeviceSession {
         teardownConnection()
 
         connectedSerial = device.serial
-        connectedName = device.displayName
-        status = .connecting(device.displayName)
+        let name = displayName(for: device)
+        connectedName = name
+        status = .connecting(name)
 
         Task {
             let outcome = await Self.prepareConnection(serial: device.serial)

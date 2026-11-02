@@ -430,6 +430,11 @@ The pairing token and peer public key are stored in the Keychain with
 the old `p2p.token` and `p2p.peerPublicKey` UserDefaults values and deletes the
 plaintext copies.
 
+The peer key slot is the same pin PeerSync uses, so the Secure Messaging form
+only ever writes a well-formed X25519 key (trimmed). Emptying the field unpairs;
+malformed text is never saved, leaves the existing pin untouched, and is flagged
+inline under the field (`SecurePairingStore.peerKeyUpdate(for:)`).
+
 ---
 
 ## 8. Tests

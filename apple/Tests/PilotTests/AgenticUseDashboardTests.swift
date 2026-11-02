@@ -114,6 +114,21 @@ struct AgenticUseDashboardTests {
         }
     }
 
+    @Test("Token flow groups models by provider so provider ribbons do not cross")
+    func tokenFlowGroupsModelsByProvider() {
+        let specs: [(String, AgenticProvider, Int)] = [
+            ("opus", .claude, 600), ("gpt", .codex, 500), ("sonnet", .claude, 400), ("k3", .kimi, 50),
+        ]
+        let models = specs.map { model, provider, tokens in
+            AgenticModelTotal(
+                model: model, displayName: model, cost: 1, tokens: tokens, costShare: 0.25,
+                isUnpriced: false, provider: provider, inputTokens: tokens
+            )
+        }
+        let graph = AgenticTokenFlowGraph.make(modelTotals: models, maxModels: 7)
+        #expect(graph.models.map(\.id) == [.model("opus"), .model("sonnet"), .model("gpt"), .model("k3")])
+    }
+
     @Test("A single leftover model keeps its own node instead of an Other bucket")
     func tokenFlowNoSingleOther() {
         let models = (0..<8).map { index in

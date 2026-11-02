@@ -75,3 +75,52 @@ struct ColorChipTests {
         #expect(found.map(\.value) == ["#00FF3F", "rgb(0, 255, 63)"])
     }
 }
+
+@Suite("Segmented picker selection tint")
+struct SegmentedSelectionTintTests {
+    /// The system accent colors (light and dark variants, sRGB) plus white
+    /// and black: every selected segment must keep its white label at or
+    /// above 4.5:1 (TYPE-3) after `legibleFill`.
+    private static let accents: [(Double, Double, Double)] = [
+        (0.0, 0.533, 1.0), (0.039, 0.518, 1.0),      // blue
+        (0.584, 0.239, 0.588), (0.749, 0.353, 0.949), // purple
+        (0.969, 0.31, 0.62), (1.0, 0.216, 0.373),    // pink
+        (0.878, 0.22, 0.243), (1.0, 0.271, 0.227),   // red
+        (0.969, 0.51, 0.106), (1.0, 0.624, 0.039),   // orange
+        (1.0, 0.784, 0.0), (1.0, 0.839, 0.039),      // yellow
+        (0.384, 0.729, 0.275), (0.196, 0.843, 0.294), // green
+        (0.549, 0.549, 0.549), (0.596, 0.596, 0.616), // graphite
+        (1, 1, 1), (0, 0, 0),
+    ]
+
+    @Test func everyAccentClearsTheContrastFloorWithWhite() {
+        for (red, green, blue) in Self.accents {
+            let fill = SegmentedSelectionTint.legibleFill(red: red, green: green, blue: blue)
+            let contrast = SegmentedSelectionTint.contrastWithWhite(red: fill.red, green: fill.green, blue: fill.blue)
+            #expect(contrast >= SegmentedSelectionTint.minimumContrast, "\(red), \(green), \(blue) -> \(contrast)")
+            #expect(contrast >= 4.5)
+        }
+    }
+
+    @Test func darkeningKeepsTheHueAndStopsAtTheFloor() {
+        let fill = SegmentedSelectionTint.legibleFill(red: 0, green: 0.533, blue: 1)
+        #expect(fill.red == 0)
+        #expect(abs(fill.green / fill.blue - 0.533) < 0.0001)
+        // One more step lighter would fall below the floor.
+        let lighter = (fill.blue + 0.01) / fill.blue
+        let contrast = SegmentedSelectionTint.contrastWithWhite(
+            red: 0, green: fill.green * lighter, blue: fill.blue * lighter
+        )
+        #expect(contrast < SegmentedSelectionTint.minimumContrast)
+    }
+
+    @Test func alreadyLegibleColorsAreUnchanged() {
+        let fill = SegmentedSelectionTint.legibleFill(red: 0.1, green: 0.2, blue: 0.5)
+        #expect(fill.red == 0.1 && fill.green == 0.2 && fill.blue == 0.5)
+    }
+
+    @Test func contrastMatchesWCAG() {
+        #expect(abs(SegmentedSelectionTint.contrastWithWhite(red: 0, green: 0, blue: 0) - 21) < 0.001)
+        #expect(abs(SegmentedSelectionTint.contrastWithWhite(red: 1, green: 1, blue: 1) - 1) < 0.001)
+    }
+}

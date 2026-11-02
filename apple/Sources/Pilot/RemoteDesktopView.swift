@@ -27,32 +27,34 @@ struct RemoteDesktopView: View {
         }
         .background(.black)
         .overlay {
-            if let groupID = pickerGroupID {
-                RemoteComputerPicker(
-                    discovery: discovery,
-                    onPick: { host, port, nickname in
-                        guard let group = groups.groups.first(where: { $0.id == groupID }),
-                              !group.isFull else { pickerGroupID = nil; return }
-                        let connection = store.addRemoteConnection(host: host, port: port, nickname: nickname)
-                        groups.place(connection.id, in: groupID)
-                        pickerGroupID = nil
-                    },
-                    onCancel: { pickerGroupID = nil }
-                )
-                .transition(.opacity)
+            ZStack {
+                if let groupID = pickerGroupID {
+                    remoteComputerPicker(groupID: groupID)
+                        // Content scale + fade (MODAL-2), springing into place
+                        // (MOT-4). The animation is scoped to this overlay so
+                        // the grid and live VNC views never interpolate.
+                        .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                }
             }
+            .animation(LiquidGlassMetrics.spring, value: pickerGroupID)
         }
-        .alert("Rename Group", isPresented: Binding(
+        // A glass prompt sheet rather than a system alert, so the name field
+        // is a Liquid Glass field like every other text input.
+        .sheet(isPresented: Binding(
             get: { renamingGroupID != nil },
             set: { if !$0 { renamingGroupID = nil } }
         )) {
-            TextField("Group name", text: $groupName)
-            Button("Save") {
+            TextPromptSheet(
+                title: "Rename Group",
+                label: "Group name",
+                prompt: "Studio Macs",
+                confirmTitle: "Save",
+                text: $groupName,
+                onCancel: { renamingGroupID = nil }
+            ) {
                 if let id = renamingGroupID { groups.renameGroup(id, to: groupName) }
                 renamingGroupID = nil
             }
-            .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            Button("Cancel", role: .cancel) { renamingGroupID = nil }
         }
         .confirmationDialog(
             "Remove Connection?",
@@ -93,75 +95,89 @@ struct RemoteDesktopView: View {
         }
     }
 
-    /// Group tabs are glass controls above the screen grid; only the selected
-    /// group carries the accent tint, as a state signal (COL-4).
+    private func remoteComputerPicker(groupID: UUID) -> some View {
+        RemoteComputerPicker(
+            discovery: discovery,
+            onPick: { host, port, nickname in
+                guard let group = groups.groups.first(where: { $0.id == groupID }),
+                      !group.isFull else { pickerGroupID = nil; return }
+                let connection = store.addRemoteConnection(host: host, port: port, nickname: nickname)
+                groups.place(connection.id, in: groupID)
+                pickerGroupID = nil
+            },
+            onCancel: { pickerGroupID = nil }
+        )
+    }
+
+    /// Group tabs are capsule glass chips above the screen grid; only the
+    /// selected group carries the accent tint, as a state signal (COL-4). The
+    /// chips, New Group, Rename, and Add Computer are one control cluster, so
+    /// each run of neighboring glass shares a container.
     private var groupBar: some View {
-        HStack(spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(groups.groups) { group in
-                        let isSelected = group.id == groups.selectedGroupID
-                        Button {
-                            store.selectedRemoteConnectionID = groups.selectGroup(
-                                group.id, preserving: store.selectedRemoteConnectionID
-                            )
-                        } label: {
-                            Label(group.name, systemImage: "square.grid.2x2")
-                                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                                .lineLimit(1)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .contentShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .compatGlassCapsule(
-                            tint: isSelected ? Color.accentColor.opacity(0.22) : nil,
-                            interactive: true
-                        )
-                        .accessibilityAddTraits(isSelected ? .isSelected : [])
-                        .contextMenu {
-                            Button("Rename Group…") { rename(group) }
-                            Button("Delete Empty Group", role: .destructive) { groups.deleteEmptyGroup(group.id) }
-                                .disabled(!group.connectionIDs.isEmpty || groups.groups.count == 1)
-                        }
-                        .dropDestination(for: String.self) { items, _ in
-                            return moveDroppedMachine(items, to: group.id)
-                        }
-                    }
-                    Button {
-                        let id = groups.addGroup()
-                        store.selectedRemoteConnectionID = nil
-                        if let group = groups.groups.first(where: { $0.id == id }) { rename(group) }
-                    } label: {
-                        Image(systemName: "plus")
-                    }
-                    .buttonBorderShape(.circle)
-                    .compatGlassButtonStyle()
-                    .help("New Group")
-                    .accessibilityLabel("New Group")
-                }
-                .padding(.vertical, 4)
+        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+            GlassChipScroller {
+                groupChips
             }
             if let group = groups.selectedGroup {
-                Button { rename(group) } label: { Image(systemName: "pencil") }
-                    .buttonBorderShape(.circle)
-                    .compatGlassButtonStyle()
-                    .help("Rename Group")
-                    .accessibilityLabel("Rename Group")
-                Text("\(group.connectionIDs.count)/4")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Button { pickerGroupID = group.id } label: {
-                    Label("Add Computer", systemImage: "plus")
+                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        Button { rename(group) } label: {
+                            Label("Rename Group", systemImage: "pencil")
+                        }
+                        .compatGlassIconButton()
+                        .help("Rename Group")
+                        Text("\(group.connectionIDs.count)/4")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Button { pickerGroupID = group.id } label: {
+                            Label("Add Computer", systemImage: "plus")
+                        }
+                        .compatGlassButtonStyle()
+                        .disabled(group.isFull)
+                        .help(group.isFull ? "This group already has four computers" : "Add a computer to this group")
+                    }
                 }
-                .compatGlassButtonStyle()
-                .disabled(group.isFull)
-                .help(group.isFull ? "This group already has four computers" : "Add a computer to this group")
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var groupChips: some View {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            ForEach(groups.groups) { group in
+                let isSelected = group.id == groups.selectedGroupID
+                Button {
+                    store.selectedRemoteConnectionID = groups.selectGroup(
+                        group.id, preserving: store.selectedRemoteConnectionID
+                    )
+                } label: {
+                    Label(group.name, systemImage: "square.grid.2x2")
+                }
+                .buttonStyle(.liquidGlassChip(isSelected: isSelected))
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .contextMenu {
+                    Button("Rename Group…") { rename(group) }
+                    Button("Delete Empty Group", role: .destructive) { groups.deleteEmptyGroup(group.id) }
+                        .disabled(!group.connectionIDs.isEmpty || groups.groups.count == 1)
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    return moveDroppedMachine(items, to: group.id)
+                }
+            }
+            Button {
+                let id = groups.addGroup()
+                store.selectedRemoteConnectionID = nil
+                if let group = groups.groups.first(where: { $0.id == id }) { rename(group) }
+            } label: {
+                Label("New Group", systemImage: "plus")
+            }
+            .compatGlassIconButton()
+            .help("New Group")
+        }
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+        .animation(LiquidGlassMetrics.stateChange, value: groups.selectedGroupID)
     }
 
     private var grid: some View {
@@ -189,11 +205,19 @@ struct RemoteDesktopView: View {
     @ViewBuilder
     private func cell(group: RemoteDesktopGroup, slot: Int) -> some View {
         if let id = group.slots[slot], let connection = store.remoteConnections.first(where: { $0.id == id }) {
+            let isSelected = store.selectedRemoteConnectionID == id
             VStack(spacing: 0) {
-                HStack(spacing: 8) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     Image(systemName: "display")
+                        .foregroundStyle(.secondary)
                     Text(connection.displayTitle).lineLimit(1)
+                        // The header row selects on a plain tap below; the
+                        // title gives VoiceOver the same button action.
+                        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+                        .accessibilityAction { store.selectedRemoteConnectionID = id }
                     Spacer()
+                    // Icon-only overflow menu: a small circular glass button
+                    // matching the other icon controls (BTN-1 tertiary tier).
                     Menu {
                         ForEach(groups.groups.filter { $0.id != group.id }) { destination in
                             Button("Move to \(destination.name)") { groups.place(id, in: destination.id) }
@@ -201,23 +225,35 @@ struct RemoteDesktopView: View {
                         }
                         Button("Disconnect") { sessions.session(for: id).disconnect() }
                         Button("Remove Connection…", role: .destructive) { store.requestCloseRemoteConnection(connection) }
-                    } label: { Image(systemName: "ellipsis") }
-                    .menuStyle(.borderlessButton)
+                    } label: {
+                        Label("Options", systemImage: "ellipsis")
+                    }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .compatGlassIconButton(controlSize: .small)
                     .fixedSize()
                     .accessibilityLabel("Options for \(connection.displayTitle)")
                 }
                 .font(.callout)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .background(store.selectedRemoteConnectionID == id
-                    ? Color.accentColor.opacity(0.15) : Color(nsColor: .windowBackgroundColor))
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                // The selection tint is translucent, so it sits on the opaque
+                // window background; on its own it composited over the black
+                // grid and left the title and menu unreadable in light mode.
+                .background {
+                    ZStack {
+                        Color(nsColor: .windowBackgroundColor)
+                        if isSelected { Color.accentColor.opacity(0.15) }
+                    }
+                }
+                .animation(LiquidGlassMetrics.stateChange, value: isSelected)
                 .contentShape(Rectangle())
                 .onTapGesture { store.selectedRemoteConnectionID = id }
                 .draggable(id.uuidString)
                 RemoteConnectionPane(
                     connection: connection,
                     session: sessions.session(for: id),
-                    isSelected: store.selectedRemoteConnectionID == id,
+                    isSelected: isSelected,
                     onActivate: {
                         if store.selectedRemoteConnectionID != id {
                             store.selectedRemoteConnectionID = id
@@ -227,11 +263,22 @@ struct RemoteDesktopView: View {
                 .id(id)
             }
         } else {
-            Color.black
-                .dropDestination(for: String.self) { items, _ in
-                    return moveDroppedMachine(items, to: group.id, slot: slot)
-                }
-                .accessibilityLabel("Empty computer slot \(slot + 1)")
+            // A quiet placeholder so an empty slot reads as a drop target
+            // rather than a dead black tile (MOT-6).
+            ZStack {
+                Color.black
+                // Secondary, not tertiary: tertiary label on pure black is
+                // about 2:1 and drops below the TYPE-3 contrast floor.
+                Label("Empty Slot", systemImage: "display")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .environment(\.colorScheme, .dark)
+            }
+            .dropDestination(for: String.self) { items, _ in
+                return moveDroppedMachine(items, to: group.id, slot: slot)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Empty computer slot \(slot + 1)")
         }
     }
 
@@ -334,18 +381,21 @@ private struct RemoteConnectionPane: View {
         connect()
     }
 
+    /// Scrim over the (possibly stale) framebuffer while the handshake runs
+    /// (COL-6). Always dark, so its semantic secondary text keeps contrast in
+    /// both appearances (COL-2).
     private var connectingOverlay: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
             ProgressView().controlSize(.large)
             Text("Connecting to \(connection.displayTitle)…")
-                .foregroundStyle(.white.opacity(0.85))
+                .foregroundStyle(.secondary)
                 .font(.callout)
             Button("Cancel") { session.disconnect() }
                 .keyboardShortcut(isSelected ? .cancelAction : nil)
                 .compatGlassButtonStyle()
-                .environment(\.colorScheme, .dark)
         }
-        .padding(32)
+        .environment(\.colorScheme, .dark)
+        .padding(LiquidGlassMetrics.Spacing.xxLarge)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.black.opacity(0.55))
     }
@@ -353,8 +403,12 @@ private struct RemoteConnectionPane: View {
     private func connectForm(error: String?) -> some View {
         GeometryReader { geometry in
             ScrollView {
-                connectFormContents(error: error)
-                    .padding(16)
+                // A quarter tile on a laptop display is too short for the full
+                // form, which pushed the Connect button below the fold. Below
+                // that height the decorative icon goes and the group gaps
+                // tighten so the primary action stays visible (BTN-1).
+                connectFormContents(error: error, compact: geometry.size.height < Self.fullFormMinHeight)
+                    .padding(LiquidGlassMetrics.Spacing.medium)
                     .frame(maxWidth: .infinity)
                     .frame(minHeight: geometry.size.height)
             }
@@ -362,57 +416,103 @@ private struct RemoteConnectionPane: View {
         .background(Color(nsColor: .textBackgroundColor))
     }
 
-    private func connectFormContents(error: String?) -> some View {
-        VStack(spacing: 12) {
-            Image(systemName: "display")
-                .scaledFont(size: 36, weight: .light)
-                .foregroundStyle(.tertiary)
+    /// Width of the connect form's single column.
+    private static let formWidth: CGFloat = 280
 
-            VStack(spacing: 4) {
-                Text(connection.displayTitle)
-                    .font(.title3.weight(.semibold))
-                Text(verbatim: "\(connection.host):\(connection.port)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+    /// Tile height below which the connect form drops its icon header.
+    private static let fullFormMinHeight: CGFloat = 500
+
+    /// Connect form spacing follows FORM-5: label → field 8, between field
+    /// groups 20, final group → submit 24. Every field keeps a persistent
+    /// label above it; placeholders are instructions only (FORM-1/FORM-2).
+    private func connectFormContents(error: String?, compact: Bool) -> some View {
+        VStack(spacing: compact ? LiquidGlassMetrics.Spacing.medium : LiquidGlassMetrics.Spacing.xLarge) {
+            VStack(spacing: LiquidGlassMetrics.Spacing.small) {
+                if !compact {
+                    Image(systemName: "display")
+                        .font(.largeTitle.weight(.light))
+                        .foregroundStyle(.tertiary)
+                }
+
+                VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                    Text(connection.displayTitle)
+                        .font(.title3.weight(.semibold))
+                    Text(verbatim: "\(connection.host):\(connection.port)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            VStack(spacing: 12) {
-                TextField("Username (optional)", text: Bindable(connection).username)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 280)
-                SecureField("Password", text: $password)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 280)
-                    .onSubmit(connect)
-                Toggle("Save password & auto-connect", isOn: $savePassword)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.small)
-                    .frame(maxWidth: 280, alignment: .leading)
-                Toggle("Share clipboard with remote Mac", isOn: $shareClipboard)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.small)
-                    .frame(maxWidth: 280, alignment: .leading)
-                Text("Off by default. Enabling this lets the remote VNC server read and replace your Mac clipboard.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 280, alignment: .leading)
-            }
+            VStack(alignment: .leading, spacing: compact ? LiquidGlassMetrics.Spacing.medium : LiquidGlassMetrics.Spacing.large) {
+                fieldGroup("Username", detail: "Optional") {
+                    TextField("Username", text: Bindable(connection).username, prompt: Text("Enter username"))
+                        .liquidGlassField()
+                }
+                fieldGroup("Password") {
+                    SecureField("Password", text: $password, prompt: Text("Enter password"))
+                        .onSubmit(connect)
+                        .liquidGlassField()
+                }
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    Toggle("Save password & auto-connect", isOn: $savePassword)
+                        .toggleStyle(.checkbox)
+                        .controlSize(.small)
+                    VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                        Toggle("Share clipboard with remote Mac", isOn: $shareClipboard)
+                            .toggleStyle(.checkbox)
+                            .controlSize(.small)
+                        Text("Off by default. Enabling this lets the remote VNC server read and replace your Mac clipboard.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
 
-            if let error {
-                Label(error, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 320)
+                if let error {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
+            .frame(maxWidth: Self.formWidth, alignment: .leading)
 
+            // The pane's single primary action, full width in the form column
+            // (BTN-1, BTN-4).
             Button(action: connect) {
                 Text(error == nil ? "Connect" : "Try Again")
-                    .frame(width: 120)
+                    .frame(maxWidth: .infinity)
             }
             .keyboardShortcut(isSelected ? .defaultAction : nil)
             .compatGlassProminentButtonStyle()
+            .controlSize(.large)
+            .frame(maxWidth: Self.formWidth)
             .disabled(connection.host.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .uiZoomedDynamicType()
+    }
+
+    /// A persistent label (with optional trailing hint) above its field. The
+    /// field's own title carries the VoiceOver name, so the visible label is
+    /// hidden from accessibility to avoid reading it twice.
+    private func fieldGroup<Field: View>(
+        _ label: String,
+        detail: String? = nil,
+        @ViewBuilder field: () -> Field
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(label)
+                    .font(.subheadline.weight(.medium))
+                Spacer()
+                if let detail {
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityHidden(true)
+            field()
         }
     }
 
@@ -434,8 +534,10 @@ private struct RemoteConnectionPane: View {
 }
 
 /// The "new tab" overlay: a card listing the machines discovered over Bonjour
-/// (`_rfb._tcp`) plus a manual host field. Same visual chrome as the editor
-/// pane's fuzzy file finder.
+/// (`_rfb._tcp`) plus a manual host field. A floating glass panel (the
+/// control layer over the screen grid), like the editor pane's fuzzy file
+/// finder. Its host field and buttons are interactive glass controls on that
+/// layer, like every other free-standing field.
 private struct RemoteComputerPicker: View {
     let discovery: RemoteScreenDiscovery
     let onPick: (_ host: String, _ port: Int, _ nickname: String) -> Void
@@ -447,49 +549,76 @@ private struct RemoteComputerPicker: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Image(systemName: "wifi")
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                 Text("Computers on This Network")
                     .font(.headline)
                 Spacer()
                 Button {
                     onCancel()
                 } label: {
-                    Image(systemName: "xmark")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    Label("Close", systemImage: "xmark")
                 }
-                .buttonStyle(.plain)
+                .compatGlassIconButton(controlSize: .small)
                 .help("Close")
-                .accessibilityLabel("Close")
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+            .padding(.vertical, LiquidGlassMetrics.Spacing.small)
 
             discoveredList
                 .frame(maxHeight: 280)
 
-            HStack(spacing: 8) {
-                Image(systemName: "network")
-                    .foregroundStyle(.secondary)
-                TextField("Enter a host, IP address, or MagicDNS name", text: $manualHost)
-                    .textFieldStyle(.plain)
-                    .focused($manualFocused)
-                    .onSubmit(connectManual)
+            manualEntry
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+                .padding(.top, LiquidGlassMetrics.Spacing.xSmall)
+                .padding(.bottom, LiquidGlassMetrics.Spacing.medium)
+        }
+        .frame(width: 520)
+        // The panel floats over the always-black screen grid, where light glass
+        // turned mid-gray (title 5.9:1, secondary 4.5:1) and dark system
+        // secondary measured 3.2:1. Always dark, like `connectingOverlay`.
+        // Secondary copy sets the legible gray itself: glass drew text styled
+        // `.secondary` at 3.15:1 even under `legibleSecondaryHierarchy()`, and
+        // that modifier dimmed the host field's placeholder to 2.6:1 (TYPE-3).
+        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous))
+        .environment(\.colorScheme, .dark)
+        // A browser left `.waiting` keeps reporting denied after access is
+        // granted, so coming back from System Settings starts a fresh one.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            discovery.retryIfNeedsPermission()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.top, 60)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Manual host entry with a persistent label (FORM-1); the placeholder is
+    /// an instruction (FORM-2). Glass capsule field with a visible focus ring
+    /// (FORM-4), next to the panel's one primary action (BTN-1).
+    private var manualEntry: some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Text("Host Address")
+                .font(.subheadline.weight(.medium))
+                .glassLegibleForeground(.secondary)
+                .accessibilityHidden(true)
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                // Glass like every other free-standing field: the panel is a
+                // glass control layer and its controls are glass too.
+                TextField(
+                    "Host Address",
+                    text: $manualHost,
+                    prompt: Text("Enter a host, IP address, or MagicDNS name")
+                )
+                .focused($manualFocused)
+                .onSubmit(connectManual)
+                .liquidGlassField(systemImage: "network", isFocused: manualFocused)
+
                 Button("Connect", action: connectManual)
                     .compatGlassProminentButtonStyle()
                     .disabled(manualHost.trimmingCharacters(in: .whitespaces).isEmpty)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
-        .frame(width: 520)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: .black.opacity(0.25), radius: 24, y: 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, 60)
-        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     @ViewBuilder
@@ -503,9 +632,9 @@ private struct RemoteComputerPicker: View {
                         Button {
                             pick(service)
                         } label: {
-                            HStack(spacing: 12) {
+                            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
                                 Image(systemName: "macbook")
-                                    .foregroundStyle(.secondary)
+                                    .glassLegibleForeground(.secondary)
                                 Text(service.name)
                                     .font(.body)
                                     .foregroundStyle(.primary)
@@ -514,14 +643,16 @@ private struct RemoteComputerPicker: View {
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(.tertiary)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 8)
-                            .contentShape(Rectangle())
+                            .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                            .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
                         }
-                        .buttonStyle(.plain)
+                        // Whole-row hover and press feedback (BTN-5), inset
+                        // from the panel edge so text stays at 16pt.
+                        .buttonStyle(.liquidGlassPressable)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
             }
             .disabled(isResolving)
             .opacity(isResolving ? 0.5 : 1)
@@ -534,25 +665,25 @@ private struct RemoteComputerPicker: View {
     /// reports it's blocked.
     @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
             switch discovery.browseState {
             case .needsPermission, .failed:
                 Image(systemName: "wifi.exclamationmark")
                     .font(.largeTitle)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                 Text("Cockpit can't browse the local network")
                     .font(.callout.weight(.medium))
             default:
                 ProgressView().controlSize(.small)
                 Text("Looking for computers with Screen Sharing enabled…")
                     .font(.callout)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                     .multilineTextAlignment(.center)
             }
 
             Text("The target Mac needs Screen Sharing on (System Settings → General → Sharing), and Cockpit needs Local Network access. You can still connect by typing a host below.")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .glassLegibleForeground(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 360)
 
@@ -563,9 +694,11 @@ private struct RemoteComputerPicker: View {
             }
             .compatGlassButtonStyle()
             .controlSize(.small)
+            // macOS 27.2 opens the top of Privacy & Security, not the pane.
+            .help("Opens Privacy & Security; then choose Local Network")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(24)
+        .padding(LiquidGlassMetrics.Spacing.xLarge)
     }
 
     private func pick(_ service: RemoteScreenDiscovery.Service) {

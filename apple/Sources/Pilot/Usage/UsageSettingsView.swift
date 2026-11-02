@@ -145,6 +145,7 @@ struct UsageSettingsView: View {
             if !enabled {
                 Label("Disabled", systemImage: "lock.fill")
                     .foregroundStyle(.secondary)
+                    .labelStyle(.titleAndIcon)
             } else {
                 switch signedIn {
                 case .some(true):

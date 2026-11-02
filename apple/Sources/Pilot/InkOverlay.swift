@@ -98,15 +98,55 @@ struct InkOverlay: View {
                                       .systemGreen, .systemBlue, .white]
     private let paletteNames = ["Red", "Orange", "Yellow", "Green", "Blue", "White"]
 
+    /// Swatch hit target; the swatch capsule wraps it at `swatchInset` on every
+    /// side, so the capsule ends and the hover circles stay concentric (LAY-4).
+    private static let swatchTarget: CGFloat = 28
+    private static let swatchDiameter: CGFloat = 20
+    private static let swatchInset = LiquidGlassMetrics.Spacing.xxSmall
+
     var body: some View {
-        ZStack(alignment: .top) {
+        // The controls float at the bottom edge. At the top they sat across
+        // the pane tab strip and covered the tab titles (LAY-5).
+        ZStack(alignment: .bottom) {
             InkCanvas(model: model, onDismiss: { isActive = false })
-            toolbar.padding(.top, 14)
+            toolbar.padding(.bottom, LiquidGlassMetrics.Spacing.large)
         }
     }
 
+    /// Three neighboring glass groups — the color picker, the tool buttons, and
+    /// the single primary action — blended by one container (BTN-1).
     private var toolbar: some View {
-        HStack(spacing: 10) {
+        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+                swatchPicker
+
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    toolButton("eraser", help: "Eraser", active: model.isEraser) { model.isEraser.toggle() }
+                    toolButton("arrow.uturn.backward", help: "Undo last stroke", disabled: model.strokes.isEmpty) {
+                        model.undo()
+                    }
+                    toolButton(
+                        "trash",
+                        help: "Clear annotations",
+                        role: .destructive,
+                        disabled: model.strokes.isEmpty
+                    ) { model.clear() }
+                }
+
+                Button("Done") { isActive = false }
+                    .scaledFont(size: 12, weight: .semibold)
+                    .compatGlassProminentButtonStyle()
+                    .controlSize(.large)
+                    .help("Finish annotating")
+            }
+        }
+        .fixedSize()
+    }
+
+    /// The swatches are one picker on one glass capsule; each swatch is a
+    /// plain button inside it with hover/press feedback (no glass on glass).
+    private var swatchPicker: some View {
+        HStack(spacing: 0) {
             ForEach(palette.indices, id: \.self) { index in
                 let swatch = palette[index]
                 let isSelected = !model.isEraser && model.color == swatch
@@ -115,52 +155,38 @@ struct InkOverlay: View {
                     model.color = swatch
                     model.isEraser = false
                 } label: {
-                    Circle()
-                        .fill(Color(nsColor: swatch))
-                        .frame(width: 18, height: 18)
-                        .overlay {
-                            Circle().strokeBorder(.primary.opacity(isSelected ? 0.9 : 0), lineWidth: 2)
-                        }
-                        .contentShape(Circle())
+                    ZStack {
+                        Circle()
+                            .fill(Color(nsColor: swatch))
+                            // Hairline keeps the white swatch visible on light glass.
+                            .overlay { Circle().strokeBorder(.primary.opacity(0.15), lineWidth: 0.5) }
+                            .frame(width: Self.swatchDiameter, height: Self.swatchDiameter)
+                        Circle()
+                            .strokeBorder(.primary, lineWidth: 2)
+                            .opacity(isSelected ? 0.9 : 0)
+                    }
+                    .frame(width: Self.swatchTarget, height: Self.swatchTarget)
+                    .animation(LiquidGlassMetrics.stateChange, value: isSelected)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.liquidGlassPressable(cornerRadius: Self.swatchTarget / 2))
                 .help("\(paletteNames[index]) ink")
                 .accessibilityLabel("\(paletteNames[index]) ink")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
-
-            Color.clear.frame(width: 4, height: 1)
-
-            toolButton("eraser", help: "Eraser", active: model.isEraser) { model.isEraser.toggle() }
-            toolButton("arrow.uturn.backward", help: "Undo last stroke", disabled: model.strokes.isEmpty) {
-                model.undo()
-            }
-            toolButton("trash", help: "Clear annotations", disabled: model.strokes.isEmpty) { model.clear() }
-
-            Color.clear.frame(width: 4, height: 1)
-
-            Button("Done") { isActive = false }
-                .buttonStyle(.plain)
-                .scaledFont(size: 12, weight: .semibold)
-                .padding(.horizontal, 4)
-                .help("Finish annotating")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .fixedSize()
+        .padding(Self.swatchInset)
         .compatFloatingGlassCapsule()
     }
 
     private func toolButton(_ symbol: String, help: String, active: Bool = false,
-                            disabled: Bool = false, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
+                            role: ButtonRole? = nil, disabled: Bool = false,
+                            action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            Label(help, systemImage: symbol)
                 .scaledFont(size: 13, weight: .medium)
                 .foregroundStyle(active ? Color.accentColor : .primary)
-                .frame(width: 22, height: 22)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .compatGlassIconButton(controlSize: .large)
         .disabled(disabled)
         .help(help)
         .accessibilityLabel(help)
@@ -183,24 +209,27 @@ struct RemoteInkOverlay: View {
 struct RemoteInkControls: View {
     var model: RemoteInkModel
 
+    /// Two circular glass buttons blended by one container, matching the
+    /// local ink toolbar's tool buttons.
     var body: some View {
-        HStack(spacing: 10) {
-            button("arrow.uturn.backward", help: "Undo last Kneeboard stroke") { model.undo() }
-            button("trash", help: "Clear Kneeboard annotations") { model.clear() }
+        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                button("arrow.uturn.backward", help: "Undo last Kneeboard stroke") { model.undo() }
+                button("trash", help: "Clear Kneeboard annotations", role: .destructive) { model.clear() }
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .compatFloatingGlassCapsule()
     }
 
-    private func button(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
+    private func button(_ symbol: String, help: String, role: ButtonRole? = nil,
+                        action: @escaping () -> Void) -> some View {
+        Button(role: role, action: action) {
+            Label(help, systemImage: symbol)
                 .scaledFont(size: 13, weight: .medium)
-                .frame(width: 22, height: 22)
-                .contentShape(Rectangle())
+                // Neutral like the local toolbar: the role carries the
+                // semantics without scattering red (COL-4).
+                .foregroundStyle(.primary)
         }
-        .buttonStyle(.plain)
+        .compatGlassIconButton(controlSize: .large)
         .help(help)
         .accessibilityLabel(help)
     }

@@ -54,7 +54,7 @@ actor AgenticUsageLoader {
         var errorDescription: String? {
             switch self {
             case .directoryUnreadable(let path):
-                return "Can't read \(path). Check that Pilot has access to your home folder."
+                return "Can't read \(path). Check that Cockpit has access to your home folder."
             }
         }
     }

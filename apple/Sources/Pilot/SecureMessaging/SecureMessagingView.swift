@@ -60,11 +60,20 @@ struct PilotSecureMessagingView: View {
     private var statusSection: some View {
         Section("Status") {
             LabeledContent("Connection") {
-                HStack(spacing: 6) {
-                    Circle().fill(statusColor).frame(width: 8, height: 8)
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    // In-flight stages show activity rather than a static dot
+                    // (MOT-5); settled states keep the colored indicator.
+                    if isConnecting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Circle().fill(statusColor).frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                    }
                     Text(statusText)
                         .foregroundStyle(.secondary)
+                        .contentTransition(.opacity)
                 }
+                .animation(LiquidGlassMetrics.stateChange, value: statusText)
             }
         }
     }
@@ -84,6 +93,7 @@ struct PilotSecureMessagingView: View {
             } label: {
                 Label("Copy My Key", systemImage: "key")
             }
+            .compatGlassButtonStyle()
         } header: {
             Text("My Public Key")
         } footer: {
@@ -93,15 +103,42 @@ struct PilotSecureMessagingView: View {
 
     private var pairingSection: some View {
         Section {
-            TextField("Peer public key (base64)", text: $peerKeyInput, axis: .vertical)
+            // Persistent labels above each field; placeholders are only an
+            // instruction or a bare example (FORM-1/FORM-2). Each field is a
+            // Liquid Glass field with a focus ring (FORM-4), matching Walkie's
+            // Secure Messaging form.
+            labeledField("Peer public key", error: peerKeyError) {
+                TextField(
+                    "Peer public key",
+                    text: $peerKeyInput,
+                    prompt: Text("Paste your peer's base64 key"),
+                    axis: .vertical
+                )
+                .labelsHidden()
                 .font(.system(.footnote, design: .monospaced))
                 .autocorrectionDisabled()
                 .lineLimit(1...3)
-            TextField("Pairing token", text: $tokenInput)
-                .autocorrectionDisabled()
+                .liquidGlassField(multiline: true)
+                // A grouped Form row offers no container shape, so the
+                // field's concentric corners resolved to square on macOS 27
+                // while the capsule fields below stayed round (LAY-4). Give
+                // it the field radius to be concentric with.
+                .liquidGlassContainerShape(cornerRadius: LiquidGlassMetrics.Radius.field)
+            }
+            labeledField("Pairing token") {
+                TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))
+                    .labelsHidden()
+                    .autocorrectionDisabled()
+                    .liquidGlassField()
+            }
             Button("Generate Pairing Token") { generateToken() }
-            TextField("Rendezvous URL", text: $rendezvousURL)
-                .autocorrectionDisabled()
+                .compatGlassButtonStyle()
+            labeledField("Rendezvous URL") {
+                TextField("Rendezvous URL", text: $rendezvousURL, prompt: Text(verbatim: "https://rendezvous.blau.app"))
+                    .labelsHidden()
+                    .autocorrectionDisabled()
+                    .liquidGlassField()
+            }
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
 
             if let transport, !transport.state.isFailed {
@@ -109,6 +146,7 @@ struct PilotSecureMessagingView: View {
                     transport.disconnect()
                     self.transport = nil
                 }
+                .compatGlassButtonStyle()
             } else {
                 Button("Connect") { connect() }
                     .compatGlassProminentButtonStyle()
@@ -123,24 +161,34 @@ struct PilotSecureMessagingView: View {
 
     private func messagingSection(_ transport: SecureChannelResponder) -> some View {
         Section("Send") {
-            HStack {
-                TextField("Message", text: $outgoing)
-                    .onSubmit(send)
-                Button("Send", action: send)
-                    .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
+            // A persistent label above the glass field (FORM-1), with the
+            // field and its action side by side. Connect is hidden while
+            // connected, so Send is the view's single prominent action (BTN-1).
+            labeledField("Message") {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    TextField("Message", text: $outgoing)
+                        .labelsHidden()
+                        .onSubmit(send)
+                        .liquidGlassField()
+                    Button("Send", action: send)
+                        .compatGlassProminentButtonStyle()
+                        .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
             }
             Button {
                 transport.sendTestBlob()
             } label: {
                 Label("Send Test Blob (Best-Effort)", systemImage: "shippingbox")
             }
+            .compatGlassButtonStyle()
         }
     }
 
     private func logSection(_ transport: SecureChannelResponder) -> some View {
         Section("Session Log") {
             if transport.log.isEmpty {
-                Text("No activity yet.").foregroundStyle(.secondary)
+                Label("No activity yet.", systemImage: "text.alignleft")
+                    .foregroundStyle(.secondary)
             } else {
                 ForEach(transport.log.reversed()) { entry in
                     Text(entry.text)
@@ -151,17 +199,65 @@ struct PilotSecureMessagingView: View {
         }
     }
 
+    /// A grouped-`Form` row with its visible label stacked above the field
+    /// (FORM-1). The field's own title is its VoiceOver name, so the visible
+    /// label is hidden from VoiceOver to avoid reading it twice; fields pass
+    /// `.labelsHidden()` so the Form does not also draw a leading row label.
+    /// `error`, when set, is shown under the field as its inline error state.
+    private func labeledField<Field: View>(
+        _ title: LocalizedStringKey,
+        error: String? = nil,
+        @ViewBuilder field: () -> Field
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            // Input → helper/error text at 4pt (FORM-5); the error is the
+            // field's designed error state (FORM-4).
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                field()
+                if let error {
+                    Label(error, systemImage: "exclamationmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .transition(.opacity)
+                }
+            }
+            .animation(LiquidGlassMetrics.stateChange, value: error)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+    }
+
     // MARK: - Actions
 
+    /// Inline validation for the peer key. The slot is the shared device pin
+    /// (also used by PeerSync), so malformed text is never persisted; tell
+    /// the user before they leave the screen. An empty field is not an
+    /// error: it unpairs.
+    private var peerKeyError: String? {
+        SecurePairingStore.peerKeyUpdate(for: peerKeyInput) == .rejectInvalid
+            ? "Not a valid base64 X25519 key. It won't be saved."
+            : nil
+    }
+
+    /// The field's key when it is one the store would pin, else `nil`.
+    private var validPeerKey: String? {
+        guard case .save(let key) = SecurePairingStore.peerKeyUpdate(for: peerKeyInput) else { return nil }
+        return key
+    }
+
     private var canConnect: Bool {
-        DeviceIdentity.parsePeerPublicKey(peerKeyInput) != nil
+        validPeerKey != nil
             && SecurePairingStore.isValidIdentifier(
                 tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
             )
     }
 
     private func connect() {
-        guard let peerKey = DeviceIdentity.parsePeerPublicKey(peerKeyInput) else {
+        guard let pin = validPeerKey, let peerKey = DeviceIdentity.parsePeerPublicKey(pin) else {
             errorMessage = "Peer public key is not a valid base64 X25519 key."
             return
         }
@@ -171,7 +267,7 @@ struct PilotSecureMessagingView: View {
             return
         }
         do {
-            try pairingStore.setPeerPublicKey(peerKeyInput)
+            try pairingStore.setPeerPublicKey(pin)
             try pairingStore.setToken(token)
             let identity = try DeviceIdentity.loadOrCreate()
             let client = try SignalingClient(
@@ -204,7 +300,9 @@ struct PilotSecureMessagingView: View {
 
     private func savePairingSecrets() {
         do {
-            try pairingStore.setPeerPublicKey(peerKeyInput)
+            // Writes only a valid key or clears an emptied field; malformed
+            // text leaves the existing pin untouched (shown inline above).
+            try pairingStore.applyPeerKeyInput(peerKeyInput)
             try pairingStore.setToken(tokenInput)
         } catch {
             errorMessage = "Could not save secure pairing settings."
@@ -240,11 +338,19 @@ struct PilotSecureMessagingView: View {
         }
     }
 
+    private var isConnecting: Bool {
+        switch transport?.state {
+        case .signaling, .holePunching, .handshake: return true
+        case .none, .connected, .failed: return false
+        }
+    }
+
     private var statusColor: Color {
         switch transport?.state {
         case .connected: return .green
         case .failed: return .red
-        case .none: return .gray
+        // Idle reads as the semantic secondary tint in both appearances (COL-2).
+        case .none: return .secondary
         default: return .orange
         }
     }

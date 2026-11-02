@@ -191,3 +191,79 @@ final class AirPlayReceiverTests: XCTestCase {
         XCTAssertTrue(worker.isFinished, "Receiver must finish within a bounded deadline")
     }
 }
+
+/// The wireless stage's full/compact switch. The pane width passed in is the
+/// width offered to the stage; a narrow pane used to read back the clipped
+/// full layout's overflow width, which never fell below the floor.
+final class WirelessInstructionsLayoutTests: XCTestCase {
+    private let narrow = WirelessInstructionsLayout.narrowMargin
+    private let wide = WirelessInstructionsLayout.wideMargin
+
+    func testNarrowPaneBelowTheWordFloorIsCompact() {
+        // "Start Sharing" plus the narrow margins is about 126pt wide.
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: 73, probeWidth: 126, receiverNameWidth: 0),
+            .compact
+        )
+    }
+
+    func testEveryPaneNarrowerThanTheFloorIsCompactWhateverTheState() {
+        // Probe widths stand in for the starting, waiting, pairing, failed,
+        // and stopped layouts; the decision depends only on the floor.
+        for probe in [72.0, 96, 126, 158, 210] {
+            for receiverName in [0.0, 40, 90] {
+                let floor = WirelessInstructionsLayout.wordFloor(probeWidth: probe, receiverNameWidth: receiverName)
+                for pane in stride(from: 0.0, to: floor, by: 0.5) {
+                    XCTAssertEqual(
+                        WirelessInstructionsLayout.resolve(paneWidth: pane, probeWidth: probe, receiverNameWidth: receiverName),
+                        .compact, "pane \(pane) floor \(floor)"
+                    )
+                }
+                XCTAssertNotEqual(
+                    WirelessInstructionsLayout.resolve(paneWidth: floor, probeWidth: probe, receiverNameWidth: receiverName),
+                    .compact
+                )
+            }
+        }
+    }
+
+    func testReceiverNameAtHalfSizeSetsTheFloorWhenWider() {
+        XCTAssertEqual(WirelessInstructionsLayout.wordFloor(probeWidth: 100, receiverNameWidth: 120), 120 + 2 * narrow)
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: 130, probeWidth: 100, receiverNameWidth: 120),
+            .compact
+        )
+    }
+
+    func testMarginWidensOnlyWhenTheWordsStillFitInsideIt() {
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: 130, probeWidth: 126, receiverNameWidth: 0),
+            .full(margin: narrow)
+        )
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: 239, probeWidth: 126, receiverNameWidth: 0),
+            .full(margin: narrow)
+        )
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: 240, probeWidth: 126, receiverNameWidth: 0),
+            .full(margin: wide)
+        )
+        let floor = 220.0
+        let needed = floor + 2 * (wide - narrow)
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: needed - 1, probeWidth: floor, receiverNameWidth: 0),
+            .full(margin: narrow)
+        )
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: needed, probeWidth: floor, receiverNameWidth: 0),
+            .full(margin: wide)
+        )
+    }
+
+    func testUnmeasuredFloorKeepsTheFullLayout() {
+        XCTAssertEqual(
+            WirelessInstructionsLayout.resolve(paneWidth: 320, probeWidth: 0, receiverNameWidth: 0),
+            .full(margin: wide)
+        )
+    }
+}

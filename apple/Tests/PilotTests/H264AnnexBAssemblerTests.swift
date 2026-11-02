@@ -501,6 +501,201 @@ struct H264AnnexBAssemblerTests {
     }
 }
 
+// MARK: - Idle-tail flush (AndroidScreenStream)
+
+/// c6511b8 reversed the flush-only-at-EOF rule: a still screen sends nothing
+/// after its last frame, so `AndroidScreenStream` flushes the assembler's
+/// buffered tail after 100 ms of silence and treats a next chunk that does
+/// not open with a start code as proof the flushed unit was cut short —
+/// reset and request a keyframe. These tests pin that rule against the real
+/// assembler and the stream's own pure `IdleTailResync` value.
+extension H264AnnexBAssemblerTests {
+    private typealias IdleTailResync = AndroidScreenStream.IdleTailResync
+
+    private func avcc(_ nalu: Data) -> Data {
+        var length = UInt32(nalu.count).bigEndian
+        return withUnsafeBytes(of: &length) { Data($0) } + nalu
+    }
+
+    @Test(arguments: [
+        Data([0, 0, 1]),
+        Data([0, 0, 1, 0x65, 0xB8]),
+        Data([0, 0, 0, 1]),
+        Data([0, 0, 0, 1, 0x41, 0x9A]),
+    ])
+    func threeAndFourByteStartCodesOpenAChunk(_ chunk: Data) {
+        #expect(AndroidScreenStream.beginsWithStartCode(chunk))
+    }
+
+    /// A pipe read can end inside a start code's zeros; a chunk too short to
+    /// disprove a start code must not trigger a needless keyframe restart.
+    @Test(arguments: [Data([0]), Data([0, 0]), Data([0, 0, 0])])
+    func allZeroChunkShorterThanFourBytesCountsAsASplitStartCode(_ chunk: Data) {
+        #expect(AndroidScreenStream.beginsWithStartCode(chunk))
+    }
+
+    @Test(arguments: [
+        Data([0x9A, 0x00, 0x04]),     // slice payload bytes
+        Data([0x65, 0xB8, 0x00]),     // looks like an IDR header, but no start code
+        Data([0x42]),                 // one payload byte
+        Data([0, 0, 2, 0x42]),        // zero run that is not a start code
+        Data([0, 0x01, 0x65]),        // start-code tail whose zeros were flushed
+        Data([0, 0, 0, 0]),           // four zeros cannot be a start code's head
+    ])
+    func midNALContinuationDoesNotOpenWithAStartCode(_ chunk: Data) {
+        #expect(!AndroidScreenStream.beginsWithStartCode(chunk))
+    }
+
+    @Test
+    func idleFlushAfterACompleteFrameEmitsExactlyThatNAL() throws {
+        var assembler = H264AnnexBAssembler()
+        var resync = IdleTailResync()
+        // The IDR is terminated by the P-slice's start code; the P-slice is
+        // the frame the still screen settled on, buffered with no terminator.
+        let events = try assembler.feed(stream([sps, pps, idrSlice, pSlice]))
+        #expect(events == [
+            .parameterSets(sps: sps, pps: pps),
+            .accessUnit(data: avcc(idrSlice), isIDR: true),
+        ])
+        #expect(assembler.hasBufferedTail)
+
+        let flushed = try resync.flushIdleTail(of: &assembler)
+        #expect(flushed == [.accessUnit(data: avcc(pSlice), isIDR: false)])
+        #expect(!assembler.hasBufferedTail)
+        #expect(resync.tailFlushed)
+        // A second quiet spell has nothing left to emit.
+        #expect(try assembler.flushTrailing().isEmpty)
+
+        // The next frame opens with its start code: the tail was whole, so no
+        // resync, and the frame decodes normally.
+        let next = stream([pSlice])
+        let resyncOnNext = resync.shouldResync(beforeFeeding: next)
+        #expect(!resyncOnNext)
+        #expect(!resync.tailFlushed)
+        let after = try assembler.feed(next) + assembler.flushTrailing()
+        #expect(after == [.accessUnit(data: avcc(pSlice), isIDR: false)])
+    }
+
+    @Test
+    func idleFlushInsideANALUnitSignalsResyncAtEverySplit() throws {
+        var bigIDR = Data([0x65, 0xB8])
+        bigIDR.append(Data(repeating: 0x42, count: 64))
+        let whole = stream([sps, pps, bigIDR, pSlice])
+        let idrStart = stream([sps, pps]).count + startCode4.count
+        // Every pause that lands strictly inside the IDR's bytes.
+        for split in (idrStart + 1)..<(idrStart + bigIDR.count) {
+            var assembler = H264AnnexBAssembler()
+            var resync = IdleTailResync()
+            _ = try assembler.feed(whole.prefix(split))
+
+            // The quiet spell shows the truncated IDR — the cost the rule
+            // accepts in exchange for a still screen ever displaying.
+            let flushed = try resync.flushIdleTail(of: &assembler)
+            #expect(flushed == [.accessUnit(data: avcc(bigIDR.prefix(split - idrStart)), isIDR: true)])
+
+            let continuation = Data(whole.suffix(from: split))
+            let resyncOnContinuation = resync.shouldResync(beforeFeeding: continuation)
+            #expect(resyncOnContinuation, "split at \(split)")
+
+            // The stream's response: a fresh assembler discards the rest of
+            // the cut unit up to the next start code, so no fragment of it is
+            // ever decoded as a frame of its own.
+            assembler = H264AnnexBAssembler()
+            let after = try assembler.feed(continuation) + assembler.flushTrailing()
+            #expect(after == [.accessUnit(data: avcc(pSlice), isIDR: false)], "split at \(split)")
+            // One check per idle flush: the rule disarms itself.
+            let resyncAgain = resync.shouldResync(beforeFeeding: Data([0x42]))
+            #expect(!resyncAgain)
+        }
+    }
+
+    @Test
+    func idleFlushRightAfterAStartCodeDoesNotResync() throws {
+        // The pause falls between a start code and the NAL it opens: nothing
+        // is buffered, so the payload that follows is the expected next unit.
+        let whole = stream([sps, pps, idrSlice, pSlice])
+        let split = stream([sps, pps, idrSlice]).count + startCode4.count
+        var assembler = H264AnnexBAssembler()
+        var resync = IdleTailResync()
+        var events = try assembler.feed(whole.prefix(split))
+        #expect(!assembler.hasBufferedTail)
+        #expect(try resync.flushIdleTail(of: &assembler).isEmpty)
+        #expect(!resync.tailFlushed)
+
+        let continuation = Data(whole.suffix(from: split))
+        let resyncOnContinuation = resync.shouldResync(beforeFeeding: continuation)
+        #expect(!resyncOnContinuation)
+        events += try assembler.feed(continuation) + assembler.flushTrailing()
+        #expect(events.last == .accessUnit(data: avcc(pSlice), isIDR: false))
+    }
+
+    @Test
+    func idleFlushOfADroppedNALTypeStillArmsResync() throws {
+        // The buffered tail is an SEI cut short just before payload bytes
+        // that read like an IDR header. SEI yields no event, so a guard armed
+        // only by emitted events stays disarmed and the remainder parses as
+        // a forged IDR. The rule arms on consumed bytes instead.
+        let sei = Data([0x06, 0x05, 0x10, 0x65, 0xB8, 0x00, 0x04])
+        let whole = stream([sps, pps, idrSlice, sei, pSlice])
+        let split = stream([sps, pps, idrSlice]).count + startCode4.count + 3
+        var assembler = H264AnnexBAssembler()
+        var resync = IdleTailResync()
+        _ = try assembler.feed(whole.prefix(split))
+        #expect(assembler.hasBufferedTail)
+        #expect(try resync.flushIdleTail(of: &assembler).isEmpty)  // SEI is dropped
+        #expect(resync.tailFlushed)
+
+        let continuation = Data(whole.suffix(from: split))
+        #expect(continuation.first == 0x65)
+        // Hazard: fed as-is, the SEI's remainder becomes a sync sample.
+        var unguarded = assembler
+        let forged = try unguarded.feed(continuation)
+        #expect(forged.contains(.accessUnit(data: avcc(Data([0x65, 0xB8, 0x00, 0x04])), isIDR: true)))
+
+        let resyncOnContinuation = resync.shouldResync(beforeFeeding: continuation)
+        #expect(resyncOnContinuation)
+    }
+
+    @Test
+    func idleFlushLeavesEveryBoundInForce() throws {
+        var resync = IdleTailResync()
+
+        // An oversized unit is rejected while buffering, before a quiet spell
+        // could ever emit it.
+        var oversized = startCode4 + Data([0x65])
+        oversized.append(Data(repeating: 0x42, count: H264AnnexBAssembler.maxNALUSize))
+        var naluAssembler = H264AnnexBAssembler()
+        #expect(throws: H264AnnexBAssembler.ParseError.naluTooLarge) {
+            _ = try naluAssembler.feed(oversized)
+        }
+
+        // An unterminated oversized SPS is still rejected when the idle flush
+        // is what completes it.
+        var spsAssembler = H264AnnexBAssembler()
+        var bigSPS = startCode4 + Data([0x67])
+        bigSPS.append(Data(repeating: 0x11, count: H264AnnexBAssembler.maxParameterSetSize))
+        _ = try spsAssembler.feed(bigSPS)
+        #expect(throws: H264AnnexBAssembler.ParseError.parameterSetTooLarge) {
+            _ = try resync.flushIdleTail(of: &spsAssembler)
+        }
+
+        // The per-feed buffer cap still holds after an idle flush emptied the
+        // buffer.
+        var bufferAssembler = H264AnnexBAssembler()
+        _ = try bufferAssembler.feed(stream([sps, pps, idrSlice]))
+        _ = try resync.flushIdleTail(of: &bufferAssembler)
+        #expect(throws: H264AnnexBAssembler.ParseError.bufferOverflow) {
+            _ = try bufferAssembler.feed(Data(repeating: 0x42, count: H264AnnexBAssembler.maxBufferSize + 1))
+        }
+
+        // A resync's fresh assembler still caps the garbage it skips.
+        var resyncedAssembler = H264AnnexBAssembler()
+        #expect(throws: H264AnnexBAssembler.ParseError.leadingGarbageExceeded) {
+            _ = try resyncedAssembler.feed(Data(repeating: 0xAB, count: H264AnnexBAssembler.maxLeadingGarbage + 1))
+        }
+    }
+}
+
 private protocol AnnexBParsing {
     init()
     mutating func feed(_ chunk: Data) throws -> [H264AnnexBAssembler.Event]

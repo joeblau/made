@@ -19,26 +19,34 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            VStack {
-                gestureDisplay
-                    .frame(maxHeight: .infinity)
-                Text(sessionDelegate.deliveryStatus)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            .navigationTitle("Trigger")
-            .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(isConnected ? .green : .red)
-                        .frame(width: 8, height: 8)
-                    Text(isConnected ? "Walkie Connected" : "Walkie Disconnected")
+            // One scrolling column instead of a fixed stack plus a pinned
+            // footer: at accessibility sizes the fixed stack pushed the
+            // gesture glyph up under the "Trigger" title, and a pinned
+            // footer overlapped the delivery line (TYPE-4).
+            ScrollView {
+                VStack {
+                    gestureDisplay
+                    Text(sessionDelegate.deliveryStatus)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                        // Delivery state cross-fades instead of hard-cutting (MOT-4).
+                        .contentTransition(.opacity)
+                        .animation(.easeOut(duration: 0.15), value: sessionDelegate.deliveryStatus)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(isConnected ? .green : .red)
+                            .frame(width: 8, height: 8)
+                            // The adjacent text already speaks the state.
+                            .accessibilityHidden(true)
+                        Text(isConnected ? "Walkie Connected" : "Walkie Disconnected")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 4)
             }
+            .navigationTitle("Trigger")
             .onAppear {
                 if isDemoMode {
                     currentGesture = "Double Pinch"
@@ -46,6 +54,13 @@ struct ContentView: View {
                 }
             }
         }
+        // The asset-catalog AccentColor is empty and not wired as the global
+        // accent, so the tint falls back to a neutral gray and the gesture
+        // glyph and prominent Send button read as secondary text. Use the
+        // same system blue as Walkie's accent so the one primary action
+        // stands out (BTN-1, COL-4). The navigation title still follows the
+        // (empty) asset accent; giving the asset a color is a brand decision.
+        .tint(.blue)
     }
 
     // MARK: - Current Gesture Display
@@ -55,13 +70,17 @@ struct ContentView: View {
             VStack(spacing: 4) {
                 Image(systemName: currentIcon)
                     .font(.title2)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.tint)
                     .contentTransition(.symbolEffect(.replace))
 
                 Text(currentGesture)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .contentTransition(.opacity)
             }
+            // Drives the symbol replace and the label cross-fade on each
+            // recorded gesture (MOT-4).
+            .animation(.spring(duration: 0.3, bounce: 0.15), value: currentIcon)
 
             Button {
                 triggerDoublePinch(source: "button")

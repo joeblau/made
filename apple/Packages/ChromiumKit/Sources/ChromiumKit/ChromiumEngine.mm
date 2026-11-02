@@ -7,6 +7,8 @@
 #if defined(BLAU_CHROMIUM_CEF_ENABLED) && BLAU_CHROMIUM_CEF_ENABLED
 
 #import <crt_externs.h>
+#import <objc/runtime.h>
+#include "include/cef_application_mac.h"
 #include "include/cef_request_context.h"
 
 namespace chromiumkit {
@@ -20,6 +22,111 @@ namespace {
 /// "set before start" contract.
 std::string g_extension_load_paths;
 std::string ExtensionLoadPaths() { return g_extension_load_paths; }
+
+/// CEF's CefAppProtocol state for NSApp. SwiftUI's App lifecycle owns NSApp
+/// (a private SwiftUI NSApplication subclass, ignoring NSPrincipalClass), so
+/// the protocol is grafted onto that class at runtime instead of subclassing.
+/// Read and written only on the main thread, where AppKit sends events.
+BOOL g_handling_send_event = NO;
+BOOL g_application_integration_installed = NO;
+
+BOOL ApplicationIsHandlingSendEvent(id, SEL) {
+    return g_handling_send_event;
+}
+
+void ApplicationSetHandlingSendEvent(id, SEL, BOOL handling) {
+    g_handling_send_event = handling;
+}
+
+bool AddProtocolMethod(Class cls, Protocol *protocol, SEL selector, IMP imp) {
+    const objc_method_description description =
+        protocol_getMethodDescription(protocol, selector, YES, YES);
+    if (description.types == nullptr) {
+        return false;
+    }
+    // A class that already implements the selector (an earlier install, or
+    // an NSApplication subclass that adopted the protocol itself) keeps it.
+    if (class_getInstanceMethod(cls, selector) != nullptr) {
+        return true;
+    }
+    return class_addMethod(cls, selector, imp, description.types);
+}
+
+/// Wraps -sendEvent: of NSApp's real class (KVO-safe: -class, not
+/// object_getClass) in CefScopedSendingEvent, which Chromium's message pump
+/// uses to tell nested run loops started from event dispatch apart. The
+/// wrapper is installed on that class only, so the change is confined to the
+/// one NSApplication instance the process has.
+bool WrapSendEvent(Class cls) {
+    const SEL selector = @selector(sendEvent:);
+    Method method = class_getInstanceMethod(cls, selector);
+    if (method == nullptr) {
+        return false;
+    }
+    using SendEventIMP = void (*)(id, SEL, NSEvent *);
+    const SendEventIMP original =
+        reinterpret_cast<SendEventIMP>(method_getImplementation(method));
+    IMP wrapped = imp_implementationWithBlock(^(id application, NSEvent *event) {
+        CefScopedSendingEvent sending_event;
+        original(application, selector, event);
+    });
+    // An inherited -sendEvent: gets an override on this class that forwards
+    // to the inherited implementation; an own one is replaced in place.
+    if (!class_addMethod(cls, selector, wrapped, method_getTypeEncoding(method))) {
+        method_setImplementation(method, wrapped);
+    }
+    return true;
+}
+
+BOOL InstallApplicationIntegration() {
+    NSCAssert(NSThread.isMainThread, @"NSApp integration requires main");
+    if (g_application_integration_installed) {
+        return YES;
+    }
+    // Never create the shared application here: that would preempt the class
+    // SwiftUI instantiates. Callers run after NSApp exists.
+    NSApplication *application = NSApp;
+    if (application == nil) {
+        return NO;
+    }
+    Class cls = [application class];
+    if (!AddProtocolMethod(cls, @protocol(CrAppProtocol),
+                           @selector(isHandlingSendEvent),
+                           reinterpret_cast<IMP>(ApplicationIsHandlingSendEvent)) ||
+        !AddProtocolMethod(cls, @protocol(CrAppControlProtocol),
+                           @selector(setHandlingSendEvent:),
+                           reinterpret_cast<IMP>(ApplicationSetHandlingSendEvent)) ||
+        !WrapSendEvent(cls)) {
+        return NO;
+    }
+    class_addProtocol(cls, @protocol(CefAppProtocol));
+    g_application_integration_installed = YES;
+    return YES;
+}
+
+/// Marks the profile's last session as cleanly exited.
+///
+/// Chrome's ExitTypeService keeps `profile.exit_type` at "Crashed" while a
+/// session runs and writes "Normal" when the profile is destroyed after a
+/// clean shutdown, except when the previous session crashed. Then it holds
+/// "Crashed" until the user responds to Chrome's crash-recovery ("Restore
+/// pages?") UI. CEF never shows that UI, so after one unclean exit (kill,
+/// logout, quit backstop) every later clean quit still left "Crashed"
+/// (observed in the macOS 27 VM). A stale "Crashed" makes Chrome restore
+/// the previous session's session cookies at every launch (observed), so
+/// session cookies outlived clean quits despite persist_session_cookies
+/// being off. Only a clean shutdown calls this: an unclean exit still reads
+/// as a crash on the next launch, as it should. Best effort: if the pref
+/// cannot be set, the profile keeps Chrome's own value.
+void RecordCleanProfileExit() {
+    CEF_REQUIRE_UI_THREAD();
+    CefRefPtr<CefRequestContext> context = CefRequestContext::GetGlobalContext();
+    if (!context) return;
+    CefRefPtr<CefValue> value = CefValue::Create();
+    value->SetString("Normal");
+    CefString error;
+    context->SetPreference("profile.exit_type", value, error);
+}
 
 class ExternalMessagePump final {
  public:
@@ -114,6 +221,101 @@ class ExternalMessagePump final {
     std::atomic<uint64_t> watchdog_work_count_{0};
 };
 
+/// The client CEF gives browsers that Chrome creates by itself in Chrome UI
+/// windows (GetDefaultClient). Returning no client would leave them
+/// unmanaged, with no callbacks, and block shutdown until someone closed the
+/// window by hand. Instead each one is hidden as soon as it exists, every
+/// navigation and popup is cancelled, every Chrome command is refused, and
+/// the browser is closed once its target URL is known (or after a short
+/// fallback delay).
+class ChromeUIBrowserClient final : public CefClient,
+                                    public CefCommandHandler,
+                                    public CefDisplayHandler,
+                                    public CefLifeSpanHandler,
+                                    public CefRequestHandler {
+ public:
+    explicit ChromeUIBrowserClient(EngineCore *engine) : engine_(engine) {}
+
+    CefRefPtr<CefCommandHandler> GetCommandHandler() override { return this; }
+    CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
+    CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
+    CefRefPtr<CefRequestHandler> GetRequestHandler() override { return this; }
+
+    void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        CEF_REQUIRE_UI_THREAD();
+        NSView *view =
+            CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser->GetHost()->GetWindowHandle());
+        [view.window orderOut:nil];
+        if (g_engine != engine_) {
+            browser->GetHost()->CloseBrowser(true);
+            return;
+        }
+        engine_->ChromeUIBrowserCreated(browser);
+        CefRefPtr<CefFrame> frame = browser->GetMainFrame();
+        if (frame) Consider(browser, frame->GetURL());
+        // Whatever happens to the navigation, the browser does not stay.
+        CefRefPtr<CefBrowser> retained = browser;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC),
+                       dispatch_get_main_queue(), ^{
+            if (g_engine != nullptr) g_engine->CloseChromeUIBrowser(retained);
+        });
+    }
+    bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
+                       CefRefPtr<CefFrame> frame,
+                       int popup_id,
+                       const CefString& target_url,
+                       const CefString& target_frame_name,
+                       WindowOpenDisposition target_disposition,
+                       bool user_gesture,
+                       const CefPopupFeatures& popup_features,
+                       CefWindowInfo& window_info,
+                       CefRefPtr<CefClient>& client,
+                       CefBrowserSettings& settings,
+                       CefRefPtr<CefDictionaryValue>& extra_info,
+                       bool* no_javascript_access) override {
+        return true;
+    }
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        CEF_REQUIRE_UI_THREAD();
+        if (g_engine == engine_) engine_->ChromeUIBrowserClosed(browser);
+    }
+    bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
+                        CefRefPtr<CefFrame> frame,
+                        CefRefPtr<CefRequest> request,
+                        bool user_gesture,
+                        bool is_redirect) override {
+        CEF_REQUIRE_UI_THREAD();
+        if (frame->IsMain()) Consider(browser, request->GetURL());
+        return true;
+    }
+    void OnAddressChange(CefRefPtr<CefBrowser> browser,
+                         CefRefPtr<CefFrame> frame,
+                         const CefString& url) override {
+        CEF_REQUIRE_UI_THREAD();
+        if (frame->IsMain()) Consider(browser, url);
+    }
+    bool OnChromeCommand(CefRefPtr<CefBrowser> browser,
+                         int command_id,
+                         cef_window_open_disposition_t disposition) override {
+        return true;
+    }
+
+ private:
+    void Consider(CefRefPtr<CefBrowser> browser, const CefString& url) {
+        const std::string value = url.ToString();
+        if (handled_ || value.empty() || value == "about:blank" ||
+            g_engine != engine_) {
+            return;
+        }
+        handled_ = true;
+        engine_->ChromeUIBrowserRequested(browser, url);
+    }
+
+    EngineCore *engine_;
+    bool handled_ = false;
+    IMPLEMENT_REFCOUNTING(ChromeUIBrowserClient);
+};
+
 class ChromiumApp final : public CefApp,
                           public CefBrowserProcessHandler {
  public:
@@ -163,6 +365,10 @@ class ChromiumApp final : public CefApp,
 
     void OnScheduleMessagePumpWork(int64_t delay_ms) override {
         ExternalMessagePump::Shared().Schedule(delay_ms);
+    }
+
+    CefRefPtr<CefClient> GetDefaultClient() override {
+        return new ChromeUIBrowserClient(engine_);
     }
 
  private:
@@ -222,6 +428,19 @@ bool EngineCore::Start(NSURL *profile, NSError **error) {
     }
     CefString(&settings.browser_subprocess_path) =
         helperURL.path.fileSystemRepresentation;
+
+    // Chromium calls -[NSApp isHandlingSendEvent] from its message pump; an
+    // NSApp without CefAppProtocol crashes on the first nested event loop.
+    if (!InstallApplicationIntegration()) {
+        if (error) {
+            *error = ChromiumKitError(
+                ChromiumKitErrorInitializationFailed,
+                @"The application object could not be prepared for Chromium.",
+                nil);
+        }
+        loader_.reset();
+        return false;
+    }
 
     app_ = new ChromiumApp(this);
     ExternalMessagePump::Shared().Start();
@@ -287,6 +506,50 @@ void EngineCore::ClientClosed(uint64_t token) {
     FinishShutdownIfReady();
 }
 
+void EngineCore::ChromeUIBrowserCreated(CefRefPtr<CefBrowser> browser) {
+    chrome_ui_browsers_.push_back(browser);
+    if (shutting_down_) {
+        browser->GetHost()->CloseBrowser(true);
+    }
+}
+
+void EngineCore::ChromeUIBrowserRequested(CefRefPtr<CefBrowser> browser,
+                                          const CefString& url) {
+    NSURL *URL = NSURLFromCef(url);
+    ChromiumEngine *owner = owner_;
+    void (^handler)(NSURL *) = owner.extensionPageRequestHandler;
+    if (!shutting_down_ && handler && URL &&
+        [URL.scheme.lowercaseString isEqualToString:@"chrome-extension"]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            handler(URL);
+        });
+    }
+    // Not from inside the navigation callback that reported the URL.
+    CefRefPtr<CefBrowser> retained = browser;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (g_engine != nullptr) g_engine->CloseChromeUIBrowser(retained);
+    });
+}
+
+void EngineCore::CloseChromeUIBrowser(CefRefPtr<CefBrowser> browser) {
+    for (const auto& candidate : chrome_ui_browsers_) {
+        if (candidate->IsSame(browser)) {
+            browser->GetHost()->CloseBrowser(true);
+            return;
+        }
+    }
+}
+
+void EngineCore::ChromeUIBrowserClosed(CefRefPtr<CefBrowser> browser) {
+    chrome_ui_browsers_.erase(
+        std::remove_if(chrome_ui_browsers_.begin(), chrome_ui_browsers_.end(),
+                       [&](const CefRefPtr<CefBrowser>& candidate) {
+                           return candidate->IsSame(browser);
+                       }),
+        chrome_ui_browsers_.end());
+    FinishShutdownIfReady();
+}
+
 void EngineCore::Shutdown() {
     NSCAssert(NSThread.isMainThread, @"CEF must shut down on main");
     if (!initialized_ || shutting_down_) {
@@ -301,11 +564,16 @@ void EngineCore::Shutdown() {
     for (const auto& client : active) {
         client->Close(true);
     }
+    const std::vector<CefRefPtr<CefBrowser>> chrome_ui = chrome_ui_browsers_;
+    for (const auto& browser : chrome_ui) {
+        browser->GetHost()->CloseBrowser(true);
+    }
     FinishShutdownIfReady();
 }
 
 void EngineCore::FinishShutdownIfReady() {
-    if (!shutting_down_ || !clients_.empty() || finish_scheduled_) {
+    if (!shutting_down_ || !clients_.empty() ||
+        !chrome_ui_browsers_.empty() || finish_scheduled_) {
         return;
     }
     finish_scheduled_ = true;
@@ -317,10 +585,14 @@ void EngineCore::FinishShutdownIfReady() {
 }
 
 void EngineCore::FinishShutdown() {
-    if (!initialized_ || !clients_.empty()) {
+    if (!initialized_ || !clients_.empty() || !chrome_ui_browsers_.empty()) {
         finish_scheduled_ = false;
         return;
     }
+    // Every browser has closed: this is a clean exit. Record it before
+    // CefShutdown destroys the profile, which commits its preferences. A
+    // quit before OnContextInitialized has no initialized profile to mark.
+    if (context_ready_) RecordCleanProfileExit();
     ExternalMessagePump::Shared().Stop();
     CefShutdown();
     initialized_ = false;
@@ -368,6 +640,10 @@ using namespace chromiumkit;
         _shutdownCompletions = [NSMutableArray array];
     }
     return self;
+}
+
++ (BOOL)installApplicationIntegration {
+    return InstallApplicationIntegration();
 }
 
 - (BOOL)isRunning {

@@ -46,7 +46,7 @@ struct SettingsSections: View {
                         keyValue(peer, tint: .green)
                     } else {
                         Text("Waiting to sync…")
-                            .foregroundStyle(.secondary)
+                            .legibleSecondaryRowText()
                     }
                 }
                 // The only control: roll a new identity key and push it to the
@@ -57,28 +57,54 @@ struct SettingsSections: View {
                 } label: {
                     Label("Regenerate & re-sync", systemImage: "arrow.triangle.2.circlepath")
                 }
+                .settingsActionButtonStyle()
             } header: {
-                HStack(spacing: 6) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     if identity.isSynced {
-                        Text("Synced")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.green)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.green.opacity(0.15), in: Capsule())
-                            .textCase(nil)
+                        // A status badge (content), not a control: tinted fill,
+                        // no glass. The green glyph carries the state; the
+                        // caption text stays primary because green caption
+                        // text on a pale green fill fails contrast (TYPE-3).
+                        Label {
+                            Text("Synced")
+                                .foregroundStyle(.primary)
+                        } icon: {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        }
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                        .background(.green.opacity(0.15), in: Capsule())
+                        .textCase(nil)
+                        .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     }
                     Text("Identity & Keys")
                 }
+                // The "Synced" caption keeps its explicit primary style.
+                .legibleSectionText()
+                .animation(LiquidGlassMetrics.spring, value: identity.isSynced)
             } footer: {
                 Text("Your device key is generated automatically and exchanged with your paired device over the encrypted connection — no setup required.")
+                    .legibleSectionText()
             }
         }
 
-        Section("About") {
-            LabeledContent("App", value: AppInfo.name)
-            LabeledContent("Version", value: AppInfo.version)
-            LabeledContent("Build", value: AppInfo.build)
+        Section {
+            aboutRow("App", AppInfo.name)
+            aboutRow("Version", AppInfo.version)
+            aboutRow("Build", AppInfo.build)
+        } header: {
+            Text("About").legibleSectionText()
+        }
+    }
+
+    /// A value row whose value stays secondary, in the legible gray on iOS:
+    /// the system `LabeledContent` value gray (138,138,142) is 3.5:1 on a
+    /// white row (TYPE-3).
+    private func aboutRow(_ title: LocalizedStringKey, _ value: String) -> some View {
+        LabeledContent(title) {
+            Text(value).legibleSecondaryRowText()
         }
     }
 
@@ -92,8 +118,23 @@ struct SettingsSections: View {
                 .foregroundStyle(tint ?? .primary)
                 .textSelection(.enabled)
         } else {
-            Text(placeholder).foregroundStyle(.secondary)
+            Text(placeholder).legibleSecondaryRowText()
         }
+    }
+}
+
+private extension View {
+    /// A free-standing settings action. On macOS a grouped `Form` row hosts a
+    /// push button, so it takes the secondary glass style (BTN-1: Settings has
+    /// no single primary action). On iOS a `Form` button is the platform's
+    /// tappable row, which keeps the system list styling.
+    @ViewBuilder
+    func settingsActionButtonStyle() -> some View {
+        #if os(macOS)
+        liquidGlassButtonStyle()
+        #else
+        self
+        #endif
     }
 }
 

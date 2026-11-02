@@ -27,7 +27,7 @@ struct UsageListView: View {
         VStack(spacing: 0) {
             header
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(spacing: LiquidGlassMetrics.Spacing.small) {
                     ProviderCard(
                         title: "Claude",
                         symbol: "BrandAnthropic",
@@ -75,7 +75,7 @@ struct UsageListView: View {
                         openSetup: openSetup
                     )
                 }
-                .padding(12)
+                .padding(LiquidGlassMetrics.Spacing.small)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -154,6 +154,9 @@ enum UsageRetryCountdown {
 }
 
 /// One provider's plan usage card. Renders per `ProviderState`.
+///
+/// The card is content, so it keeps a quiet fill in the shared card radius
+/// (no glass, no border); only its actions are glass controls.
 private struct ProviderCard: View {
     let title: String
     /// Asset-catalog symbol name for the provider's brand mark.
@@ -168,28 +171,50 @@ private struct ProviderCard: View {
     let openSetup: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             header
             content
         }
-        .padding(12)
+        .padding(LiquidGlassMetrics.Spacing.small)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            .quaternary.opacity(0.4),
+            in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.card, style: .continuous)
+        )
+        .liquidGlassContainerShape()
+        .animation(LiquidGlassMetrics.spring, value: stateKind)
+    }
+
+    /// Coarse state identity, so switching between loading, sign-in, and
+    /// usage content animates instead of snapping (MOT-4). Usage values
+    /// themselves animate through their own numeric transitions.
+    private var stateKind: Int {
+        switch state {
+        case .disabled: 0
+        case .loading: 1
+        case .notSignedIn: 2
+        case .error: 3
+        case .rateLimited: 4
+        case .usage: 5
+        }
     }
 
     private var header: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             // Brand marks are custom symbol assets, tinted like SF Symbols.
             Image(symbol)
                 .font(.body)
                 .foregroundStyle(tint)
+                .accessibilityHidden(true)
             Text(title)
                 .font(.body.weight(.semibold))
             if let plan = state.displayedUsage?.planLabel {
+                // Brand-colored text on its own 15% wash measured about 2.2:1 in
+                // light mode; the wash keeps the brand cue (TYPE-3).
                 Text(plan)
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(tint)
-                    .padding(.horizontal, 6)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
                     .padding(.vertical, 2)
                     .background(tint.opacity(0.15), in: Capsule())
             }
@@ -201,21 +226,23 @@ private struct ProviderCard: View {
     private var content: some View {
         switch state {
         case .disabled:
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text("Allow Cockpit to read this CLI's credentials and request plan usage.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // Secondary glass, not prominent: several cards can show this
+                // at once, and the inspector has no single primary (BTN-1).
                 Button(action: enable) {
                     Label("Enable Usage", systemImage: "checkmark.circle")
-                        .font(.callout)
                 }
-                .buttonStyle(.link)
+                .compatGlassButtonStyle()
+                .buttonBorderShape(.capsule)
+                .controlSize(.small)
             }
 
         case .loading:
-            ProgressView().controlSize(.small)
-                .frame(maxWidth: .infinity, alignment: .center)
+            loadingPlaceholder
 
         case .notSignedIn:
             setupPrompt(
@@ -253,7 +280,7 @@ private struct ProviderCard: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         } else {
-            VStack(spacing: 10) {
+            VStack(spacing: LiquidGlassMetrics.Spacing.small) {
                 ForEach(usage.windowsInDisplayOrder) { window in
                     windowRow(window)
                 }
@@ -266,14 +293,17 @@ private struct ProviderCard: View {
     }
 
     private func windowRow(_ window: UsageWindow) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             HStack {
                 Text(window.name)
                     .font(.callout.weight(.medium))
                 Spacer()
+                // Primary text, not the bar's brand tint: orange, green, and
+                // yellow figures on the light card measured 1.6–2.5:1
+                // (TYPE-3). Only the critical red, at semibold, keeps color.
                 Text("\(Int((window.utilization * 100).rounded()))%")
                     .font(.system(.callout, design: .rounded, weight: .semibold))
-                    .foregroundStyle(barColor(window.utilization))
+                    .foregroundStyle(isCritical(window.utilization) ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
             }
             ProgressView(value: min(max(window.utilization, 0), 1))
                 .progressViewStyle(.linear)
@@ -287,7 +317,7 @@ private struct ProviderCard: View {
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .contentTransition(.numericText(countsDown: true))
-                        .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.7), value: countdown)
+                        .animation(LiquidGlassMetrics.spring, value: countdown)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
@@ -297,7 +327,7 @@ private struct ProviderCard: View {
     private func creditsRow(_ credits: CreditInfo) -> some View {
         let hasMonthlyAllowance = credits.unlimited || credits.used != nil
             || credits.limit != nil || credits.utilization != nil
-        return VStack(spacing: 4) {
+        return VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             if let balance = credits.balance {
                 creditLine(
                     label: hasMonthlyAllowance ? "Balance" : "Credits",
@@ -367,24 +397,50 @@ private struct ProviderCard: View {
     }
 
     private func setupPrompt(message: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Text(message)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button(action: openSetup) {
                 Label("Set Up", systemImage: "arrow.up.forward")
-                    .font(.callout)
             }
-            .buttonStyle(.link)
+            .compatGlassButtonStyle()
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
         }
     }
 
-    private func barColor(_ utilization: Double) -> Color {
-        switch utilization {
-        case ..<0.75: tint
-        case ..<0.9: .yellow
-        default: .red
+    /// Skeleton of two usage windows while the first request is in flight,
+    /// so the card keeps its loaded shape (MOT-5) instead of a lone spinner.
+    private var loadingPlaceholder: some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
+            ForEach(0..<2, id: \.self) { _ in
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                    HStack {
+                        Text("Usage window")
+                            .font(.callout.weight(.medium))
+                        Spacer()
+                        Text("00%")
+                            .font(.system(.callout, design: .rounded, weight: .semibold))
+                    }
+                    Capsule()
+                        .fill(.fill.tertiary)
+                        .frame(height: 6)
+                }
+            }
         }
+        .redacted(reason: .placeholder)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading usage")
     }
+
+    /// The bar keeps the provider's color until the window is nearly spent.
+    /// A yellow middle tier read as calmer than Claude's orange brand (a 78%
+    /// window looked safer than a 62% one), so there are two states only.
+    private func barColor(_ utilization: Double) -> Color {
+        isCritical(utilization) ? .red : tint
+    }
+
+    private func isCritical(_ utilization: Double) -> Bool { utilization >= 0.9 }
 }

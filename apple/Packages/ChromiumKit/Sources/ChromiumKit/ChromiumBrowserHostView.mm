@@ -22,6 +22,30 @@ using namespace chromiumkit;
     return self;
 }
 
+- (instancetype)initExtensionPopupWithScreenFrame:(NSRect)screenFrame {
+    return [self initExtensionHostWithScreenFrame:screenFrame popup:YES];
+}
+
+- (instancetype)initExtensionWindowWithScreenFrame:(NSRect)screenFrame {
+    return [self initExtensionHostWithScreenFrame:screenFrame popup:NO];
+}
+
+- (instancetype)initExtensionHostWithScreenFrame:(NSRect)screenFrame
+                                           popup:(BOOL)popup {
+    // The flags must be set before initializeHost: registering with a running
+    // engine creates the browser immediately, and the client fixes its
+    // presentation when it is constructed.
+    self = [super initWithFrame:NSMakeRect(0, 0, NSWidth(screenFrame),
+                                           NSHeight(screenFrame))];
+    if (self) {
+        _extensionPopup = popup;
+        _extensionWindow = !popup;
+        _extensionScreenFrame = screenFrame;
+        [self initializeHost];
+    }
+    return self;
+}
+
 - (void)initializeHost {
     _lifecycleState = ChromiumBrowserLifecycleStateCreating;
     _estimatedProgress = 0;
@@ -299,9 +323,45 @@ using namespace chromiumkit;
                                         port:port];
     }
 }
+- (BOOL)cefHandlesJavaScriptDialogs {
+    return !self.closeDelivered &&
+        [self.delegate respondsToSelector:
+            @selector(chromiumBrowserHostView:didRequestJavaScriptDialog:)];
+}
+- (BOOL)cefPresentJavaScriptDialog:(ChromiumJavaScriptDialogRequest *)request {
+    if (self.lifecycleState != ChromiumBrowserLifecycleStateCreated ||
+        ![self cefHandlesJavaScriptDialogs]) {
+        return NO;
+    }
+    // CEF runs one dialog per browser; a stale request is answered first.
+    [self.activeJavaScriptDialog cancel];
+    self.activeJavaScriptDialog = request;
+    [self.delegate chromiumBrowserHostView:self
+                didRequestJavaScriptDialog:request];
+    return YES;
+}
+- (void)cefDidResetJavaScriptDialogs {
+    ChromiumJavaScriptDialogRequest *active = self.activeJavaScriptDialog;
+    self.activeJavaScriptDialog = nil;
+    if (!active || active.resolved) return;
+    [active invalidate];
+    id<ChromiumBrowserHostViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:
+            @selector(chromiumBrowserHostViewDidResetJavaScriptDialogs:)]) {
+        [delegate chromiumBrowserHostViewDidResetJavaScriptDialogs:self];
+    }
+}
 - (void)cefWillClose {
     if (self.lifecycleState != ChromiumBrowserLifecycleStateClosed) {
         self.lifecycleState = ChromiumBrowserLifecycleStateClosing;
+    }
+}
+- (void)cefPopupDidResignActive {
+    if (self.lifecycleState != ChromiumBrowserLifecycleStateCreated) return;
+    id<ChromiumBrowserHostViewDelegate> delegate = self.delegate;
+    if ([delegate respondsToSelector:
+            @selector(chromiumBrowserHostViewPopupDidResignActive:)]) {
+        [delegate chromiumBrowserHostViewPopupDidResignActive:self];
     }
 }
 - (void)cefDidClose {

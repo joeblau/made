@@ -26,11 +26,77 @@ private enum PaneLayoutMetrics {
     static let dividerLineThickness: CGFloat = 1
     static let dividerHitThickness: CGFloat = 6
     static let collapsedPaneThickness: CGFloat = 28
+    /// Pane tab height; tabs are capsules, so this is also their diameter.
+    static let tabHeight: CGFloat = 28
 }
 
 private struct PaneLayoutPlan {
     let sizes: [UUID: CGFloat]
     let expandedSize: CGFloat
+}
+
+/// Pane size floors. The relative 0.1 floor alone let a divider drag (or a
+/// narrower window) squeeze a pane to 37–65pt, where pane headers clip and
+/// picker titles break a letter per line. An expanded pane therefore keeps
+/// at least `minimumPaneLength` points whenever the stack fits every expanded
+/// pane at that length; a stack too small for that keeps the relative floor.
+enum PaneSizing {
+    /// Enough for a pane header: glyph, a short title, and two small buttons.
+    static let minimumPaneLength: Double = 160
+    static let minimumRelativeFraction = 0.1
+
+    /// The smallest fraction a divider drag may leave an expanded pane.
+    static func minimumFraction(expandedSize: Double?, expandedCount: Int) -> Double {
+        guard let expandedSize, expandedSize > 0, expandedCount > 0,
+              minimumPaneLength * Double(expandedCount) <= expandedSize else {
+            return minimumRelativeFraction
+        }
+        return max(minimumRelativeFraction, minimumPaneLength / expandedSize)
+    }
+
+    /// New fractions for the pair either side of a divider. The pair's total is
+    /// preserved, and neither side is pushed below `minimumFraction`; a side
+    /// already below it (a window that just got narrower) may grow but not
+    /// shrink, so the result never jumps, goes negative, or overflows the pair.
+    static func resizedPair(
+        leading: Double,
+        trailing: Double,
+        delta: Double,
+        minimumFraction: Double
+    ) -> (leading: Double, trailing: Double) {
+        let leading = max(0, leading)
+        let trailing = max(0, trailing)
+        let total = leading + trailing
+        let lower = min(minimumFraction, leading)
+        let upper = total - min(minimumFraction, trailing)
+        let newLeading = min(max(leading + delta, lower), upper)
+        return (newLeading, total - newLeading)
+    }
+
+    /// Lifts every expanded pane below `minimumPaneLength` up to it, taking the
+    /// space proportionally from the larger panes. Input fractions sum to 1;
+    /// so does the output. When the panes can't all fit at the floor, the
+    /// fractions come back unchanged (the previous, purely relative layout).
+    static func flooredFractions(_ fractions: [UUID: Double], expandedSize: Double) -> [UUID: Double] {
+        guard !fractions.isEmpty, expandedSize > 0,
+              minimumPaneLength * Double(fractions.count) <= expandedSize else { return fractions }
+        let floor = minimumPaneLength / expandedSize
+        var pinned = Set<UUID>()
+        while true {
+            let free = fractions.filter { !pinned.contains($0.key) }
+            let remaining = max(0, 1 - Double(pinned.count) * floor)
+            let freeTotal = free.values.reduce(0, +)
+            let scaled = free.mapValues { value in
+                freeTotal > 0 ? value / freeTotal * remaining : remaining / Double(free.count)
+            }
+            let undersized = scaled.filter { $0.value < floor }.map(\.key)
+            // `count * floor <= 1` means at least one pane always stays free.
+            guard !undersized.isEmpty, undersized.count < free.count else {
+                return scaled.merging(pinned.map { ($0, floor) }) { scaledValue, _ in scaledValue }
+            }
+            pinned.formUnion(undersized)
+        }
+    }
 }
 
 struct WorkspaceView: View {
@@ -65,20 +131,25 @@ struct WorkspaceView: View {
         Group {
             if workspace.axis == .vertical {
                 resizableTabBar
-                    .padding(.vertical, 6)
+                    .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
             } else {
                 let sorted = workspace.sortedPanes
-                HStack(spacing: 1) {
-                    ForEach(sorted) { pane in
-                        tabItem(pane)
-                            .frame(width: pane.isCollapsed ? PaneLayoutMetrics.collapsedPaneThickness : nil)
-                            .frame(maxWidth: pane.isCollapsed ? nil : .infinity)
-                    }
+                // Tabs are neighboring glass capsules rendered in one
+                // container (shared sampling, no glass on glass); spacing 0
+                // keeps each tab a distinct capsule.
+                CompatGlassContainer(spacing: 0) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                        ForEach(sorted) { pane in
+                            tabItem(pane)
+                                .frame(width: pane.isCollapsed ? PaneLayoutMetrics.collapsedPaneThickness : nil)
+                                .frame(maxWidth: pane.isCollapsed ? nil : .infinity)
+                        }
 
-                    Spacer()
+                        Spacer()
+                    }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
             }
         }
         .background(.bar)
@@ -100,28 +171,36 @@ struct WorkspaceView: View {
             isSelected: isSelected,
             isHovering: hoveredPaneID == pane.id,
             isWorkspaceActive: isActive,
-            // The extension surface may close its last pane (its empty state
-            // invites re-adding); the main window always keeps one.
-            canClose: workspace.sortedPanes.count > 1 || surface == .extension,
+            // `Workspace.requestRemovePane` and `removePane` keep a
+            // workspace's last pane on both surfaces, so the last tab offers
+            // no close button rather than one that does nothing.
+            canClose: workspace.sortedPanes.count > 1,
+            onSelect: { workspace.selectedPaneID = pane.id },
             onClose: { workspace.requestRemovePane(pane) },
             onHide: { workspace.collapsePane(pane) },
             onUnhide: { workspace.expandPane(pane) }
         )
-        .padding(.horizontal, pane.isCollapsed ? 0 : 14)
+        // Capsule tabs (no squared-off control corners); the 8pt inset keeps
+        // the round close/hide buttons close to concentric with the capsule
+        // ends (LAY-4).
+        .padding(.horizontal, pane.isCollapsed ? 0 : LiquidGlassMetrics.Spacing.xSmall)
         .frame(maxWidth: .infinity)
-        .frame(height: 28)
+        .frame(height: PaneLayoutMetrics.tabHeight)
         .compatGlassEffect(
             tint: glassTint,
             interactive: true,
-            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            in: Capsule()
         )
         .overlay {
             if isDropTarget {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                Capsule()
                     .fill(Color.accentColor.opacity(0.18))
+                    .allowsHitTesting(false)
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .contentShape(Capsule())
+        .animation(LiquidGlassMetrics.stateChange, value: isSelected)
+        .animation(LiquidGlassMetrics.stateChange, value: isDropTarget)
         .onHover { isHovering in
             if isHovering {
                 hoveredPaneID = pane.id
@@ -144,15 +223,17 @@ struct WorkspaceView: View {
                 sourceSurface: surface
             )
         ) {
-            HStack(spacing: 6) {
+            // Drag previews are snapshotted without a backdrop, so they keep
+            // a material fill rather than glass — in the same capsule shape.
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Image(systemName: pane.kind.systemImageName)
                     .scaledFont(size: 11)
                 Text(pane.displayTitle)
                     .scaledFont(size: 12)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 6))
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+            .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+            .background(.regularMaterial, in: Capsule())
         }
         .dropDestination(for: WorkspacePaneDragPayload.self) { payloads, _ in
             guard let payload = payloads.first else { return false }
@@ -177,7 +258,10 @@ struct WorkspaceView: View {
             Button("Close", role: .destructive) {
                 workspace.requestRemovePane(pane)
             }
-            .disabled(workspace.sortedPanes.count <= 1 && surface != .extension)
+            // `Workspace.removePane` keeps every workspace's last pane, on
+            // both surfaces, so an enabled Close on the last pane was a
+            // silent no-op in Extendo.
+            .disabled(workspace.sortedPanes.count <= 1)
 
             if workspace.sortedPanes.count > 1 {
                 Divider()
@@ -202,32 +286,55 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Reached when the last pane is closed (the extension surface allows
-    /// that): an explicit invitation to add panes, mirroring the toolbar
-    /// launcher's options.
+    /// An explicit invitation to add panes, mirroring the toolbar launcher's
+    /// options. The pane model keeps every workspace's last pane, so this is
+    /// a defensive state for a workspace restored with no panes.
     private var emptyPanesView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             ContentUnavailableView(
                 "No Panes",
                 systemImage: "rectangle.dashed",
                 description: Text("Add a pane to get started.")
             )
+            .legibleSecondaryHierarchy()
             .frame(maxHeight: 220)
 
-            HStack(spacing: 8) {
-                addPaneButton(.terminal)
-                addPaneButton(.browser)
-                addPaneButton(.device)
-                addPaneButton(.simulator)
-                addPaneButton(.android)
-                addPaneButton(.editor)
+            // One row when the pane is wide enough; two rows of three in a
+            // narrow (e.g. Extendo) window so the capsules never clip (LAY-6).
+            CompatGlassContainer(spacing: 0) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        addPaneButtons(Self.emptyPaneKinds)
+                    }
+                    VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                            addPaneButtons(Array(Self.emptyPaneKinds.prefix(3)))
+                        }
+                        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                            addPaneButtons(Array(Self.emptyPaneKinds.dropFirst(3)))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(LiquidGlassMetrics.Spacing.xLarge)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private static let emptyPaneKinds: [PaneKind] = [.terminal, .browser, .device, .simulator, .android, .editor]
+
+    private func addPaneButtons(_ kinds: [PaneKind]) -> some View {
+        ForEach(kinds, id: \.self) { kind in
+            if kind == .editor {
+                addPaneButton(kind)
                     .disabled(workspace.effectiveRootPath == nil)
                     .help(workspace.effectiveRootPath == nil
                         ? "Set a workspace root path to open the editor"
                         : "Open a file editor with fuzzy file search")
+            } else {
+                addPaneButton(kind)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func addPaneButton(_ kind: PaneKind) -> some View {
@@ -238,6 +345,7 @@ struct WorkspaceView: View {
         }
         // Peer choices with no single primary (BTN-1), so all secondary glass.
         .compatGlassButtonStyle()
+        .buttonBorderShape(.capsule)
     }
 
     @ViewBuilder
@@ -322,31 +430,34 @@ private extension WorkspaceView {
             let availableWidth = max(0, geometry.size.width - dividerCount * PaneLayoutMetrics.dividerHitThickness)
             let layout = paneLayoutPlan(totalSize: availableWidth, sorted: sorted)
 
-            HStack(spacing: 0) {
-                ForEach(Array(sorted.enumerated()), id: \.element.id) { index, pane in
-                    let tabWidth = layout.sizes[pane.id] ?? 0
+            // Spacing 0: tabs stay distinct across the resize handles.
+            CompatGlassContainer(spacing: 0) {
+                HStack(spacing: 0) {
+                    ForEach(Array(sorted.enumerated()), id: \.element.id) { index, pane in
+                        let tabWidth = layout.sizes[pane.id] ?? 0
 
-                    tabItem(pane)
-                        .frame(width: max(0, tabWidth))
+                        tabItem(pane)
+                            .frame(width: max(0, tabWidth))
 
-                    if index < sorted.count - 1 {
-                        let trailingPane = sorted[index + 1]
-                        PaneResizeHandle(
-                            isVertical: true,
-                            totalSize: layout.expandedSize,
-                            leadingID: pane.id,
-                            trailingID: trailingPane.id,
-                            workspace: workspace,
-                            isEnabled: workspace.canResizePanes(
+                        if index < sorted.count - 1 {
+                            let trailingPane = sorted[index + 1]
+                            PaneResizeHandle(
+                                isVertical: true,
+                                totalSize: layout.expandedSize,
                                 leadingID: pane.id,
-                                trailingID: trailingPane.id
+                                trailingID: trailingPane.id,
+                                workspace: workspace,
+                                isEnabled: workspace.canResizePanes(
+                                    leadingID: pane.id,
+                                    trailingID: trailingPane.id
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }
         }
-        .frame(height: 28)
+        .frame(height: PaneLayoutMetrics.tabHeight)
     }
 
     func syncFocusForSelectedPane() {
@@ -377,7 +488,10 @@ private extension WorkspaceView {
         let collapsedThickness = min(PaneLayoutMetrics.collapsedPaneThickness, max(0, maxCollapsedThickness))
         let collapsedTotal = CGFloat(collapsedPanes.count) * collapsedThickness
         let expandedSize = expandedPanes.isEmpty ? 0 : max(0, totalSize - collapsedTotal)
-        let fractions = workspace.normalizedExpandedSizeFractions
+        let fractions = PaneSizing.flooredFractions(
+            workspace.normalizedExpandedSizeFractions,
+            expandedSize: Double(expandedSize)
+        )
 
         var sizes: [UUID: CGFloat] = [:]
         for pane in sorted {
@@ -461,7 +575,12 @@ private struct PaneResizeHandle: View {
                     let moved = current - lastDragLocation
                     lastDragLocation = current
                     let delta = Double(moved / totalSize)
-                    workspace.resizePanes(leadingID: leadingID, trailingID: trailingID, delta: delta)
+                    workspace.resizePanes(
+                        leadingID: leadingID,
+                        trailingID: trailingID,
+                        delta: delta,
+                        expandedSize: Double(totalSize)
+                    )
                 }
                 .onEnded { _ in
                     guard isEnabled else { return }
@@ -492,12 +611,15 @@ private struct CollapsedPaneSlit: View {
 
     var body: some View {
         ZStack {
+            // The whole slit is the tap target: unglazed, but with a hover
+            // wash and press feedback so it reads as clickable (BTN-5). The
+            // slit is a pane edge, not a control, so the wash stays square.
             Button(action: onUnhide) {
                 Color.clear
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.liquidGlassPressable(cornerRadius: 0))
             .accessibilityLabel("Unhide \(pane.kind.displayName)")
 
             Group {
@@ -506,13 +628,13 @@ private struct CollapsedPaneSlit: View {
                         unhideButton
                         Spacer(minLength: 0)
                     }
-                    .padding(.top, 6)
+                    .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
                 } else {
                     HStack(spacing: 0) {
                         unhideButton
                         Spacer(minLength: 0)
                     }
-                    .padding(.leading, 6)
+                    .padding(.leading, LiquidGlassMetrics.Spacing.xxSmall)
                 }
             }
         }
@@ -529,13 +651,18 @@ private struct CollapsedPaneSlit: View {
                 isWorkspaceActive: isWorkspaceActive
             )
         } else {
+            // Icon-only control floating over the collapsed slit: a circular
+            // glass button sized to fit the 28pt slit.
             Button(action: onUnhide) {
-                Image(systemName: "eye")
-                    .scaledFont(size: 10, weight: .semibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 18, height: 18)
+                Label {
+                    Text("Unhide \(pane.kind.displayName)")
+                } icon: {
+                    Image(systemName: "eye")
+                        .scaledFont(size: 10, weight: .semibold)
+                        .frame(width: 12, height: 12)
+                }
             }
-            .buttonStyle(.plain)
+            .compatGlassIconButton(controlSize: .mini)
             .help("Unhide \(pane.kind.displayName)")
         }
     }
@@ -566,7 +693,23 @@ private struct HiddenTerminalIndicator: View {
     }
 
     var body: some View {
-        VStack(spacing: compact ? 2 : 5) {
+        CompatGlassContainer(spacing: 0) {
+            indicatorStack
+        }
+        .animation(LiquidGlassMetrics.spring, value: activity)
+        .animation(LiquidGlassMetrics.spring, value: executableCommand != nil)
+        .task(id: isWorkspaceActive) {
+            guard isWorkspaceActive else { return }
+            let sessionName = pane.persistentSessionName
+            while !Task.isCancelled {
+                activity = await PersistentTerminalSession.foregroundActivity(sessionName: sessionName)
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private var indicatorStack: some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             if activity == .running {
                 runningIndicator
                     .help("This hidden terminal is running")
@@ -586,16 +729,6 @@ private struct HiddenTerminalIndicator: View {
                 )
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: activity)
-        .animation(.easeInOut(duration: 0.2), value: executableCommand != nil)
-        .task(id: isWorkspaceActive) {
-            guard isWorkspaceActive else { return }
-            let sessionName = pane.persistentSessionName
-            while !Task.isCancelled {
-                activity = await PersistentTerminalSession.foregroundActivity(sessionName: sessionName)
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
     }
 
     private func fastCommandButton(
@@ -606,6 +739,8 @@ private struct HiddenTerminalIndicator: View {
         Button {
             perform(action)
         } label: {
+            // A fixed glyph frame keeps the circle the same size while the
+            // spinner swaps in.
             Group {
                 if activeAction == action {
                     ProgressView()
@@ -616,10 +751,10 @@ private struct HiddenTerminalIndicator: View {
                 }
             }
             .foregroundStyle(action == .play ? Color.primary : Color.secondary)
-            .frame(width: compact ? 18 : 20, height: compact ? 18 : 20)
-            .background(Color.primary.opacity(0.06), in: Circle())
+            .frame(width: 12, height: 12)
         }
-        .buttonStyle(.plain)
+        // Icon-only circular glass, one control size for the whole column.
+        .compatGlassIconButton(controlSize: .mini)
         .disabled(activeAction != nil)
         .help(help)
         .accessibilityLabel(help)

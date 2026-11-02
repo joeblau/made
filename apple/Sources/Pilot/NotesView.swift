@@ -90,10 +90,12 @@ struct NotesView: View {
             systemImage: "eye.slash"
         )
         .scaledFont(size: 11)
-        .foregroundStyle(.secondary)
+        // Vibrant `.secondary` measured 3.95:1 on the light editor canvas;
+        // a security notice must clear 4.5:1 (TYPE-3).
+        .glassLegibleForeground(.secondary)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
         .accessibilityLabel(
             "Security notice: secret masking is visual only. Notes are stored locally as plaintext."
         )
@@ -111,67 +113,62 @@ struct NotesView: View {
 
     private func tabBar(notes: [Note]) -> some View {
         HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                CompatGlassContainer(spacing: 8) {
-                    HStack(spacing: 8) {
-                        ForEach(notes) { note in
-                            NoteTab(
-                                title: note.displayTitle,
-                                isSelected: note.id == store.selectedNoteID,
-                                isDropTarget: dropTargetNoteID == note.id,
-                                onSelect: { store.selectedNoteID = note.id },
-                                onClose: { store.requestCloseNote(note) }
-                            )
-                            // Drag-to-reorder (issue #67). The note rides along as a
-                            // dedicated Transferable payload; dropping onto another tab
-                            // inserts the dragged note just before it and persists the
-                            // new order.
-                            .draggable(NoteTabTransfer(id: note.id)) {
-                                // Legible chip under the cursor while dragging.
-                                Text(note.displayTitle)
-                                    .scaledFont(size: 12)
-                                    .lineLimit(1)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 4)
-                                    .background(
-                                        .ultraThinMaterial,
-                                        in: RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    )
-                            }
-                            .dropDestination(for: NoteTabTransfer.self) { items, _ in
-                                dropTargetNoteID = nil
-                                guard let dragged = items.first else { return false }
-                                store.moveNote(dragged.id, before: note.id)
-                                return true
-                            } isTargeted: { targeted in
-                                dropTargetNoteID = targeted ? note.id : nil
-                            }
+            GlassChipScroller {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    ForEach(notes) { note in
+                        NoteTab(
+                            title: note.displayTitle,
+                            isSelected: note.id == store.selectedNoteID,
+                            isDropTarget: dropTargetNoteID == note.id,
+                            onSelect: { store.selectedNoteID = note.id },
+                            onClose: { store.requestCloseNote(note) }
+                        )
+                        // Drag-to-reorder (issue #67). The note rides along as a
+                        // dedicated Transferable payload; dropping onto another tab
+                        // inserts the dragged note just before it and persists the
+                        // new order.
+                        .draggable(NoteTabTransfer(id: note.id)) {
+                            // Legible chip under the cursor while dragging,
+                            // in the same capsule as the tab it came from.
+                            Text(note.displayTitle)
+                                .scaledFont(size: 12)
+                                .lineLimit(1)
+                                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                                .background(.ultraThinMaterial, in: Capsule())
                         }
-
-                        Button {
-                            store.addNote()
-                        } label: {
-                            Image(systemName: "plus")
-                                .scaledFont(size: 12, weight: .medium)
-                        }
-                        .compatGlassButtonStyle()
-                        .buttonBorderShape(.circle)
-                        .foregroundStyle(.primary)
-                        .help("New Note")
-                        // Dropping a tab on (or past) the + button sends it to the end.
                         .dropDestination(for: NoteTabTransfer.self) { items, _ in
+                            dropTargetNoteID = nil
                             guard let dragged = items.first else { return false }
-                            store.moveNoteToEnd(dragged.id)
+                            store.moveNote(dragged.id, before: note.id)
                             return true
+                        } isTargeted: { targeted in
+                            dropTargetNoteID = targeted ? note.id : nil
                         }
                     }
+
+                    Button {
+                        store.addNote()
+                    } label: {
+                        Label("New Note", systemImage: "plus")
+                            .scaledFont(size: 12, weight: .medium)
+                    }
+                    .compatGlassIconButton()
+                    .foregroundStyle(.primary)
+                    .help("New Note")
+                    // Dropping a tab on (or past) the + button sends it to the end.
+                    .dropDestination(for: NoteTabTransfer.self) { items, _ in
+                        guard let dragged = items.first else { return false }
+                        store.moveNoteToEnd(dragged.id)
+                        return true
+                    }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
             }
 
             wordWrapMenu
-                .padding(.horizontal, 12)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
         }
     }
 
@@ -179,18 +176,35 @@ struct NotesView: View {
         NoteWordWrap(rawValue: wordWrapRawValue) ?? .eighty
     }
 
-    /// A standard pop-up picker rather than a hand-built checkmark menu: it
-    /// renders as a Liquid Glass pop-up button on macOS 26 and keeps the
-    /// selected width visible without a second "compact" title.
+    /// A visible label beside a capsule glass menu button showing the
+    /// selected width. An in-content `Picker(.menu)` draws the standard
+    /// pop-up bezel on macOS 26, not glass, so the pop-up is a button-style
+    /// `Menu` whose inline picker still supplies the native checkmark.
     private var wordWrapMenu: some View {
-        Picker("Word Wrap", selection: wordWrapSelection) {
-            ForEach(NoteWordWrap.allCases) { option in
-                Text(option.title).tag(option)
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // Legible gray: system secondary measured 3.95:1 on white.
+            Text("Word Wrap")
+                .foregroundStyle(GlassLegibleText.secondaryColor)
+                .accessibilityHidden(true)
+            Menu {
+                Picker("Word Wrap", selection: wordWrapSelection) {
+                    ForEach(NoteWordWrap.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Text(selectedWordWrap.title)
             }
+            .menuStyle(.button)
+            .compatGlassButtonStyle()
+            .controlSize(.small)
+            .fixedSize()
+            .accessibilityLabel("Word Wrap")
+            .accessibilityValue(selectedWordWrap.title)
         }
-        .pickerStyle(.menu)
         .scaledFont(size: 11, weight: .medium)
-        .fixedSize()
         .help("Word Wrap")
     }
 
@@ -215,11 +229,21 @@ struct NotesView: View {
                 // text view rebinds cleanly instead of reusing stale state.
                 .id(note.id)
         } else {
-            ContentUnavailableView(
-                "No Note",
-                systemImage: "note.text",
-                description: Text("Create a note with the + button.")
-            )
+            // Empty state with a clear next action (MOT-6); the tab bar's +
+            // stays the secondary glass control, so this is the one primary.
+            ContentUnavailableView {
+                Label("No Note", systemImage: "note.text")
+            } description: {
+                Text("Create a note with the + button.")
+            } actions: {
+                Button("New Note") { store.addNote() }
+                    .compatGlassProminentButtonStyle()
+            }
+            .legibleSecondaryHierarchy()
+            // Fill the detail area like the editor does. Without this the
+            // VStack centered the whole column, so the tab bar and notice
+            // floated to mid-pane with blank space above them (LAY-1).
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
@@ -453,21 +477,33 @@ private struct NoteTab: View {
 
     @State private var isHovering = false
 
+    /// The close target is a circle inset from the tab's trailing edge by the
+    /// same amount vertically and horizontally, so it nests concentrically in
+    /// the capsule tab (LAY-4).
+    private static let closeSize: CGFloat = 18
+    private static let closeInset = LiquidGlassMetrics.Spacing.xxSmall
+
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
             Text(title)
                 .scaledFont(size: 12, weight: isSelected ? .semibold : .regular)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // The capsule selects on a plain tap (the close button stays
+                // its own target), so the title carries the button semantics.
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+                .accessibilityAction { onSelect() }
 
+            // Plain inside the tab (the tab is the glass), with its own
+            // hover/press feedback (BTN-5).
             Button(action: onClose) {
                 Image(systemName: "xmark")
                     .scaledFont(size: 9, weight: .bold)
-                    .frame(width: 18)
-                    .contentShape(Rectangle())
+                    .frame(width: Self.closeSize, height: Self.closeSize)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.closeSize / 2))
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Close Note")
             // Reserve the trailing slot so hovering never shifts the title.
             .opacity(isHovering || isSelected ? 1 : 0)
             .disabled(!isHovering && !isSelected)
@@ -475,14 +511,17 @@ private struct NoteTab: View {
             .accessibilityHidden(!isHovering && !isSelected)
             .help("Close Note")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.leading, LiquidGlassMetrics.Spacing.small)
+        .padding(.trailing, Self.closeInset)
+        .padding(.vertical, Self.closeInset)
         .frame(maxWidth: 170, alignment: .leading)
+        // Capsule tabs, like the system segmented and tab controls on 26.
         .compatGlassEffect(
             tint: isSelected ? Color.accentColor.opacity(0.14) : nil,
             interactive: true,
-            in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+            in: Capsule()
         )
+        .animation(LiquidGlassMetrics.stateChange, value: isSelected)
         // Insertion marker on the leading edge — a drop places the dragged tab
         // just before this one.
         .overlay(alignment: .leading) {
@@ -494,8 +533,8 @@ private struct NoteTab: View {
                     .offset(x: -4)
             }
         }
-        .animation(.easeInOut(duration: 0.12), value: isDropTarget)
-        .contentShape(Rectangle())
+        .animation(LiquidGlassMetrics.stateChange, value: isDropTarget)
+        .contentShape(Capsule())
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
     }

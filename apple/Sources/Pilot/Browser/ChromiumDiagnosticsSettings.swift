@@ -247,6 +247,8 @@ struct ChromiumDiagnosticsSettingsSection: View {
     @State private var isClearing = false
     @State private var resultMessage: String?
 
+    // Secondary text uses the legible gray: the system secondary measured
+    // 3.9:1 here in light mode, and the system green "Running" 2.1:1 (TYPE-3).
     var body: some View {
         Section {
             LabeledContent("Release") {
@@ -270,7 +272,7 @@ struct ChromiumDiagnosticsSettingsSection: View {
             }
             LabeledContent("Profile") {
                 Text(ChromiumBrowsingDataController.profileLocationCategory)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GlassLegibleText.secondaryColor)
             }
 
             if let diagnostic = diagnostics.lastInitializationFailure {
@@ -284,15 +286,20 @@ struct ChromiumDiagnosticsSettingsSection: View {
                 }
             }
 
-            Button("Clear Chromium Browsing Data", role: .destructive) {
+            Button("Clear Chromium Browsing Data…", role: .destructive) {
                 isConfirmingClear = true
             }
+            // Secondary glass, not prominent: a destructive action is never
+            // the view's primary call to action (BTN-1, COL-4). The red role
+            // tint is kept for the confirmation alert (MODAL-1).
+            .compatGlassButtonStyle()
+            .buttonBorderShape(.capsule)
             .disabled(clearAvailability != .available || isClearing)
 
             if let reason = clearAvailability.unavailableReason {
                 Text(reason)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(GlassLegibleText.secondaryColor)
             }
         } header: {
             Label("Chromium", systemImage: "globe")
@@ -301,6 +308,7 @@ struct ChromiumDiagnosticsSettingsSection: View {
                 "Chromium profiles are isolated from WebKit, workspaces, and system Chrome. "
                     + "Diagnostics omit credentials, URL details, headers, local paths, and page content."
             )
+            .foregroundStyle(GlassLegibleText.secondaryColor)
         }
         .onAppear {
             diagnostics.refreshRuntimeStatus()
@@ -332,21 +340,22 @@ struct ChromiumDiagnosticsSettingsSection: View {
         ChromiumBrowsingDataController.availability
     }
 
+    /// The dashboards' state tints, darkened in light mode to clear 4.5:1.
     private var runtimeTint: Color {
         switch diagnostics.runtimeStatus {
         case .running:
-            .green
+            DashboardTone.green.adaptiveColor
         case .unavailable, .rendererTerminated:
-            .red
+            DashboardTone.red.adaptiveColor
         case .notStarted, .starting:
-            .secondary
+            GlassLegibleText.secondaryColor
         }
     }
 
     private func diagnosticValue(_ value: String) -> some View {
         Text(value)
             .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(GlassLegibleText.secondaryColor)
             .textSelection(.enabled)
             .multilineTextAlignment(.trailing)
     }

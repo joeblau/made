@@ -23,6 +23,11 @@
     return self;
 }
 
++ (BOOL)installApplicationIntegration {
+    // No CEF is linked, so NSApp is left exactly as AppKit created it.
+    return NO;
+}
+
 - (BOOL)isRunning {
     return self.state == ChromiumEngineStateInitializing ||
            self.state == ChromiumEngineStateRunning;
@@ -84,6 +89,26 @@
 - (instancetype)initWithCoder:(NSCoder *)coder {
     self = [super initWithCoder:coder];
     if (self) [self initializeUnavailableHost];
+    return self;
+}
+- (instancetype)initExtensionPopupWithScreenFrame:(NSRect)screenFrame {
+    return [self initExtensionHostWithScreenFrame:screenFrame popup:YES];
+}
+
+- (instancetype)initExtensionWindowWithScreenFrame:(NSRect)screenFrame {
+    return [self initExtensionHostWithScreenFrame:screenFrame popup:NO];
+}
+
+- (instancetype)initExtensionHostWithScreenFrame:(NSRect)screenFrame
+                                           popup:(BOOL)popup {
+    self = [super initWithFrame:NSMakeRect(0, 0, NSWidth(screenFrame),
+                                           NSHeight(screenFrame))];
+    if (self) {
+        _extensionPopup = popup;
+        _extensionWindow = !popup;
+        _extensionScreenFrame = screenFrame;
+        [self initializeUnavailableHost];
+    }
     return self;
 }
 - (void)initializeUnavailableHost {
@@ -163,9 +188,15 @@
                               forURL:(NSURL *)URL {}
 - (void)cefDidRejectClientCertificateForHost:(NSString *)host
                                         port:(NSInteger)port {}
+- (BOOL)cefHandlesJavaScriptDialogs { return NO; }
+- (BOOL)cefPresentJavaScriptDialog:(ChromiumJavaScriptDialogRequest *)request {
+    return NO;
+}
+- (void)cefDidResetJavaScriptDialogs {}
 - (void)cefWillClose {
     self.lifecycleState = ChromiumBrowserLifecycleStateClosing;
 }
+- (void)cefPopupDidResignActive {}
 - (void)cefDidClose {
     if (self.closeDelivered) return;
     self.closeDelivered = YES;

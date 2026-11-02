@@ -163,7 +163,53 @@ final class MirrorModel {
         annotationStatusText = "Cockpit received your annotations"
         // Any non-zero value hides the SearchingOverlay (gated on == 0).
         frameCount = 1
+        #if DEBUG
+        applyDemoScenario()
+        #endif
     }
+
+    #if DEBUG
+    /// Screenshot fixtures, reached only with `-demoMode YES -demoScenario
+    /// <name>` in DEBUG builds: `searching` shows the Searching for Cockpit
+    /// overlay, `pairAlert` / `keyChangeAlert` the approval alert, and
+    /// `liveActivity` the connection Live Activity plus a mirror still for
+    /// the snapshot widget. No receiver is started, so no peer is involved.
+    private func applyDemoScenario() {
+        switch UserDefaults.standard.string(forKey: "demoScenario") {
+        case "searching":
+            demoImage = nil
+            videoSize = .zero
+            frameCount = 0
+            statusText = "Searching"
+        case "pairAlert", "keyChangeAlert":
+            pairingRequest = FrameLinkPairingRequest(
+                id: UUID(),
+                displayName: "Studio Mac",
+                fingerprint: "3F:A9:12:C7:5E:08:B4:D1",
+                publicKey: "",
+                isKeyChange: UserDefaults.standard.string(forKey: "demoScenario") == "keyChangeAlert"
+            )
+        case "liveActivity":
+            if let jpeg = demoImage?.jpegData(compressionQuality: 0.7) {
+                PlotterSnapshotStore.writeSnapshot(
+                    jpeg: jpeg,
+                    status: PlotterSnapshotStore.Status(isConnected: true, title: "Cockpit", updatedAt: Date())
+                )
+            }
+            WidgetCenter.shared.reloadAllTimelines()
+            PlotterActivityController.shared.setConnected(true, title: "Cockpit")
+        default:
+            break
+        }
+    }
+
+    /// Demo mode reads as connected except in the `searching` fixture.
+    var isDemoConnected: Bool {
+        isDemoMode && UserDefaults.standard.string(forKey: "demoScenario") != "searching"
+    }
+    #else
+    var isDemoConnected: Bool { isDemoMode }
+    #endif
 
     /// Draws a dark, screenshot-like still resembling a mirrored editor window:
     /// a window chrome bar, a sidebar, and a few code-like lines. Used only in

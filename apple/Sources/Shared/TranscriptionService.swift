@@ -171,6 +171,10 @@ final class TranscriptionService: @unchecked Sendable {
     var isModelLoading: Bool = false
     var modelLoadingProgress: String = ""
     var modelLoadingFraction: Double?
+    /// Whether the load in flight reads an already-complete cache rather than
+    /// downloading. Set once per load from its preparation, so a cancelling
+    /// or indeterminate download (fraction nil) never reads as a cached load.
+    var isLoadingFromCache = false
     var modelErrorMessage: String?
 
     private var loadedModel: TranscriptionLoadedModel?
@@ -277,11 +281,32 @@ final class TranscriptionService: @unchecked Sendable {
         guard generation == cacheRefreshGeneration else { return }
         validatedCacheEntry = entry
         hasCachedModel = entry != nil
+        #if DEBUG
+        let storedBytes = demoStoredBytes ?? storedBytes
+        #endif
+        applyStoredSize(storedBytes)
+    }
+
+    private func applyStoredSize(_ storedBytes: Int64) {
         hasStoredModel = storedBytes > 0
         cachedModelSize = storedBytes > 0
             ? ByteCountFormatter.string(fromByteCount: storedBytes, countStyle: .file)
             : "Not downloaded"
     }
+
+    #if DEBUG
+    /// Screenshot-fixture override for the stored size; `nil` reads the disk.
+    @ObservationIgnored private var demoStoredBytes: Int64?
+
+    /// DEBUG screenshot fixtures only: reports `bytes` as the stored model
+    /// size now and on every later cache refresh, including the detached one
+    /// `init` starts, which would otherwise overwrite the fixture with
+    /// "Not downloaded". Release builds have no override.
+    func applyDemoStoredModel(bytes: Int64) {
+        demoStoredBytes = bytes
+        applyStoredSize(bytes)
+    }
+    #endif
 
     private func resolveCachedEntry() async -> SpeechModelCache.Entry? {
         if let task = cacheRefreshTask { await task.value }
@@ -323,6 +348,7 @@ final class TranscriptionService: @unchecked Sendable {
             ? "Loading cached speech model…"
             : "Preparing speech model download…"
         modelLoadingFraction = preparation.isCached ? nil : 0
+        isLoadingFromCache = preparation.isCached
         modelLoadGeneration += 1
         modelCancellationRequested = false
         modelCancellationMessage = nil
@@ -381,6 +407,7 @@ final class TranscriptionService: @unchecked Sendable {
             isModelLoading = false
             modelLoadingProgress = ""
             modelLoadingFraction = nil
+            isLoadingFromCache = false
             modelCancellationRequested = false
             modelCancellationMessage = nil
             // Include partial downloads in storage controls after failure/cancellation.

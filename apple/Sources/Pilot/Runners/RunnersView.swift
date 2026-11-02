@@ -8,7 +8,11 @@ struct RunnersView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            tabBar
+            // With no sources the empty state's "Add Runner Source" is the one
+            // action (BTN-1); a lone "+" chip strip above it would repeat it.
+            if !store.scopes.isEmpty {
+                tabBar
+            }
             if store.selectedScope != nil {
                 summaryBar
                 if let error = store.snapshot.error { errorBanner(error) }
@@ -22,6 +26,7 @@ struct RunnersView: View {
                     Button("Add Runner Source", systemImage: "plus") { showsAddScope = true }
                         .compatGlassProminentButtonStyle()
                 }
+                .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -45,26 +50,29 @@ struct RunnersView: View {
         }
     }
 
-    /// Scope tabs are glass controls floating above the fleet; the selected
-    /// tab carries the only accent tint, as a state signal (COL-4).
+    /// Scope tabs are glass chips floating above the fleet; the selected tab
+    /// carries the only accent tint, as a state signal (COL-4). They stay
+    /// chips rather than a segmented control because each carries its own
+    /// context menu and the strip scrolls when there are many.
     private var tabBar: some View {
-        HStack(spacing: 12) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+            GlassChipScroller {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     ForEach(store.scopes) { scope in
                         scopeTab(scope)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                .animation(LiquidGlassMetrics.spring, value: store.selectedScopeID)
             }
-            Button { showsAddScope = true } label: { Image(systemName: "plus") }
-                .buttonBorderShape(.circle)
-                .compatGlassButtonStyle()
-                .help("Add an enterprise, organization, or repository")
-                .accessibilityLabel("Add a runner source")
+            Button { showsAddScope = true } label: {
+                Label("Add a runner source", systemImage: "plus")
+            }
+            .compatGlassIconButton()
+            .help("Add an enterprise, organization, or repository")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
     }
 
     private func scopeTab(_ scope: RunnerScope) -> some View {
@@ -75,17 +83,8 @@ struct RunnersView: View {
         } label: {
             Label(scope.name, systemImage: scope.kind.symbol)
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(isSelected ? Color.primary : Color.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
-        .compatGlassCapsule(
-            tint: isSelected ? Color.accentColor.opacity(0.22) : nil,
-            interactive: true
-        )
+        .buttonStyle(.liquidGlassChip(isSelected: isSelected))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .contextMenu {
             if let url = scope.settingsURL { Link("Open Runner Settings on GitHub", destination: url) }
@@ -110,12 +109,17 @@ struct RunnersView: View {
 
     private var summaryCounts: some View {
         HStack(spacing: 16) {
-            Text("\(store.snapshot.runners.count) runners")
+            // While filtering, the headline says how many cards match, so it
+            // never reads "12 runners" over a grid of four.
+            Text(store.visibleRunners.count == store.snapshot.runners.count
+                 ? "\(store.snapshot.runners.count) runners"
+                 : "\(store.visibleRunners.count) of \(store.snapshot.runners.count) runners")
                 .font(.headline)
+                .contentTransition(.numericText())
             ForEach(GitHubRunner.State.allCases, id: \.rawValue) { state in
                 let count = store.snapshot.runners.filter { $0.state == state }.count
-                HStack(spacing: 4) {
-                    Circle().fill(state.color).frame(width: 6, height: 6)
+                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                    Circle().fill(state.color).frame(width: 8, height: 8)
                     Text("\(count) \(state.rawValue.lowercased())")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -125,43 +129,42 @@ struct RunnersView: View {
     }
 
     private var searchControls: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             Spacer(minLength: 0)
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Filter runners", text: $store.searchText)
-                    .textFieldStyle(.plain)
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .frame(maxWidth: 200)
-            .compatGlassCapsule()
+            TextField("Filter runners", text: $store.searchText)
+                .liquidGlassField(systemImage: "magnifyingglass")
+                .font(.subheadline)
+                .frame(maxWidth: 200)
 
             Picker("Layout", selection: $layout) {
                 ForEach(RunnerLayout.allCases, id: \.self) { layout in
                     Label(layout.title, systemImage: layout.symbol).labelStyle(.iconOnly).tag(layout)
                 }
             }
-            .pickerStyle(.segmented)
+            .legibleSegmentedPicker()
             .labelsHidden()
             .fixedSize()
             .help("Switch between the 3D fleet, compact tiles, and detailed cards")
 
-            if store.isRefreshing { ProgressView().controlSize(.small) }
-            Button { Task { await store.refreshSelected() } } label: { Image(systemName: "arrow.clockwise") }
-                .buttonBorderShape(.circle)
-                .compatGlassButtonStyle()
-                .disabled(store.isRefreshing)
-                .help("Refresh runners")
-                .accessibilityLabel("Refresh runners")
+            // The spinner runs inside the refresh control, so the filter
+            // field and layout picker never shift while a refresh is running.
+            Button { Task { await store.refreshSelected() } } label: {
+                Label {
+                    Text("Refresh runners")
+                } icon: {
+                    InspectorRefreshGlyph(isRefreshing: store.isRefreshing)
+                }
+            }
+            .compatGlassIconButton()
+            .disabled(store.isRefreshing)
+            .help("Refresh runners")
         }
     }
 
     private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.small) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                 Text(message)
                 if store.snapshot.updatedAt != nil { Text("Showing the last successful refresh.").foregroundStyle(.secondary) }
             }
@@ -171,10 +174,19 @@ struct RunnersView: View {
                 .disabled(store.isRefreshing)
         }
         .font(.subheadline)
-        .padding(12)
-        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 20)
-        .padding(.bottom, 12)
+        .padding(LiquidGlassMetrics.Spacing.small)
+        // Content, not glass: a quiet warning wash. Its radius is the Retry
+        // capsule's (~12pt) plus the 12pt inset, so the corner nesting stays
+        // concentric (LAY-4).
+        .background(
+            Color.orange.opacity(0.1),
+            in: RoundedRectangle(
+                cornerRadius: LiquidGlassMetrics.Radius.field + LiquidGlassMetrics.Spacing.small,
+                style: .continuous
+            )
+        )
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.large)
+        .padding(.bottom, LiquidGlassMetrics.Spacing.small)
     }
 
     @ViewBuilder
@@ -189,9 +201,11 @@ struct RunnersView: View {
                     ? "No self-hosted runners are registered for this \(store.selectedScope?.kind.title.lowercased() ?? "scope")."
                     : "Resolve the access or connection issue above, then try again.")
             )
+            .legibleSecondaryHierarchy()
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if store.visibleRunners.isEmpty {
             ContentUnavailableView.search(text: store.searchText)
+                .legibleSecondaryHierarchy()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if layout == .fleet {
             RunnerFleetView(
@@ -247,11 +261,10 @@ private struct RunnerCard: View {
     let edit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
             HStack(alignment: .top) {
                 RunnerHardwareImage(hardware: hardware)
-                    .frame(width: 64, height: 64)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .runnerThumbnail(size: 64, cornerRadius: RunnerSurface.cardThumbnailRadius)
                 Spacer()
                 RunnerStatusBadge(state: runner.state)
             }
@@ -261,25 +274,29 @@ private struct RunnerCard: View {
                 Text([runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Text(runner.labels.map(\.name).joined(separator: " · "))
+            Text(runner.labelLine)
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .frame(height: 32, alignment: .topLeading)
                 .help(runner.labels.map(\.name).joined(separator: ", "))
             HStack {
-                Text(runner.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                Spacer(minLength: 8)
-                Button(action: edit) { Image(systemName: "pencil") }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+                // The GitHub name only adds information once the runner is renamed (HIER-2).
+                if name != runner.name {
+                    Text(runner.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
+                Button(action: edit) { Label("Edit \(name)", systemImage: "pencil") }
+                    .compatGlassIconButton(controlSize: .small)
                     .help("Edit device name and hardware image")
-                    .accessibilityLabel("Edit \(name)")
             }
         }
-        .padding(16)
+        .padding(RunnerSurface.cardPadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 24))
+        .background(
+            Color.secondary.opacity(0.07),
+            in: RoundedRectangle(cornerRadius: RunnerSurface.cardRadius, style: .continuous)
+        )
         .contextMenu { Button("Edit Device…", action: edit) }
     }
 }
@@ -292,39 +309,50 @@ private struct RunnerTile: View {
     let hardware: RunnerHardware
     let edit: () -> Void
     @State private var isHovering = false
+    @State private var isHoveringEdit = false
     @State private var showsDetails = false
 
+    /// The details popover is transient, so while it is open the next click
+    /// only dismisses it. It stays closed while the pointer is on the edit
+    /// button, or that button could never be clicked after a short dwell.
+    private var wantsDetails: Bool { isHovering && !isHoveringEdit }
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
             RunnerHardwareImage(hardware: hardware, size: 32)
-                .frame(width: 48, height: 48)
-                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 8) {
+                .runnerThumbnail(size: 48, cornerRadius: RunnerSurface.tileThumbnailRadius)
+                // Only the image dims for an offline runner; dimming the whole
+                // tile took the secondary "Offline" badge to about 2:1 (TYPE-3).
+                .opacity(runner.state == .offline ? 0.6 : 1)
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text(name)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                HStack(spacing: 8) {
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                     RunnerStatusBadge(state: runner.state)
                     Spacer(minLength: 0)
                     // Sits beside the badge so the name keeps the full width.
-                    Button(action: openEditor) { Image(systemName: "pencil") }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+                    Button(action: openEditor) { Label("Edit \(name)", systemImage: "pencil") }
+                        .compatGlassIconButton(controlSize: .small)
+                        .onHover { isHoveringEdit = $0 }
                         .opacity(isHovering ? 1 : 0)
                         .help("Edit device name and hardware image")
-                        .accessibilityLabel("Edit \(name)")
                 }
             }
         }
-        .opacity(runner.state == .offline ? 0.6 : 1)
-        .padding(12)
+        .padding(RunnerSurface.tilePadding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.secondary.opacity(isHovering ? 0.12 : 0.07), in: RoundedRectangle(cornerRadius: 20))
-        .contentShape(RoundedRectangle(cornerRadius: 20))
+        .background(
+            Color.secondary.opacity(isHovering ? 0.12 : 0.07),
+            in: RoundedRectangle(cornerRadius: RunnerSurface.tileRadius, style: .continuous)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: RunnerSurface.tileRadius, style: .continuous))
         .onHover { isHovering = $0 }
-        .task(id: isHovering) {
-            guard isHovering else {
+        // Hover wash and the edit control fade rather than snap (BTN-5).
+        .animation(LiquidGlassMetrics.stateChange, value: isHovering)
+        .task(id: wantsDetails) {
+            guard wantsDetails else {
                 showsDetails = false
                 return
             }
@@ -352,24 +380,27 @@ struct RunnerDetailsPopover: View {
     let hardware: RunnerHardware
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
                 RunnerHardwareImage(hardware: hardware)
-                    .frame(width: 56, height: 56)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                VStack(alignment: .leading, spacing: 4) {
+                    .runnerThumbnail(size: 56, cornerRadius: LiquidGlassMetrics.Radius.field)
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     Text(name).font(.headline).lineLimit(2)
                     RunnerStatusBadge(state: runner.state)
                 }
             }
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 8) {
+            Grid(
+                alignment: .leadingFirstTextBaseline,
+                horizontalSpacing: LiquidGlassMetrics.Spacing.small,
+                verticalSpacing: LiquidGlassMetrics.Spacing.xSmall
+            ) {
                 detailRow("Hardware", hardware.title)
                 detailRow("Platform", [runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))
                 if name != runner.name { detailRow("Runner", runner.name) }
                 if !runner.labels.isEmpty {
                     GridRow {
-                        Text("Labels").foregroundStyle(.secondary)
-                        Text(runner.labels.map(\.name).joined(separator: " · "))
+                        Text("Labels").foregroundStyle(GlassLegibleText.secondaryColor)
+                        Text(runner.labelLine)
                             .font(.caption.monospaced())
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -377,13 +408,16 @@ struct RunnerDetailsPopover: View {
             }
             .font(.caption)
         }
-        .padding(16)
+        .padding(LiquidGlassMetrics.Spacing.medium)
         .frame(width: 300, alignment: .leading)
     }
 
     private func detailRow(_ title: String, _ value: String) -> some View {
         GridRow {
-            Text(title).foregroundStyle(.secondary)
+            // Row titles are secondary on popover glass (TYPE-3). Set
+            // directly: `legibleSecondaryHierarchy()` does not reach text
+            // that names `.secondary` itself.
+            Text(title).foregroundStyle(GlassLegibleText.secondaryColor)
             Text(value).textSelection(.enabled)
         }
     }
@@ -393,11 +427,18 @@ private struct RunnerStatusBadge: View {
     let state: GitHubRunner.State
 
     var body: some View {
-        Label(state.rawValue, systemImage: state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
+        // The dot carries the state color; the word stays primary, because
+        // green or orange text on its own 12% wash measured about 2:1 (TYPE-3).
+        Label {
+            Text(state.rawValue)
+        } icon: {
+            Image(systemName: state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
+                .foregroundStyle(state.color)
+        }
             .font(.caption.weight(.medium))
-            .foregroundStyle(state.color)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+            .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
             .background(state.color.opacity(0.12), in: Capsule())
     }
 }
@@ -443,6 +484,31 @@ private struct RunnerHardwareImage: View {
     }
 }
 
+/// Card and tile geometry. Each thumbnail sits one padding-width from its
+/// surface's corner, so its radius is the surface radius minus that padding
+/// (LAY-4: outer = inner + padding).
+private enum RunnerSurface {
+    static let cardPadding = LiquidGlassMetrics.Spacing.medium
+    static let cardThumbnailRadius = LiquidGlassMetrics.Radius.control
+    static let cardRadius = cardThumbnailRadius + cardPadding
+
+    static let tilePadding = LiquidGlassMetrics.Spacing.small
+    static let tileThumbnailRadius = LiquidGlassMetrics.Radius.control
+    static let tileRadius = tileThumbnailRadius + tilePadding
+}
+
+private extension View {
+    /// The tinted square every hardware image sits in, so the card, tile,
+    /// popover, and edit sheet share one thumbnail treatment.
+    func runnerThumbnail(size: CGFloat, cornerRadius: CGFloat) -> some View {
+        frame(width: size, height: size)
+            .background(
+                Color.accentColor.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+    }
+}
+
 private struct AddRunnerScopeSheet: View {
     let add: (RunnerScope) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -453,28 +519,33 @@ private struct AddRunnerScopeSheet: View {
     private var scope: RunnerScope? { RunnerScope.parse(name, kind: kind) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.large) {
             Text("Add Runner Source").font(.title2.weight(.semibold))
             Picker("Source", selection: $kind) {
                 ForEach(RunnerScope.Kind.allCases, id: \.self) { kind in Text(kind.title).tag(kind) }
             }
-            .pickerStyle(.segmented)
+            .legibleSegmentedPicker()
             .labelsHidden()
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                // Persistent label above the field; the placeholder is only
+                // an example value (FORM-1/FORM-2).
                 Text(kind.title).font(.subheadline.weight(.medium))
                 // Helper text sits tight under its own field (FORM-5).
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     TextField(kind.inputPlaceholder, text: $name)
-                        .textFieldStyle(.roundedBorder)
                         .focused($isNameFocused)
                         .onSubmit(submit)
+                        .liquidGlassField(isFocused: isNameFocused)
                     Text(kind == .enterprise
                          ? "Uses your GitHub CLI account. Enterprise runners need the manage_runners:enterprise token scope."
                          : "Uses your GitHub CLI account. You’ll need access to view this source’s self-hosted runners.")
-                        .font(.caption).foregroundStyle(.secondary)
+                        // System secondary measured 3.95:1 on the light sheet
+                        // (TYPE-3); a sheet-wide `legibleSecondaryHierarchy()`
+                        // does not reach text that names `.secondary` itself.
+                        .font(.caption).foregroundStyle(GlassLegibleText.secondaryColor)
                 }
             }
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
@@ -484,9 +555,9 @@ private struct AddRunnerScopeSheet: View {
                     .compatGlassProminentButtonStyle()
                     .disabled(scope == nil)
             }
-            .padding(.top, 4)
+            .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
         }
-        .padding(24)
+        .padding(LiquidGlassMetrics.Spacing.xLarge)
         .frame(width: 420)
         .onAppear { isNameFocused = true }
     }
@@ -511,26 +582,49 @@ private struct RunnerDetailsSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.large) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
                 RunnerHardwareImage(hardware: presentation.hardware ?? .inferred(for: runner))
-                VStack(alignment: .leading, spacing: 4) {
+                    .runnerThumbnail(size: 56, cornerRadius: LiquidGlassMetrics.Radius.field)
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                     Text("Edit Device").font(.title2.weight(.semibold))
-                    Text(runner.name).font(.subheadline).foregroundStyle(.secondary)
+                    Text(runner.name).font(.subheadline).foregroundStyle(GlassLegibleText.secondaryColor)
                 }
             }
-            Form {
-                TextField("Display name", text: $presentation.name, prompt: Text(runner.name))
-                Picker("Hardware", selection: $presentation.hardware) {
-                    Text("Automatic (\(RunnerHardware.inferred(for: runner).title))").tag(nil as RunnerHardware?)
-                    ForEach(RunnerHardware.allCases) { hardware in
-                        Text(hardware.title).tag(Optional(hardware))
+            // Persistent labels stacked above each control (FORM-1), matching
+            // Add Runner Source; the placeholder is only the GitHub name the
+            // device falls back to (FORM-2).
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
+                stackedRow("Display name") {
+                    TextField("Display name", text: $presentation.name, prompt: Text(runner.name))
+                        .labelsHidden()
+                        .liquidGlassField()
+                }
+                stackedRow("Hardware") {
+                    // A glass menu rather than the unglazed system pop-up,
+                    // so it matches the glass field above it.
+                    Menu {
+                        Picker("Hardware", selection: $presentation.hardware) {
+                            Text(automaticHardwareTitle).tag(nil as RunnerHardware?)
+                            ForEach(RunnerHardware.allCases) { hardware in
+                                Text(hardware.title).tag(Optional(hardware))
+                            }
+                        }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    } label: {
+                        Text(presentation.hardware?.title ?? automaticHardwareTitle)
                     }
+                    .menuStyle(.button)
+                    .compatGlassButtonStyle()
+                    .fixedSize()
+                    .accessibilityLabel("Hardware")
+                    .accessibilityValue(presentation.hardware?.title ?? automaticHardwareTitle)
                 }
             }
             Text("Device names and images are saved in Cockpit. Runner labels come from GitHub.")
-                .font(.caption).foregroundStyle(.secondary)
-            HStack(spacing: 8) {
+                .font(.caption).foregroundStyle(GlassLegibleText.secondaryColor)
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Button("Reset to Defaults") { presentation = RunnerPresentation() }
                     .compatGlassButtonStyle()
                 Spacer()
@@ -542,8 +636,45 @@ private struct RunnerDetailsSheet: View {
                     .compatGlassProminentButtonStyle()
             }
         }
-        .padding(24)
+        .padding(LiquidGlassMetrics.Spacing.xLarge)
         .frame(width: 440)
+        // The "Display name" and "Hardware" labels, the runner name, and the
+        // footnote measured 3.95:1 in system secondary on the light sheet
+        // (TYPE-3), so they set the legible gray directly. A sheet-wide
+        // `legibleSecondaryHierarchy()` left explicit `.secondary` text at
+        // 3.95:1 and turned the Hardware menu's glass into a solid
+        // primary-colored pill (2.0:1 dark, 2.8:1 light).
+    }
+
+    private var automaticHardwareTitle: String {
+        "Automatic (\(RunnerHardware.inferred(for: runner).title))"
+    }
+
+    /// A visible label above its control; the control's own title stays its
+    /// VoiceOver name, so the visible label is hidden from VoiceOver.
+    private func stackedRow<Control: View>(
+        _ title: LocalizedStringKey,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Text(title)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(GlassLegibleText.secondaryColor)
+                .accessibilityHidden(true)
+            control()
+        }
+    }
+}
+
+private extension GitHubRunner {
+    /// Labels as one wrapping line. Hyphenated labels ("mac-mini") never
+    /// break at their hyphen, and each separator stays with the label before
+    /// it, so a wrap lands between labels instead of mid-label or before a
+    /// dangling "·".
+    var labelLine: String {
+        labels
+            .map { $0.name.replacingOccurrences(of: "-", with: "-\u{2060}") }
+            .joined(separator: "\u{00A0}· ")
     }
 }
 

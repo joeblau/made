@@ -6,7 +6,13 @@ import UIKit
 struct ContentView: View {
     var mirror: MirrorModel
     @State private var showsDashboard = false
+    @State private var showsSettings = false
     @State private var dashboardFamily = DashboardFamily.actions
+    /// How far the corner-adapted safe area reaches past the plain safe area
+    /// on each edge, measured by the UIKit mirror view. When the app runs in
+    /// a resizable window, the leading value clears the iPadOS window
+    /// controls (close, minimize, tile) at top-leading.
+    @State private var cornerInsets = EdgeInsets()
 
     var body: some View {
         ZStack {
@@ -16,8 +22,15 @@ struct ContentView: View {
             // A single transformable container holds BOTH the video layer and
             // the PencilKit canvas, so pinch-zoom/pan moves them together and
             // annotation strokes stay pixel-aligned with the mirrored window.
-            ZoomableMirrorView(mirror: mirror)
-                .ignoresSafeArea()
+            // The PencilKit tool picker is a system palette above the app's
+            // windows; hide it while a sheet covers the mirror so it never
+            // floats over (and clips) the sheet's content.
+            ZoomableMirrorView(
+                mirror: mirror,
+                isCovered: showsDashboard || showsSettings,
+                onCornerInsetsChange: { cornerInsets = $0 }
+            )
+            .ignoresSafeArea()
 
             // Frame-count / status reads live in their own view so the 60fps
             // diagnostic ticks don't re-render the canvas or video reps.
@@ -28,22 +41,27 @@ struct ContentView: View {
         // Both float over the mirror as Liquid Glass controls; the container
         // lets the neighboring glass shapes blend into one cluster.
         .overlay(alignment: .topLeading) {
-            GlassEffectContainer(spacing: 8) {
-                HStack(spacing: 8) {
-                    SettingsButton()
-                    Button {
-                        showsDashboard = true
-                    } label: {
-                        Image(systemName: "square.grid.2x2")
-                    }
-                    .help("Dashboard")
-                    .accessibilityLabel("Dashboard")
-                    ConnectionStatusBadge(mirror: mirror)
-                }
-                .font(.title3)
-                .buttonStyle(GlassCircleButtonStyle())
-            }
-            .padding(12)
+            FloatingControlCluster(
+                mirror: mirror,
+                showsSettings: $showsSettings,
+                showsDashboard: $showsDashboard
+            )
+            // Floating chrome over the mirror grows with Dynamic Type up to
+            // AX2, in step with the UIKit annotation toolbar (which clamps at
+            // the same category). Past that, the two clusters would collide
+            // on an iPad mini in portrait (TYPE-4).
+            .dynamicTypeSize(...FloatingChromeMetrics.maximumDynamicTypeSize)
+            // The mirror stage is always black, so its floating chrome stays
+            // dark in both appearances (like `SearchingOverlay`). Light glass
+            // over black renders as flat gray disks that wash out the green
+            // connected glyph (COL-2 dark-mode parity, contrast on glass).
+            // Sheets are presented from the ZStack, so they keep the system
+            // appearance.
+            .environment(\.colorScheme, .dark)
+            .padding(FloatingChromeMetrics.clusterPadding(cornerInsets: cornerInsets))
+        }
+        .sheet(isPresented: $showsSettings) {
+            SettingsScreen()
         }
         .sheet(isPresented: $showsDashboard) {
             PlotterDashboardView(mirror: mirror, selectedFamily: $dashboardFamily)
@@ -74,20 +92,129 @@ struct ContentView: View {
     }
 }
 
+/// Dynamic Type sizing shared by both floating clusters over the mirror: the
+/// SwiftUI Settings/Dashboard/status cluster and the UIKit annotation toolbar.
+/// Both scale the same 48pt base relative to `.title3` (SwiftUI's
+/// `@ScaledMetric` and `UIFontMetrics` produce identical values) and stop
+/// growing at the same size, so the two clusters always share one height.
+enum FloatingChromeMetrics {
+    /// The control circle (and toolbar capsule height) at the default size.
+    static let baseControlSide: CGFloat = 48
+    /// Width of one annotation-toolbar button at the default size.
+    static let baseToolbarButtonWidth: CGFloat = 44
+    /// The regular `.glass` circle's padding around its label on each side.
+    /// Fixed by the system across Dynamic Type sizes (measured on the 27.2
+    /// iPadOS simulator: a 34pt label is a 48pt circle at every size).
+    static let glassButtonPadding: CGFloat = 7
+    /// The largest size the floating chrome grows to (SwiftUI side).
+    static let maximumDynamicTypeSize = DynamicTypeSize.accessibility2
+    /// The same limit for the UIKit side.
+    static let maximumContentSizeCategory = UIContentSizeCategory.accessibilityLarge
+
+    /// Circles in the leading SwiftUI cluster (Settings, Dashboard, status).
+    static let clusterControlCount = 3
+
+    /// Width of the leading SwiftUI cluster for a given circle size; the
+    /// UIKit toolbar uses it to tell whether both clusters fit on one row.
+    static func clusterWidth(controlSide: CGFloat) -> CGFloat {
+        let count = CGFloat(clusterControlCount)
+        return count * controlSide + (count - 1) * LiquidGlassMetrics.Spacing.xSmall
+    }
+
+    /// The leading cluster's inset from the safe area. Normally the 12pt that
+    /// matches the UIKit annotation toolbar on the trailing side, so both
+    /// clusters share one edge (LAY-3). Where the corner-adapted safe area
+    /// reaches farther in (a resizable window's controls at top-leading),
+    /// the cluster starts at that region's edge instead, exactly as the
+    /// toolbar does on its side. Full screen, the region only rounds off the
+    /// display corner (about 9pt), which the 12pt already clears, so the
+    /// cluster stays put.
+    ///
+    /// SwiftUI's `containerCornerOffset` / `containerCornerInsets` do not
+    /// report the window controls here, so `cornerInsets` comes from UIKit
+    /// (``ZoomableMirrorUIView/cornerInsets``).
+    static func clusterPadding(cornerInsets: EdgeInsets) -> EdgeInsets {
+        let inset = LiquidGlassMetrics.Spacing.small
+        return EdgeInsets(
+            top: max(inset, cornerInsets.top),
+            leading: max(inset, cornerInsets.leading),
+            bottom: inset,
+            trailing: inset
+        )
+    }
+
+    /// `value` scaled like `.title3` for `traits`, rounded to whole points
+    /// so circle edges stay crisp. Matches `@ScaledMetric(relativeTo: .title3)`
+    /// rounded the same way.
+    static func scaled(_ value: CGFloat, for traits: UITraitCollection) -> CGFloat {
+        UIFontMetrics(forTextStyle: .title3).scaledValue(for: value, compatibleWith: traits).rounded()
+    }
+}
+
+/// Settings + Dashboard + connection status. Owns the one `@ScaledMetric`
+/// that sizes every circle in the cluster, so the buttons and the badge stay
+/// identical at every Dynamic Type size (TYPE-4). It lives below the
+/// caller's `dynamicTypeSize` clamp so the metric honors it.
+private struct FloatingControlCluster: View {
+    var mirror: MirrorModel
+    @Binding var showsSettings: Bool
+    @Binding var showsDashboard: Bool
+
+    @ScaledMetric(relativeTo: .title3) private var scaledControlSide = FloatingChromeMetrics.baseControlSide
+
+    var body: some View {
+        let controlSide = scaledControlSide.rounded()
+        GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // `FloatingChromeMetrics.clusterWidth` mirrors this row (count
+            // and spacing) so the UIKit toolbar can make room for it.
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                // Same "•••" entry as the shared `SettingsButton`, but the
+                // sheet is presented outside this cluster's pinned-dark
+                // environment so Settings follows the system appearance.
+                Button {
+                    showsSettings = true
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("Settings")
+                Button {
+                    showsDashboard = true
+                } label: {
+                    // A titled Label keeps the spoken name with the glyph
+                    // (IMG-1); only the symbol is drawn.
+                    Label("Dashboard", systemImage: "square.grid.2x2")
+                        .labelStyle(.iconOnly)
+                }
+                .help("Dashboard")
+                .accessibilityLabel("Dashboard")
+                ConnectionStatusBadge(mirror: mirror, diameter: controlSide)
+            }
+            .font(.title3)
+            .buttonStyle(GlassCircleButtonStyle(diameter: controlSide))
+        }
+    }
+}
+
 /// System `.glass` circle buttons with a fixed glyph box, so symbols of
 /// different heights (the ellipsis vs. the grid) produce identical circles.
-/// A primitive style so it also reaches the shared `SettingsButton`.
+/// A primitive style, so it wraps every button in the cluster uniformly.
 private struct GlassCircleButtonStyle: PrimitiveButtonStyle {
-    /// With the regular control size this yields a 48pt circle, matching the
-    /// connection badge and the UIKit annotation toolbar capsule.
-    static let glyphSide: CGFloat = 34
+    /// The rendered circle; the connection badge uses the same value so every
+    /// circle in the cluster is identical. 48pt at the default size, matching
+    /// the UIKit annotation toolbar capsule.
+    let diameter: CGFloat
+
+    /// The label box: the circle minus the system's regular glass padding.
+    private var glyphSide: CGFloat {
+        max(diameter - 2 * FloatingChromeMetrics.glassButtonPadding, 0)
+    }
 
     func makeBody(configuration: Configuration) -> some View {
         Button(role: configuration.role) {
             configuration.trigger()
         } label: {
             configuration.label
-                .frame(width: Self.glyphSide, height: Self.glyphSide)
+                .frame(width: glyphSide, height: glyphSide)
         }
         .buttonStyle(.glass)
         .buttonBorderShape(.circle)
@@ -100,6 +227,9 @@ private struct GlassCircleButtonStyle: PrimitiveButtonStyle {
 /// PencilKit canvas siblings.
 private struct ConnectionStatusBadge: View {
     var mirror: MirrorModel
+    /// Shared with `GlassCircleButtonStyle` so the badge matches its
+    /// neighbors at every Dynamic Type size.
+    let diameter: CGFloat
 
     var body: some View {
         let connected = mirror.frameCount > 0
@@ -107,15 +237,26 @@ private struct ConnectionStatusBadge: View {
         // neighboring controls, with green reserved for the connected signal.
         Image(systemName: connected ? "laptopcomputer" : "laptopcomputer.slash")
             .foregroundStyle(connected ? Color.green : Color.secondary)
-            .frame(width: 48, height: 48)
-            .glassEffect(.regular.interactive(), in: Circle())
-            .help(connected ? "Connected to Cockpit" : "Searching for Cockpit")
-            .accessibilityLabel(connected ? "Connected to Cockpit" : "Not connected to Cockpit")
+            // The glyph morphs between states instead of hard-swapping (MOT-4).
+            .contentTransition(.symbolEffect(.replace))
+            .frame(width: diameter, height: diameter)
+            // The whole circle is the long-press target, not just the glyph.
+            .contentShape(Circle())
+            // Long-press / secondary-click lifts a circle, not a squared-off
+            // rectangle, for the context menu preview.
+            .contentShape(.contextMenuPreview, Circle())
+            // Attached inside the glass: with the menu outside it, the glass
+            // layer took the long press and the menu never opened, leaving
+            // Forget Paired Cockpit unreachable.
             .contextMenu {
                 Button("Forget Paired Cockpit", role: .destructive) {
                     mirror.forgetPilot()
                 }
             }
+            .glassEffect(.regular.interactive(), in: Circle())
+            .animation(LiquidGlassMetrics.stateChange, value: connected)
+            .help(connected ? "Connected to Cockpit" : "Searching for Cockpit")
+            .accessibilityLabel(connected ? "Connected to Cockpit" : "Not connected to Cockpit")
     }
 }
 
@@ -126,18 +267,55 @@ private struct SearchingOverlay: View {
     var mirror: MirrorModel
 
     var body: some View {
-        if mirror.frameCount == 0 {
-            ContentUnavailableView {
-                Label("Searching for Cockpit", systemImage: "antenna.radiowaves.left.and.right")
-            } description: {
-                Text("Make sure Cockpit is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
-            } actions: {
-                ProgressView()
+        let isSearching = mirror.frameCount == 0
+        ZStack {
+            if isSearching {
+                // At large accessibility sizes the message is taller than
+                // the band between the floating clusters (top) and the
+                // PencilKit palette (bottom): it scrolls inside that band
+                // instead of running under both (TYPE-4).
+                ViewThatFits(in: .vertical) {
+                    placeholder
+                    ScrollView { placeholder }
+                }
+                .padding(.top, Self.topClearance)
+                .padding(.bottom, Self.bottomClearance)
+                // The mirror stage is always black (a video surface), so the
+                // placeholder must stay light-on-dark regardless of system mode.
+                .environment(\.colorScheme, .dark)
+                .transition(.opacity)
             }
-            // The mirror stage is always black (a video surface), so the
-            // placeholder must stay light-on-dark regardless of system mode.
-            .environment(\.colorScheme, .dark)
         }
+        // Fade the placeholder out as the first frame lands instead of a hard
+        // cut (MOT-1 context transition). Keyed on the Bool, so per-frame
+        // `frameCount` ticks never start an animation.
+        .animation(LiquidGlassMetrics.stateChange, value: isSearching)
+    }
+
+    /// Below the floating clusters (48pt circles, 12pt inset, 8pt gap).
+    private static let topClearance: CGFloat = 72
+    /// Above the PencilKit tool palette docked at the bottom edge.
+    private static let bottomClearance: CGFloat = 104
+
+    private var placeholder: some View {
+        ContentUnavailableView {
+            Label {
+                Text("Searching for Cockpit")
+            } icon: {
+                // The antenna pulses outward while searching: the one
+                // designed loading motion (MOT-5, MOT-3), replacing a
+                // second competing spinner. Opacity-only, so it stays
+                // calm with Reduce Motion.
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .symbolEffect(.variableColor.iterative)
+            }
+        } description: {
+            Text("Make sure Cockpit is running on your Mac, and that both devices are on the same Wi-Fi network with Local Network access enabled for Kneeboard.")
+        }
+        // A readable measure on a wide iPad stage: the centered
+        // description wraps to a few short lines instead of one
+        // 110-character line (LAY-6, TYPE-1).
+        .frame(maxWidth: 560)
     }
 }
 
@@ -147,6 +325,11 @@ private struct SearchingOverlay: View {
 /// PencilKit canvas, and the pinch/pan gestures) into SwiftUI.
 private struct ZoomableMirrorView: UIViewRepresentable {
     var mirror: MirrorModel
+    /// True while a sheet is presented over the mirror.
+    var isCovered = false
+    /// Receives how far the corner-adapted safe area extends past the plain
+    /// safe area on each edge (see ``ZoomableMirrorUIView/cornerInsets``).
+    var onCornerInsetsChange: (EdgeInsets) -> Void = { _ in }
 
     func makeUIView(context: Context) -> ZoomableMirrorUIView {
         let view = ZoomableMirrorUIView()
@@ -167,6 +350,7 @@ private struct ZoomableMirrorView: UIViewRepresentable {
         view.onClear = {
             mirror.sendAnnotation(.clear)
         }
+        view.onCornerInsetsChange = onCornerInsetsChange
         // Apply undo/clear commands that originate on Pilot to this canvas (the
         // authoritative drawing); the resulting change echoes back to Pilot.
         mirror.onRemoteAnnotation = { [weak view] message in
@@ -183,6 +367,8 @@ private struct ZoomableMirrorView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: ZoomableMirrorUIView, context: Context) {
+        uiView.onCornerInsetsChange = onCornerInsetsChange
+        uiView.setToolPickerHidden(isCovered)
         if mirror.isDemoMode {
             uiView.videoSize = mirror.videoSize
             uiView.applyDemoContent(image: mirror.demoImage)
@@ -246,6 +432,14 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     private let toolbar = UIStackView()
     /// Liquid Glass platter the annotation toolbar floats on.
     private let toolbarGlass = UIVisualEffectView()
+    /// Size constraints of the toolbar buttons, rescaled when Dynamic Type
+    /// changes (see `updateToolbarButtonSizes()`).
+    private var toolbarButtonWidthConstraints: [NSLayoutConstraint] = []
+    private var toolbarButtonHeightConstraints: [NSLayoutConstraint] = []
+    /// The toolbar's preferred top (12pt below the safe area, level with the
+    /// SwiftUI cluster); moved down a row by `updateToolbarRow()` when the
+    /// window is too narrow for both clusters side by side.
+    private var toolbarTopConstraint: NSLayoutConstraint?
 
     /// Shown above the (empty) video layer only in demo mode; rides the same
     /// zoom/pan transform so seeded annotation strokes stay aligned.
@@ -254,6 +448,8 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     private var hasSeededDemoStrokes = false
 
     private var toolPicker: PKToolPicker?
+    /// Whether ``setToolPickerHidden(_:)`` currently has the picker hidden.
+    private var isToolPickerCovered = false
 
     /// One completed stroke was added — sent incrementally so each line is a
     /// discrete entry on Pilot's undo stack.
@@ -264,6 +460,15 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// drawing so Pilot resyncs.
     var onResync: ((PKDrawing, CGRect) -> Void)?
     var onClear: (() -> Void)?
+    /// The corner-adapted safe area changed; receives ``cornerInsets``.
+    var onCornerInsetsChange: ((EdgeInsets) -> Void)?
+
+    /// The safe area adapted (horizontally) to the window's corners, so
+    /// floating controls clear the iPadOS window controls in a resizable
+    /// window. The annotation toolbar is constrained inside it.
+    private static let cornerAdaptedSafeArea = UIView.LayoutRegion.safeArea(cornerAdaptation: .horizontal)
+    /// Last value delivered to `onCornerInsetsChange`, to report only changes.
+    private var reportedCornerInsets: EdgeInsets?
 
     /// Stroke count at the last delivered change, to classify the next one as an
     /// add / undo / resync.
@@ -315,6 +520,8 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     }
 
     override func layoutSubviews() {
+        // Before the constraint pass, so the toolbar lands in its row now.
+        updateToolbarRow()
         super.layoutSubviews()
         // The content view fills us; the affine transform handles zoom/pan.
         contentView.frame = bounds
@@ -323,12 +530,51 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         canvasView.frame = contentView.bounds
         remapDrawingForCurrentLayoutIfNeeded()
         applyTransform()
+        reportCornerInsetsIfChanged()
         // Seed demo strokes once we actually have a non-zero canvas to map
         // them into (layout has run and videoSize is known).
         if isDemoMode, !hasSeededDemoStrokes, videoSize != .zero,
            canvasView.bounds.width > 0 {
             seedDemoStrokes()
             hasSeededDemoStrokes = true
+        }
+    }
+
+    override func safeAreaInsetsDidChange() {
+        super.safeAreaInsetsDidChange()
+        setNeedsLayout()
+    }
+
+    /// How far the corner-adapted safe area extends past the plain safe area
+    /// on each edge, in layout direction. The SwiftUI cluster already honors
+    /// the plain safe area, so it only needs this difference: about 66pt at
+    /// top-leading in a resizable window (the window controls), and only the
+    /// ~9pt display-corner rounding when the window fills the screen.
+    var cornerInsets: EdgeInsets {
+        let adapted = directionalEdgeInsets(for: Self.cornerAdaptedSafeArea)
+        let plain = NSDirectionalEdgeInsets(
+            top: safeAreaInsets.top,
+            leading: effectiveUserInterfaceLayoutDirection == .rightToLeft ? safeAreaInsets.right : safeAreaInsets.left,
+            bottom: safeAreaInsets.bottom,
+            trailing: effectiveUserInterfaceLayoutDirection == .rightToLeft ? safeAreaInsets.left : safeAreaInsets.right
+        )
+        return EdgeInsets(
+            top: max(0, adapted.top - plain.top),
+            leading: max(0, adapted.leading - plain.leading),
+            bottom: max(0, adapted.bottom - plain.bottom),
+            trailing: max(0, adapted.trailing - plain.trailing)
+        )
+    }
+
+    /// Delivers ``cornerInsets`` after a layout pass that changed them. The
+    /// callback updates SwiftUI state, so it is deferred out of layout.
+    private func reportCornerInsetsIfChanged() {
+        guard window != nil else { return }
+        let insets = cornerInsets
+        guard insets != reportedCornerInsets else { return }
+        reportedCornerInsets = insets
+        DispatchQueue.main.async { [weak self] in
+            self?.onCornerInsetsChange?(insets)
         }
     }
 
@@ -416,6 +662,17 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         installToolPicker(for: canvasView)
     }
 
+    /// Hides the tool picker while SwiftUI presents a sheet over the mirror,
+    /// and restores it (with the canvas as first responder) afterwards. Acts
+    /// only on cover/uncover transitions, so routine `updateUIView` passes
+    /// never fight the picker's own state.
+    func setToolPickerHidden(_ hidden: Bool) {
+        guard hidden != isToolPickerCovered, let toolPicker else { return }
+        isToolPickerCovered = hidden
+        toolPicker.setVisible(!hidden, forFirstResponder: canvasView)
+        if !hidden { canvasView.becomeFirstResponder() }
+    }
+
     private func installToolPicker(for canvasView: PKCanvasView) {
         let picker = PKToolPicker()
         picker.addObserver(canvasView)
@@ -429,7 +686,15 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         toolbar.alignment = .center
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         toolbar.isLayoutMarginsRelativeArrangement = true
-        toolbar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 2, leading: 4, bottom: 2, trailing: 4)
+        // No vertical margin: the buttons themselves are the capsule height
+        // (48pt at the default size, on the 4pt grid), which keeps the
+        // toolbar level with the SwiftUI cluster's 48pt circles.
+        toolbar.directionalLayoutMargins = NSDirectionalEdgeInsets(
+            top: 0,
+            leading: LiquidGlassMetrics.Spacing.xxSmall,
+            bottom: 0,
+            trailing: LiquidGlassMetrics.Spacing.xxSmall
+        )
 
         // Floating controls over the mirror use interactive Liquid Glass in a
         // capsule, matching the SwiftUI settings cluster on the leading side.
@@ -437,6 +702,13 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         glass.isInteractive = true
         toolbarGlass.effect = glass
         toolbarGlass.cornerConfiguration = .capsule()
+        // Pinned dark like the SwiftUI cluster: the mirror stage behind it is
+        // always black, and `.label` glyphs then resolve light on dark glass.
+        toolbarGlass.overrideUserInterfaceStyle = .dark
+        // Same Dynamic Type ceiling as the SwiftUI cluster, so both clusters
+        // stop growing together; the glyphs' text-style symbol configuration
+        // honors it too.
+        toolbarGlass.maximumContentSizeCategory = FloatingChromeMetrics.maximumContentSizeCategory
         toolbarGlass.translatesAutoresizingMaskIntoConstraints = false
         toolbarGlass.contentView.addSubview(toolbar)
 
@@ -462,14 +734,74 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
 
         // The toolbar stays fixed (not inside the transformable content view).
         addSubview(toolbarGlass)
+        let cornerSafeArea = layoutGuide(for: Self.cornerAdaptedSafeArea)
+        let toolbarTop = toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: LiquidGlassMetrics.Spacing.small)
+        toolbarTopConstraint = toolbarTop
+        let toolbarTrailing = toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -LiquidGlassMetrics.Spacing.small)
+        toolbarTop.priority = .defaultHigh
+        toolbarTrailing.priority = .defaultHigh
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: toolbarGlass.contentView.topAnchor),
             toolbar.bottomAnchor.constraint(equalTo: toolbarGlass.contentView.bottomAnchor),
             toolbar.leadingAnchor.constraint(equalTo: toolbarGlass.contentView.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: toolbarGlass.contentView.trailingAnchor),
-            toolbarGlass.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 12),
-            toolbarGlass.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -12)
+            // 12pt inside the safe area, matching the SwiftUI cluster, but
+            // never outside the corner-adapted safe area: if a window corner
+            // ever carries chrome on this side, the toolbar moves clear of it
+            // (the same rule as `FloatingChromeMetrics.clusterPadding`). The
+            // window controls sit top-leading today, so this side normally
+            // only sees the ~9pt corner rounding, which the 12pt clears.
+            toolbarTop,
+            toolbarTrailing,
+            toolbarGlass.topAnchor.constraint(greaterThanOrEqualTo: safeAreaLayoutGuide.topAnchor, constant: LiquidGlassMetrics.Spacing.small),
+            toolbarGlass.topAnchor.constraint(greaterThanOrEqualTo: cornerSafeArea.topAnchor),
+            toolbarGlass.trailingAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.trailingAnchor, constant: -LiquidGlassMetrics.Spacing.small),
+            toolbarGlass.trailingAnchor.constraint(lessThanOrEqualTo: cornerSafeArea.trailingAnchor)
         ])
+
+        updateToolbarButtonSizes()
+        toolbarGlass.registerForTraitChanges(
+            [UITraitPreferredContentSizeCategory.self]
+        ) { [weak self] (_: UIVisualEffectView, _: UITraitCollection) in
+            self?.updateToolbarButtonSizes()
+            self?.setNeedsLayout()
+        }
+    }
+
+    /// Scales the toolbar buttons with Dynamic Type exactly like the SwiftUI
+    /// cluster's `@ScaledMetric`, using the glass view's (clamped) traits.
+    private func updateToolbarButtonSizes() {
+        let traits = toolbarGlass.traitCollection
+        let width = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseToolbarButtonWidth, for: traits)
+        let height = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseControlSide, for: traits)
+        toolbarButtonWidthConstraints.forEach { $0.constant = width }
+        toolbarButtonHeightConstraints.forEach { $0.constant = height }
+    }
+
+    /// Keeps the annotation toolbar level with the SwiftUI cluster when both
+    /// fit across the window, and otherwise drops it to a second row just
+    /// below the cluster. A narrow resizable window at the larger Dynamic
+    /// Type sizes cannot hold both rows side by side, and the cluster also
+    /// steps in past the window controls there; without this the two
+    /// clusters overlap.
+    private func updateToolbarRow() {
+        guard let toolbarTopConstraint else { return }
+        let traits = toolbarGlass.traitCollection
+        let side = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseControlSide, for: traits)
+        let buttonWidth = FloatingChromeMetrics.scaled(FloatingChromeMetrics.baseToolbarButtonWidth, for: traits)
+        let toolbarWidth = CGFloat(toolbar.arrangedSubviews.count) * buttonWidth
+            + toolbar.directionalLayoutMargins.leading + toolbar.directionalLayoutMargins.trailing
+        let clusterPadding = FloatingChromeMetrics.clusterPadding(cornerInsets: cornerInsets)
+        let spacing = LiquidGlassMetrics.Spacing.small
+        let needed = clusterPadding.leading + FloatingChromeMetrics.clusterWidth(controlSide: side)
+            + spacing + toolbarWidth + spacing
+        let available = bounds.width - safeAreaInsets.left - safeAreaInsets.right
+        let top = needed <= available
+            ? spacing
+            : clusterPadding.top + side + LiquidGlassMetrics.Spacing.xSmall
+        if toolbarTopConstraint.constant != top {
+            toolbarTopConstraint.constant = top
+        }
     }
 
     /// Empties this canvas and tells Pilot to clear too (`onClear` sends a single
@@ -486,8 +818,9 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         onClear?()
     }
 
-    /// A 44pt icon button for the glass toolbar: Dynamic Type symbol sizing,
-    /// a label-colored glyph that adapts with the glass, a spoken name, and
+    /// An icon button for the glass toolbar (44 x 48pt at the default size,
+    /// scaled by `updateToolbarButtonSizes()`): Dynamic Type symbol sizing, a
+    /// label-colored glyph that adapts with the glass, a spoken name, and
     /// pointer hover on iPad trackpads.
     private func button(systemName: String, label: String, action: @escaping () -> Void) -> UIButton {
         let button = UIButton(type: .system)
@@ -497,8 +830,11 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         button.accessibilityLabel = label
         button.isPointerInteractionEnabled = true
         button.addAction(UIAction { _ in action() }, for: .touchUpInside)
-        button.widthAnchor.constraint(equalToConstant: 44).isActive = true
-        button.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        let width = button.widthAnchor.constraint(equalToConstant: FloatingChromeMetrics.baseToolbarButtonWidth)
+        let height = button.heightAnchor.constraint(equalToConstant: FloatingChromeMetrics.baseControlSide)
+        NSLayoutConstraint.activate([width, height])
+        toolbarButtonWidthConstraints.append(width)
+        toolbarButtonHeightConstraints.append(height)
         return button
     }
 

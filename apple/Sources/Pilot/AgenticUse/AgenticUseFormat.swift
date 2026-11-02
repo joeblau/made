@@ -9,12 +9,15 @@ enum AgenticUseFormat {
         value.formatted(.currency(code: "USD").precision(.fractionLength(2)))
     }
 
-    /// Compact axis money: "$50", "$1.2K".
+    /// Compact axis money: "$50", "$1.2K", and cents below a dollar
+    /// ("$0.05"), where one fraction digit rounded quiet hours' ticks such as
+    /// 0.05 to a second "$0" label.
     static func axisCost(_ value: Double) -> String {
-        value.formatted(
+        let magnitude = abs(value)
+        return value.formatted(
             .currency(code: "USD")
                 .notation(.compactName)
-                .precision(.fractionLength(0...1))
+                .precision(.fractionLength(magnitude > 0 && magnitude < 1 ? 0...2 : 0...1))
         )
     }
 
@@ -51,9 +54,11 @@ enum AgenticUseFormat {
         return (current - previous) / previous
     }
 
-    /// Compact money for prose: "$17.2K", "$412".
+    /// Money for prose: compact from $1,000 ("$17.2K"), full cents below
+    /// it ("$170.47"), so an insight never prints a one-decimal "$170.5"
+    /// beside the KPI card's "$170.47".
     static func compactCost(_ value: Double) -> String {
-        axisCost(value)
+        abs(value) >= 1000 ? axisCost(value) : cost(value)
     }
 
     /// Unsigned magnitude for a delta badge: "28%", or ">999%" past the cap

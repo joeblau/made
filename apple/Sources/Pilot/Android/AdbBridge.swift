@@ -184,10 +184,20 @@ enum AdbBridge {
             arguments: ["-s", serial, "emu", "avd", "name"],
             timeout: .seconds(5)
         ) else { return nil }
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+        return parseAVDNameOutput(String(decoding: data, as: UTF8.self))
+    }
+
+    /// The emulator console answers in CRLF lines ("Pixel_9_API_36\r\nOK\r\n").
+    /// Swift treats "\r\n" as one Character, so splitting on "\n" alone kept
+    /// the whole reply as one line and returned "Pixel_9_API_36\r\nOK" — which
+    /// never matched an installed AVD and leaked "OK" into the picker title.
+    static func parseAVDNameOutput(_ output: String) -> String? {
+        for line in output.split(whereSeparator: \.isNewline) {
             let name = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if name.isEmpty || name == "OK" { continue }
-            return name
+            // The name now renders in the picker, so hold it to the same
+            // allowlist as `-list-avds` output (untrusted device input).
+            return EmulatorBridge.isValidAVDName(name) ? name : nil
         }
         return nil
     }

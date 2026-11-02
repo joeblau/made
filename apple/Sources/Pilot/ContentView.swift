@@ -37,8 +37,56 @@ struct WorkspaceNumberShortcuts: View {
 }
 
 /// Keeps every pane-specific toolbar identical between Main and Extendo.
-/// Both windows install this view in the same toolbar placement, so control
-/// order, overflow behavior, and future additions stay synchronized.
+/// Both windows install this content in the same toolbar placement, so
+/// control order, overflow behavior, and future additions stay synchronized.
+///
+/// A browser pane's address field is its own Liquid Glass capsule, so it
+/// gets a dedicated item with the toolbar's shared capsule hidden (no glass
+/// on glass), between the navigation group and the tools group.
+struct PaneToolbarContent: ToolbarContent {
+    let pane: Pane?
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .secondaryAction) {
+            BrowserPaneToolbarSlot(pane: pane, slot: .navigation)
+        }
+        ToolbarItem(placement: .secondaryAction) {
+            BrowserPaneToolbarSlot(pane: pane, slot: .address)
+        }
+        .compatSharedBackgroundHidden()
+        ToolbarItemGroup(placement: .secondaryAction) {
+            if let pane {
+                PaneToolbarControls(pane: pane)
+            }
+        }
+    }
+}
+
+/// One browser-only slot of `PaneToolbarContent`. Resolving the pane inside a
+/// view body keeps the slot observing collapse and kind changes.
+private struct BrowserPaneToolbarSlot: View {
+    enum Slot {
+        case navigation
+        case address
+    }
+
+    let pane: Pane?
+    let slot: Slot
+
+    var body: some View {
+        if let state = BrowserToolbarSelection.state(for: pane) {
+            switch slot {
+            case .navigation:
+                BrowserNavigationToolbarControls(state: state)
+            case .address:
+                BrowserAddressToolbarControl(state: state)
+            }
+        }
+    }
+}
+
+/// The pane-kind tools of `PaneToolbarContent`, after any browser navigation
+/// and address items.
 struct PaneToolbarControls: View {
     let pane: Pane
 
@@ -48,7 +96,7 @@ struct PaneToolbarControls: View {
             switch pane.kind {
             case .browser:
                 if let state = BrowserToolbarSelection.state(for: pane) {
-                    BrowserToolbarControls(state: state)
+                    BrowserToolsToolbarControls(state: state)
                 }
             case .device:
                 DeviceToolbarControls(paneID: pane.id)
@@ -247,29 +295,39 @@ struct ContentView: View {
                 workspaceRow: workspaceRow
             )
             .safeAreaInset(edge: .bottom) {
-                HStack(spacing: 12) {
-                    RecordingStatusIndicator(isRecording: isPeerRecording)
-                    AwakeStatusButton()
+                // A floating cluster of circular glass status buttons over the
+                // sidebar's scrolling content, rendered in one container (no
+                // glass on glass); spacing 0 keeps every circle distinct.
+                CompatGlassContainer(spacing: 0) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        RecordingStatusIndicator(isRecording: isPeerRecording)
+                        AwakeStatusButton()
 
-                    Spacer(minLength: 0)
+                        Spacer(minLength: 0)
 
-                    HStack(spacing: 12) {
-                        ForEach(connectedDevices) { device in
-                            DeviceStatusButton(
-                                device: device,
-                                connectionDetail: connectionDetail(for: device)
-                            )
+                        HStack(spacing: StatusClusterMetrics.spacing) {
+                            ForEach(connectedDevices) { device in
+                                DeviceStatusButton(
+                                    device: device,
+                                    connectionDetail: connectionDetail(for: device)
+                                )
+                            }
                         }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
             }
-            .alert(editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
-                   isPresented: $isGroupNamePresented) {
-                TextField("Group name", text: $groupName)
-                Button("Cancel", role: .cancel) {}
-                Button(editingGroupID == nil ? "Create" : "Save") {
+            // A glass prompt sheet rather than a system alert, so the name
+            // field is a Liquid Glass field like every other text input.
+            .sheet(isPresented: $isGroupNamePresented) {
+                TextPromptSheet(
+                    title: editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
+                    label: "Group name",
+                    prompt: "Frontend",
+                    confirmTitle: editingGroupID == nil ? "Create" : "Save",
+                    text: $groupName
+                ) {
                     if let editingGroupID {
                         store.workspaceGroups.rename(editingGroupID, to: groupName)
                     } else {
@@ -277,7 +335,6 @@ struct ContentView: View {
                         workspacesSectionExpanded = true
                     }
                 }
-                .disabled(groupName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .sheet(item: $newWorkspaceRequest) { request in
                 NewWorkspaceSheet(finder: newWorkspaceFinder) { directory in
@@ -301,7 +358,7 @@ struct ContentView: View {
                             groupName = ""
                             isGroupNamePresented = true
                         } label: {
-                            Label("New Workspace Group", systemImage: "folder.badge.plus")
+                            Label("New Workspace Group…", systemImage: "folder.badge.plus")
                         }
                     } label: {
                         Label("New Workspace", systemImage: "plus")
@@ -313,9 +370,30 @@ struct ContentView: View {
         } detail: {
             ZStack {
                 if workspaces.isEmpty {
-                    ContentUnavailableView("No Workspace Selected",
-                                           systemImage: "rectangle.on.rectangle.slash",
-                                           description: Text("Create a workspace with the + button."))
+                    // Empty state with a clear next action (MOT-6); the only
+                    // action here, so it is the prominent one (BTN-1). Only
+                    // in workspace detail: the global modes draw without a
+                    // background, so it used to show through Notes.
+                    if store.isWorkspaceDetailVisible {
+                        ContentUnavailableView {
+                            // Nothing exists to select yet, so say that (HIER-2);
+                            // "No Workspace Selected" is the state below.
+                            Label("No Workspaces", systemImage: "rectangle.on.rectangle.slash")
+                        } description: {
+                            Text("Create a workspace with the + button.")
+                        } actions: {
+                            Button {
+                                newWorkspaceRequest = NewWorkspaceRequest()
+                            } label: {
+                                Label("New Workspace…", systemImage: "plus")
+                            }
+                            .compatGlassProminentButtonStyle()
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.large)
+                            .accessibilityIdentifier("workspace.empty.new-workspace")
+                        }
+                        .legibleSecondaryHierarchy()
+                    }
                 } else {
                     // The workspace stack stays mounted at all times — even in
                     // Notes mode — so entering Notes never tears down live
@@ -356,6 +434,7 @@ struct ContentView: View {
                                 onSelect: store.selectWorkspace
                             )
                         }
+                        .legibleSecondaryHierarchy()
                     }
                 }
 
@@ -454,6 +533,9 @@ struct ContentView: View {
             let message = notification.userInfo?["message"] as? String ?? "Unknown persistence error"
             persistenceFailure = PersistenceFailure(operation: operation, message: message)
         }
+        #if DEBUG
+        .task { await DemoReviewFixture.postPersistenceFailureOnce() }
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: UsageConsent.changedNotification)) { _ in
             usageStore.reload()
         }
@@ -478,6 +560,8 @@ struct ContentView: View {
             )
         )
         .toolbar {
+            // The field is its own glass capsule, so the item's shared
+            // toolbar capsule is hidden (no glass on glass).
             ToolbarItem(placement: .principal) {
                 if store.isWorkspaceDetailVisible,
                    let pane = TerminalToolbarSelection.pane(
@@ -487,6 +571,7 @@ struct ContentView: View {
                         .id(pane.id)
                 }
             }
+            .compatSharedBackgroundHidden()
             ToolbarItem(placement: .principal) {
                 if store.isWorkspaceDetailVisible,
                    let pane = TerminalToolbarSelection.pane(
@@ -496,12 +581,11 @@ struct ContentView: View {
                         .id(pane.id)
                 }
             }
-            ToolbarItemGroup(placement: .secondaryAction) {
-                if store.isWorkspaceDetailVisible,
-                   let pane = store.selectedWorkspace?.selectedPane {
-                    PaneToolbarControls(pane: pane)
-                }
-            }
+            PaneToolbarContent(
+                pane: store.isWorkspaceDetailVisible
+                    ? store.selectedWorkspace?.selectedPane
+                    : nil
+            )
             if #available(macOS 26.0, *) {
                 ToolbarItem(placement: .primaryAction) {
                     // ⌘T / ⌘B live as main-menu commands (see PilotApp.commands)
@@ -517,7 +601,7 @@ struct ContentView: View {
                         .disabled(store.isNotesMode)
                 }
             }
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     isDrawingActive.toggle()
                 } label: {
@@ -526,6 +610,13 @@ struct ContentView: View {
                 }
                 .disabled(store.selectedWorkspace == nil || store.isNotesMode)
                 .help("Draw over the active pane (⇧⌘D)")
+            }
+            // The Inspector toggle is window layout, not a pane tool: give it
+            // its own glass group, as the system does for sidebar toggles.
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     guard let workspace = store.selectedWorkspace else { return }
                     workspace.setInspectorPresented(!workspace.isInspectorPresented)
@@ -580,6 +671,13 @@ struct ContentView: View {
                     .padding(16)
             }
         }
+        // Capsule is the default control shape for the whole window and the
+        // sheets it presents: on macOS 26 the bordered/glass buttons, popup
+        // pickers and segmented pickers otherwise draw squared rounded
+        // rectangles beside the capsule fields and chips. A control that
+        // sets its own shape (glass icon circles) still wins, because the
+        // innermost buttonBorderShape applies.
+        .buttonBorderShape(.capsule)
     }
 
     private var canCloseActiveTab: Bool {
@@ -687,10 +785,17 @@ struct ContentView: View {
             isConnected: localAudioOutput != nil,
             name: localAudioOutput?.name
         )
+        #if DEBUG
+        // Review-only: `-demoPeersConnected YES` in a demo launch shows the
+        // connected glyphs without a paired peer.
+        let demoConnected = DemoReviewFixture.flag("demoPeersConnected")
+        #else
+        let demoConnected = false
+        #endif
         return [
-            ConnectedDevice(kind: .iphone, isConnected: syncService.isConnected),
-            ConnectedDevice(kind: .ipad, isConnected: isPlotterConnected),
-            ConnectedDevice(kind: .appleWatch, isConnected: peerDeviceStatus.isWatchConnected),
+            ConnectedDevice(kind: .iphone, isConnected: syncService.isConnected || demoConnected),
+            ConnectedDevice(kind: .ipad, isConnected: isPlotterConnected || demoConnected),
+            ConnectedDevice(kind: .appleWatch, isConnected: peerDeviceStatus.isWatchConnected || demoConnected),
             audioDevice
         ]
     }
@@ -904,11 +1009,14 @@ private struct RecordingStatusIndicator: View {
         Button {
             isPopoverPresented.toggle()
         } label: {
-            Image(systemName: isRecording ? "waveform.circle.fill" : "waveform.circle")
+            // The glass circle is the button shape, so the glyph drops its
+            // own circle; live recording animates instead of only recoloring.
+            Image(systemName: "waveform")
                 .foregroundStyle(isRecording ? .red : .secondary)
+                .symbolEffect(.variableColor.iterative, isActive: isRecording)
+                .statusGlyphFrame()
         }
-        .buttonStyle(.plain)
-        .statusButtonHitTarget()
+        .statusButtonStyle()
         .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
             StatusPopoverContent(
                 title: "Microphone",
@@ -933,9 +1041,9 @@ private struct AwakeStatusButton: View {
         } label: {
             Image(systemName: "cup.and.heat.waves")
                 .foregroundStyle(controller.isEnabled ? Color.green : .secondary)
+                .statusGlyphFrame()
         }
-        .buttonStyle(.plain)
-        .statusButtonHitTarget()
+        .statusButtonStyle()
         .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
             AwakeSessionDetailsView(controller: controller)
         }
@@ -1007,9 +1115,10 @@ private struct DeviceStatusButton: View {
             Image(systemName: device.kind.systemImageName)
                 .symbolVariant(device.kind.usesFillVariant ? .fill : .none)
                 .foregroundStyle(device.isConnected ? .green : .secondary)
+                .contentTransition(.symbolEffect(.replace))
+                .statusGlyphFrame()
         }
-        .buttonStyle(.plain)
-        .statusButtonHitTarget()
+        .statusButtonStyle()
         .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
             StatusPopoverContent(
                 title: device.name ?? device.kind.displayName,
@@ -1059,10 +1168,24 @@ private struct StatusPopoverContent: View {
     }
 }
 
+/// Sidebar status cluster sizing: every circle matches, whatever the glyph's
+/// natural width (IMG-1), and the five circles still fit the 180pt minimum
+/// sidebar width.
+private enum StatusClusterMetrics {
+    static let spacing = LiquidGlassMetrics.Spacing.xxSmall
+    static let glyphSize: CGFloat = 14
+}
+
 private extension View {
-    func statusButtonHitTarget() -> some View {
-        frame(width: 22, height: 22)
-            .contentShape(Rectangle())
+    /// A square glyph frame so circular glass buttons come out the same size.
+    func statusGlyphFrame() -> some View {
+        frame(width: StatusClusterMetrics.glyphSize, height: StatusClusterMetrics.glyphSize)
+    }
+
+    /// Icon-only circular glass for the sidebar status cluster (one control
+    /// size for the whole row).
+    func statusButtonStyle() -> some View {
+        compatGlassIconButton(controlSize: .small)
     }
 }
 

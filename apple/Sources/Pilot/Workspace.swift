@@ -56,7 +56,7 @@ enum BrowserEngine: String, Codable, CaseIterable, Sendable {
             true
         case .chromium:
             switch capability {
-            case .navigation, .addressFocus, .developerTools:
+            case .navigation, .addressFocus, .developerTools, .findInPage:
                 true
             case .appearanceOverride, .annotation, .websiteDataReset:
                 false
@@ -72,6 +72,7 @@ enum BrowserCapability: Hashable, Sendable {
     case developerTools
     case annotation
     case websiteDataReset
+    case findInPage
 }
 
 enum BrowserPaneCommand: Sendable {
@@ -483,41 +484,42 @@ final class BrowserState {
     var navigationRequestID: Int = 0
     var inspectorToggleRequestID: Int = 0
 
-    @Transient var pendingURL: URL? = nil
-    @Transient var canGoBack: Bool = false
-    @Transient var canGoForward: Bool = false
-    @Transient var isLoading: Bool = false
-    @Transient var title: String = ""
+    /// Runtime-only page state. SwiftData does not publish changes to
+    /// `@Transient` stored properties, so a toolbar or page view that
+    /// stayed mounted never saw ⌘L, Lasso, loading, or history updates.
+    /// The values live in an `@Observable` object instead; the forwarding
+    /// properties below are computed, so the persisted schema is unchanged.
+    /// Readable (never replaceable) outside this file so feature extensions,
+    /// such as Find in Page, can forward to it.
+    @Transient private(set) var runtime = BrowserRuntimeState()
+    var pendingURL: URL? { get { runtime.pendingURL } set { runtime.pendingURL = newValue } }
+    var canGoBack: Bool { get { runtime.canGoBack } set { runtime.canGoBack = newValue } }
+    var canGoForward: Bool { get { runtime.canGoForward } set { runtime.canGoForward = newValue } }
+    var isLoading: Bool { get { runtime.isLoading } set { runtime.isLoading = newValue } }
+    var title: String { get { runtime.title } set { runtime.title = newValue } }
     /// Favicon metadata follows the loaded page, independently of address edits.
     @Transient private var faviconMetadata = BrowserFaviconMetadata()
-    @Transient var estimatedProgress: Double = 0
-    @Transient var showDevTools: Bool = false
-    @Transient var needsInspectorToggle: Bool = false
+    var estimatedProgress: Double { get { runtime.estimatedProgress } set { runtime.estimatedProgress = newValue } }
+    var showDevTools: Bool { get { runtime.showDevTools } set { runtime.showDevTools = newValue } }
+    var needsInspectorToggle: Bool { get { runtime.needsInspectorToggle } set { runtime.needsInspectorToggle = newValue } }
     /// Browser Annotate mode — runtime only, off after relaunch.
-    @Transient var annotateMode: Bool = false
-    @Transient var annotateToggleRequestID: Int = 0
+    var annotateMode: Bool { get { runtime.annotateMode } set { runtime.annotateMode = newValue } }
+    var annotateToggleRequestID: Int { get { runtime.annotateToggleRequestID } set { runtime.annotateToggleRequestID = newValue } }
     /// Set by ⌘L and consumed when this browser's address field is mounted.
-    @Transient var needsAddressFocus: Bool = false
+    var needsAddressFocus: Bool { get { runtime.needsAddressFocus } set { runtime.needsAddressFocus = newValue } }
     /// Native navigation callbacks must not replace a newer address-field draft.
-    @Transient var isAddressEditing: Bool = false
-    @Transient var pendingAddressSubmission: String? = nil
+    var isAddressEditing: Bool { get { runtime.isAddressEditing } set { runtime.isAddressEditing = newValue } }
+    var pendingAddressSubmission: String? { get { runtime.pendingAddressSubmission } set { runtime.pendingAddressSubmission = newValue } }
     /// Recreates the WKWebView after its persistent website data is cleared.
-    @Transient var websiteDataResetRequestID: Int = 0
+    var websiteDataResetRequestID: Int { get { runtime.websiteDataResetRequestID } set { runtime.websiteDataResetRequestID = newValue } }
     /// Recreates an unavailable Chromium surface without changing its engine.
-    @Transient var runtimeRetryRequestID: Int = 0
-    /// Chromium-only page command state. Counters make every action edge-triggered.
-    @Transient var findQuery: String = ""
-    @Transient var findForward: Bool = true
-    @Transient var findMatchCase: Bool = false
-    @Transient var findNext: Bool = false
-    @Transient var findRequestID: Int = 0
-    @Transient var stopFindingRequestID: Int = 0
-    @Transient var findMatchCount: Int = 0
-    @Transient var activeFindMatchOrdinal: Int = 0
-    @Transient var printRequestID: Int = 0
-    @Transient var savePageRequestID: Int = 0
-    @Transient var downloadStatusText: String = ""
-    @Transient var downloadProgress: Double? = nil
+    var runtimeRetryRequestID: Int { get { runtime.runtimeRetryRequestID } set { runtime.runtimeRetryRequestID = newValue } }
+    /// Chromium-only page command state. Counters make every action
+    /// edge-triggered. Find in Page lives in `BrowserFindInPage.swift`.
+    var printRequestID: Int { get { runtime.printRequestID } set { runtime.printRequestID = newValue } }
+    var savePageRequestID: Int { get { runtime.savePageRequestID } set { runtime.savePageRequestID = newValue } }
+    var downloadStatusText: String { get { runtime.downloadStatusText } set { runtime.downloadStatusText = newValue } }
+    var downloadProgress: Double? { get { runtime.downloadProgress } set { runtime.downloadProgress = newValue } }
 
     var appearanceMode: AppearanceMode {
         get { AppearanceMode(rawValue: appearanceModeRaw) ?? .system }
@@ -636,28 +638,6 @@ final class BrowserState {
         isLoading = !urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         estimatedProgress = 0
         runtimeRetryRequestID += 1
-    }
-
-    func requestFind(
-        _ query: String,
-        forward: Bool = true,
-        matchCase: Bool = false,
-        findNext: Bool = false
-    ) {
-        guard engine == .chromium, !query.isEmpty else { return }
-        findQuery = query
-        findForward = forward
-        findMatchCase = matchCase
-        self.findNext = findNext
-        findRequestID += 1
-    }
-
-    func stopFinding() {
-        guard engine == .chromium else { return }
-        findQuery = ""
-        findMatchCount = 0
-        activeFindMatchOrdinal = 0
-        stopFindingRequestID += 1
     }
 
     func requestPrint() {
@@ -1180,30 +1160,30 @@ final class Workspace {
     }
 
     /// Resize the nearest expanded panes on either side of the divider by a delta
-    /// (in fraction of total expanded size). Collapsed panes keep their slit width.
-    func resizePanes(leadingID: UUID, trailingID: UUID, delta: Double) {
+    /// (in fraction of `expandedSize`, the points shared by expanded panes).
+    /// Collapsed panes keep their slit width; see `PaneSizing` for the floor.
+    func resizePanes(leadingID: UUID, trailingID: UUID, delta: Double, expandedSize: Double? = nil) {
         guard let (leadingPane, trailingPane) = resizePanePair(
             leadingID: leadingID,
             trailingID: trailingID
         ) else { return }
 
-        let fractions = normalizedExpandedSizeFractions
+        // Start from what's on screen (floored), so the first drag never jumps.
+        var fractions = normalizedExpandedSizeFractions
+        if let expandedSize { fractions = PaneSizing.flooredFractions(fractions, expandedSize: expandedSize) }
         guard let leadFrac = fractions[leadingPane.id],
               let trailFrac = fractions[trailingPane.id] else { return }
 
-        let minFraction = 0.1
-        let newLead = max(minFraction, min(leadFrac + delta, leadFrac + trailFrac - minFraction))
-        let newTrail = leadFrac + trailFrac - newLead
-
-        // Apply to all panes (initialize any that were 0)
+        let minimum = PaneSizing.minimumFraction(expandedSize: expandedSize, expandedCount: fractions.count)
+        let (newLead, newTrail) = PaneSizing.resizedPair(
+            leading: leadFrac, trailing: trailFrac, delta: delta, minimumFraction: minimum
+        )
+        fractions[leadingPane.id] = newLead
+        fractions[trailingPane.id] = newTrail
+        // Write every expanded pane's normalized share, not just the pair's:
+        // mixing normalized and raw weights would resize unrelated panes.
         for pane in sortedPanes where !pane.isCollapsed {
-            if pane.id == leadingPane.id {
-                pane.sizeFraction = newLead
-            } else if pane.id == trailingPane.id {
-                pane.sizeFraction = newTrail
-            } else if pane.sizeFraction <= 0 {
-                pane.sizeFraction = fractions[pane.id] ?? (1.0 / Double(panes.count))
-            }
+            pane.sizeFraction = fractions[pane.id] ?? (1.0 / Double(max(panes.count, 1)))
         }
     }
 

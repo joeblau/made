@@ -13,18 +13,31 @@ final class BuildPushCoordinator {
     private var subscription: Subscription?
     private var pollTask: Task<Void, Never>?
     var onUpdate: ((BuildWorkflowRun) -> Void)?
+    private let peerKeyProvider: () -> String?
+
+    /// `peerKey` is injectable for tests; production reads the Keychain pin.
+    init(peerKey: @escaping () -> String? = DeviceIdentity.peerPublicKeyBase64) {
+        self.peerKeyProvider = peerKey
+    }
+
+    /// The run currently followed, if any.
+    var followedRunKey: String? { subscription?.run.id }
+
+    /// The paired Walkie key, or `nil` when unpaired. Normalized again so an
+    /// empty or malformed value can never bind or match a subscription.
+    private var pairedPeerKey: String? { DeviceIdentity.pairedPeerPublicKey(peerKeyProvider()) }
 
     func restore() {
         guard subscription == nil,
               let saved = BuildMonitorStorage.load(Subscription.self),
-              saved.peerKey == DeviceIdentity.peerPublicKeyBase64(), saved.expiresAt > Date() else { return }
+              saved.peerKey == pairedPeerKey, saved.expiresAt > Date() else { return }
         subscription = saved
         beginPolling()
     }
 
     func follow(_ request: BuildFollowRequest, available: [BuildWorkflowRun]) {
         guard request.capability.map(BuildActivityRelay.validCapability) ?? true,
-              let peerKey = DeviceIdentity.peerPublicKeyBase64() else { return }
+              let peerKey = pairedPeerKey else { return }
         // Only follow a run Cockpit actually advertised, never arbitrary peer-supplied URLs or commands.
         guard let run = available.first(where: { $0.id == request.runKey })
                 ?? subscription?.run, run.id == request.runKey else { return }
@@ -53,7 +66,7 @@ final class BuildPushCoordinator {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, let saved = self.subscription else { return }
-                guard saved.expiresAt > Date(), saved.peerKey == DeviceIdentity.peerPublicKeyBase64() else {
+                guard saved.expiresAt > Date(), saved.peerKey == self.pairedPeerKey else {
                     self.stop()
                     return
                 }

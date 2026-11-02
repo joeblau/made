@@ -151,29 +151,16 @@ final class GitHubTasksStore {
         in directory: String,
         policy: RepositoryRefreshPolicy
     ) async -> ([GitHubTask], String?) {
-        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory) else {
-            return ([], "This folder is not a Git repository.")
-        }
+        let data: Data
         do {
-            let data = try await RepositoryPollingScheduler.shared.data(
-                for: .issues,
-                repository: repository,
-                policy: policy
-            )
-            guard let issues = try? JSONDecoder().decode([GitHubTask].self, from: data) else {
-                return ([], "Couldn’t parse gh output.")
-            }
-            return (issues, nil)
-        } catch let error as RepositoryPollingError {
-            return ([], error.localizedDescription)
-        } catch let error as ProcessRunnerError {
-            let detail = error.result?.standardErrorString
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let detail, !detail.isEmpty { return ([], detail) }
-            return ([], "Couldn’t load GitHub issues.")
+            data = try await GitHubCLIFailure.read(.issues, in: directory, policy: policy)
         } catch {
-            return ([], "Couldn’t load GitHub issues.")
+            return ([], GitHubCLIFailure.message(for: error, reading: "issues"))
         }
+        guard let issues = try? JSONDecoder().decode([GitHubTask].self, from: data) else {
+            return ([], "Couldn’t read the issues returned by GitHub.")
+        }
+        return (issues, nil)
     }
 }
 
@@ -227,16 +214,23 @@ struct GitHubTasksView: View {
 
                 if store.tasks.isEmpty {
                     if store.isLoading {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        // The store raises `isLoading` only for a first or
+                        // manual load with nothing on screen, never for silent
+                        // background polls, so the skeleton cannot flicker.
+                        InspectorLoadingPlaceholder()
                             .transition(.opacity)
                     } else if let error = store.errorMessage {
-                        ContentUnavailableView(
-                            "No Issues",
-                            systemImage: "exclamationmark.triangle",
-                            description: Text(error)
-                        )
+                        // A failed load is an error, not an empty list: say
+                        // so and offer the one next step (MOT-6, BTN-1).
+                        ContentUnavailableView {
+                            Label("Couldn\u{2019}t Load Issues", systemImage: "exclamationmark.triangle")
+                        } description: {
+                            Text(error)
+                        } actions: {
+                            Button("Retry", action: store.refresh)
+                                .compatGlassProminentButtonStyle()
+                        }
+                        .legibleSecondaryHierarchy()
                         .transition(.opacity)
                     } else {
                         ContentUnavailableView(
@@ -244,6 +238,7 @@ struct GitHubTasksView: View {
                             systemImage: "checkmark.circle",
                             description: Text("This repo has no open GitHub issues.")
                         )
+                        .legibleSecondaryHierarchy()
                         .transition(.opacity)
                     }
                 }
@@ -268,24 +263,49 @@ private struct GitHubTaskRow: View {
     let task: GitHubTask
     @State private var sent = false
 
+    /// Hover washes extend this far past the text they highlight; matching
+    /// negative padding keeps the card's layout exactly where it was.
+    private let washInset = LiquidGlassMetrics.Spacing.xxSmall
+
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // The issue number runs a command, so it is a real glass control
+            // rather than a link-styled label; the title beside it stays an
+            // inline link to GitHub (BTN-5 hover/press on both).
+            // Primary label like every glass button: accent blue measured
+            // 2.25:1 (dark) and 3.87:1 (light) on the capsule. A checkmark,
+            // not a color, confirms the send.
             Button(action: sendImplementPrompt) {
-                Text("#\(task.number)")
-                    .font(.system(.body, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(sent ? Color.green : Color.accentColor)
+                Group {
+                    if sent {
+                        Text("\(Image(systemName: "checkmark"))\(task.number)")
+                    } else {
+                        Text("#\(task.number)")
+                    }
+                }
+                .font(.system(.callout, design: .monospaced, weight: .semibold))
+                .foregroundStyle(.primary)
+                .contentTransition(.interpolate)
             }
-            .buttonStyle(.plain)
+            .compatGlassButtonStyle()
+            .controlSize(.small)
+            .animation(LiquidGlassMetrics.stateChange, value: sent)
+            .accessibilityLabel("Implement issue \(task.number)")
             .help("Run an \u{201C}implement #\(task.number)\u{201D} task in the active terminal")
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(task.title)
-                    .font(.body)
-                    .lineLimit(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: open)
-                    .help("Open #\(task.number) on GitHub")
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                Button(action: open) {
+                    Text(task.title)
+                        .font(.body)
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(washInset)
+                }
+                .buttonStyle(.liquidGlassPressable)
+                .padding(-washInset)
+                .help("Open #\(task.number) on GitHub")
 
                 metadata
             }

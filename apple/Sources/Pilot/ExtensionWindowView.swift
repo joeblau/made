@@ -701,6 +701,7 @@ struct ExtensionWindowView: View {
                                     : "Select a workspace in the main Cockpit window."
                             )
                         )
+                        .legibleSecondaryHierarchy()
                         .accessibilityIdentifier("extension.empty")
                     }
                 }
@@ -739,23 +740,22 @@ struct ExtensionWindowView: View {
             )
         )
         .toolbar {
+            // Same as Main: the field is its own glass capsule, so the
+            // item's shared toolbar capsule is hidden.
             ToolbarItem(placement: .principal) {
                 if let selectedTerminalPane {
                     TerminalFastCommandToolbarField(pane: selectedTerminalPane)
                         .id(selectedTerminalPane.id)
                 }
             }
+            .compatSharedBackgroundHidden()
             ToolbarItem(placement: .principal) {
                 if let selectedTerminalPane {
                     TerminalFastCommandToolbarActions(pane: selectedTerminalPane)
                         .id(selectedTerminalPane.id)
                 }
             }
-            ToolbarItemGroup(placement: .secondaryAction) {
-                if let pane = extensionWorkspace?.selectedPane {
-                    PaneToolbarControls(pane: pane)
-                }
-            }
+            PaneToolbarContent(pane: extensionWorkspace?.selectedPane)
             if #available(macOS 26.0, *) {
                 ToolbarItem(placement: .primaryAction) {
                     WorkspacePaneLauncher(workspace: extensionWorkspace)
@@ -767,7 +767,7 @@ struct ExtensionWindowView: View {
                     WorkspacePaneLauncher(workspace: extensionWorkspace)
                 }
             }
-            ToolbarItemGroup(placement: .primaryAction) {
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     isDrawingActive.toggle()
                 } label: {
@@ -779,7 +779,13 @@ struct ExtensionWindowView: View {
                 .disabled(extensionWorkspace == nil)
                 .help("Draw over the active Extendo pane (⇧⌘D)")
                 .accessibilityIdentifier("extension.annotate")
-
+            }
+            // Same grouping as the main window: the Inspector toggle is window
+            // layout, so it gets its own glass group.
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     guard let workspace = extensionWorkspace else { return }
                     workspace.setInspectorPresented(!workspace.isInspectorPresented)
@@ -834,6 +840,11 @@ struct ExtensionWindowView: View {
             tasksStore.load(directory: nil)
             controller.suspend()
         }
+        // The same window-wide capsule default as Main (`ContentView`), so
+        // the panes and Inspector Extendo hosts never fall back to the
+        // squared macOS 26 bordered/glass and picker shapes. Controls that
+        // set their own shape (glass icon circles) still win.
+        .buttonBorderShape(.capsule)
     }
 
     private func inspectorPresentedBinding(for workspace: Workspace?) -> Binding<Bool> {

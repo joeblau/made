@@ -32,16 +32,22 @@
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/cef_command_handler.h"
+#include "include/cef_command_ids.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_dialog_handler.h"
 #include "include/cef_display_handler.h"
 #include "include/cef_download_handler.h"
 #include "include/cef_find_handler.h"
+#include "include/cef_jsdialog_handler.h"
+#include "include/cef_keyboard_handler.h"
 #include "include/cef_life_span_handler.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_resource_request_handler.h"
+#include "include/views/cef_browser_view.h"
+#include "include/views/cef_window.h"
 #include "include/wrapper/cef_helpers.h"
 #include "include/wrapper/cef_library_loader.h"
 
@@ -69,11 +75,14 @@ inline NSURL *NSURLFromCef(const CefString& value) {
 }
 
 class BrowserClient final : public CefClient,
+                            public CefCommandHandler,
                             public CefContextMenuHandler,
                             public CefDialogHandler,
                             public CefDisplayHandler,
                             public CefDownloadHandler,
                             public CefFindHandler,
+                            public CefJSDialogHandler,
+                            public CefKeyboardHandler,
                             public CefLifeSpanHandler,
                             public CefLoadHandler,
                             public CefPermissionHandler,
@@ -83,8 +92,13 @@ class BrowserClient final : public CefClient,
     BrowserClient(EngineCore *engine,
                   uint64_t token,
                   ChromiumBrowserHostView *host)
-        : engine_(engine), token_(token), host_(host) {}
+        : engine_(engine),
+          token_(token),
+          host_(host),
+          views_hosted_(host.isExtensionPopup || host.isExtensionWindow),
+          views_popup_(host.isExtensionPopup) {}
 
+    CefRefPtr<CefCommandHandler> GetCommandHandler() override { return this; }
     CefRefPtr<CefContextMenuHandler> GetContextMenuHandler() override {
         return this;
     }
@@ -92,6 +106,10 @@ class BrowserClient final : public CefClient,
     CefRefPtr<CefDisplayHandler> GetDisplayHandler() override { return this; }
     CefRefPtr<CefDownloadHandler> GetDownloadHandler() override { return this; }
     CefRefPtr<CefFindHandler> GetFindHandler() override { return this; }
+    CefRefPtr<CefJSDialogHandler> GetJSDialogHandler() override {
+        return this;
+    }
+    CefRefPtr<CefKeyboardHandler> GetKeyboardHandler() override { return this; }
     CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override { return this; }
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
     CefRefPtr<CefPermissionHandler> GetPermissionHandler() override {
@@ -129,7 +147,19 @@ class BrowserClient final : public CefClient,
     bool ExecuteJavaScript(NSString *script, NSURL *source_url, NSInteger line);
     bool SendMouseClick(NSPoint point);
     void Layout();
+    /// Extension popup and window hosts only: callbacks from the CEF-owned
+    /// top-level window that hosts the browser view.
+    void ViewsWindowCreated(CefRefPtr<CefWindow> window);
+    void ViewsWindowActivationChanged(bool active);
+    void ViewsWindowDestroyed();
 
+    bool OnChromeCommand(CefRefPtr<CefBrowser> browser,
+                         int command_id,
+                         cef_window_open_disposition_t disposition) override;
+    bool OnPreKeyEvent(CefRefPtr<CefBrowser> browser,
+                       const CefKeyEvent& event,
+                       CefEventHandle os_event,
+                       bool* is_keyboard_shortcut) override;
     bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser,
                         CefRefPtr<CefFrame> frame,
                         CefRefPtr<CefRequest> request,
@@ -195,6 +225,18 @@ class BrowserClient final : public CefClient,
                       const CefRect& selection_rect,
                       int active_match_ordinal,
                       bool final_update) override;
+    bool OnJSDialog(CefRefPtr<CefBrowser> browser,
+                    const CefString& origin_url,
+                    JSDialogType dialog_type,
+                    const CefString& message_text,
+                    const CefString& default_prompt_text,
+                    CefRefPtr<CefJSDialogCallback> callback,
+                    bool& suppress_message) override;
+    bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser,
+                              const CefString& message_text,
+                              bool is_reload,
+                              CefRefPtr<CefJSDialogCallback> callback) override;
+    void OnResetDialogState(CefRefPtr<CefBrowser> browser) override;
     bool GetAuthCredentials(CefRefPtr<CefBrowser> browser,
                             const CefString& origin_url,
                             bool is_proxy,
@@ -246,10 +288,19 @@ class BrowserClient final : public CefClient,
         return browser_ && browser_->IsSame(browser);
     }
     void FinishWithoutBrowser(NSError *error);
+    bool CreateViewsBrowser(ChromiumBrowserHostView *host);
 
     EngineCore *engine_;
     const uint64_t token_;
     __weak ChromiumBrowserHostView *host_;
+    /// Fixed at construction: an extension popup or window is a Chrome-style
+    /// CefBrowserView in its own CEF-owned top-level window; every other host
+    /// is an Alloy-style child of its NSView.
+    const bool views_hosted_;
+    /// A frameless popup that dismisses when it stops being active.
+    const bool views_popup_;
+    CefRefPtr<CefBrowserView> views_browser_view_;
+    CefRefPtr<CefWindow> views_window_;
     CefRefPtr<CefBrowser> browser_;
     bool create_requested_ = false;
     bool closing_ = false;
@@ -271,6 +322,19 @@ class EngineCore final {
     void ClientClosed(uint64_t token);
     void Shutdown();
 
+    /// Browsers Chrome creates by itself in Chrome UI windows, for an
+    /// extension's chrome.tabs.create or chrome.windows.create. They are
+    /// hidden, never navigated, and closed; only an extension URL is passed
+    /// on (ChromiumEngine.extensionPageRequestHandler). Shutdown waits for
+    /// them like any other browser.
+    void ChromeUIBrowserCreated(CefRefPtr<CefBrowser> browser);
+    void ChromeUIBrowserRequested(CefRefPtr<CefBrowser> browser,
+                                  const CefString& url);
+    void ChromeUIBrowserClosed(CefRefPtr<CefBrowser> browser);
+    /// Closes |browser| if it is still a live Chrome UI browser. Safe to call
+    /// late, from a delayed block, after the browser has already closed.
+    void CloseChromeUIBrowser(CefRefPtr<CefBrowser> browser);
+
  private:
     void FinishShutdownIfReady();
     void FinishShutdown();
@@ -280,6 +344,7 @@ class EngineCore final {
     std::unique_ptr<CefScopedLibraryLoader> loader_;
     CefRefPtr<CefApp> app_;
     std::unordered_map<uint64_t, CefRefPtr<BrowserClient>> clients_;
+    std::vector<CefRefPtr<CefBrowser>> chrome_ui_browsers_;
     uint64_t next_token_ = 1;
     bool initialized_ = false;
     bool context_ready_ = false;

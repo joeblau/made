@@ -92,25 +92,62 @@ struct EditorPaneView: View {
     @State private var finder = FileFinder()
     @State private var searchQuery = ""
     @State private var selectedIndex = 0
+    /// The results list's natural height, so the results card hugs a short
+    /// list instead of stretching to its cap (see `resultsList`).
+    @State private var finderListHeight: CGFloat?
     @FocusState private var searchFocused: Bool
 
     // Arrow-key fallback for the finder; see `installKeyMonitor()`.
     @State private var keyMonitor: Any?
 
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Quick open floats like Spotlight, so the results card uses the panel
+    /// radius; result highlights nest concentrically inside it (LAY-4).
+    private static let finderCornerRadius = LiquidGlassMetrics.Radius.panel
+    /// The gap between the search capsule and the results card. The glass
+    /// container's blend spacing stays below it, so the two shapes read as
+    /// separate pieces at rest, Spotlight-style.
+    private static let finderSectionSpacing = LiquidGlassMetrics.Spacing.small
+    private static let finderGlassBlendSpacing = LiquidGlassMetrics.Spacing.xSmall
+    private static let finderRowInset = LiquidGlassMetrics.Spacing.xSmall
+    /// Results up to this count render in an eager stack (see `resultsList`);
+    /// it is above what the 360pt palette shows without scrolling.
+    private static let finderEagerRowLimit = 24
+    private static let finderRowCornerRadius = LiquidGlassMetrics.Radius.inner(
+        outer: finderCornerRadius,
+        padding: finderRowInset
+    )
+
+    /// The banner's dismiss target is a circle; the banner corner wraps it at
+    /// the same inset so the two stay concentric (LAY-4).
+    private static let bannerDismissSize: CGFloat = 24
+    private static let bannerInset = LiquidGlassMetrics.Spacing.xSmall
+    private static let bannerCornerRadius = bannerDismissSize / 2 + bannerInset
 
     var body: some View {
         ZStack {
             editorLayer
 
-            // Save failures must stay visible while editing, not only in the finder.
-            if session.document != nil, let errorMessage = session.errorMessage {
-                errorBanner(errorMessage)
+            // Each overlay animates inside its own wrapper so the spring never
+            // leaks into the editor layer (a reloaded document must not fade).
+            ZStack {
+                // Save failures must stay visible while editing, not only in the finder.
+                if session.document != nil, let errorMessage = session.errorMessage {
+                    errorBanner(errorMessage)
+                        .transition(overlayTransition(edge: .top))
+                }
             }
+            .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: session.errorMessage)
 
-            if showFinder {
-                finderOverlay
+            ZStack {
+                if showFinder {
+                    finderOverlay
+                        .transition(overlayTransition(scale: 0.98))
+                }
             }
+            .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: showFinder)
 
             keyboardShortcuts
         }
@@ -234,47 +271,67 @@ struct EditorPaneView: View {
         )
     }
 
+    /// No buffer and no finder: name the state and offer the one next action
+    /// (MOT-6), keeping the ⌘P hint as the description.
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "curlybraces")
-                .font(.system(size: 32, weight: .light))
-                .foregroundStyle(.tertiary)
+        ContentUnavailableView {
+            Label("No File Open", systemImage: "curlybraces")
+        } description: {
             Text("⌘P to find a file")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        } actions: {
+            Button("Find File…", action: openFinder)
+                .compatGlassProminentButtonStyle()
         }
+        .legibleSecondaryHierarchy()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Overlays slide in from their anchored edge, or scale-fade in place, and
+    /// fall back to a plain fade under Reduce Motion (MOT-4).
+    private func overlayTransition(edge: Edge? = nil, scale: CGFloat = 1) -> AnyTransition {
+        guard !reduceMotion else { return .opacity }
+        if let edge {
+            return .move(edge: edge).combined(with: .opacity)
+        }
+        return .opacity.combined(with: .scale(scale: scale, anchor: .top))
     }
 
     // MARK: - Finder overlay
 
     private var finderOverlay: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
+        // Quick open is a transient control layer over the editor, laid out
+        // like Spotlight on macOS 26: the search field is its own glass
+        // capsule and the results float as a separate glass card below it
+        // (material + shadow before 26). Neither sits on the other, and one
+        // container renders and morphs the two glass shapes together.
+        CompatGlassContainer(spacing: Self.finderGlassBlendSpacing) {
+            VStack(spacing: Self.finderSectionSpacing) {
+                // The magnifier and the always-focused capsule identify the
+                // field, Spotlight-style.
                 TextField("Search files…", text: $searchQuery)
-                    .textFieldStyle(.plain)
                     .scaledFont(size: 14)
                     .focused($searchFocused)
                     .onKeyPress(.return) { openSelected(); return .handled }
                     .onKeyPress(.escape) { dismissFinder(); return .handled }
                     .onKeyPress(.downArrow) { moveSelection(by: 1); return .handled }
                     .onKeyPress(.upArrow) { moveSelection(by: -1); return .handled }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
+                    .liquidGlassField(systemImage: "magnifyingglass", isFocused: searchFocused)
 
-            resultsBody
-                .frame(maxHeight: 360)
+                // No height frame here: a `maxHeight` frame takes all the
+                // height offered, so the card would stretch past short
+                // results. The list caps itself and the palette caps the
+                // total below.
+                resultsBody
+                    .clipShape(RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous))
+                    .compatFloatingGlass(
+                        in: RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous)
+                    )
+            }
         }
         .frame(maxWidth: 520)
-        .frame(maxHeight: 360)
-        // Quick open is a transient control layer over the editor, like
-        // Spotlight: glass on macOS 26, material + shadow before it.
-        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .frame(maxHeight: 360, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, 12)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
         .padding(.top, 60)             // float the card toward the top third
         .frame(maxHeight: .infinity, alignment: .top)
     }
@@ -305,19 +362,19 @@ struct EditorPaneView: View {
     @ViewBuilder
     private var resultsBody: some View {
         if rootPath == nil {
-            finderMessage("Set a workspace root path to browse files.")
+            finderMessage("Set a workspace root path to browse files.", systemImage: "folder.badge.questionmark")
         } else if let errorMessage = session.errorMessage {
-            finderMessage(errorMessage)
+            finderMessage(errorMessage, systemImage: "exclamationmark.triangle")
         } else if finder.isIndexing && finder.results.isEmpty {
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 ProgressView().controlSize(.small)
                 Text("Indexing…")
                     .foregroundStyle(.secondary)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding()
+            .frame(maxWidth: .infinity)
+            .padding(LiquidGlassMetrics.Spacing.medium)
         } else if finder.results.isEmpty {
-            finderMessage("No matches")
+            finderMessage("No matches", systemImage: "magnifyingglass")
         } else {
             resultsList
         }
@@ -326,19 +383,35 @@ struct EditorPaneView: View {
     private var resultsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(Array(finder.results.enumerated()), id: \.element.id) { index, item in
-                        resultRow(item, isHighlighted: index == selectedIndex)
-                            .id(index)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                selectedIndex = index
-                                openSelected()
-                            }
+                // A short list is laid out eagerly so its measured height is
+                // exact; a lazy stack's estimated row heights left the card
+                // taller than its rows after a narrowing query. Long lists
+                // overflow the cap anyway, so they stay lazy.
+                Group {
+                    if finder.results.count <= Self.finderEagerRowLimit {
+                        VStack(spacing: 0) { resultRows }
+                    } else {
+                        LazyVStack(spacing: 0) { resultRows }
                     }
                 }
-                .padding(.vertical, 4)
+                // The results card stands alone, so the top and bottom insets
+                // match the side inset and the first and last rows' highlights
+                // stay concentric with the card corners (LAY-4).
+                .padding(.vertical, Self.finderRowInset)
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.height
+                } action: { height in
+                    finderListHeight = height
+                }
             }
+            // A scroll view takes all the height it is offered, which left a
+            // one-result card stretched to the 360pt cap and mostly empty.
+            // Cap it at the list's own height so the card grows with the
+            // results, Spotlight-style, and scrolls only past the cap.
+            .frame(maxHeight: finderListHeight)
+            // Keep the scroller on the card's straight edge: a full-height
+            // legacy scroller otherwise runs into the rounded corners.
+            .contentMargins(.vertical, Self.finderCornerRadius, for: .scrollIndicators)
             .onChange(of: selectedIndex) {
                 withAnimation(.easeOut(duration: 0.12)) {
                     proxy.scrollTo(selectedIndex, anchor: .center)
@@ -347,8 +420,24 @@ struct EditorPaneView: View {
         }
     }
 
+    private var resultRows: some View {
+        ForEach(Array(finder.results.enumerated()), id: \.element.id) { index, item in
+            // A real button so each row has hover/press feedback (BTN-5) and
+            // reads as actionable to VoiceOver.
+            Button {
+                selectedIndex = index
+                openSelected()
+            } label: {
+                resultRow(item, isHighlighted: index == selectedIndex)
+            }
+            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.finderRowCornerRadius))
+            .padding(.horizontal, Self.finderRowInset)
+            .id(index)
+        }
+    }
+
     private func resultRow(_ item: FileItem, isHighlighted: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(item.name)
                 .scaledFont(size: 13)
                 .foregroundStyle(.primary)
@@ -357,61 +446,76 @@ struct EditorPaneView: View {
             if !directory.isEmpty {
                 Text(directory)
                     .scaledFont(size: 11)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
         .background(
             isHighlighted
                 ? Color.accentColor.opacity(0.22)
                 : Color.clear,
-            in: RoundedRectangle(cornerRadius: 6)
+            in: RoundedRectangle(cornerRadius: Self.finderRowCornerRadius, style: .continuous)
         )
-        .padding(.horizontal, 6)
+        .animation(LiquidGlassMetrics.stateChange, value: isHighlighted)
+        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 
-    private func finderMessage(_ message: String) -> some View {
-        Text(message)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding()
+    /// Compact, palette-sized status: a quiet symbol anchors the message so
+    /// empty and error states read at a glance (MOT-6, HIER-3).
+    private func finderMessage(_ message: String, systemImage: String) -> some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Image(systemName: systemImage)
+                .scaledFont(size: 20, weight: .light)
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            Text(message)
+                .foregroundStyle(.secondary)
+        }
+        // Width only: the card hugs the message, like a short results list.
+        .frame(maxWidth: .infinity)
+        .padding(LiquidGlassMetrics.Spacing.medium)
     }
 
     // MARK: - Error banner
 
     /// Compact, dismissible banner pinned to the top of the editor. Surfaces ⌘S /
     /// auto-save failures (and load errors) without stealing the buffer.
+    ///
+    /// The banner floats over the buffer, so it is the glass layer; its dismiss
+    /// control stays a plain circle with hover/press feedback inside it rather
+    /// than a second glass shape (no glass on glass, BTN-5).
     private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.red)
+                .accessibilityHidden(true)
             Text(message)
                 .scaledFont(size: 12)
                 .foregroundStyle(.primary)
                 .lineLimit(2)
-            Spacer(minLength: 8)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
             Button {
                 session.errorMessage = nil
             } label: {
                 Image(systemName: "xmark")
                     .scaledFont(size: 11, weight: .semibold)
                     .foregroundStyle(.secondary)
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
+                    .frame(width: Self.bannerDismissSize, height: Self.bannerDismissSize)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.bannerDismissSize / 2))
             .help("Dismiss")
             .accessibilityLabel("Dismiss error")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
+        .padding(.leading, LiquidGlassMetrics.Spacing.small)
+        .padding(.trailing, Self.bannerInset)
+        .padding(.vertical, Self.bannerInset)
+        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: Self.bannerCornerRadius, style: .continuous))
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+        .padding(.top, LiquidGlassMetrics.Spacing.small)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 

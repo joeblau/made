@@ -36,6 +36,15 @@ struct AdbBridgeParsingTests {
     }
 
     @Test
+    func parsesEmulatorConsoleAVDNameWithCRLF() {
+        #expect(AdbBridge.parseAVDNameOutput("Pixel_9_API_36\r\nOK\r\n") == "Pixel_9_API_36")
+        #expect(AdbBridge.parseAVDNameOutput("Pixel_9_API_36\nOK\n") == "Pixel_9_API_36")
+        #expect(AdbBridge.parseAVDNameOutput("OK\r\n") == nil)
+        #expect(AdbBridge.parseAVDNameOutput("") == nil)
+        #expect(AdbBridge.parseAVDNameOutput("Pixel 9; rm -rf\r\nOK\r\n") == nil)
+    }
+
+    @Test
     func androidPaneTargetsSeparateSimulatorsAndDevices() {
         let simulator = AndroidDevice(
             serial: "emulator-5554",

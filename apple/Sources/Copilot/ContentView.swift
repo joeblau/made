@@ -36,12 +36,21 @@ struct ContentView: View {
     @State private var transcription: TranscriptionService
     @State private var walkie: CopilotWalkieTalkie
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var showModelDownloadConfirmation = false
     @State private var showSpeechStorage = false
+    /// The error that sent the user to the storage sheet ("Manage Storage"),
+    /// kept after the alert clears `modelErrorMessage` so the sheet can still
+    /// say why the download stopped (FORM-4).
+    @State private var storageErrorMessage: String?
     @AppStorage("transcription.allowRestrictedNetwork") private var allowRestrictedNetwork = false
     /// Auto-generated identity key, auto-exchanged with Pilot over the
     /// encrypted channel (issue #51). Drives the Settings "Identity & Keys".
     @State private var secureIdentity = SecureIdentity(role: .copilot)
+    #if DEBUG
+    /// Screenshot fixture for the pairing alert (`-demoScenario pairAlert`).
+    @State private var demoPairingRequest: PeerSyncPairingRequest?
+    #endif
 
     init(syncService: PeerSyncService, watchDelegate: PhoneSessionDelegate,
          buildMonitor: BuildActivityController = BuildActivityController(),
@@ -70,7 +79,25 @@ struct ContentView: View {
     /// workspace list and trackpad inset render. The live `isConnected`
     /// is untouched on the normal path.
     private var isPeerConnected: Bool {
-        demoMode || syncService.isConnected
+        (demoMode && !CopilotDemoScenario.forcesDisconnected) || syncService.isConnected
+    }
+
+    /// The pending pairing approval: the live request, or in DEBUG demo
+    /// builds a fixture request so the alert can be reviewed without a peer.
+    private var pairingRequest: PeerSyncPairingRequest? {
+        #if DEBUG
+        if let demoPairingRequest { return demoPairingRequest }
+        #endif
+        return syncService.pairingRequest
+    }
+
+    private func resolvePairingRequest(approved: Bool) {
+        #if DEBUG
+        // A fixture prompt only dismisses itself. It must never resolve a
+        // live request whose fingerprint it was hiding (as in Cockpit).
+        if demoPairingRequest != nil { demoPairingRequest = nil; return }
+        #endif
+        syncService.resolvePairingRequest(approved: approved)
     }
 
     var body: some View {
@@ -78,6 +105,9 @@ struct ContentView: View {
             mainContent
             .toolbar {
                 deviceToolbar
+                // Settings/storage and the two dashboards are separate groups
+                // on the shared glass toolbar background.
+                ToolbarSpacer(.fixed, placement: .topBarLeading)
                 ToolbarItem(placement: .topBarLeading) {
                     Button("Dashboard", systemImage: "square.grid.2x2") { showDashboard = true }
                 }
@@ -89,7 +119,20 @@ struct ContentView: View {
                 trackpadInset
             }
             .safeAreaInset(edge: .top) {
-                walkieStatus
+                // Below the toolbar, never over it: the download banner and
+                // the walkie HUD push the list down instead of covering the
+                // Settings/Dashboard glass groups (glass on glass).
+                VStack(spacing: 0) {
+                    if transcription.isModelLoading {
+                        modelLoadingBanner
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    walkieStatus
+                }
+                .animation(LiquidGlassMetrics.spring, value: transcription.isModelLoading)
+                .animation(LiquidGlassMetrics.spring, value: walkie.phase)
+                // An idle status message alone also shows/hides the HUD.
+                .animation(LiquidGlassMetrics.spring, value: walkie.statusMessage)
             }
         }
         .environment(secureIdentity)
@@ -147,37 +190,14 @@ struct ContentView: View {
             }
         }
         .onDisappear { walkie.interrupt() }
-        .overlay(alignment: .top) {
-            if transcription.isModelLoading {
-                HStack(spacing: 12) {
-                    if let fraction = transcription.modelLoadingFraction {
-                        ProgressView(value: fraction)
-                            .frame(width: 72)
-                    } else {
-                        ProgressView()
-                    }
-                    Text(transcription.modelLoadingProgress)
-                        .font(.footnote)
-                    Spacer()
-                    Button("Cancel") {
-                        transcription.cancelModelLoad()
-                        walkie.interrupt()
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                // Floating status/control layer above the list: Liquid Glass,
-                // with a plain Cancel inside so glass never stacks on glass.
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                .padding()
-            }
-        }
         .alert("Download Speech Model?", isPresented: $showModelDownloadConfirmation) {
             Button("Not Now", role: .cancel) {
             }
-            Button("Download on Wi-Fi") {
+            // The recommended path is the alert's one emphasized action (BTN-1).
+            Button("Download on Wi-Fi", role: .confirm) {
                 prepareSpeechModel(allowRestrictedNetwork: false)
             }
+            .keyboardShortcut(.defaultAction)
             Button("Use Cellular") {
                 allowRestrictedNetwork = true
                 prepareSpeechModel(allowRestrictedNetwork: true)
@@ -189,16 +209,18 @@ struct ContentView: View {
             get: { transcription.modelErrorMessage != nil },
             set: { if !$0 { transcription.modelErrorMessage = nil } }
         )) {
-            Button("Retry") {
+            Button("Retry", role: .confirm) {
                 transcription.modelErrorMessage = nil
                 prepareSpeechModel(allowRestrictedNetwork: allowRestrictedNetwork)
             }
+            .keyboardShortcut(.defaultAction)
             Button("Use Cellular") {
                 transcription.modelErrorMessage = nil
                 allowRestrictedNetwork = true
                 prepareSpeechModel(allowRestrictedNetwork: true)
             }
             Button("Manage Storage") {
+                storageErrorMessage = transcription.modelErrorMessage
                 transcription.modelErrorMessage = nil
                 showSpeechStorage = true
             }
@@ -206,28 +228,112 @@ struct ContentView: View {
         } message: {
             Text(transcription.modelErrorMessage ?? "")
         }
-        .sheet(isPresented: $showSpeechStorage) {
-            SpeechModelStorageView(transcription: transcription)
+        .sheet(isPresented: $showSpeechStorage, onDismiss: { storageErrorMessage = nil }) {
+            SpeechModelStorageView(
+                transcription: transcription,
+                errorMessage: $storageErrorMessage,
+                onCancelLoad: cancelModelLoad
+            )
         }
         .alert(
-            syncService.pairingRequest?.isKeyChange == true
+            pairingRequest?.isKeyChange == true
                 ? "Trust New Cockpit Identity?"
                 : "Pair with Cockpit?",
             isPresented: Binding(
-                get: { syncService.pairingRequest != nil },
-                set: { if !$0 { syncService.resolvePairingRequest(approved: false) } }
+                get: { pairingRequest != nil },
+                set: { if !$0 { resolvePairingRequest(approved: false) } }
             )
         ) {
             Button("Reject", role: .cancel) {
-                syncService.resolvePairingRequest(approved: false)
+                resolvePairingRequest(approved: false)
             }
-            Button(syncService.pairingRequest?.isKeyChange == true ? "Trust New Key" : "Pair") {
-                syncService.resolvePairingRequest(approved: true)
+            Button(pairingRequest?.isKeyChange == true ? "Trust New Key" : "Pair") {
+                resolvePairingRequest(approved: true)
             }
         } message: {
-            let request = syncService.pairingRequest
+            let request = pairingRequest
             Text("Verify this fingerprint on \(request?.displayName ?? "the other device") before approving:\n\n\(request?.fingerprint ?? "")")
         }
+    }
+
+    /// Floating download status with its Cancel control beside it: two
+    /// sibling glass shapes in one container, never glass stacked on glass.
+    private var modelLoadingBanner: some View {
+        // Container spacing below the stack gap: the two shapes render
+        // together but stay distinct instead of blending into one blob.
+        GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            if dynamicTypeSize.isAccessibilitySize {
+                // Accessibility sizes: one column, so the status wraps by
+                // words at full width and Cancel never hyphenates (TYPE-4).
+                VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                        modelLoadingProgressIndicator
+                        modelLoadingStatusText
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(LiquidGlassMetrics.Spacing.medium)
+                    .glassEffect(.regular, in: RoundedRectangle(
+                        cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous
+                    ))
+                    modelLoadingCancelButton(fullWidth: true)
+                }
+            } else {
+                HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+                    HStack(spacing: LiquidGlassMetrics.Spacing.small) {
+                        modelLoadingProgressIndicator
+                            .frame(width: transcription.modelLoadingFraction == nil ? nil : 56)
+                        modelLoadingStatusText
+                        Spacer(minLength: 0)
+                    }
+                    // Capsule ends are half the height wide; the larger side
+                    // inset keeps the progress bar off the curve.
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.large)
+                    .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+                    .frame(maxHeight: .infinity)
+                    .glassEffect(.regular, in: Capsule())
+
+                    modelLoadingCancelButton(fullWidth: false)
+                }
+                // Both capsules take the taller one's height, so the status and
+                // its Cancel read as one row of matching shapes (LAY-4).
+                .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+        .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
+    }
+
+    @ViewBuilder
+    private var modelLoadingProgressIndicator: some View {
+        if let fraction = transcription.modelLoadingFraction {
+            ProgressView(value: fraction)
+        } else {
+            ProgressView()
+        }
+    }
+
+    private var modelLoadingStatusText: some View {
+        Text(transcription.modelLoadingProgress)
+            .font(.footnote)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func modelLoadingCancelButton(fullWidth: Bool) -> some View {
+        Button(action: cancelModelLoad) {
+            // Full width below the status at accessibility sizes; beside it,
+            // the label stretches to the status capsule's height.
+            Text("Cancel")
+                .frame(maxWidth: fullWidth ? .infinity : nil, maxHeight: fullWidth ? nil : .infinity)
+        }
+        .liquidGlassButtonStyle()
+        .buttonBorderShape(.capsule)
+    }
+
+    /// Shared by the banner's Cancel and the storage sheet's, which covers
+    /// the banner: a walkie cycle waiting on the model ends with the load.
+    private func cancelModelLoad() {
+        transcription.cancelModelLoad()
+        walkie.interrupt()
     }
 
     @ViewBuilder
@@ -235,16 +341,20 @@ struct ContentView: View {
         if !isPeerConnected && workspaces.isEmpty {
             ContentUnavailableView {
                 Label("Looking for Cockpit…", systemImage: "antenna.radiowaves.left.and.right")
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
             } description: {
                 Text("Make sure Cockpit is running on your Mac.")
-            } actions: {
-                ProgressView()
+                    .foregroundStyle(LegibleSecondaryText.color)
             }
+            // The pulsing antenna is the one loading motion, as in
+            // Kneeboard's Searching overlay; a spinner beside it competed
+            // with it (MOT-3, MOT-5).
         } else if workspaces.isEmpty {
             ContentUnavailableView(
                 "No Workspaces",
                 systemImage: "rectangle.on.rectangle.slash",
                 description: Text("Create a workspace in Cockpit.")
+                    .foregroundStyle(LegibleSecondaryText.color)
             )
         } else {
             workspaceList
@@ -286,37 +396,68 @@ struct ContentView: View {
 
     @ViewBuilder
     private var walkieStatus: some View {
-        if !demoMode, walkie.phase != .idle || walkie.statusMessage != nil {
-            VStack(alignment: .leading, spacing: 8) {
-                switch walkie.phase {
-                case .preparing:
-                    Label("Preparing microphone…", systemImage: "mic")
-                case .recording:
-                    Label("Recording — release Volume Down to send", systemImage: "mic.fill")
-                        .foregroundStyle(.red)
-                case .finishing:
-                    Label("Finishing transcription…", systemImage: "waveform")
-                case .idle:
-                    if let message = walkie.statusMessage { Text(message) }
-                }
-                let text = walkie.displayedTranscript(liveText: transcription.combinedText)
-                if !text.isEmpty || walkie.phase == .recording {
-                    WalkieTranscriptView(text: text, isRecording: walkie.phase == .recording)
-                }
-                if walkie.phase == .idle, !walkie.transcript.isEmpty {
-                    ShareLink("Copy or Share Transcript", item: walkie.transcript)
-                        .font(.caption)
+        if !demoMode || CopilotDemoScenario.showsWalkieHUD, walkie.phase != .idle || walkie.statusMessage != nil {
+            // The HUD panel and its Share button are sibling glass shapes in
+            // one container, like the download banner and its Cancel: the
+            // button gets real glass without stacking it on the panel's.
+            GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    walkieStatusPanel
+                    if walkie.phase == .idle, !walkie.transcript.isEmpty {
+                        ShareLink("Copy or Share Transcript", item: walkie.transcript)
+                            .font(.footnote)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .liquidGlassButtonStyle()
+                            .buttonBorderShape(.capsule)
+                            .controlSize(.small)
+                    }
                 }
             }
-            .font(.footnote)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            // Transient HUD floating over the list, not a full-bleed slab
-            // under the (already glass) navigation bar.
-            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .padding(.horizontal)
-            .padding(.bottom, 8)
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+            .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
+    }
+
+    private var walkieStatusPanel: some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Group {
+            switch walkie.phase {
+            case .preparing:
+                Label("Preparing microphone…", systemImage: "mic")
+            case .recording:
+                // The pulsing red glyph carries the recording signal
+                // (COL-4); the footnote copy stays primary so it keeps
+                // contrast on the glass HUD (TYPE-3).
+                Label {
+                    Text("Recording — release Volume Down to send")
+                } icon: {
+                    Image(systemName: "mic.fill")
+                        .foregroundStyle(.red)
+                        .symbolEffect(.pulse, options: .repeating)
+                }
+            case .finishing:
+                Label("Finishing transcription…", systemImage: "waveform")
+            case .idle:
+                if let message = walkie.statusMessage { Text(message) }
+            }
+            }
+            // Status lines wrap rather than truncate; under pressure the
+            // transcript below gives up height first (TYPE-4).
+            .fixedSize(horizontal: false, vertical: true)
+            let text = walkie.displayedTranscript(liveText: transcription.combinedText)
+            if !text.isEmpty || walkie.phase == .recording {
+                WalkieTranscriptView(text: text, isRecording: walkie.phase == .recording)
+            }
+        }
+        .font(.footnote)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(LiquidGlassMetrics.Spacing.medium)
+        // Transient HUD floating over the list, not a full-bleed slab
+        // under the (already glass) navigation bar.
+        .glassEffect(.regular, in: RoundedRectangle(
+            cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous
+        ))
     }
 
     private func prepareSpeechModel(allowRestrictedNetwork: Bool) {
@@ -338,12 +479,12 @@ struct ContentView: View {
                     .font(.caption.weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
                     .padding(.vertical, 2)
                     .background(.red, in: Capsule())
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
     }
 
     private var workspaceSections: [VolumeScrollSection<WorkspaceSummary>] {
@@ -367,12 +508,11 @@ struct ContentView: View {
             SettingsButton()
         }
         ToolbarItem(placement: .topBarLeading) {
-            Button {
+            // Titled like its neighbors; the toolbar shows the symbol only
+            // and the title stays the VoiceOver name.
+            Button("Speech Model Storage", systemImage: "waveform.badge.magnifyingglass") {
                 showSpeechStorage = true
-            } label: {
-                Image(systemName: "waveform.badge.magnifyingglass")
             }
-            .accessibilityLabel("Speech Model Storage")
         }
         // Device connection status, top-right.
         // Status glyphs, not controls: keep them off the glass control layer
@@ -396,8 +536,8 @@ struct ContentView: View {
     @ViewBuilder
     private var trackpadInset: some View {
         if isPeerConnected {
-            GlassEffectContainer(spacing: 12) {
-                VStack(spacing: 12) {
+            GlassEffectContainer(spacing: LiquidGlassMetrics.Spacing.small) {
+                VStack(spacing: LiquidGlassMetrics.Spacing.small) {
                     // Always rendered (fixed height) so the bottom doesn't flash
                     // in/out as workspace state syncs each second; degrades to a
                     // disabled state when the selection has no tabs.
@@ -472,7 +612,74 @@ struct ContentView: View {
         ]
         workspaces = demo
         selectedID = demo.first?.id
+        #if DEBUG
+        if let scenario = CopilotDemoScenario.current { applyDemoScenario(scenario) }
+        #endif
     }
+
+    #if DEBUG
+    /// Puts the real views into one fixture state for screenshot review.
+    /// Reached only through `-demoMode YES -demoScenario <name>`.
+    private func applyDemoScenario(_ scenario: CopilotDemoScenario) {
+        let transcript = "Run the release checklist and open a pull request for the widget fixes"
+        switch scenario {
+        case .searching, .noWorkspaces:
+            workspaces = []
+            selectedID = nil
+        case .disconnected:
+            break
+        case .preparing:
+            walkie.applyDemoState(phase: .preparing)
+        case .listening:
+            walkie.applyDemoState(phase: .recording)
+        case .recording:
+            transcription.partialText = transcript
+            walkie.applyDemoState(phase: .recording)
+        case .finishing:
+            transcription.partialText = transcript
+            walkie.applyDemoState(phase: .finishing)
+        case .sent:
+            walkie.applyDemoState(
+                phase: .idle,
+                transcript: transcript,
+                statusMessage: "Sent to Cockpit. Hold Volume Up to execute."
+            )
+        case .modelLoading:
+            transcription.isModelLoading = true
+            transcription.modelLoadingFraction = 0.42
+            transcription.isLoadingFromCache = false
+            transcription.modelLoadingProgress = "Downloading speech model… 42%"
+        case .modelLoadingCached:
+            transcription.isModelLoading = true
+            transcription.modelLoadingFraction = nil
+            transcription.isLoadingFromCache = true
+            transcription.modelLoadingProgress = "Loading cached speech model…"
+            // A cached load has a stored model; without this the sheet's
+            // Stored row reads "Not downloaded" beside it.
+            transcription.applyDemoStoredModel(bytes: 632_000_000)
+        case .storageSheetError:
+            storageErrorMessage = "The speech-model download stopped because the network became "
+                + "unavailable or restricted."
+            showSpeechStorage = true
+        case .downloadAlert:
+            showModelDownloadConfirmation = true
+        case .transcriptionError:
+            transcription.modelErrorMessage = "The speech-model download stopped because the network became "
+                + "unavailable or restricted. Connect to Wi-Fi or choose Use Cellular to retry."
+        case .pairAlert, .keyChangeAlert:
+            demoPairingRequest = PeerSyncPairingRequest(
+                id: UUID(),
+                displayName: "Studio Mac",
+                fingerprint: "3F:A9:12:C7:5E:08:B4:D1",
+                isKeyChange: scenario == .keyChangeAlert
+            )
+        case .storageError:
+            dashboard.applyDemoPersistenceError()
+        case .activityError:
+            dashboardActivities.applyDemoActivitiesDisabledError()
+        }
+    }
+    #endif
 
     private func sendDeviceStatus() {
         guard !demoMode else { return }
@@ -480,39 +687,121 @@ struct ContentView: View {
     }
 }
 
+/// DEBUG-only fixture states for screenshot review. Honored only together
+/// with `-demoMode YES` (`-demoScenario <name>`); release builds always see
+/// `nil`, so their behavior is unchanged.
+enum CopilotDemoScenario: String {
+    case searching, noWorkspaces, disconnected
+    case preparing, listening, recording, finishing, sent
+    case modelLoading, modelLoadingCached, storageSheetError
+    case downloadAlert, transcriptionError, pairAlert, keyChangeAlert
+    case storageError, activityError
+
+    static var current: CopilotDemoScenario? {
+        #if DEBUG
+        guard UserDefaults.standard.bool(forKey: "demoMode") else { return nil }
+        return UserDefaults.standard.string(forKey: "demoScenario").flatMap(Self.init(rawValue:))
+        #else
+        return nil
+        #endif
+    }
+
+    /// Demo mode normally fakes a connected Cockpit; these show the
+    /// disconnected states instead.
+    static var forcesDisconnected: Bool {
+        current == .searching || current == .disconnected
+    }
+
+    /// Demo mode hides the walkie HUD unless a HUD fixture is selected.
+    static var showsWalkieHUD: Bool {
+        switch current {
+        case .preparing, .listening, .recording, .finishing, .sent: true
+        default: false
+        }
+    }
+}
+
+/// Which storage controls the speech sheet offers. While a load runs, the
+/// sheet covers the main banner, so it offers that banner's Cancel instead
+/// of download actions a tap would silently join.
+struct SpeechStorageControls: Equatable {
+    /// The Cancel title while a load runs, else `nil`.
+    let cancelTitle: String?
+    /// Remove Download, for a stored (possibly partial) or loaded model.
+    let showsRemove: Bool
+    let removeEnabled: Bool
+    /// Download on Wi-Fi / Use Cellular: only with nothing stored and idle.
+    let showsDownload: Bool
+
+    /// `isCachedLoad` comes from the service's load preparation, not from a
+    /// missing fraction: cancelling or an indeterminate download also clears
+    /// the fraction, and must keep reading "Cancel Download".
+    init(isLoading: Bool, isCachedLoad: Bool, hasStoredModel: Bool, isLoaded: Bool) {
+        let stored = hasStoredModel || isLoaded
+        cancelTitle = isLoading ? (isCachedLoad ? "Cancel Loading" : "Cancel Download") : nil
+        showsRemove = stored
+        removeEnabled = stored && !isLoading
+        showsDownload = !stored && !isLoading
+    }
+
+    /// The live service error wins; otherwise the one carried in from the
+    /// "Transcription Unavailable" alert.
+    static func displayedError(service: String?, carried: String?) -> String? {
+        service ?? carried
+    }
+}
+
 private struct SpeechModelStorageView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Bindable var transcription: TranscriptionService
+    /// The error carried in from "Manage Storage"; cleared by the next action.
+    @Binding var errorMessage: String?
+    let onCancelLoad: () -> Void
+
+    private var controls: SpeechStorageControls {
+        SpeechStorageControls(
+            isLoading: transcription.isModelLoading,
+            isCachedLoad: transcription.isLoadingFromCache,
+            hasStoredModel: transcription.hasStoredModel,
+            isLoaded: transcription.isModelLoaded
+        )
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("Model", value: SpeechModelCache.displayName)
-                    LabeledContent("Download size", value: SpeechModelCache.downloadSize)
-                    LabeledContent("Stored", value: transcription.cachedModelSize)
-                    if transcription.hasStoredModel || transcription.isModelLoaded {
-                        Button("Remove Download", role: .destructive) {
-                            Task { await transcription.removeCachedModel() }
-                        }
-                        .disabled(transcription.isModelLoading)
-                    } else {
-                        Button("Download on Wi-Fi") {
-                            Task { _ = await transcription.loadModel(allowRestrictedNetwork: false) }
-                        }
-                        Button("Use Cellular") {
-                            Task { _ = await transcription.loadModel(allowRestrictedNetwork: true) }
-                        }
+                    if let message = SpeechStorageControls.displayedError(
+                        service: transcription.modelErrorMessage, carried: errorMessage
+                    ) {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .symbolRenderingMode(.multicolor)
+                            .font(.footnote)
+                            // Separator starts at the glyph, like every other row.
+                            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                     }
+                    valueRow("Model", SpeechModelCache.displayName)
+                    valueRow("Download size", SpeechModelCache.downloadSize)
+                    valueRow("Stored", transcription.cachedModelSize)
+                    if transcription.isModelLoading {
+                        loadingRow
+                    }
+                    storageControls
                 } header: {
                     Text("On-device Speech Model")
+                        .foregroundStyle(LegibleSecondaryText.color)
                 } footer: {
                     Text("The model stays on this iPhone and transcription audio is processed on-device.")
+                        .foregroundStyle(LegibleSecondaryText.color)
                 }
-                Section("Model Credits") {
+                Section {
                     Text("Parakeet Ultra by Moondream, based on NVIDIA Parakeet v3. Core ML conversion and quantization by Fluid Inference.")
                     Link("Model and attribution", destination: URL(string: "https://huggingface.co/FluidInference/parakeet-ultra-coreml")!)
                     Link("CC BY 4.0 license", destination: URL(string: "https://creativecommons.org/licenses/by/4.0/")!)
+                } header: {
+                    Text("Model Credits")
+                        .foregroundStyle(LegibleSecondaryText.color)
                 }
             }
             .navigationTitle("Speech Storage")
@@ -521,6 +810,73 @@ private struct SpeechModelStorageView: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+        }
+    }
+
+    /// A value row whose value stays secondary under its label but in the
+    /// legible gray. Every secondary gray in this sheet measured under 4.5:1
+    /// in light mode: values (138,138,142) 3.5:1 on the white row, section
+    /// headers and footer (133,133,139) 3.3:1 on the grouped background, the
+    /// loading status (127,127,127) 4.0:1 (TYPE-3).
+    private func valueRow(_ title: LocalizedStringKey, _ value: String) -> some View {
+        LabeledContent(title) {
+            Text(value).foregroundStyle(LegibleSecondaryText.color)
+        }
+    }
+
+    /// Designed loading state while the sheet covers the main screen's
+    /// download banner (MOT-5). Like the banner, it becomes one column at
+    /// accessibility sizes so the status wraps by words at full width
+    /// instead of squeezing beside a fixed-width bar (TYPE-4).
+    private var loadingRow: some View {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small))
+            : AnyLayout(HStackLayout(spacing: LiquidGlassMetrics.Spacing.small))
+        return layout {
+            if let fraction = transcription.modelLoadingFraction {
+                ProgressView(value: fraction)
+                    .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : 72)
+            } else {
+                ProgressView()
+            }
+            // Secondary under the row labels, in the legible gray (`valueRow`).
+            Text(transcription.modelLoadingProgress)
+                .font(.footnote)
+                .foregroundStyle(LegibleSecondaryText.color)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // The separator below starts under the bar or spinner, the row's
+        // leading edge, not under the status text.
+        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+    }
+
+    @ViewBuilder
+    private var storageControls: some View {
+        let controls = controls
+        if let cancelTitle = controls.cancelTitle {
+            // Plain, like the main banner's Cancel: stopping a download
+            // keeps what is stored, so it is not destructive.
+            Button(cancelTitle) {
+                errorMessage = nil
+                onCancelLoad()
+            }
+        }
+        if controls.showsRemove {
+            Button("Remove Download", role: .destructive) {
+                errorMessage = nil
+                Task { await transcription.removeCachedModel() }
+            }
+            .disabled(!controls.removeEnabled)
+        }
+        if controls.showsDownload {
+            Button("Download on Wi-Fi") {
+                errorMessage = nil
+                Task { _ = await transcription.loadModel(allowRestrictedNetwork: false) }
+            }
+            Button("Use Cellular") {
+                errorMessage = nil
+                Task { _ = await transcription.loadModel(allowRestrictedNetwork: true) }
             }
         }
     }
@@ -536,6 +892,10 @@ private struct TabSwitcherBar: View {
 
     /// Same feel as volume up/down list navigation (VolumeObserver.tapHaptic).
     private let selectHaptic = UIImpactFeedbackGenerator(style: .medium)
+
+    /// A capsule of this height has the trackpad's corner radius
+    /// (height / 2 = 32) so the pair reads as one control group.
+    private let barHeight: CGFloat = 64
 
     private var tabs: [TabSummary] { workspace?.tabs ?? [] }
 
@@ -555,8 +915,8 @@ private struct TabSwitcherBar: View {
         ZStack {
             // Two full-height tap halves drive prev/next.
             HStack(spacing: 0) {
-                half(systemImage: "chevron.left", delta: -1, alignment: .leading)
-                half(systemImage: "chevron.right", delta: 1, alignment: .trailing)
+                half(title: "Previous Tab", systemImage: "chevron.left", delta: -1, alignment: .leading)
+                half(title: "Next Tab", systemImage: "chevron.right", delta: 1, alignment: .trailing)
             }
             // Centered label sits on top but passes touches through to the
             // halves below.
@@ -564,18 +924,26 @@ private struct TabSwitcherBar: View {
                 .padding(.horizontal, 56)
                 .allowsHitTesting(false)
         }
-        .frame(height: 64)
+        .frame(height: barHeight)
+        // The halves are full rectangles (every point of the bar stays a
+        // tap target); clipping to the capsule makes each pressed wash
+        // exactly one half of the glass shape (concentric by construction,
+        // LAY-4).
+        .clipShape(Capsule())
         // Floating control: interactive Liquid Glass capsule (height 64,
         // radius 32 — the trackpad's radius) sharing the trackpad's
         // horizontal insets so the two controls line up as a pair.
         .glassEffect(.regular.interactive(), in: Capsule())
-        .padding(.horizontal)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+        // A fixed-height control: past AX1 the tab name truncated to a few
+        // letters ("Termi…"), so its text stops growing there (TYPE-4).
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
     }
 
     @ViewBuilder
     private var centerLabel: some View {
         if let current {
-            HStack(spacing: 8) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Image(systemName: current.systemImageName)
                     .font(.subheadline)
                 Text(current.title)
@@ -583,14 +951,15 @@ private struct TabSwitcherBar: View {
                     .lineLimit(1)
             }
         } else {
+            // Regular weight (a tab title is semibold) but primary color:
+            // secondary on the glass bar measured about 2.9:1 (TYPE-3).
             Text("No tabs")
                 .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 
     @ViewBuilder
-    private func half(systemImage: String, delta: Int, alignment: Alignment) -> some View {
+    private func half(title: LocalizedStringKey, systemImage: String, delta: Int, alignment: Alignment) -> some View {
         let target = currentIndex + delta
         let enabled = tabs.indices.contains(target)
         Button {
@@ -603,14 +972,18 @@ private struct TabSwitcherBar: View {
                 .overlay(alignment: alignment) {
                     Image(systemName: systemImage)
                         .font(.body.weight(.semibold))
-                        .padding(.horizontal, 24)
+                        .padding(.horizontal, LiquidGlassMetrics.Spacing.xLarge)
                         // Monochrome on glass; tint is reserved for state (COL-4).
                         .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
                 }
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        // Each half is a segment of the glass capsule: a rectangular pressed
+        // wash, clipped to the capsule by the bar, instead of a dead plain
+        // style (BTN-5). A rounded wash here would also round the hit shape
+        // and leave dead corners at the bar's center.
+        .buttonStyle(.liquidGlassPressable(cornerRadius: 0))
         .disabled(!enabled)
+        .accessibilityLabel(Text(title))
     }
 }
 
@@ -626,31 +999,93 @@ private struct TabSwitcherBar: View {
 struct WalkieTranscriptView: View {
     let text: String
     let isRecording: Bool
-    @ScaledMetric(relativeTo: .body) private var transcriptHeight = 96.0
+    @ScaledMetric(relativeTo: .body) private var scaledTranscriptHeight = 96.0
+
+    /// About four lines by default; at accessibility sizes it stops at
+    /// 160pt (three lines at AX3) so the HUD never pushes the list and the
+    /// trackpad off screen or slides under the toolbar.
+    private var transcriptHeight: CGFloat { min(scaledTranscriptHeight, 160) }
 
     var body: some View {
+        if isRecording {
+            // A stable box while words stream in, so the HUD never jitters.
+            scrollingTranscript
+                .frame(height: transcriptHeight)
+        } else {
+            // A finished transcript takes only the height it needs, up to
+            // the same cap, so a short result leaves no empty band between
+            // it and Share (LAY-1); a long one scrolls.
+            CappedHeightLayout(maxHeight: transcriptHeight) {
+                scrollingTranscript
+            }
+        }
+    }
+
+    private var transcriptText: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if text.isEmpty && isRecording {
+                // A glyph, not a dimmed color, marks the placeholder:
+                // secondary text on the glass HUD measured 2.9:1 (TYPE-3).
+                Label {
+                    Text("Listening…")
+                } icon: {
+                    Image(systemName: "waveform")
+                        .symbolEffect(.variableColor.iterative, options: .repeating)
+                }
+            } else {
+                Text(text)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("walkie.transcript")
+            }
+            Color.clear.frame(height: 1).id("transcriptEnd")
+        }
+        .font(.body)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var scrollingTranscript: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 0) {
-                    if text.isEmpty && isRecording {
-                        Text("Listening…")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text(text)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("walkie.transcript")
-                    }
-                    Color.clear.frame(height: 1).id("transcriptEnd")
-                }
-                .font(.body)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                transcriptText
             }
-            .frame(height: transcriptHeight)
             .defaultScrollAnchor(.bottom)
             .defaultScrollAnchor(.top, for: .alignment)
+            // Earlier words scrolled past the top fade out over a 8pt band
+            // instead of a half-clipped line butting against the status
+            // above. The matching top margin keeps unscrolled text clear of
+            // the fade.
+            .contentMargins(.top, LiquidGlassMetrics.Spacing.xSmall, for: .scrollContent)
+            .mask {
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                        .frame(height: LiquidGlassMetrics.Spacing.xSmall)
+                    Color.black
+                }
+            }
+            // The fade band sits in the HUD's existing 8pt gap above, so
+            // the status-to-transcript spacing stays 8pt (LAY-5).
+            .padding(.top, -LiquidGlassMetrics.Spacing.xSmall)
             .onChange(of: text) {
                 proxy.scrollTo("transcriptEnd", anchor: .bottom)
             }
         }
+    }
+}
+
+/// Sizes its single child to the child's ideal height, capped at `maxHeight`
+/// (a scroll view's ideal height is its content's), and fills the offered
+/// width.
+private struct CappedHeightLayout: Layout {
+    let maxHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else { return .zero }
+        let ideal = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        let height = min(ideal.height, maxHeight, proposal.height ?? .infinity)
+        return CGSize(width: proposal.width ?? ideal.width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
     }
 }

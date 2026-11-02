@@ -120,7 +120,10 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     static func pairingDecision(candidate: String?, trusted: String?) -> PairingDecision {
         guard let candidate,
               DeviceIdentity.parsePeerPublicKey(candidate) != nil else { return .reject }
-        guard let trusted, !trusted.isEmpty else {
+        // An empty or malformed pin is "unpaired": first-pairing approval, not
+        // a key change. It can never equal a valid candidate, so this only
+        // changes the prompt wording, never whether approval is required.
+        guard let trusted, DeviceIdentity.parsePeerPublicKey(trusted) != nil else {
             return .approvalRequired(isKeyChange: false)
         }
         return candidate == trusted ? .trusted : .approvalRequired(isKeyChange: true)

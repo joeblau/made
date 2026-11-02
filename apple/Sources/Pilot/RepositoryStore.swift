@@ -103,6 +103,21 @@ final class RepositoryStore {
     var filesystem: [FileSystemEntry] = []
     var repoPath: String = ""
     var isLoading = false
+    /// Whether a pull-request read has finished for this repo since it was
+    /// opened. `isLoading` also rises for silent polls, so only a first read
+    /// may show the loading skeleton (MOT-5).
+    private(set) var hasLoadedPullRequests = false
+    /// Why the last pull request read failed, or nil. A failed read must not
+    /// look like an empty repository in the inspector.
+    var pullRequestError: String?
+    /// Why the last workflow run read failed, or nil.
+    var workflowError: String?
+    /// Whether a `gh run list` read is in flight, including silent polls.
+    private(set) var isLoadingWorkflowRuns = false
+    /// Whether a workflow-run read has finished for this repo since it was
+    /// opened. Only the first read shows the skeleton; later polls keep the
+    /// empty or error state on screen so it can't flicker every 30s (MOT-5).
+    private(set) var hasLoadedWorkflowRuns = false
     var isLoadingFilesystem = false
     private var refreshTimer: Timer?
     private var polledResources: RepositoryPolledResources = .both
@@ -124,8 +139,13 @@ final class RepositoryStore {
 
         repoPath = directory
         pullRequests = []
+        hasLoadedPullRequests = false
         actions = []
         runs = []
+        isLoadingWorkflowRuns = false
+        hasLoadedWorkflowRuns = false
+        pullRequestError = nil
+        workflowError = nil
         filesystem = []
         fetchFilesystem()
         polledResources = RepositoryPolledResources(visibleTab: visibleTab)
@@ -177,9 +197,26 @@ final class RepositoryStore {
         pullRequests = []
         actions = []
         runs = []
+        pullRequestError = nil
+        workflowError = nil
         filesystem = []
         isLoading = false
+        hasLoadedPullRequests = false
+        isLoadingWorkflowRuns = false
+        hasLoadedWorkflowRuns = false
         isLoadingFilesystem = false
+    }
+
+    /// What the Actions tab lays over its (empty) list. A first read shows
+    /// the skeleton; after that the error or empty state stays put whatever
+    /// polls are in flight, so a 30s tick never fades it out and back.
+    var workflowRunsOverlay: InspectorListOverlay? {
+        InspectorListOverlay(
+            isEmpty: actions.isEmpty,
+            hasRepository: !repoPath.isEmpty,
+            hasLoaded: hasLoadedWorkflowRuns,
+            error: workflowError
+        )
     }
 
     func fetchAll(policy: RepositoryRefreshPolicy = .automatic) {
@@ -193,12 +230,15 @@ final class RepositoryStore {
         let dir = repoPath
 
         Task {
-            let result = await Self.fetchPullRequestData(directory: dir, policy: policy)
+            let (result, error) = await Self.fetchPullRequestData(directory: dir, policy: policy)
             // Drop stale results: the user may have switched workspaces while
             // the shell command ran, and these would clobber the new repo's data.
             guard self.repoPath == dir else { return }
-            self.pullRequests = result
+            // Keep the last good list on a failed poll; only a success replaces it.
+            if error == nil { self.pullRequests = result }
+            self.pullRequestError = error
             self.isLoading = false
+            self.hasLoadedPullRequests = true
         }
     }
 
@@ -206,13 +246,19 @@ final class RepositoryStore {
     /// GitHub API round-trip) feeds both instead of two per refresh tick.
     func fetchWorkflowRuns(policy: RepositoryRefreshPolicy = .automatic) {
         guard !repoPath.isEmpty else { return }
+        isLoadingWorkflowRuns = true
         let dir = repoPath
 
         Task {
-            let (actions, runs) = await Self.fetchWorkflowData(directory: dir, policy: policy)
+            let (actions, runs, error) = await Self.fetchWorkflowData(directory: dir, policy: policy)
             guard self.repoPath == dir else { return }
-            self.actions = actions
-            self.runs = runs
+            if error == nil {
+                self.actions = actions
+                self.runs = runs
+            }
+            self.workflowError = error
+            self.isLoadingWorkflowRuns = false
+            self.hasLoadedWorkflowRuns = true
         }
     }
 
@@ -232,17 +278,17 @@ final class RepositoryStore {
     private nonisolated static func fetchPullRequestData(
         directory: String,
         policy: RepositoryRefreshPolicy
-    ) async -> [GitPullRequest] {
-        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory),
-              let data = try? await RepositoryPollingScheduler.shared.data(
-                for: .pullRequests,
-                repository: repository,
-                policy: policy
-              ),
-              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return []
+    ) async -> ([GitPullRequest], String?) {
+        let data: Data
+        do {
+            data = try await GitHubCLIFailure.read(.pullRequests, in: directory, policy: policy)
+        } catch {
+            return ([], GitHubCLIFailure.message(for: error, reading: "pull requests"))
         }
-        return items.compactMap { item -> GitPullRequest? in
+        guard let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return ([], "Couldn\u{2019}t read the pull requests returned by GitHub.")
+        }
+        return (items.compactMap { item -> GitPullRequest? in
             guard let number = item["number"] as? Int else { return nil }
             let author = item["author"] as? [String: Any]
             let createdAt = item["createdAt"] as? String ?? ""
@@ -256,21 +302,21 @@ final class RepositoryStore {
                 headBranch: item["headRefName"] as? String ?? "",
                 elapsed: createdAt.isEmpty ? "" : Self.relativeTime(from: createdAt)
             )
-        }
+        }, nil)
     }
 
     private nonisolated static func fetchWorkflowData(
         directory: String,
         policy: RepositoryRefreshPolicy
-    ) async -> ([GitAction], [GitRun]) {
-        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory),
-              let data = try? await RepositoryPollingScheduler.shared.data(
-                for: .workflowRuns,
-                repository: repository,
-                policy: policy
-              ),
-              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            return ([], [])
+    ) async -> ([GitAction], [GitRun], String?) {
+        let data: Data
+        do {
+            data = try await GitHubCLIFailure.read(.workflowRuns, in: directory, policy: policy)
+        } catch {
+            return ([], [], GitHubCLIFailure.message(for: error, reading: "workflow runs"))
+        }
+        guard let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+            return ([], [], "Couldn\u{2019}t read the workflow runs returned by GitHub.")
         }
 
         var actions: [GitAction] = []
@@ -325,7 +371,7 @@ final class RepositoryStore {
                 status: status
             ))
         }
-        return (actions, runs)
+        return (actions, runs, nil)
     }
 
     private nonisolated static func fetchFilesystemData(directory: String) async -> [FileSystemEntry] {
@@ -417,4 +463,65 @@ final class RepositoryStore {
         return String(filePath.dropFirst(prefix.count))
     }
 
+}
+
+/// The state an inspector list shows in place of rows, or nil while it has
+/// rows to show.
+enum InspectorListOverlay: Equatable {
+    case loading
+    case error(String)
+    case empty
+
+    init?(isEmpty: Bool, hasRepository: Bool, hasLoaded: Bool, error: String?) {
+        guard isEmpty else { return nil }
+        if hasRepository && !hasLoaded {
+            self = .loading
+        } else if let error {
+            self = .error(error)
+        } else {
+            self = .empty
+        }
+    }
+}
+
+/// Plain-language copy for a failed `gh` read in the inspector. The PR,
+/// Actions, and Issues tabs share it so one cause (most often a signed-out
+/// GitHub CLI) reads the same everywhere instead of as raw CLI output.
+enum GitHubCLIFailure: Error, LocalizedError {
+    case notGitHubRepository
+
+    var errorDescription: String? {
+        "This folder isn\u{2019}t a Git repository with a GitHub remote."
+    }
+
+    /// Reads one polled resource, throwing `notGitHubRepository` when the
+    /// folder has no GitHub repository to ask about.
+    nonisolated static func read(
+        _ resource: RepositoryPollResource,
+        in directory: String,
+        policy: RepositoryRefreshPolicy
+    ) async throws -> Data {
+        guard let repository = await RepositoryPollingScheduler.shared.repository(for: directory) else {
+            throw GitHubCLIFailure.notGitHubRepository
+        }
+        return try await RepositoryPollingScheduler.shared.data(
+            for: resource,
+            repository: repository,
+            policy: policy
+        )
+    }
+
+    nonisolated static func message(for error: Error, reading noun: String) -> String {
+        if let error = error as? LocalizedError, !(error is ProcessRunnerError),
+           let description = error.errorDescription {
+            return description
+        }
+        let detail = (error as? ProcessRunnerError)?.result?.standardErrorString
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if detail.contains("gh auth login") || detail.contains("not logged") || detail.contains("401") {
+            return "Sign in to GitHub with gh auth login, then retry."
+        }
+        if !detail.isEmpty { return detail }
+        return "Couldn\u{2019}t load \(noun) from GitHub. Check your connection, then retry."
+    }
 }

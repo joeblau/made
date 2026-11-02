@@ -6,7 +6,9 @@ struct WorkspaceSidebarHeading: View {
     var body: some View {
         Text(title)
             .scaledFont(size: 11, weight: .semibold)
-            .foregroundStyle(.secondary)
+            // Vibrant `.secondary` measured 3.2:1 on the glass sidebar in
+            // both appearances (TYPE-3).
+            .glassLegibleForeground(.secondary)
             .lineLimit(1)
     }
 }
@@ -39,9 +41,10 @@ struct WorkspaceSidebarRow: View {
         let branch = isRenaming ? nil : branch
 
         VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 6) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 if isRenaming {
                     TextField("Name", text: $draftName)
+                        .clearsFieldEditorBackground()
                         .focused($renameFocused)
                         .onSubmit(commitRename)
                         .onExitCommand(perform: cancelRename)
@@ -55,6 +58,10 @@ struct WorkspaceSidebarRow: View {
                             // context menu that opened it has closed.
                             DispatchQueue.main.async { renameFocused = true }
                         }
+                        // Free-standing in-place field: capsule glass with a
+                        // visible focus ring (FORM-4). The branch line hides
+                        // while renaming, so the row height barely changes.
+                        .liquidGlassField(isFocused: renameFocused)
                         .layoutPriority(1)
                 } else {
                     Text(workspace.name)
@@ -78,9 +85,11 @@ struct WorkspaceSidebarRow: View {
         .tag(SidebarSelection.workspace(workspace.id))
         .contentShape(Rectangle())
         .draggable(WorkspaceSidebarDragPayload(workspaceID: workspace.id)) {
+            // Snapshotted without a backdrop, so material rather than glass.
             Text(workspace.name)
-                .padding(8)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+                .background(.regularMaterial, in: Capsule())
         }
         .contextMenu {
             Button {
@@ -93,7 +102,7 @@ struct WorkspaceSidebarRow: View {
             }
 
             Button(action: onUpdateRootPath) {
-                Label("Update Root Path", systemImage: "arrow.triangle.2.circlepath")
+                Label("Update Root Path…", systemImage: "arrow.triangle.2.circlepath")
             }
 
             Divider()
@@ -136,7 +145,7 @@ struct WorkspaceSidebarRow: View {
     private func branchLabel(_ branch: String) -> some View {
         Text(branch)
             .scaledFont(size: 10)
-            .foregroundStyle(.secondary)
+            .glassLegibleForeground(.secondary)
             .lineLimit(1)
             .truncationMode(.middle)
             .help("On branch \(branch)")
@@ -203,6 +212,10 @@ private struct WorkspaceLLMGauge: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(gaugeDescription)
             .accessibilityHidden(!isVisible)
+            // The tap below has no button of its own, so VoiceOver gets the
+            // trait and the same action while it can jump to a pane.
+            .accessibilityAddTraits(running > 0 ? .isButton : [])
+            .accessibilityAction { selectRunningPane() }
             // Tappable only while an agent is running; an idle ring has
             // no pane to jump to.
             .contentShape(Rectangle())
@@ -417,18 +430,28 @@ struct WorkspaceGroupSidebarRow: View {
         Button {
             store.workspaceGroups.setExpanded(group.id, !group.isExpanded)
         } label: {
-            HStack(spacing: 6) {
-                Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                // One chevron that rotates, so expanding reads as motion
+                // rather than a glyph swap (MOT-4).
+                Image(systemName: "chevron.right")
                     .scaledFont(size: 9, weight: .semibold)
-                    .foregroundStyle(.secondary)
+                    .glassLegibleForeground(.secondary)
+                    .rotationEffect(.degrees(group.isExpanded ? 90 : 0))
                     .frame(width: 10)
                 WorkspaceSidebarHeading(title: group.name)
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
-            .background(isDropTarget ? Color.accentColor.opacity(0.15) : .clear)
+            .background(
+                isDropTarget ? Color.accentColor.opacity(0.15) : .clear,
+                in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous)
+            )
+            .animation(LiquidGlassMetrics.spring, value: group.isExpanded)
+            .animation(LiquidGlassMetrics.stateChange, value: isDropTarget)
         }
-        .buttonStyle(.plain)
+        // Whole-row tap target: stays unglazed but gets hover and press
+        // feedback (BTN-5).
+        .buttonStyle(.liquidGlassPressable)
         .accessibilityLabel(group.name)
         .accessibilityValue(group.isExpanded ? "Expanded" : "Collapsed")
         .onDrop(of: [.pilotWorkspace], isTargeted: $isDropTarget) { providers in
@@ -439,7 +462,7 @@ struct WorkspaceGroupSidebarRow: View {
         .draggable(WorkspaceSidebarDragPayload(groupID: group.id))
         .contextMenu {
             Button("New Workspace in Group…", action: onNewWorkspace)
-            Button("Rename Group", action: onRename)
+            Button("Rename Group…", action: onRename)
             Button("Ungroup Workspaces") {
                 store.workspaceGroups.remove(group.id, workspaceIDs: store.unpinnedWorkspaceIDs)
             }

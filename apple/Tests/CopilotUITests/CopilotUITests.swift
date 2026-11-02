@@ -5,6 +5,10 @@ import XCTest
 /// Runs against demo mode (`-demoMode YES`), which injects representative
 /// fixture state so the screens render without a live Pilot peer on the
 /// network. See the Foundation harness / DEMO-MODE convention.
+/// Main-actor isolated like PlotterUITests: fastlane's `setupSnapshot` and
+/// `snapshot` helpers are `@MainActor`, so Swift 6 rejects calling them from
+/// a nonisolated test class.
+@MainActor
 final class CopilotUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false

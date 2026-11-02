@@ -36,6 +36,15 @@ FOUNDATION_EXTERN NSError *ChromiumKitUnavailableError(void);
 @property (nonatomic) NSUInteger chromiumToken;
 @property (nonatomic, nullable) NSURL *pendingURL;
 @property (nonatomic) BOOL closeDelivered;
+@property (nonatomic, readwrite, getter=isExtensionPopup) BOOL extensionPopup;
+@property (nonatomic, readwrite, getter=isExtensionWindow) BOOL extensionWindow;
+/// AppKit screen coordinates (bottom-left origin) of an extension popup or
+/// window's CEF-owned top-level window.
+@property (nonatomic) NSRect extensionScreenFrame;
+/// The dialog the delegate currently owns. Weak: the delegate keeps it alive
+/// until it decides, and releasing it unresolved cancels it.
+@property (nonatomic, weak, nullable)
+    ChromiumJavaScriptDialogRequest *activeJavaScriptDialog;
 - (void)cefDidCreate;
 - (void)cefDidChangeURL:(NSURL *)URL;
 - (void)cefDidChangeTitle:(nullable NSString *)title;
@@ -64,8 +73,15 @@ FOUNDATION_EXTERN NSError *ChromiumKitUnavailableError(void);
                               forURL:(nullable NSURL *)URL;
 - (void)cefDidRejectClientCertificateForHost:(NSString *)host
                                         port:(NSInteger)port;
+/// Hands a request to the delegate. Returns NO, leaving the request
+/// unresolved, when the delegate does not handle JavaScript dialogs.
+- (BOOL)cefPresentJavaScriptDialog:(ChromiumJavaScriptDialogRequest *)request;
+- (BOOL)cefHandlesJavaScriptDialogs;
+- (void)cefDidResetJavaScriptDialogs;
 - (void)cefWillClose;
 - (void)cefDidClose;
+/// Extension popups only: the popup's own window lost key status.
+- (void)cefPopupDidResignActive;
 @end
 
 @interface ChromiumContextMenuRequest ()
@@ -92,6 +108,20 @@ FOUNDATION_EXTERN NSError *ChromiumKitUnavailableError(void);
                          kinds:(ChromiumPermissionKind)kinds
                rawPermissionMask:(NSUInteger)rawPermissionMask
                decisionHandler:(void (^)(BOOL allowed))decisionHandler;
+@end
+
+@interface ChromiumJavaScriptDialogRequest ()
+- (instancetype)initWithKind:(ChromiumJavaScriptDialogKind)kind
+                   originURL:(nullable NSURL *)originURL
+                     message:(NSString *)message
+           defaultPromptText:(NSString *)defaultPromptText
+                      reload:(BOOL)reload
+             decisionHandler:(void (^)(BOOL accepted,
+                                       NSString *_Nullable userInput))
+                                 decisionHandler;
+/// Marks the request resolved without running its handler, after CEF has
+/// cancelled the dialog itself.
+- (void)invalidate;
 @end
 
 NS_ASSUME_NONNULL_END

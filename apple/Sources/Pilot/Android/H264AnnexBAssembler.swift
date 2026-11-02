@@ -105,10 +105,18 @@ struct H264AnnexBAssembler {
         return events
     }
 
-    /// Emit the buffered trailing NALU only when the stream has reached EOF.
-    /// Annex-B has no NAL length field, so byte silence can never prove that a
-    /// tail is complete: USB scheduling may pause in the middle of one. The
-    /// stream owner therefore calls this only after stdout closes.
+    /// Whether `flushTrailing` would consume buffered NAL bytes. Lets the
+    /// idle flush tell "flushed a tail" from "nothing buffered" even when the
+    /// tail is a dropped NAL type (SEI, AUD) that yields no event.
+    var hasBufferedTail: Bool { sawFirstStartCode && !buffer.isEmpty }
+
+    /// Emit the buffered trailing NALU. Annex-B has no NAL length field, so
+    /// byte silence can never prove that a tail is complete: USB scheduling
+    /// may pause in the middle of one. The stream owner calls this after
+    /// stdout closes, and after a quiet spell so a still screen's last frame
+    /// is shown; there it treats bytes that then arrive without a start code
+    /// as proof the tail was cut short and resyncs on a fresh keyframe
+    /// (`AndroidScreenStream.flushIdleTail`).
     mutating func flushTrailing() throws -> [Event] {
         var events: [Event] = []
         if sawFirstStartCode, !buffer.isEmpty {

@@ -6,6 +6,9 @@ struct TabItemContent: View {
     let isHovering: Bool
     let isWorkspaceActive: Bool
     let canClose: Bool
+    /// Selects the pane. The capsule's tap does this for the pointer; the
+    /// title group exposes it to VoiceOver as the tab's button action.
+    let onSelect: () -> Void
     let onClose: () -> Void
     let onHide: () -> Void
     let onUnhide: () -> Void
@@ -28,7 +31,9 @@ struct TabItemContent: View {
                 BrowserFaviconView(state: state)
                     .frame(width: 18, height: 18)
             }
-            .buttonStyle(.plain)
+            // Sits inside the tab's glass capsule, so it stays unglazed (no
+            // glass on glass) but gets hover and press feedback (BTN-5).
+            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.headerButtonSize / 2))
             .help("Unhide \(pane.displayTitle)")
             .accessibilityLabel("Unhide \(pane.displayTitle)")
         } else {
@@ -37,51 +42,66 @@ struct TabItemContent: View {
     }
 
     private var expandedContent: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             if isHovering && canClose {
                 headerButton(systemName: "xmark", help: "Close \(paneTitle)", action: onClose)
-                    // Primary-relative so the hit circle reads in light mode too.
-                    .background(Color.primary.opacity(0.08), in: Circle())
-                    .transition(.opacity)
+                    // Semantic fill so the hit circle reads in both modes.
+                    .background(.fill.tertiary, in: Circle())
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
 
-            Image(systemName: pane.kind.systemImageName)
-                .scaledFont(size: 11)
-                .foregroundStyle(isSelected ? .primary : .secondary)
+            // One button for assistive tech: the capsule selects on a plain
+            // tap (no Button, so the close and hide buttons stay separate
+            // targets), and that tap had no button trait or action.
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                Image(systemName: pane.kind.systemImageName)
+                    .scaledFont(size: 11)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .accessibilityHidden(true)
 
-            Text(pane.displayTitle)
-                .scaledFont(size: 12)
-                .lineLimit(1)
-                .foregroundStyle(isSelected ? .primary : .secondary)
+                Text(pane.displayTitle)
+                    .scaledFont(size: 12)
+                    .lineLimit(1)
+                    .foregroundStyle(isSelected ? .primary : .secondary)
 
-            if pane.kind == .terminal {
-                TerminalAgentBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
-                TerminalDirtyBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
+                if pane.kind == .terminal {
+                    TerminalAgentBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
+                    TerminalDirtyBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
+                }
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { onSelect() }
 
             Spacer(minLength: 0)
 
             if isHovering {
                 headerButton(systemName: "eye.slash", help: "Hide \(paneTitle)", action: onHide)
-                    .transition(.opacity)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
             }
         }
-        .animation(.easeInOut(duration: 0.15), value: isHovering)
+        .animation(LiquidGlassMetrics.stateChange, value: isHovering)
     }
 
     private var paneTitle: String {
         pane.kind.displayName
     }
 
+    private static let headerButtonSize: CGFloat = 18
+
+    /// Icon buttons inside the tab's glass capsule. Glass here would stack
+    /// glass on glass, so they stay unglazed with a circular hover wash and
+    /// press feedback instead (BTN-5).
     private func headerButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
                 .scaledFont(size: 9, weight: .bold)
                 .foregroundStyle(.secondary)
-                .frame(width: 18, height: 18)
+                .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.liquidGlassPressable(cornerRadius: Self.headerButtonSize / 2))
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
@@ -100,14 +120,17 @@ private struct TerminalAgentBadge: View {
             if let agent {
                 Text(agent.displayName)
                     .scaledFont(size: 10, weight: .semibold)
-                    .foregroundStyle(Color.accentColor)
+                    // The wash carries the accent; the word stays primary,
+                    // because accent text on its own 15% wash measures about
+                    // 2:1 (TYPE-3), like the runner status badges.
+                    .foregroundStyle(.primary)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(Color.accentColor.opacity(0.15), in: Capsule())
                     .help("\(agent.displayName) is open in this terminal")
             }
         }
-        .animation(.easeInOut(duration: 0.2), value: agent)
+        .animation(LiquidGlassMetrics.spring, value: agent)
         .observingApplicationActivity($isApplicationActive)
         // Restart polling when activation flips; only the visible workspace of
         // the frontmost app polls.

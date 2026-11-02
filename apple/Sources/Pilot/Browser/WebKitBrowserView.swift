@@ -25,6 +25,8 @@ struct WebViewRepresentable: NSViewRepresentable {
     let state: BrowserState
     let navigationRequestID: Int
     let inspectorToggleRequestID: Int
+    let findRequestID: Int
+    let stopFindingRequestID: Int
     let annotateMode: Bool
     let annotateToggleRequestID: Int
     let appearanceMode: AppearanceMode
@@ -63,6 +65,8 @@ struct WebViewRepresentable: NSViewRepresentable {
         webView.onReload = { state.requestNavigationCommand("blau://reload") }
         webView.onSelect = onSelect
         webView.performBrowserCommand(.setZoom(uiZoom))
+        context.coordinator.lastFindRequestID = findRequestID
+        context.coordinator.lastStopFindingRequestID = stopFindingRequestID
         context.coordinator.observeURL(of: webView)
         if let url = initialURL {
             webView.load(URLRequest(url: url))
@@ -100,6 +104,12 @@ struct WebViewRepresentable: NSViewRepresentable {
                 .setDeveloperToolsVisible(state.showDevTools)
             )
         }
+
+        context.coordinator.consumeFindRequests(
+            findRequestID: findRequestID,
+            stopFindingRequestID: stopFindingRequestID,
+            in: nsView
+        )
 
         // Browser Annotate: push the enabled state into the injected overlay.
         if context.coordinator.lastAnnotateToggleID != annotateToggleRequestID {
@@ -158,6 +168,9 @@ struct WebViewRepresentable: NSViewRepresentable {
         let targetTerminalPaneID: @MainActor () -> UUID?
         /// Last annotate-toggle id pushed into the page, to dedupe updateNSView runs.
         var lastAnnotateToggleID = -1
+        /// Edge-trigger state for Find in Page requests.
+        var lastFindRequestID = 0
+        var lastStopFindingRequestID = 0
         private var urlObservation: NSKeyValueObservation?
         private var navStateObservations: [NSKeyValueObservation] = []
         private var pendingDestinations: [ObjectIdentifier: URL] = [:]
@@ -194,6 +207,44 @@ struct WebViewRepresentable: NSViewRepresentable {
             urlObservation = nil
             navStateObservations.forEach { $0.invalidate() }
             navStateObservations = []
+        }
+
+        // MARK: - Find in Page
+
+        /// WebKit's public find API selects the next match and reports only
+        /// whether one exists, so the bar shows "Match found" rather than a
+        /// count. A result for a superseded request is dropped.
+        func consumeFindRequests(
+            findRequestID: Int,
+            stopFindingRequestID: Int,
+            in webView: WKWebView
+        ) {
+            if lastStopFindingRequestID != stopFindingRequestID {
+                lastStopFindingRequestID = stopFindingRequestID
+                state.findMatchCount = 0
+                state.activeFindMatchOrdinal = 0
+                // WebKit has no public call to hide its find highlight, which
+                // stayed on the last match after Done or Escape. A search that
+                // cannot match clears it.
+                webView.find(UUID().uuidString, configuration: WKFindConfiguration()) { _ in }
+            }
+            guard lastFindRequestID != findRequestID else { return }
+            lastFindRequestID = findRequestID
+            let query = state.findQuery
+            guard !query.isEmpty else { return }
+            let configuration = WKFindConfiguration()
+            configuration.backwards = !state.findForward
+            configuration.caseSensitive = state.findMatchCase
+            configuration.wraps = true
+            let state = state
+            webView.find(query, configuration: configuration) { result in
+                MainActor.assumeIsolated {
+                    guard state.findRequestID == findRequestID,
+                          state.findQuery == query else { return }
+                    state.findMatchCount = result.matchFound ? 1 : 0
+                    state.activeFindMatchOrdinal = result.matchFound ? 1 : 0
+                }
+            }
         }
 
         // MARK: - Certificate warnings

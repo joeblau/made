@@ -184,6 +184,17 @@ final class CopilotWalkieTalkie {
         transcript = ""
     }
 
+    #if DEBUG
+    /// Screenshot fixture (`-demoMode YES -demoScenario …` only): puts the HUD
+    /// in `phase` without a microphone, model, or peer. Never in release.
+    func applyDemoState(phase: Phase, transcript: String = "", statusMessage: String? = nil) {
+        recording = Recording(workspaceID: nil, didStart: phase != .preparing)
+        self.phase = phase
+        self.transcript = transcript
+        self.statusMessage = statusMessage
+    }
+    #endif
+
     private func performExecution(workspaceID: UUID?, generation: Int) async {
         guard generation == interruptionGeneration, !Task.isCancelled else { return }
         guard isConnected() else {

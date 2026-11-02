@@ -6,7 +6,9 @@ import simd
 /// the GitHub hub floats behind the first row tilted to face the camera.
 struct RunnerFleetLayout: Equatable {
     static let columnSpacing: Float = 20
-    static let rowSpacing: Float = 31
+    /// Deep enough that a back row's hanging caption clears the lid of the
+    /// tallest enclosure in front of it (8 cm), not just a Mac mini's.
+    static let rowSpacing: Float = 36
     static let miniHalfDepth: Float = 6.4
     /// Where a runner's name card hangs from, just in front of its case.
     static let labelDepth: Float = 6.9

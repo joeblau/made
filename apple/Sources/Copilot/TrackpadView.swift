@@ -53,9 +53,11 @@ struct TrackpadView: View {
         // doesn't flex under a drag) in place of a hand-filled material.
         // The label is the glass's own content so it renders above the glass
         // with system vibrancy instead of being sampled beneath it.
+        // Primary, not secondary: glass vibrancy pulled the secondary
+        // caption to about 3:1 in both appearances (TYPE-3).
         Text("Trackpad")
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.primary)
             .frame(maxWidth: .infinity)
             .frame(height: 200)
             .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 32, style: .continuous))

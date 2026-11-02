@@ -12,9 +12,65 @@ struct InspectorTabSelector: View {
                 Label(tab.rawValue, systemImage: tab.systemImageName).tag(tab)
             }
         }
-        .pickerStyle(.segmented)
+        .legibleSegmentedPicker()
         .font(.title3)
         .labelsHidden()
+    }
+}
+
+/// The selected segment's fill for every segmented picker in Cockpit. The
+/// system draws the selected label white on the accent color, which measured
+/// 3.79:1 in dark and 4.26:1 in light on the inspector tabs (TYPE-3 needs
+/// 4.5:1). SwiftUI's `.tint` on a segmented `Picker` sets the backing
+/// `NSSegmentedControl.selectedSegmentBezelColor`, so the fill is the user's
+/// accent darkened just enough for white text to clear `minimumContrast`.
+enum SegmentedSelectionTint {
+    /// Above 4.5:1 because the dark-appearance bezel draws lighter than its
+    /// fill: a 4.8:1 fill measured 4.65:1 on screen in dark, 5.02:1 in light.
+    static let minimumContrast = 5.2
+
+    static let color = Color(nsColor: NSColor(name: nil) { appearance in
+        var accent = NSColor.systemBlue
+        appearance.performAsCurrentDrawingAppearance {
+            accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .systemBlue
+        }
+        let fill = legibleFill(red: accent.redComponent, green: accent.greenComponent, blue: accent.blueComponent)
+        return NSColor(srgbRed: fill.red, green: fill.green, blue: fill.blue, alpha: 1)
+    })
+
+    /// `red`/`green`/`blue` (sRGB, 0...1) mixed toward black in small steps
+    /// until white text on it reaches `minimumContrast`; a color that already
+    /// does is returned unchanged, so the hue stays the user's accent.
+    static func legibleFill(
+        red: Double,
+        green: Double,
+        blue: Double
+    ) -> (red: Double, green: Double, blue: Double) {
+        var scale = 1.0
+        while scale > 0, contrastWithWhite(red: red * scale, green: green * scale, blue: blue * scale) < minimumContrast {
+            scale -= 0.01
+        }
+        scale = max(0, scale)
+        return (red * scale, green * scale, blue * scale)
+    }
+
+    /// WCAG 2 contrast ratio of white against an sRGB color.
+    static func contrastWithWhite(red: Double, green: Double, blue: Double) -> Double {
+        func linear(_ channel: Double) -> Double {
+            channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        return 1.05 / (luminance + 0.05)
+    }
+}
+
+extension View {
+    /// The system segmented control with a selected segment whose white
+    /// label stays legible (`SegmentedSelectionTint`). Use it for every
+    /// segmented `Picker` in Cockpit.
+    func legibleSegmentedPicker() -> some View {
+        pickerStyle(.segmented)
+            .tint(SegmentedSelectionTint.color)
     }
 }
 
@@ -31,9 +87,11 @@ struct InspectorSectionHeader: View {
     var refresh: (() -> Void)?
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // `.subheadline` is 11pt on macOS and follows the inspector's
+            // `uiZoomedDynamicType` ladder like the title beside it (TYPE-4).
             Image(systemName: systemImage)
-                .scaledFont(size: 11, weight: .medium)
+                .font(.subheadline.weight(.medium))
                 .frame(width: 16)
                 .accessibilityHidden(true)
 
@@ -47,35 +105,64 @@ struct InspectorSectionHeader: View {
                     .controlSize(.mini)
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
 
-            if isLoading, refresh != nil {
-                // Activity replaces the refresh control in place, so the
-                // feedback appears exactly where the user just clicked.
-                ProgressView()
-                    .controlSize(.small)
-                    .frame(width: 17, height: 17)
-            } else if let refresh {
-                Button(action: refresh) {
-                    Image(systemName: "arrow.clockwise")
-                        .scaledFont(size: 13)
-                        .frame(width: 17, height: 17)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isRefreshDisabled)
-                .help(refreshHelp ?? "Refresh")
+            if let refresh {
+                refreshButton(action: refresh)
+            } else {
+                // Reserve the refresh slot so a header without one (Files)
+                // keeps the same height as every other tab's header.
+                refreshButton(action: {})
+                    .hidden()
+                    .accessibilityHidden(true)
             }
         }
-        .foregroundStyle(.secondary)
-        .frame(minHeight: 16)
+        // System secondary measured 3.2:1 on inspector glass in both modes
+        // (TYPE-3); the legible gray clears 4.5:1 for the title and glyph.
+        .glassLegibleForeground(.secondary)
         // No filled box: a tinted header directly above tinted cards read as
         // boxes inside boxes (LAY-1). 16pt lines the glyph up with the
         // Files outline's disclosure column and the cards' leading icons.
-        .padding(.horizontal, 16)
-        .padding(.top, 8)
-        .padding(.bottom, 4)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+        .padding(.top, LiquidGlassMetrics.Spacing.xSmall)
+        .padding(.bottom, LiquidGlassMetrics.Spacing.xxSmall)
         .frame(maxWidth: .infinity)
+    }
+
+    /// Icon-only glass circle (BTN-5). While a refresh runs the spinner
+    /// replaces the glyph inside the same control, so the feedback appears
+    /// exactly where the user just clicked and nothing shifts.
+    private func refreshButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label {
+                Text(refreshHelp ?? "Refresh")
+            } icon: {
+                InspectorRefreshGlyph(isRefreshing: isLoading)
+            }
+        }
+        .compatGlassIconButton(controlSize: .small)
+        .disabled(isRefreshDisabled || isLoading)
+        .help(refreshHelp ?? "Refresh")
+    }
+}
+
+/// The refresh symbol, swapped in place for a spinner while a refresh runs.
+/// The symbol keeps its layout slot (only its opacity changes), so a glass
+/// button built around it never changes size mid-refresh (MOT-5).
+struct InspectorRefreshGlyph: View {
+    let isRefreshing: Bool
+
+    var body: some View {
+        Image(systemName: "arrow.clockwise")
+            .opacity(isRefreshing ? 0 : 1)
+            .overlay {
+                if isRefreshing {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .transition(.opacity)
+                }
+            }
+            .animation(LiquidGlassMetrics.stateChange, value: isRefreshing)
     }
 }
 
@@ -92,19 +179,39 @@ struct InspectorMetadataSeparator: View {
     }
 }
 
+/// Inspector card geometry. Cards are content, not controls: a quiet
+/// semantic fill with no glass and no border (LAY-1/LAY-2), 4pt-grid padding
+/// (LAY-3), and the shared card radius token. A whole-card hover wash uses the
+/// same radius, so it lines up with the card edge exactly (LAY-4).
+enum InspectorCardMetrics {
+    static let padding = LiquidGlassMetrics.Spacing.small
+    static let cornerRadius = LiquidGlassMetrics.Radius.card
+}
+
 extension View {
+    /// A non-interactive inspector card: surface plus the insert/remove
+    /// transition. Interactive cards apply `inspectorCardSurface()` inside a
+    /// `Button` label and `inspectorCardTransition()` outside it.
     func inspectorListCard() -> some View {
-        padding(10)
+        inspectorCardSurface()
+            .inspectorCardTransition()
+    }
+
+    func inspectorCardSurface() -> some View {
+        padding(InspectorCardMetrics.padding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 .quaternary.opacity(0.4),
-                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                in: RoundedRectangle(cornerRadius: InspectorCardMetrics.cornerRadius, style: .continuous)
             )
-            .transition(
-                .opacity.combined(
-                    with: .scale(scale: 0.96, anchor: .top)
-                )
+    }
+
+    func inspectorCardTransition() -> some View {
+        transition(
+            .opacity.combined(
+                with: .scale(scale: 0.96, anchor: .top)
             )
+        )
     }
 
     /// Animate identity changes in inspector card collections while leaving
@@ -127,6 +234,53 @@ private struct InspectorListAnimationModifier<Value: Equatable>: ViewModifier {
     }
 }
 
+/// Skeleton cards for an inspector list's first load (MOT-5): the shape of
+/// the content that is coming, gently pulsing, instead of a lone spinner.
+/// Motion stops under Reduce Motion; VoiceOver reads a single "Loading".
+struct InspectorLoadingPlaceholder: View {
+    var rowCount = 4
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isDimmed = false
+
+    var body: some View {
+        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
+            ForEach(0..<rowCount, id: \.self) { index in
+                HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    Circle()
+                        .frame(width: 12, height: 12)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 2) {
+                        // Varied widths so the skeleton doesn't read as one
+                        // repeated row (HIER-5).
+                        Text(verbatim: index.isMultiple(of: 2)
+                             ? "Placeholder issue title text"
+                             : "Placeholder title")
+                            .font(.callout)
+                        Text(verbatim: "#0000 • someone • 1h")
+                            .font(.subheadline)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(.quaternary)
+                .redacted(reason: .placeholder)
+                .inspectorCardSurface()
+            }
+        }
+        .padding(LiquidGlassMetrics.Spacing.small)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .opacity(isDimmed ? 0.5 : 1)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                isDimmed = true
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading")
+    }
+}
+
 struct InspectorPanelView: View {
     let gitStore: RepositoryStore
     let tasksStore: GitHubTasksStore
@@ -136,8 +290,8 @@ struct InspectorPanelView: View {
     var body: some View {
         VStack(spacing: 0) {
             InspectorTabSelector(selection: $selectedTab)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 6)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
 
             // Expand the tab content to fill the inspector's height. Without
             // this, an intrinsically-sized tab (e.g. an empty-state
@@ -173,6 +327,7 @@ struct FilesystemListView: View {
             ContentUnavailableView("No Files",
                                    systemImage: "folder",
                                    description: Text("Select a workspace with a git repo root path."))
+                .legibleSecondaryHierarchy()
         } else {
             VStack(spacing: 0) {
                 if !store.repoPath.isEmpty {
@@ -505,18 +660,41 @@ struct PullRequestListView: View {
                     LazyVStack(spacing: 12) {
                         ForEach(store.pullRequests) { pullRequest in
                             pullRequestRow(pullRequest)
-                                .inspectorListCard()
+                                .inspectorCardTransition()
                         }
                     }
                     .padding(12)
                 }
 
-                if store.pullRequests.isEmpty && !store.isLoading {
+                if store.pullRequests.isEmpty && !store.isLoading, let error = store.pullRequestError {
+                    // A failed read is an error, not an empty repository: say so
+                    // and offer the one next step, like the Issues tab (MOT-6).
+                    ContentUnavailableView {
+                        Label("Couldn\u{2019}t Load Pull Requests", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("Retry") { store.fetchPullRequests(policy: .manual) }
+                            .compatGlassProminentButtonStyle()
+                    }
+                    .legibleSecondaryHierarchy()
+                    .transition(.opacity)
+                } else if store.pullRequests.isEmpty && store.isLoading && !store.hasLoadedPullRequests {
+                    // First read: skeleton cards instead of a blank panel,
+                    // like the Issues tab (MOT-5).
+                    InspectorLoadingPlaceholder()
+                        .transition(.opacity)
+                } else if store.pullRequests.isEmpty && !store.isLoading {
+                    // The hint names the missing repo only when there is none;
+                    // an empty list for a real repo says so instead.
                     ContentUnavailableView(
                         "No Pull Requests",
                         systemImage: "arrow.triangle.pull",
-                        description: Text("Select a workspace with a GitHub repo root path.")
+                        description: Text(store.repoPath.isEmpty
+                            ? "Select a workspace with a GitHub repo root path."
+                            : "This repository has no open pull requests.")
                     )
+                    .legibleSecondaryHierarchy()
                     .transition(.opacity)
                 }
             }
@@ -565,9 +743,11 @@ struct PullRequestListView: View {
 
                 Spacer(minLength: 0)
             }
-            .contentShape(Rectangle())
+            .inspectorCardSurface()
         }
-        .buttonStyle(.plain)
+        // The whole card is the tap target: hover wash + press feedback in
+        // the card's own shape (BTN-5), not glass — cards are content.
+        .buttonStyle(.liquidGlassPressable(cornerRadius: InspectorCardMetrics.cornerRadius))
         .disabled(pullRequest.url.isEmpty)
         .help(pullRequest.url.isEmpty ? "" : "Open on GitHub")
     }
@@ -644,6 +824,9 @@ struct ActionsListView: View {
             RepositoryTableHeader(
                 title: store.repositoryName,
                 systemImage: "folder",
+                // Spin only for the first read; the skeleton below covers the
+                // same wait, and a silent 30s poll must not animate (MOT-5).
+                isLoading: store.isLoadingWorkflowRuns && !store.hasLoadedWorkflowRuns,
                 refreshHelp: "Refresh actions",
                 isRefreshDisabled: store.repoPath.isEmpty
             ) {
@@ -655,19 +838,40 @@ struct ActionsListView: View {
                     LazyVStack(spacing: 12) {
                         ForEach(store.actions) { action in
                             actionRow(action)
-                                .inspectorListCard()
+                                .inspectorCardTransition()
                         }
                     }
                     .padding(12)
                 }
 
-                if store.actions.isEmpty && !store.isLoading {
+                switch store.workflowRunsOverlay {
+                case .loading:
+                    // First read: skeleton cards, never "No Actions" (MOT-5).
+                    InspectorLoadingPlaceholder()
+                        .transition(.opacity)
+                case .error(let error):
+                    ContentUnavailableView {
+                        Label("Couldn\u{2019}t Load Actions", systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(error)
+                    } actions: {
+                        Button("Retry") { store.fetchWorkflowRuns(policy: .manual) }
+                            .compatGlassProminentButtonStyle()
+                    }
+                    .legibleSecondaryHierarchy()
+                    .transition(.opacity)
+                case .empty:
                     ContentUnavailableView(
                         "No Actions",
                         systemImage: "gearshape.2",
-                        description: Text("Select a workspace with a GitHub repo root path.")
+                        description: Text(store.repoPath.isEmpty
+                            ? "Select a workspace with a GitHub repo root path."
+                            : "No GitHub Actions workflow runs for this repository.")
                     )
+                    .legibleSecondaryHierarchy()
                     .transition(.opacity)
+                case nil:
+                    EmptyView()
                 }
             }
         }
@@ -693,48 +897,60 @@ struct ActionsListView: View {
                             .font(.subheadline.weight(.medium))
                             .foregroundStyle(.secondary)
                         InspectorMetadataSeparator()
+                        // One line, middle-truncated: wrapping split branch
+                        // names at hyphens in a narrow inspector.
                         Text(action.headBranch)
                             .font(.system(.subheadline, design: .monospaced))
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
 
-                    HStack(spacing: 4) {
-                        Text(String(action.headSha.prefix(7)))
-                            .font(.system(.subheadline, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        // Hash • user • duration • time ago.
-                        if !action.actor.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(action.actor)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        if !action.duration.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(action.duration)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .fixedSize()
-                        }
-                        if !action.elapsed.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(action.elapsed)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                    // Hash • user • duration • time ago on one line when it
+                    // fits. At the inspector's narrow width the actor drops
+                    // out rather than truncating both it and the age to
+                    // "monal…" / "2 hour…"; the age always reads in full.
+                    ViewThatFits(in: .horizontal) {
+                        actionMetadata(action, showsActor: true)
+                        actionMetadata(action, showsActor: false)
                     }
                 }
 
                 Spacer(minLength: 0)
             }
-            .contentShape(Rectangle())
+            .inspectorCardSurface()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.liquidGlassPressable(cornerRadius: InspectorCardMetrics.cornerRadius))
         .disabled(action.url.isEmpty)
         .help(action.url.isEmpty ? "" : "Open on GitHub")
+    }
+
+    private func actionMetadata(_ action: GitAction, showsActor: Bool) -> some View {
+        HStack(spacing: 4) {
+            // A short hash is never wrapped or truncated.
+            Text(String(action.headSha.prefix(7)))
+                .font(.system(.subheadline, design: .monospaced))
+                .fixedSize()
+            if showsActor, !action.actor.isEmpty {
+                InspectorMetadataSeparator()
+                Text(action.actor)
+                    .font(.subheadline)
+                    .fixedSize()
+            }
+            if !action.duration.isEmpty {
+                InspectorMetadataSeparator()
+                Text(action.duration)
+                    .font(.subheadline)
+                    .fixedSize()
+            }
+            if !action.elapsed.isEmpty {
+                InspectorMetadataSeparator()
+                Text(action.elapsed)
+                    .font(.subheadline)
+                    .lineLimit(1)
+            }
+        }
+        .foregroundStyle(.secondary)
     }
 
     private func openActionInBrowser(_ action: GitAction) {
@@ -781,6 +997,7 @@ struct ActionsListView: View {
 private struct RepositoryTableHeader: View {
     let title: String
     let systemImage: String
+    var isLoading = false
     let refreshHelp: String
     let isRefreshDisabled: Bool
     let refresh: () -> Void
@@ -789,6 +1006,7 @@ private struct RepositoryTableHeader: View {
         InspectorSectionHeader(
             title: title,
             systemImage: systemImage,
+            isLoading: isLoading,
             refreshHelp: refreshHelp,
             isRefreshDisabled: isRefreshDisabled,
             refresh: refresh

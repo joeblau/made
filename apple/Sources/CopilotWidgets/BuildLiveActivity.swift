@@ -29,20 +29,35 @@ struct BuildLiveActivity: Widget {
                     Label(context.state.label, systemImage: context.state.symbol).foregroundStyle(context.state.buildTint)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    BuildElapsedTime(state: context.state)
+                    // The leading label already reads "Queued" before a run
+                    // starts; show the clock only once there is one.
+                    if context.state.startedAt != nil {
+                        BuildElapsedTime(state: context.state)
+                    }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(context.attributes.workflow).font(.headline).lineLimit(1)
                         Text("\(context.attributes.repository) · \(context.attributes.branch)").font(.caption).lineLimit(1)
                         if context.isStale && !context.state.isComplete {
-                            Text("Updates delayed · check Cockpit").font(.caption).foregroundStyle(.secondary)
+                            // Same caution label as the Lock Screen card: orange
+                            // glyph, secondary copy (COL-2, IMG-1).
+                            Label {
+                                Text("Updates delayed · check Cockpit")
+                                    .foregroundStyle(.secondary)
+                            } icon: {
+                                Image(systemName: "wifi.slash")
+                                    .foregroundStyle(.orange)
+                            }
+                            .font(.caption)
+                            .lineLimit(1)
                         }
                         Link("View on GitHub", destination: context.attributes.runURL).font(.caption)
                     }
                 }
             } compactLeading: {
                 Image(systemName: context.state.symbol).foregroundStyle(context.state.buildTint)
+                    .contentTransition(.symbolEffect(.replace))
             } compactTrailing: {
                 if context.isStale && !context.state.isComplete {
                     Image(systemName: "wifi.slash")

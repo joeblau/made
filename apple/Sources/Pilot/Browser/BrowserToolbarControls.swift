@@ -14,6 +14,69 @@ enum BrowserToolbarSelection {
     }
 }
 
+/// Scene-local browser selection used by menu commands. Revealing a browser
+/// preserves focused-pane mode by moving that focus to the browser instead of
+/// leaving `focusedPaneID` attached to a hidden pane.
+@MainActor
+enum BrowserCommandSelection {
+    static func selectedState(
+        in workspace: Workspace?,
+        supporting capability: BrowserCapability? = nil
+    ) -> BrowserState? {
+        guard let state = BrowserToolbarSelection.state(for: workspace?.selectedPane) else {
+            return nil
+        }
+        if let capability, !state.supports(capability) {
+            return nil
+        }
+        return state
+    }
+
+    static func hasBrowser(
+        in workspace: Workspace?,
+        supporting capability: BrowserCapability? = nil
+    ) -> Bool {
+        workspace?.panes.contains { pane in
+            guard pane.kind == .browser,
+                  let state = pane.browserState else { return false }
+            return capability.map(state.supports) ?? true
+        } ?? false
+    }
+
+    @discardableResult
+    static func revealBrowser(
+        in workspace: Workspace?,
+        supporting capability: BrowserCapability? = nil
+    ) -> BrowserState? {
+        guard let workspace else { return nil }
+
+        func isEligible(_ pane: Pane) -> Bool {
+            guard pane.kind == .browser,
+                  let state = pane.browserState else { return false }
+            return capability.map(state.supports) ?? true
+        }
+
+        let browser: Pane
+        if let selectedPane = workspace.selectedPane,
+           isEligible(selectedPane) {
+            browser = selectedPane
+        } else if let firstBrowser = workspace.sortedPanes.first(where: isEligible) {
+            browser = firstBrowser
+        } else {
+            return nil
+        }
+
+        if let focusedPaneID = workspace.focusedPaneID,
+           focusedPaneID != browser.id {
+            workspace.focusPane(browser)
+        } else {
+            workspace.expandPane(browser)
+            workspace.selectedPaneID = browser.id
+        }
+        return BrowserToolbarSelection.state(for: browser)
+    }
+}
+
 struct BrowserBackForwardToolbarControls: View {
     let state: BrowserState
 
@@ -44,7 +107,11 @@ struct BrowserAddressToolbarControl: View {
     let addressIdealWidth: CGFloat
     let addressMaxWidth: CGFloat
 
+    /// Drives ⌘L's programmatic focus request only: `@FocusState` never
+    /// reports focus for a field hosted in a toolbar item.
     @FocusState private var isAddressFocused: Bool
+    /// Whether the field is being edited, read from AppKit's first responder.
+    @State private var isAddressEditing = false
 
     init(
         state: BrowserState,
@@ -58,22 +125,45 @@ struct BrowserAddressToolbarControl: View {
         self.addressMaxWidth = addressMaxWidth
     }
 
+    /// The reload button: a 16pt glyph with a 4pt pad on each side.
+    private static let reloadDiameter: CGFloat = 16 + 2 * LiquidGlassMetrics.Spacing.xxSmall
+    /// The reload button's inset from the capsule's trailing edge. The 24pt
+    /// circle sits in a field of the toolbar's control height, so the
+    /// trailing inset matches the vertical one (6pt) and the circle nests
+    /// concentrically in the capsule: 18pt = 12pt + 6pt (LAY-4).
+    private static let reloadInset = (LiquidGlassMetrics.toolbarControlHeight - reloadDiameter) / 2
+
     var body: some View {
 
+        // The field is its own Liquid Glass capsule. It lives in its own
+        // toolbar item whose shared capsule is hidden (`PaneToolbarContent`),
+        // so there is exactly one glass layer.
+        // The globe is a fixed glyph rather than a lock: `urlText` is the
+        // editable text, not a verified connection state, so it must not
+        // claim security. The placeholder must stay "URL":
+        // `BrowserAddressFocus` finds the AppKit field by it for ⌘L.
         TextField("URL", text: Bindable(state).urlText)
-            .textFieldStyle(.plain)
             .scaledFont(size: 13, weight: .medium)
+            .glassLegibleForeground(.primary)
             .focused($isAddressFocused)
             .onSubmit { state.navigate() }
-            .onChange(of: isAddressFocused) { _, isFocused in
-                state.isAddressEditing = isFocused
+            .toolbarFieldEditing($isAddressEditing)
+            .onChange(of: isAddressEditing) { _, isEditing in
+                state.isAddressEditing = isEditing
             }
-            .padding(.leading, 12)
-            .padding(.trailing, 32)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .onDisappear { state.isAddressEditing = false }
+            .accessibilityLabel("Address")
+            // Together with the field's own 16pt trailing padding, this
+            // clears the reload button overlaid at the capsule's edge.
+            .padding(.trailing, LiquidGlassMetrics.Spacing.medium)
+            .liquidGlassField(
+                systemImage: "globe",
+                isFocused: isAddressEditing,
+                minHeight: LiquidGlassMetrics.toolbarControlHeight
+            )
             .overlay(alignment: .trailing) {
                 browserReloadButton
-                    .padding(.trailing, 10)
+                    .padding(.trailing, Self.reloadInset)
             }
             .frame(
                 minWidth: addressMinWidth,
@@ -119,26 +209,45 @@ struct BrowserAddressToolbarControl: View {
                     }
                 }
             }
-            .frame(width: 14, height: 14)
+            .frame(width: 16, height: 16)
+            // The custom style below does not dim itself when disabled, so
+            // the icon carries the enabled state.
+            .foregroundStyle(state.supports(.navigation)
+                             ? AnyShapeStyle(.secondary)
+                             : AnyShapeStyle(.tertiary))
+            .animation(LiquidGlassMetrics.stateChange, value: state.isLoading)
+            // A 24pt circular hit area with a hover wash and press feedback
+            // (BTN-5). It sits inside the address field's glass capsule, so
+            // it stays plain-looking rather than adding a second glass layer.
+            .padding(LiquidGlassMetrics.Spacing.xxSmall)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.liquidGlassPressable(cornerRadius: 12))
         .disabled(!state.supports(.navigation))
         .help(state.isLoading ? "Stop" : "Reload")
         .accessibilityIdentifier("browser.reload")
     }
 }
 
-/// Complete navigation/location composition used by Main. Extension installs
-/// these as separate navigation and principal toolbar items.
+/// The leading browser navigation controls. Main and Extendo both install
+/// them through `PaneToolbarContent`, ahead of the address field's own
+/// toolbar item and the tools group.
 struct BrowserNavigationToolbarControls: View {
     let state: BrowserState
+
+    @State private var wallets: [WalletExtension] = []
 
     var body: some View {
         // Wallets lead, separated from the navigation ControlGroup so they read
         // as their own affordance rather than a third arrow.
-        BrowserWalletToolbarControls(state: state)
+        BrowserWalletToolbarControls(state: state, wallets: wallets)
         BrowserBackForwardToolbarControls(state: state)
-        BrowserAddressToolbarControl(state: state)
+            // Discovery hangs off the arrows, which are always present; the
+            // wallet controls are empty until wallets exist, so a task there
+            // never ran. Keyed by engine so a slot reused for another pane
+            // rediscovers, and WebKit panes, which cannot host extensions, skip it.
+            .task(id: state.engine) {
+                wallets = state.engine == .chromium ? WalletExtensionRegistry.discover() : []
+            }
     }
 }
 
@@ -149,15 +258,14 @@ struct BrowserToolsToolbarControls: View {
 
     @State private var isConfirmingWebsiteDataReset = false
     @State private var isClearingWebsiteData = false
-    @State private var isShowingFind = false
-    @State private var findText = ""
 
     var body: some View {
 
         Menu {
-            Button("Default Profile") {}
-            Divider()
-            Button("Manage Profiles...") {}
+            // One profile exists, so it reads as the checked current one.
+            // The earlier "Default Profile" and "Manage Profiles…" items were
+            // buttons with empty actions: clicking either did nothing.
+            Toggle("Default Profile", isOn: .constant(true))
             Divider()
             Button("Clear All Browser Data…", role: .destructive) {
                 isConfirmingWebsiteDataReset = true
@@ -182,21 +290,24 @@ struct BrowserToolsToolbarControls: View {
             )
         }
 
-        if state.engine == .chromium {
-            ControlGroup {
-                Button {
-                    findText = state.findQuery
-                    isShowingFind = true
-                } label: {
-                    Label("Find in Page", systemImage: "magnifyingglass")
+        ControlGroup {
+            // Toggles the in-pane find bar. A `.popover` anchored here never
+            // presented: SwiftUI cannot anchor one to a button inside a
+            // toolbar `ControlGroup`.
+            Button {
+                if state.isFindBarVisible {
+                    state.hideFindBar()
+                } else {
+                    state.showFindBar()
                 }
-                .disabled(!hasLoadedPage)
-                .help("Find in Page")
-                .accessibilityIdentifier("browser.find")
-                .popover(isPresented: $isShowingFind, arrowEdge: .bottom) {
-                    chromiumFindPopover
-                }
+            } label: {
+                Label("Find in Page", systemImage: "magnifyingglass")
+            }
+            .disabled(!hasLoadedPage || !state.supports(.findInPage))
+            .help(state.isFindBarVisible ? "Hide Find Bar" : "Find in Page (⌘F)")
+            .accessibilityIdentifier("browser.find")
 
+            if state.engine == .chromium {
                 Button {
                     state.requestPrint()
                 } label: {
@@ -215,8 +326,10 @@ struct BrowserToolsToolbarControls: View {
                 .help("Save Page")
                 .accessibilityIdentifier("browser.save-page")
             }
-            .controlGroupStyle(.navigation)
+        }
+        .controlGroupStyle(.navigation)
 
+        if state.engine == .chromium {
             if let progress = state.downloadProgress {
                 ProgressView(value: progress)
                     .frame(width: 44)
@@ -227,18 +340,16 @@ struct BrowserToolsToolbarControls: View {
 
         ControlGroup {
             Menu {
-                ForEach(AppearanceMode.allCases, id: \.self) { mode in
-                    Button {
-                        state.appearanceMode = mode
-                    } label: {
-                        HStack {
-                            Text(mode.rawValue)
-                            if state.appearanceMode == mode {
-                                Image(systemName: "checkmark")
-                            }
-                        }
+                // An inline picker gives the menu its native checkmark. An
+                // image in a menu button's label never rendered, so the menu
+                // did not show which mode was active.
+                Picker("Appearance", selection: Bindable(state).appearanceMode) {
+                    ForEach(AppearanceMode.allCases, id: \.self) { mode in
+                        Text(mode.rawValue).tag(mode)
                     }
                 }
+                .pickerStyle(.inline)
+                .labelsHidden()
             } label: {
                 Label("Appearance", systemImage: appearanceIcon)
             }
@@ -251,10 +362,15 @@ struct BrowserToolsToolbarControls: View {
             Button {
                 state.perform(.toggleAnnotation)
             } label: {
-                Label("Lasso", systemImage: "lasso")
+                // The toolbar draws its glyphs monochrome on macOS 27, so the
+                // accent color alone never showed that Lasso is on (BTN-5).
+                // The glyph itself changes as well.
+                Label("Lasso", systemImage: state.annotateMode ? "lasso.badge.sparkles" : "lasso")
+                    .contentTransition(.symbolEffect(.replace))
             }
             .disabled(!state.supports(.annotation))
             .foregroundStyle(state.annotateMode ? Color.accentColor : Color.primary)
+            .accessibilityValue(state.annotateMode ? "On" : "Off")
             .help(state.annotateMode
                   ? "Turn off Lasso (⇧⌘A)"
                   : "Select a web element and tell an agent what to fix (⇧⌘A)")
@@ -271,55 +387,6 @@ struct BrowserToolsToolbarControls: View {
         }
         .controlGroupStyle(.navigation)
         .accessibilityIdentifier("browser.tools")
-    }
-
-    private var chromiumFindPopover: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Find", text: $findText)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit {
-                    state.requestFind(findText)
-                }
-                .accessibilityIdentifier("browser.find-field")
-
-            HStack {
-                Text(findResultSummary)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button {
-                    state.requestFind(findText, forward: false, findNext: true)
-                } label: {
-                    Label("Previous Match", systemImage: "chevron.up")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(findText.isEmpty)
-                .accessibilityIdentifier("browser.find-previous")
-
-                Button {
-                    state.requestFind(findText, forward: true, findNext: true)
-                } label: {
-                    Label("Next Match", systemImage: "chevron.down")
-                }
-                .labelStyle(.iconOnly)
-                .disabled(findText.isEmpty)
-                .accessibilityIdentifier("browser.find-next")
-
-                Button("Done") {
-                    isShowingFind = false
-                }
-            }
-        }
-        .padding(12)
-        .frame(width: 320)
-        .onDisappear {
-            state.stopFinding()
-        }
-    }
-
-    private var findResultSummary: String {
-        guard state.findMatchCount > 0 else { return "No matches" }
-        return "\(state.activeFindMatchOrdinal) of \(state.findMatchCount)"
     }
 
     private var hasLoadedPage: Bool {
@@ -342,16 +409,6 @@ struct BrowserToolsToolbarControls: View {
             state.requestWebsiteDataReset()
             isClearingWebsiteData = false
         }
-    }
-}
-
-/// Complete browser toolbar shared by Main and Extendo.
-struct BrowserToolbarControls: View {
-    let state: BrowserState
-
-    var body: some View {
-        BrowserNavigationToolbarControls(state: state)
-        BrowserToolsToolbarControls(state: state)
     }
 }
 

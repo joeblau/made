@@ -11,48 +11,63 @@ struct CopilotDashboardView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                // Three groups, tight inside and apart between (LAY-5): the
+                // family picker, the snapshot with its data status, and the
+                // Live Activity control with its status and explanation.
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xLarge) {
+                    // System segmented picker: a capsule glass control on 26+.
+                    // Segment names come from the shared family titles, so they
+                    // match the card headers, widgets, and Kneeboard.
                     Picker("Dashboard", selection: $selectedFamily) {
-                        Text("Actions").tag(DashboardFamily.actions)
-                        Text("Usage").tag(DashboardFamily.usage)
-                        Text("Runners").tag(DashboardFamily.runners)
+                        ForEach(DashboardFamily.allCases, id: \.self) { family in
+                            Text(family.title).tag(family)
+                        }
                     }
                     .pickerStyle(.segmented)
 
-                    if !connected {
-                        Label("Cockpit disconnected · showing last-good data", systemImage: "wifi.slash")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
+                        if !connected {
+                            // Orange glyph carries the caution; footnote copy
+                            // uses the legible secondary gray: the system
+                            // `.secondary` is 4.0:1 on the light sheet (TYPE-3).
+                            cautionLabel(Text("Cockpit disconnected · showing last-good data"), systemImage: "wifi.slash")
+                                .foregroundStyle(LegibleSecondaryText.color)
+                        }
+
+                        selectedCard
+                            .padding(LiquidGlassMetrics.Spacing.medium)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            // Content card, not a control: a quiet fill instead of a
+                            // material that would stack on the sheet's glass.
+                            .background(.fill.quaternary, in: RoundedRectangle(
+                                cornerRadius: LiquidGlassMetrics.Radius.card, style: .continuous
+                            ))
+                            .liquidGlassContainerShape()
+
+                        if let error = model.persistenceError {
+                            cautionLabel(Text(error), systemImage: "externaldrive.badge.exclamationmark")
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
-                    selectedCard
-                        .padding(16)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        // Content card, not a control: a quiet fill instead of a
-                        // material that would stack on the sheet's glass.
-                        .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
+                        activityControl
 
-                    activityControl
+                        if let error = activities.lastError {
+                            cautionLabel(Text(error), systemImage: "exclamationmark.triangle.fill", tint: .red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
 
-                    if let error = activities.lastError {
-                        Label(error, systemImage: "exclamationmark.triangle.fill")
+                        Text("Aggregate Live Activities update from Cockpit while connected. They do not use APNs or push notifications.")
                             .font(.footnote)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(LegibleSecondaryText.color)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if let error = model.persistenceError {
-                        Label(error, systemImage: "externaldrive.badge.exclamationmark")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    Text("Aggregate Live Activities update from Cockpit while connected. They do not use APNs or push notifications.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding()
+                .padding(LiquidGlassMetrics.Spacing.medium)
+                // Context transition: the frame stays, the card content
+                // cross-fades and the layout settles with a spring (MOT-1/MOT-4).
+                .animation(LiquidGlassMetrics.spring, value: selectedFamily)
             }
             .navigationTitle("Dashboard")
             .navigationBarTitleDisplayMode(.inline)
@@ -78,13 +93,18 @@ struct CopilotDashboardView: View {
 
     private var activityControl: some View {
         let isActive = activities.activeFamilies.contains(selectedFamily)
-        return VStack(alignment: .leading, spacing: 12) {
-            Label(
-                isActive ? "Live Activity is on" : "Live Activity is off",
-                systemImage: isActive ? "livephoto" : "livephoto.slash"
-            )
+        return VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
+            // The glyph carries the on/off color; the copy stays secondary so
+            // green text never has to pass contrast on its own (TYPE-3).
+            Label {
+                Text(isActive ? "Live Activity is on" : "Live Activity is off")
+                    .foregroundStyle(LegibleSecondaryText.color)
+            } icon: {
+                Image(systemName: isActive ? "livephoto" : "livephoto.slash")
+                    .foregroundStyle(isActive ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+                    .contentTransition(.symbolEffect(.replace))
+            }
             .font(.subheadline)
-            .foregroundStyle(isActive ? .green : .secondary)
 
             Button {
                 updateActivity()
@@ -92,17 +112,33 @@ struct CopilotDashboardView: View {
                 Text(isActive ? "Stop Live Activity" : "Start Live Activity")
                     .frame(maxWidth: .infinity)
             }
-            // The screen's one primary action: full-width prominent glass.
-            .buttonStyle(.glassProminent)
+            // Start is the sheet's one primary action (full-width prominent
+            // glass); Stop is a reversible toggle, so it drops to neutral
+            // glass, matching Kneeboard's dashboard (BTN-1, COL-4).
+            .liquidGlassButtonStyle(prominent: !isActive)
+            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .disabled(isUpdatingActivity || (!isActive && !hasSelectedSnapshot))
 
             if !isActive && !hasSelectedSnapshot {
                 Text("Start becomes available after the first Cockpit update.")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(LegibleSecondaryText.color)
             }
         }
+    }
+
+    /// A footnote status line whose tinted glyph carries the caution or
+    /// error signal while the text keeps the caller's contrast-safe
+    /// foreground (TYPE-3; color is never the only signal, COL-4).
+    private func cautionLabel(_ title: Text, systemImage: String, tint: Color = .orange) -> some View {
+        Label {
+            title
+        } icon: {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+        }
+        .font(.footnote)
     }
 
     private var hasSelectedSnapshot: Bool {

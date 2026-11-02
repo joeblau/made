@@ -1,4 +1,5 @@
 import AppKit
+import Metal
 import SceneKit
 import SwiftUI
 
@@ -187,6 +188,15 @@ final class RunnerFleetScene {
     /// Hit tests use this category so floor glows don't widen a runner's hover area.
     static let pickableCategory = 1 << 1
     static let background = NSColor(red: 0.03, green: 0.035, blue: 0.06, alpha: 1)
+    /// SceneKit's multi-pass bloom builds per-mip texture views that the
+    /// macOS virtual-machine GPU driver cannot back: the first frame aborts
+    /// the app with `Assertion failed: (texture.resourceID)` in
+    /// AppleParavirtTexture. A single pass renders there; real GPUs keep the
+    /// two-pass glow.
+    static let bloomIterationCount: Int = {
+        let isParavirtual = MTLCreateSystemDefaultDevice()?.name.localizedCaseInsensitiveContains("paravirtual") ?? false
+        return isParavirtual ? 1 : 2
+    }()
 
     let scene = SCNScene()
     let cameraNode = SCNNode()
@@ -223,7 +233,7 @@ final class RunnerFleetScene {
         camera.wantsExposureAdaptation = false
         camera.bloomIntensity = 2.2
         camera.bloomThreshold = 1.2
-        camera.bloomIterationCount = 2
+        camera.bloomIterationCount = Self.bloomIterationCount
         camera.bloomBlurRadius = 14
         // Contact darkening where cases meet the floor.
         camera.screenSpaceAmbientOcclusionIntensity = 1.4
@@ -745,6 +755,12 @@ private enum FleetLabels {
                         .foregroundStyle(Color(white: 0.72))
                 }
             }
+            // A back row's caption hangs over the lids of the row in front;
+            // without a scrim its light-gray state text vanishes against a
+            // silver case (COL-6). The padding keeps the halo inside the image.
+            .shadow(color: .black.opacity(0.9), radius: 1.5)
+            .shadow(color: .black.opacity(0.6), radius: 4)
+            .padding(.vertical, 4)
         }
     }
 

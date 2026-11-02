@@ -18,6 +18,7 @@ struct SecureMessagingView: View {
     @State private var transport: SecureChannelTransport?
     @State private var outgoing = ""
     @State private var errorMessage: String?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var myPublicKey: String { DeviceIdentity.publicKeyBase64() ?? "—" }
     private let pairingStore = SecurePairingStore()
@@ -34,6 +35,10 @@ struct SecureMessagingView: View {
                 logSection(transport)
             }
         }
+        // The multi-line peer-key field turns Return into a newline, so a
+        // drag down is the way to put the keyboard away and reveal the
+        // field's inline error and Connect (FORM-4).
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Secure Messaging")
         .navigationBarTitleDisplayMode(.inline)
         .task { loadPairingSecrets() }
@@ -51,14 +56,25 @@ struct SecureMessagingView: View {
     // MARK: - Sections
 
     private var statusSection: some View {
-        Section("Status") {
+        Section {
             LabeledContent("Connection") {
-                HStack(spacing: 6) {
-                    Circle().fill(statusColor).frame(width: 8, height: 8)
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    // In-flight stages show activity rather than a static dot
+                    // (MOT-5); settled states keep the colored indicator.
+                    if isConnecting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Circle().fill(statusColor).frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                    }
                     Text(statusText)
-                        .foregroundStyle(.secondary)
+                        .legibleSecondaryRowText()
+                        .contentTransition(.opacity)
                 }
+                .animation(LiquidGlassMetrics.stateChange, value: statusText)
             }
+        } header: {
+            Text("Status").legibleSectionText()
         }
     }
 
@@ -75,51 +91,128 @@ struct SecureMessagingView: View {
                 Label("Share my key", systemImage: "key")
             }
         } header: {
-            Text("My public key")
+            Text("My public key").legibleSectionText()
         } footer: {
             Text("Send this to your peer; they paste it as the peer key on their device.")
+                .legibleSectionText()
         }
     }
 
     private var pairingSection: some View {
         Section {
-            TextField("Peer public key (base64)", text: $peerKeyInput, axis: .vertical)
+            // Persistent labels above each field; placeholders are only an
+            // instruction or a bare example (FORM-1/FORM-2). Each field is a
+            // Liquid Glass field with a focus ring (FORM-4), matching the
+            // bezeled fields of Cockpit's Secure Messaging form instead of
+            // bare text in the row.
+            labeledField("Peer public key", error: peerKeyError) {
+                TextField(
+                    "Peer public key",
+                    text: $peerKeyInput,
+                    prompt: Text("Paste your peer's base64 key"),
+                    axis: .vertical
+                )
                 .font(.system(.footnote, design: .monospaced))
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .lineLimit(1...3)
-            TextField("Pairing token", text: $tokenInput)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            Button("Generate secure pairing token") { generateToken() }
-            TextField("Rendezvous URL", text: $rendezvousURL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
+                .liquidGlassField(multiline: true)
+                // Error state on the field itself, not only in the helper
+                // line below it (FORM-4). Same shape as the glass and its
+                // focus ring.
+                .overlay {
+                    ConcentricRectangle(
+                        corners: .concentric(minimum: .fixed(LiquidGlassMetrics.Radius.field)),
+                        isUniform: true
+                    )
+                    .stroke(.red, lineWidth: 1.5)
+                    .opacity(peerKeyError == nil ? 0 : 1)
+                    .allowsHitTesting(false)
+                }
+            }
+            labeledField("Pairing token") {
+                TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .liquidGlassField()
+            }
+            // Secondary glass beside the token it fills (BTN-1); a
+            // non-default style also keeps the row from routing every tap
+            // in it to this button.
+            // "Generate Token" under the Pairing token label: the shorter
+            // verb label no longer hyphenates mid-word at accessibility
+            // sizes (BTN-2, TYPE-4); the full name stays for VoiceOver.
+            Button {
+                generateToken()
+            } label: {
+                // At accessibility sizes the glyph would force "Generate" to
+                // break mid-word; the title alone wraps by words.
+                if dynamicTypeSize.isAccessibilitySize {
+                    Text("Generate Token")
+                } else {
+                    Label("Generate Token", systemImage: "key.viewfinder")
+                }
+            }
+            .accessibilityLabel("Generate secure pairing token")
+            .liquidGlassButtonStyle()
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+            labeledField("Rendezvous URL") {
+                TextField("Rendezvous URL", text: $rendezvousURL, prompt: Text(verbatim: "https://rendezvous.blau.app"))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .keyboardType(.URL)
+                    .liquidGlassField()
+            }
             Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
 
-            if let transport, !transport.state.isFailed {
-                Button(transport.state == .signaling ? "Cancel connection" : "Disconnect", role: .destructive) {
-                    transport.disconnect()
-                    self.transport = nil
-                }
-            } else {
-                Button("Connect") { connect() }
+            // Connect is the screen's one prominent action (BTN-1, BTN-4);
+            // Disconnect and Cancel are reversible, so neutral glass with
+            // the destructive role's red label.
+            Group {
+                if let transport, !transport.state.isFailed {
+                    Button(role: .destructive) {
+                        transport.disconnect()
+                        self.transport = nil
+                    } label: {
+                        Text(transport.state == .signaling ? "Cancel connection" : "Disconnect")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .liquidGlassButtonStyle()
+                } else {
+                    Button {
+                        connect()
+                    } label: {
+                        Text("Connect")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .liquidGlassButtonStyle(prominent: true)
                     .disabled(!canConnect)
+                }
             }
+            .buttonBorderShape(.capsule)
+            .controlSize(.large)
         } header: {
-            Text("Peer")
+            Text("Peer").legibleSectionText()
         } footer: {
             Text("The pairing token must match on both devices. Peer key is pinned and authenticated by the handshake.")
+                .legibleSectionText()
         }
     }
 
     private func messagingSection(_ transport: SecureChannelTransport) -> some View {
-        Section("Send") {
-            HStack {
+        // The section header is the composer's persistent label (FORM-1).
+        Section {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 TextField("Message", text: $outgoing)
                     .onSubmit(send)
-                Button("Send", action: send)
+                    .liquidGlassField()
+                // Connect is hidden while connected, so Send is the view's one
+                // prominent action (BTN-1): a circular glass icon button in the
+                // Messages idiom. A non-default style also keeps the Form from
+                // routing taps anywhere in the row to it.
+                Button("Send", systemImage: "arrow.up", action: send)
+                    .liquidGlassIconButton(prominent: true)
                     .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
             }
             Button {
@@ -127,13 +220,19 @@ struct SecureMessagingView: View {
             } label: {
                 Label("Send test blob (best-effort)", systemImage: "shippingbox")
             }
+            .liquidGlassButtonStyle()
+            .buttonBorderShape(.capsule)
+            .controlSize(.small)
+        } header: {
+            Text("Send").legibleSectionText()
         }
     }
 
     private func logSection(_ transport: SecureChannelTransport) -> some View {
-        Section("Session log") {
+        Section {
             if transport.log.isEmpty {
-                Text("No activity yet.").foregroundStyle(.secondary)
+                Label("No activity yet.", systemImage: "text.alignleft")
+                    .legibleSecondaryRowText()
             } else {
                 ForEach(transport.log.reversed()) { entry in
                     Text(entry.text)
@@ -141,20 +240,75 @@ struct SecureMessagingView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+        } header: {
+            Text("Session log").legibleSectionText()
         }
+    }
+
+    /// A Form row with a persistent visible label above its field (FORM-1),
+    /// label → input at 8pt (FORM-5). The field's own title stays its
+    /// VoiceOver label, so the visible label is hidden from accessibility.
+    /// `error`, when set, is shown under the field as its inline error state.
+    private func labeledField<Field: View>(
+        _ title: LocalizedStringKey,
+        error: String? = nil,
+        @ViewBuilder field: () -> Field
+    ) -> some View {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            Text(title)
+                .font(.subheadline)
+                .legibleSecondaryRowText()
+                .accessibilityHidden(true)
+            // Input → helper/error text at 4pt (FORM-5); the error is the
+            // field's designed error state (FORM-4).
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                field()
+                if let error {
+                    // The red glyph and field stroke carry the error; the
+                    // footnote copy stays primary, since system red text on
+                    // the light grouped row measures about 3.6:1 (TYPE-3).
+                    Label {
+                        Text(error)
+                    } icon: {
+                        Image(systemName: "exclamationmark.circle.fill")
+                            .foregroundStyle(.red)
+                    }
+                    .font(.footnote)
+                    .transition(.opacity)
+                }
+            }
+            .animation(LiquidGlassMetrics.stateChange, value: error)
+        }
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
     }
 
     // MARK: - Actions
 
+    /// Inline validation for the peer key. The slot is the shared device pin
+    /// (also used by PeerSync), so malformed text is never persisted; tell
+    /// the user before they leave the screen. An empty field is not an
+    /// error: it unpairs.
+    private var peerKeyError: String? {
+        SecurePairingStore.peerKeyUpdate(for: peerKeyInput) == .rejectInvalid
+            ? "Not a valid base64 X25519 key. It won't be saved."
+            : nil
+    }
+
+    /// The field's key when it is one the store would pin, else `nil`.
+    private var validPeerKey: String? {
+        guard case .save(let key) = SecurePairingStore.peerKeyUpdate(for: peerKeyInput) else { return nil }
+        return key
+    }
+
     private var canConnect: Bool {
-        DeviceIdentity.parsePeerPublicKey(peerKeyInput) != nil
+        validPeerKey != nil
             && SecurePairingStore.isValidIdentifier(
                 tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
             )
     }
 
     private func connect() {
-        guard let peerKey = DeviceIdentity.parsePeerPublicKey(peerKeyInput) else {
+        guard let pin = validPeerKey, let peerKey = DeviceIdentity.parsePeerPublicKey(pin) else {
             errorMessage = "Peer public key is not a valid base64 X25519 key."
             return
         }
@@ -164,7 +318,7 @@ struct SecureMessagingView: View {
             return
         }
         do {
-            try pairingStore.setPeerPublicKey(peerKeyInput)
+            try pairingStore.setPeerPublicKey(pin)
             try pairingStore.setToken(token)
             let identity = try DeviceIdentity.loadOrCreate()
             let client = try SignalingClient(
@@ -197,7 +351,9 @@ struct SecureMessagingView: View {
 
     private func savePairingSecrets() {
         do {
-            try pairingStore.setPeerPublicKey(peerKeyInput)
+            // Writes only a valid key or clears an emptied field; malformed
+            // text leaves the existing pin untouched (shown inline above).
+            try pairingStore.applyPeerKeyInput(peerKeyInput)
             try pairingStore.setToken(tokenInput)
         } catch {
             errorMessage = "Could not save secure pairing settings."
@@ -233,11 +389,19 @@ struct SecureMessagingView: View {
         }
     }
 
+    private var isConnecting: Bool {
+        switch transport?.state {
+        case .signaling, .holePunching, .handshake: return true
+        case .none, .connected, .failed: return false
+        }
+    }
+
     private var statusColor: Color {
         switch transport?.state {
         case .connected: return .green
         case .failed: return .red
-        case .none: return .gray
+        // Idle reads as the semantic secondary tint in both appearances (COL-2).
+        case .none: return .secondary
         default: return .orange
         }
     }

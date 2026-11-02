@@ -7,12 +7,12 @@ struct AgenticUseInsightsView: View {
     let insights: [AgenticUseInsight]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
             Text("Insights").agenticUseCardTitle()
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 190), spacing: 16, alignment: .top)],
+                columns: [GridItem(.adaptive(minimum: 192), spacing: LiquidGlassMetrics.Spacing.medium, alignment: .top)],
                 alignment: .leading,
-                spacing: 16
+                spacing: LiquidGlassMetrics.Spacing.medium
             ) {
                 ForEach(insights) { insight in
                     card(insight)
@@ -26,21 +26,23 @@ struct AgenticUseInsightsView: View {
         let tint = Self.tint(for: insight.kind)
         // A soft tinted tile: a solid gradient with a white glyph read like a
         // small primary button competing with the real controls.
-        return HStack(alignment: .top, spacing: 12) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.small) {
+            RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous)
                 .fill(tint.opacity(0.16))
                 .frame(width: 32, height: 32)
                 .overlay {
+                    // Glyph sized to its 32pt tile, not to the text scale.
                     Image(systemName: Self.symbol(for: insight.kind))
                         .scaledFont(size: 14, weight: .semibold)
                         .foregroundStyle(tint)
                 }
-            VStack(alignment: .leading, spacing: 4) {
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
                 Text(insight.title)
-                    .scaledFont(size: 12, weight: .semibold)
+                    .agenticUseFont(.body, weight: .semibold)
                     .fixedSize(horizontal: false, vertical: true)
                 Text(insight.detail)
-                    .scaledFont(size: 11)
+                    .agenticUseFont(.meta)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

@@ -17,17 +17,18 @@ struct AgenticUseTokenFlowPanel: View {
 
     var body: some View {
         let graph = graph
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
+            HStack(alignment: .firstTextBaseline, spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 Text("Token Flow").agenticUseCardTitle()
                 Text("\(AgenticUseFormat.tokens(graph.totalTokens)) tokens by provider, model, and type")
-                    .scaledFont(size: 11)
+                    .agenticUseFont(.meta)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
             if graph.links.isEmpty {
                 ContentUnavailableView("No token flow", systemImage: "point.3.connected.trianglepath.dotted")
+                    .legibleSecondaryHierarchy()
                     .frame(minHeight: 200)
             } else {
                 AgenticUseTokenFlowDiagram(
@@ -86,7 +87,7 @@ private struct AgenticUseTokenFlowDiagram: View {
                     }
                 }
                 .allowsHitTesting(false)
-                .animation(.easeOut(duration: 0.18), value: hovered)
+                .animation(LiquidGlassMetrics.stateChange, value: hovered)
 
                 ForEach(layout.frames, id: \.id) { frame in
                     node(frame.id)
@@ -189,8 +190,8 @@ private struct AgenticUseTokenFlowDiagram: View {
         let tint = AgenticUseModelPalette.providerColor(for: provider)
         // Soft tint like the token-type tiles: a solid gradient tile read as
         // a button and out-shouted the flow itself.
-        return HStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            RoundedRectangle(cornerRadius: NodeMetrics.tileRadius, style: .continuous)
                 .fill(tint.opacity(0.2))
                 .frame(width: 36, height: 36)
                 .overlay {
@@ -199,26 +200,27 @@ private struct AgenticUseTokenFlowDiagram: View {
                         .scaledFont(size: 20, weight: .semibold)
                         .foregroundStyle(tint)
                 }
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(provider.displayName)
-                    .scaledFont(size: 12, weight: .semibold)
+                    .agenticUseFont(.body, weight: .semibold)
                 Text("\(AgenticUseFormat.tokens(node.tokens)) tokens")
-                    .scaledFont(size: 10)
+                    .agenticUseFont(.caption)
                     .foregroundStyle(.secondary)
                 Text(node.cost > 0 ? AgenticUseFormat.cost(node.cost) : "—")
-                    .scaledFont(size: 10, weight: .medium)
+                    .agenticUseFont(.caption, weight: .medium)
                     .monospacedDigit()
             }
             .lineLimit(1)
             .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, NodeMetrics.padding)
         .nodeChrome(tint: tint, dimmed: isDimmed(.provider(provider)))
     }
 
     private func modelNode(title: String, provider: AgenticProvider?, help: String) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Group {
                 if let provider {
                     Image(provider.brandSymbol)
@@ -228,15 +230,18 @@ private struct AgenticUseTokenFlowDiagram: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .scaledFont(size: 11, weight: .semibold)
-            .frame(width: 14)
+            .agenticUseFont(.meta, weight: .semibold)
+            .frame(width: 16)
+            .accessibilityHidden(true)
             Text(title)
-                .scaledFont(size: 11, weight: .medium)
+                .agenticUseFont(.meta, weight: .medium)
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
+        // Model nodes are short, so the concentric node radius renders them
+        // as capsules; pad a little more so the text clears the round ends.
+        .padding(.horizontal, NodeMetrics.padding + LiquidGlassMetrics.Spacing.xxSmall)
         .nodeChrome(tint: nil, dimmed: false)
         .help(help)
     }
@@ -244,20 +249,22 @@ private struct AgenticUseTokenFlowDiagram: View {
     private func typeNode(_ type: AgenticTokenFlowGraph.TokenType, node: AgenticTokenFlowGraph.Node) -> some View {
         let tint = Self.tint(for: type)
         let share = graph.totalTokens > 0 ? Double(node.tokens) / Double(graph.totalTokens) : 0
-        return HStack(spacing: 8) {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            RoundedRectangle(cornerRadius: NodeMetrics.tileRadius, style: .continuous)
                 .fill(tint.opacity(0.2))
                 .frame(width: 32, height: 32)
                 .overlay {
+                    // Glyph sized to its tile, not to the text scale.
                     Image(systemName: type.symbol)
                         .scaledFont(size: 17, weight: .semibold)
                         .foregroundStyle(tint)
                 }
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(type.title)
-                    .scaledFont(size: 12, weight: .semibold)
+                    .agenticUseFont(.body, weight: .semibold)
                 Text("\(AgenticUseFormat.tokens(node.tokens)) (\(AgenticUseFormat.percent(share)))")
-                    .scaledFont(size: 10)
+                    .agenticUseFont(.caption)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -265,7 +272,7 @@ private struct AgenticUseTokenFlowDiagram: View {
             .minimumScaleFactor(0.8)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, NodeMetrics.padding)
         .nodeChrome(tint: tint, dimmed: isDimmed(.tokenType(type)))
     }
 
@@ -382,19 +389,28 @@ private struct AgenticUseTokenFlowDiagram: View {
     }
 }
 
+/// Node geometry. Icon tiles sit `padding` in from the node edge, so the node
+/// radius is the tile radius plus that padding — concentric corners (LAY-4).
+private enum NodeMetrics {
+    static let padding: CGFloat = LiquidGlassMetrics.Spacing.xSmall
+    static let tileRadius: CGFloat = LiquidGlassMetrics.Radius.control
+    static let radius: CGFloat = tileRadius + padding
+}
+
 private extension View {
     /// Shared node card: an opaque fill so ribbons pass cleanly underneath,
     /// with a tinted wash for provider and token-type nodes. No outline —
-    /// the wash already separates each node from the ribbons.
+    /// the wash already separates each node from the ribbons. Nodes are
+    /// content (data), not controls, so they stay solid rather than glass.
     func nodeChrome(tint: Color?, dimmed: Bool) -> some View {
         frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: NodeMetrics.radius, style: .continuous)
                     .fill(.background)
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: NodeMetrics.radius, style: .continuous)
                     .fill((tint ?? .secondary).opacity(tint == nil ? 0.1 : 0.16))
             }
             .opacity(dimmed ? 0.45 : 1)
-            .animation(.easeOut(duration: 0.18), value: dimmed)
+            .animation(LiquidGlassMetrics.stateChange, value: dimmed)
     }
 }

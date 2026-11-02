@@ -219,6 +219,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
         private var isPresentingCertificateWarning = false
         private var rejectedCertificateOrigin: ChromiumOrigin?
         private let confirmCertificate: @MainActor (BrowserCertificateIdentity) -> Bool
+        private var javaScriptDialogThrottle = BrowserJavaScriptDialogThrottle()
         private(set) var lastDiagnostic: ChromiumDiagnosticRecord?
 
         init(
@@ -309,6 +310,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
             certificateNavigationGeneration += 1
             certificateNavigationURL = nil
             certificateExceptions.removeAll()
+            state.javaScriptDialog?.cancel()
             host?.delegate = nil
             host?.performBrowserCommand(.close)
             host = nil
@@ -412,11 +414,15 @@ struct ChromiumBrowserView: NSViewRepresentable {
             guard lastFindRequestID != requestID else { return }
             lastFindRequestID = requestID
             guard !state.findQuery.isEmpty else { return }
+            // CEF's `findNext` is Chromium's `find_match`, not "same session":
+            // CEF itself restarts when the text or case changes. `false` only
+            // highlights without activating a match, so the first Return after
+            // typing would land on match 1 instead of moving to match 2.
             host?.findText(
                 state.findQuery,
                 forward: state.findForward,
                 matchCase: state.findMatchCase,
-                findNext: state.findNext
+                findNext: true
             )
         }
 
@@ -683,6 +689,80 @@ struct ChromiumBrowserView: NSViewRepresentable {
             }
         }
 
+        @objc(chromiumBrowserHostView:didRequestJavaScriptDialog:)
+        nonisolated func chromiumBrowserHostView(
+            _ browserView: ChromiumBrowserHostView,
+            didRequestJavaScriptDialog request: ChromiumJavaScriptDialogRequest
+        ) {
+            MainActor.assumeIsolated {
+                guard host === browserView else {
+                    request.cancel()
+                    return
+                }
+                let kind: BrowserJavaScriptDialogKind
+                switch request.kind {
+                case .alert: kind = .alert
+                case .confirm: kind = .confirm
+                case .prompt: kind = .prompt(defaultText: request.defaultPromptText)
+                case .beforeUnload: kind = .beforeUnload(isReload: request.isReload)
+                @unknown default:
+                    request.cancel()
+                    return
+                }
+                presentJavaScriptDialog(
+                    kind: kind,
+                    originURL: request.originURL,
+                    message: request.message
+                ) { accepted, input in
+                    if accepted {
+                        request.accept(userInput: input)
+                    } else {
+                        request.cancel()
+                    }
+                }
+            }
+        }
+
+        /// Shows a page dialog as this pane's sheet, or answers Cancel when
+        /// the page is over its dialog budget (Leave, for beforeunload) or
+        /// one is already waiting.
+        func presentJavaScriptDialog(
+            kind: BrowserJavaScriptDialogKind,
+            originURL: URL?,
+            message: String,
+            now: Date = Date(),
+            respond: @escaping (_ accepted: Bool, _ input: String?) -> Void
+        ) {
+            guard javaScriptDialogThrottle.admit(at: now) else {
+                // A suppressed beforeunload proceeds, as in Chrome: answering
+                // Stay would let a page that spent its budget block every
+                // navigation and reload away from it.
+                if case .beforeUnload = kind {
+                    respond(true, nil)
+                } else {
+                    respond(false, nil)
+                }
+                return
+            }
+            let content = BrowserJavaScriptDialogContent(
+                kind: kind,
+                originURL: originURL,
+                message: message
+            )
+            state.presentJavaScriptDialog(content, respond: respond)
+        }
+
+        @objc(chromiumBrowserHostViewDidResetJavaScriptDialogs:)
+        nonisolated func chromiumBrowserHostViewDidResetJavaScriptDialogs(
+            _ browserView: ChromiumBrowserHostView
+        ) {
+            MainActor.assumeIsolated {
+                guard host === browserView else { return }
+                // CEF already cancelled the request; this only dismisses.
+                state.javaScriptDialog?.cancel()
+            }
+        }
+
         @objc(chromiumBrowserHostView:didUpdateFindMatchCount:activeMatchOrdinal:finalUpdate:)
         nonisolated func chromiumBrowserHostView(
             _ browserView: ChromiumBrowserHostView,
@@ -945,6 +1025,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
                 _ = browserView
                 state.isLoading = isLoading
                 if isLoading {
+                    javaScriptDialogThrottle.reset()
                     container?.runtimeState = .ready
                     ChromiumDiagnosticsCenter.shared.recordRunning()
                 } else {
@@ -1010,7 +1091,17 @@ struct ChromiumBrowserView: NSViewRepresentable {
             if let origin = rejectedCertificateOrigin {
                 container?.runtimeState = .certificateRejected(origin.serialized)
             } else {
-                container?.runtimeState = .navigationFailed
+                switch ChromiumLoadFailurePresentation(error) {
+                case .enginePage:
+                    // Chromium draws its own error page with a Reload
+                    // button; a native overlay on top would be a second
+                    // prominent recovery action (BTN-1).
+                    container?.runtimeState = .ready
+                case .ignored:
+                    break
+                case .nativeOverlay:
+                    container?.runtimeState = .navigationFailed
+                }
             }
             lastDiagnostic = ChromiumDiagnosticRecord.make(
                 event: .navigationFailed,
@@ -1061,6 +1152,33 @@ struct ChromiumBrowserView: NSViewRepresentable {
     }
 }
 
+/// How Pilot presents a failed Chromium load. Chromium renders its own error
+/// page, with a Reload button, for every network error except an aborted
+/// navigation (a stop, a policy cancel, or a download), so the native
+/// "could not load" overlay is only for failures with no engine page, such
+/// as an unavailable runtime.
+enum ChromiumLoadFailurePresentation: Equatable, Sendable {
+    /// Chromium's error page is the recovery surface; hide the overlay.
+    case enginePage
+    /// Nothing failed from the user's point of view; keep the pane as is.
+    case ignored
+    /// No engine page exists; show the native message and Retry.
+    case nativeOverlay
+
+    /// Chromium's `net::ERR_ABORTED`.
+    static let abortedNetError = -3
+
+    init(_ error: NSError) {
+        guard error.domain == ChromiumKitError.errorDomain,
+              error.code == ChromiumKitError.navigationFailed.rawValue,
+              let netError = (error.userInfo["ChromiumNetError"] as? NSNumber)?.intValue else {
+            self = .nativeOverlay
+            return
+        }
+        self = netError == Self.abortedNetError ? .ignored : .enginePage
+    }
+}
+
 @MainActor
 final class ChromiumPermissionDecisionStore {
     static let shared = ChromiumPermissionDecisionStore()
@@ -1108,6 +1226,9 @@ final class ChromiumPermissionDecisionStore {
 @MainActor
 final class ChromiumBrowserContainerView: NSView {
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
+    /// Shown while Chromium starts so the pane reads as working, not blank
+    /// (MOT-5).
+    private let startingIndicator = NSProgressIndicator()
     private lazy var retryButton = NSButton(
         title: "Retry",
         target: self,
@@ -1123,17 +1244,37 @@ final class ChromiumBrowserContainerView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        updateBackgroundColor()
 
         messageLabel.translatesAutoresizingMaskIntoConstraints = false
         messageLabel.alignment = .center
         messageLabel.textColor = .secondaryLabelColor
+        messageLabel.font = .preferredFont(forTextStyle: .body)
         messageLabel.maximumNumberOfLines = 3
         addSubview(messageLabel)
+        startingIndicator.translatesAutoresizingMaskIntoConstraints = false
+        startingIndicator.style = .spinning
+        startingIndicator.controlSize = .small
+        startingIndicator.isDisplayedWhenStopped = false
+        addSubview(startingIndicator)
         retryButton.translatesAutoresizingMaskIntoConstraints = false
-        retryButton.bezelStyle = .rounded
+        if #available(macOS 26.0, *) {
+            // The pane's single recovery action: prominent capsule glass
+            // (BTN-1), never a squared bezel.
+            retryButton.bezelStyle = .glass
+            retryButton.borderShape = .capsule
+            retryButton.tintProminence = .primary
+        } else {
+            retryButton.bezelStyle = .rounded
+        }
+        retryButton.controlSize = .large
         addSubview(retryButton)
         NSLayoutConstraint.activate([
+            startingIndicator.centerXAnchor.constraint(equalTo: centerXAnchor),
+            startingIndicator.bottomAnchor.constraint(
+                equalTo: messageLabel.topAnchor,
+                constant: -12
+            ),
             messageLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             messageLabel.centerYAnchor.constraint(
                 equalTo: centerYAnchor,
@@ -1155,6 +1296,19 @@ final class ChromiumBrowserContainerView: NSView {
         fatalError("init(coder:) is unavailable")
     }
 
+    /// A layer's `CGColor` is resolved once, so re-resolve the semantic
+    /// window color whenever the appearance flips (COL-2: dark-mode parity).
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackgroundColor()
+    }
+
+    private func updateBackgroundColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
+    }
+
     func install(_ host: ChromiumBrowserHostView) {
         host.translatesAutoresizingMaskIntoConstraints = false
         addSubview(host, positioned: .below, relativeTo: messageLabel)
@@ -1167,12 +1321,33 @@ final class ChromiumBrowserContainerView: NSView {
         runtimeState = .ready
     }
 
+    /// Wraps the status message at word boundaries only. A wrapping label
+    /// hyphenates by default, which split "avail- / able" in narrow panes.
+    private func applyUnhyphenatedMessage() {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.hyphenationFactor = 0
+        paragraph.usesDefaultHyphenation = false
+        messageLabel.attributedStringValue = NSAttributedString(
+            string: messageLabel.stringValue,
+            attributes: [
+                .font: messageLabel.font ?? NSFont.preferredFont(forTextStyle: .body),
+                .foregroundColor: NSColor.secondaryLabelColor,
+                .paragraphStyle: paragraph,
+            ]
+        )
+    }
+
     @objc
     private func retry() {
         onRetry?()
     }
 
     private func updateMessage() {
+        defer {
+            applyUnhyphenatedMessage()
+            updateStartingIndicator()
+        }
         switch runtimeState {
         case .starting:
             messageLabel.stringValue = "Starting Chromium..."
@@ -1206,6 +1381,14 @@ final class ChromiumBrowserContainerView: NSView {
             messageLabel.stringValue = "Chromium browser closed."
             messageLabel.isHidden = false
             retryButton.isHidden = true
+        }
+    }
+
+    private func updateStartingIndicator() {
+        if runtimeState == .starting {
+            startingIndicator.startAnimation(nil)
+        } else {
+            startingIndicator.stopAnimation(nil)
         }
     }
 }

@@ -100,7 +100,7 @@ struct AndroidPaneView: View {
                 toast(label: "Screenshot Copied", systemImage: "checkmark.circle.fill")
             }
             if showsDroppedTextToast {
-                toast(label: "Some characters can't be typed over adb", systemImage: "keyboard.badge.ellipsis")
+                toast(label: "Some characters can\u{2019}t be typed over adb", systemImage: "keyboard.badge.ellipsis")
             }
         }
         .onChange(of: session.clipboardCopyCount) { _, _ in
@@ -147,11 +147,7 @@ struct AndroidPaneView: View {
     }
 
     private func toast(label: String, systemImage: String) -> some View {
-        Label(label, systemImage: systemImage)
-            .font(.headline)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .compatGlassCapsule()
+        DevicePaneToast(text: label, systemImage: systemImage)
             .transition(.opacity.combined(with: .scale(scale: 0.85)))
             .allowsHitTesting(false)
             .zIndex(20)
@@ -187,23 +183,16 @@ private struct AndroidPickerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Label(session.target?.pickerTitle ?? "Android Device", systemImage: pickerSystemImage)
-                    .font(.headline)
-                Spacer()
-                if session.isRefreshing {
-                    ProgressView().controlSize(.small)
-                }
-                Button {
-                    session.refreshDevices()
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .disabled(session.isRefreshing)
-                .help("Re-scan connected Android devices")
-            }
-            .padding(12)
+            DevicePickerHeader(
+                // A restored pane has no target (it isn't persisted) and lists
+                // emulators and devices together, so the title stays neutral
+                // instead of claiming "Android Device" over an emulator row.
+                title: session.target?.pickerTitle ?? "Android",
+                systemImage: pickerSystemImage,
+                isRefreshing: session.isRefreshing,
+                refreshHelp: "Re-scan connected Android devices",
+                refresh: { session.refreshDevices() }
+            )
 
             if session.devices.isEmpty && session.bootableAVDs.isEmpty {
                 emptyState
@@ -217,7 +206,7 @@ private struct AndroidPickerView: View {
                                 } label: {
                                     deviceRow(device)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.liquidGlassPressable)
                                 .disabled(!device.isConnectable)
                             }
                         } header: {
@@ -235,7 +224,7 @@ private struct AndroidPickerView: View {
                                 } label: {
                                     avdRow(avd)
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.liquidGlassPressable)
                             }
                         }
                     }
@@ -262,23 +251,14 @@ private struct AndroidPickerView: View {
     }
 
     private func deviceRow(_ device: AndroidDevice) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: device.isEmulator ? "apps.iphone" : "smartphone")
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(device.displayName)
-                if let hint = stateHint(device) {
-                    Text(hint).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            Image(systemName: device.isConnectable ? "chevron.right" : "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-        .contentShape(Rectangle())
-        .padding(.vertical, 4)
+        DevicePickerRow(
+            systemImage: device.isEmulator ? "apps.iphone" : "smartphone",
+            // Every Google emulator image reports the same model string; the
+            // AVD name is what the user created and recognizes (HIER-5).
+            title: session.displayName(for: device),
+            detail: stateHint(device),
+            trailingSystemImage: device.isConnectable ? "chevron.right" : "exclamationmark.triangle"
+        )
     }
 
     /// Only the Simulator target lists bootable AVDs; the header text only earns
@@ -288,21 +268,12 @@ private struct AndroidPickerView: View {
     }
 
     private func avdRow(_ avd: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "play.circle")
-                .foregroundStyle(.secondary)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(EmulatorBridge.displayName(for: avd))
-                Text("Not running — tap to boot").font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: "power")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-        .contentShape(Rectangle())
-        .padding(.vertical, 4)
+        DevicePickerRow(
+            systemImage: "play.circle",
+            title: EmulatorBridge.displayName(for: avd),
+            detail: "Not running — tap to boot",
+            trailingSystemImage: "power"
+        )
     }
 
     private func stateHint(_ device: AndroidDevice) -> String? {
@@ -316,24 +287,13 @@ private struct AndroidPickerView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            if session.isRefreshing {
-                ProgressView()
-                Text("Looking for devices…").foregroundStyle(.secondary)
-            } else if let error = session.lastError {
-                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
-                Text("Couldn't List Devices").font(.headline)
-                Text(error).font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
-            } else {
-                Image(systemName: "smartphone").scaledFont(size: 36).foregroundStyle(.secondary)
-                Text(emptyTitle).font(.headline)
-                Text(emptyGuidance)
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
-            }
+        if session.isRefreshing {
+            DevicePaneMessage("Looking for devices…", systemImage: pickerSystemImage, isLoading: true)
+        } else if let error = session.lastError {
+            DevicePaneMessage("Couldn't List Devices", systemImage: "exclamationmark.triangle", detail: error)
+        } else {
+            DevicePaneMessage(emptyTitle, systemImage: "smartphone", detail: emptyGuidance)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var pickerSystemImage: String {
@@ -363,19 +323,15 @@ private struct AndroidToolingMissingView: View {
     let session: AndroidDeviceSession
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "wrench.and.screwdriver").scaledFont(size: 36).foregroundStyle(.secondary)
-            Text("adb Required").font(.headline)
-            Text("Mirroring an Android device needs the adb tool from Android platform-tools.\n\nInstall it with:\nbrew install --cask android-platform-tools\n\nor install Android Studio, then Refresh.")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .multilineTextAlignment(.center).padding(.horizontal, 32)
+        DevicePaneMessage(
+            "adb Required",
+            systemImage: "wrench.and.screwdriver",
+            detail: "Mirroring an Android device needs the adb tool from Android platform-tools.\n\nInstall it with:\nbrew install --cask android-platform-tools\n\nor install Android Studio, then Refresh.",
+            onCanvas: true
+        ) {
             Button("Refresh") { session.refreshDevices() }
                 .compatGlassProminentButtonStyle()
         }
-        .foregroundStyle(.white)
-        .environment(\.colorScheme, .dark)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(PreviewCanvasBackground())
     }
 }
 
@@ -385,38 +341,35 @@ private struct AndroidStatusOverlay: View {
     let session: AndroidDeviceSession
 
     var body: some View {
-        VStack(spacing: 12) {
-            switch session.status {
-            case .booting(let name):
-                ProgressView()
-                Text("Starting \(name)…").font(.headline)
-                Text("The emulator can take a minute to boot.")
-                    .font(.subheadline).foregroundStyle(.secondary)
+        switch session.status {
+        case .booting(let name):
+            DevicePaneMessage(
+                "Starting \(name)…",
+                systemImage: "apps.iphone",
+                detail: "The emulator can take a minute to boot.",
+                isLoading: true,
+                onCanvas: true
+            ) {
                 Button("Back to Devices") { session.chooseAnotherDevice() }
                     .compatGlassButtonStyle()
-                    .padding(.top, 4)
-            case .connecting(let name):
-                ProgressView()
-                Text("Connecting to \(name)…").font(.headline)
-            case .failed(let message):
-                Image(systemName: "exclamationmark.triangle").scaledFont(size: 36).foregroundStyle(.secondary)
-                Text("Device Unavailable").font(.headline)
-                Text(message).font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
-                HStack {
-                    Button("Retry") { session.retry() }
-                        .compatGlassProminentButtonStyle()
-                    Button("Back to Devices") { session.chooseAnotherDevice() }
-                        .compatGlassButtonStyle()
-                }
-            default:
-                EmptyView()
             }
+        case .connecting(let name):
+            DevicePaneMessage("Connecting to \(name)…", systemImage: "smartphone", isLoading: true, onCanvas: true)
+        case .failed(let message):
+            DevicePaneMessage(
+                "Device Unavailable",
+                systemImage: "exclamationmark.triangle",
+                detail: message,
+                onCanvas: true
+            ) {
+                Button("Retry") { session.retry() }
+                    .compatGlassProminentButtonStyle()
+                Button("Back to Devices") { session.chooseAnotherDevice() }
+                    .compatGlassButtonStyle()
+            }
+        default:
+            PreviewCanvasBackground()
         }
-        .foregroundStyle(.white)
-        .environment(\.colorScheme, .dark)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(PreviewCanvasBackground())
     }
 }
 

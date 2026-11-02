@@ -97,14 +97,14 @@ struct VolumeScrollListView<Item: Identifiable, RowContent: View>: View {
                     currentIndex = newIndex
                     selectedID = items[newIndex].id
                     onHighlightChanged?(items[newIndex])
-                    withAnimation {
+                    withAnimation(LiquidGlassMetrics.spring) {
                         proxy.scrollTo(items[newIndex].id, anchor: .center)
                     }
                 }
             }
             .onChange(of: selectedID) {
                 guard let selectedID else { return }
-                withAnimation {
+                withAnimation(LiquidGlassMetrics.spring) {
                     proxy.scrollTo(selectedID, anchor: .center)
                 }
             }
@@ -130,8 +130,12 @@ struct VolumeScrollListView<Item: Identifiable, RowContent: View>: View {
     @ViewBuilder
     private func sectionContent(_ section: VolumeScrollSection<Item>) -> some View {
         if let title = section.title {
-            Section(title) {
+            Section {
                 rows(for: section.items)
+            } header: {
+                // "Pinned"/"Workspaces" in the legible gray: the system
+                // header gray is 3.3:1 on the light grouped background.
+                Text(title).legibleSectionText()
             }
         } else {
             rows(for: section.items)
@@ -141,12 +145,16 @@ struct VolumeScrollListView<Item: Identifiable, RowContent: View>: View {
     @ViewBuilder
     private func rows(for sectionItems: [Item]) -> some View {
         ForEach(sectionItems) { item in
-            rowContent(item, item.id == selectedID)
+            let isHighlighted = item.id == selectedID
+            rowContent(item, isHighlighted)
+                // Accent wash marks the volume-button cursor; a state signal,
+                // not decoration (COL-4), and announced as the selection.
                 .listRowBackground(
-                    item.id == selectedID
+                    isHighlighted
                         ? Color.accentColor.opacity(0.2)
                         : nil
                 )
+                .accessibilityAddTraits(isHighlighted ? .isSelected : [])
                 .id(item.id)
         }
     }
@@ -738,7 +746,7 @@ private struct PreviewItem: Identifiable {
                     .font(.caption.weight(.bold))
                     .monospacedDigit()
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
                     .padding(.vertical, 2)
                     .background(.red, in: Capsule())
             }

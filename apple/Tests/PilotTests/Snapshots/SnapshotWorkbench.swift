@@ -298,8 +298,9 @@ private struct SnapshotNotes: View {
                 ForEach(fixtures.workspace.notes) { note in
                     Text(note.displayTitle).lineLimit(1)
                         .padding(.horizontal, 12).padding(.vertical, 6)
+                        // Opaque stand-in for NotesView's capsule glass tabs.
                         .background(note.id == fixtures.workspace.selectedNoteID ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.08),
-                                    in: RoundedRectangle(cornerRadius: 7))
+                                    in: Capsule())
                 }
                 Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
                 Spacer()
