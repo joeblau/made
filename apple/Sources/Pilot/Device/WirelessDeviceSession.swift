@@ -203,14 +203,12 @@ struct WirelessDeviceView: View {
         } else {
             Button(title, action: action)
                 .compatGlassButtonStyle()
-                .buttonBorderShape(.capsule)
         }
     }
 
     private func startButton(_ title: String) -> some View {
         Button(title) { session.start() }
             .compatGlassProminentButtonStyle()
-            .buttonBorderShape(.capsule)
             .fixedSize()
             .accessibilityLabel("Start Wireless Sharing")
     }
@@ -249,7 +247,6 @@ struct WirelessDeviceView: View {
                 words(message)
                 Button("Try Again") { session.start() }
                     .compatGlassProminentButtonStyle()
-                    .buttonBorderShape(.capsule)
             case .stopped:
                 words("Wireless Sharing Is Off").font(.headline)
                 // A narrow pane takes the short title instead of truncating
@@ -315,10 +312,12 @@ struct WirelessDeviceView: View {
 
     private func compactActionButton(_ title: String, systemImage: String) -> some View {
         Button { session.start() } label: {
-            Label(title, systemImage: systemImage).labelStyle(.iconOnly)
+            Label(title, systemImage: systemImage)
         }
-        .compatGlassProminentButtonStyle()
-        .buttonBorderShape(.circle)
+        // The icon helper, not the prominent style plus an outer
+        // `.buttonBorderShape(.circle)`: that style pins a capsule innermost,
+        // which won and drew this glyph-only action as a pill.
+        .compatGlassIconButton(prominent: true)
         .help(title)
     }
 

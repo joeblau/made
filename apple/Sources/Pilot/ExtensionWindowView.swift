@@ -840,6 +840,11 @@ struct ExtensionWindowView: View {
             tasksStore.load(directory: nil)
             controller.suspend()
         }
+        // The same window-wide capsule default as Main (`ContentView`), so
+        // the panes and Inspector Extendo hosts never fall back to the
+        // squared macOS 26 bordered/glass and picker shapes. Controls that
+        // set their own shape (glass icon circles) still win.
+        .buttonBorderShape(.capsule)
     }
 
     private func inspectorPresentedBinding(for workspace: Workspace?) -> Binding<Bool> {

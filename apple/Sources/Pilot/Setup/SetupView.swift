@@ -290,7 +290,9 @@ struct SetupView: View {
                     .disabled(tools.isChecking)
                 if tools.isChecking { ProgressView().controlSize(.small) }
                 Spacer()
+                // Glass like Check Again: an action in the row, not inline text.
                 Link("Get Homebrew", destination: URL(string: "https://brew.sh/")!)
+                    .compatGlassButtonStyle()
             }
             Text("Run copied commands in Terminal. Install and sign in to your preferred coding agents there as well. Cockpit uses your existing accounts; it does not install tools or change credentials automatically.")
                 .font(.caption).foregroundStyle(.secondary)

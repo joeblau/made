@@ -176,18 +176,35 @@ struct NotesView: View {
         NoteWordWrap(rawValue: wordWrapRawValue) ?? .eighty
     }
 
-    /// A standard pop-up picker rather than a hand-built checkmark menu: it
-    /// renders as a Liquid Glass pop-up button on macOS 26 and keeps the
-    /// selected width visible without a second "compact" title.
+    /// A visible label beside a capsule glass menu button showing the
+    /// selected width. An in-content `Picker(.menu)` draws the standard
+    /// pop-up bezel on macOS 26, not glass, so the pop-up is a button-style
+    /// `Menu` whose inline picker still supplies the native checkmark.
     private var wordWrapMenu: some View {
-        Picker("Word Wrap", selection: wordWrapSelection) {
-            ForEach(NoteWordWrap.allCases) { option in
-                Text(option.title).tag(option)
+        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            // Legible gray: system secondary measured 3.95:1 on white.
+            Text("Word Wrap")
+                .foregroundStyle(GlassLegibleText.secondaryColor)
+                .accessibilityHidden(true)
+            Menu {
+                Picker("Word Wrap", selection: wordWrapSelection) {
+                    ForEach(NoteWordWrap.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                Text(selectedWordWrap.title)
             }
+            .menuStyle(.button)
+            .compatGlassButtonStyle()
+            .controlSize(.small)
+            .fixedSize()
+            .accessibilityLabel("Word Wrap")
+            .accessibilityValue(selectedWordWrap.title)
         }
-        .pickerStyle(.menu)
         .scaledFont(size: 11, weight: .medium)
-        .fixedSize()
         .help("Word Wrap")
     }
 

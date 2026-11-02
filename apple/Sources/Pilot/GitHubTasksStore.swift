@@ -269,18 +269,28 @@ private struct GitHubTaskRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            // Inline text links inside a content card: plain-looking, but with
-            // hover and press feedback (BTN-5) instead of dead styles.
+            // The issue number runs a command, so it is a real glass control
+            // rather than a link-styled label; the title beside it stays an
+            // inline link to GitHub (BTN-5 hover/press on both).
+            // Primary label like every glass button: accent blue measured
+            // 2.25:1 (dark) and 3.87:1 (light) on the capsule. A checkmark,
+            // not a color, confirms the send.
             Button(action: sendImplementPrompt) {
-                Text("#\(task.number)")
-                    .font(.system(.body, design: .monospaced, weight: .semibold))
-                    .foregroundStyle(sent ? Color.green : Color.accentColor)
-                    .contentTransition(.interpolate)
-                    .padding(washInset)
+                Group {
+                    if sent {
+                        Text("\(Image(systemName: "checkmark"))\(task.number)")
+                    } else {
+                        Text("#\(task.number)")
+                    }
+                }
+                .font(.system(.callout, design: .monospaced, weight: .semibold))
+                .foregroundStyle(.primary)
+                .contentTransition(.interpolate)
             }
-            .buttonStyle(.liquidGlassPressable)
-            .padding(-washInset)
+            .compatGlassButtonStyle()
+            .controlSize(.small)
             .animation(LiquidGlassMetrics.stateChange, value: sent)
+            .accessibilityLabel("Implement issue \(task.number)")
             .help("Run an \u{201C}implement #\(task.number)\u{201D} task in the active terminal")
 
             VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {

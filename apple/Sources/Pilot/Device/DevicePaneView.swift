@@ -99,7 +99,6 @@ struct DevicePaneView: View {
                                 Label("Share Wirelessly…", systemImage: "airplay.video")
                             }
                             .compatGlassButtonStyle()
-                            .buttonBorderShape(.capsule)
                             .environment(\.colorScheme, .dark)
                             .padding(LiquidGlassMetrics.Spacing.small)
                         }
@@ -551,7 +550,6 @@ private struct IOSDevicePickerView: View {
                     .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
             }
             .compatGlassButtonStyle()
-            .buttonBorderShape(.capsule)
             .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
             .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
 

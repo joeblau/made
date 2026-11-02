@@ -133,7 +133,6 @@ struct RemoteDesktopView: View {
                             Label("Add Computer", systemImage: "plus")
                         }
                         .compatGlassButtonStyle()
-                        .buttonBorderShape(.capsule)
                         .disabled(group.isFull)
                         .help(group.isFull ? "This group already has four computers" : "Add a computer to this group")
                     }
@@ -390,7 +389,6 @@ private struct RemoteConnectionPane: View {
             Button("Cancel") { session.disconnect() }
                 .keyboardShortcut(isSelected ? .cancelAction : nil)
                 .compatGlassButtonStyle()
-                .buttonBorderShape(.capsule)
         }
         .environment(\.colorScheme, .dark)
         .padding(LiquidGlassMetrics.Spacing.xxLarge)
@@ -483,7 +481,6 @@ private struct RemoteConnectionPane: View {
             }
             .keyboardShortcut(isSelected ? .defaultAction : nil)
             .compatGlassProminentButtonStyle()
-            .buttonBorderShape(.capsule)
             .controlSize(.large)
             .frame(maxWidth: Self.formWidth)
             .disabled(connection.host.trimmingCharacters(in: .whitespaces).isEmpty)
@@ -615,7 +612,6 @@ private struct RemoteComputerPicker: View {
 
                 Button("Connect", action: connectManual)
                     .compatGlassProminentButtonStyle()
-                    .buttonBorderShape(.capsule)
                     .disabled(manualHost.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
@@ -693,7 +689,6 @@ private struct RemoteComputerPicker: View {
                 }
             }
             .compatGlassButtonStyle()
-            .buttonBorderShape(.capsule)
             .controlSize(.small)
             // macOS 27.2 opens the top of Privacy & Security, not the pane.
             .help("Opens Privacy & Security; then choose Local Network")

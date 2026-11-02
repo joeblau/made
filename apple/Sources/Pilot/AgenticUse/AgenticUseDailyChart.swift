@@ -145,22 +145,40 @@ struct AgenticUseDailyChartPanel: View {
         .fixedSize()
     }
 
+    /// Secondary glass capsules beside the title. A plain menu `Picker` is an
+    /// unglazed pop-up button on macOS 26+, so each is a glass `Menu` holding
+    /// an inline picker (checkmarked choices); one container blends the pair.
     private var trailingControls: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            if Self.offersWeekly(snapshot.range) {
-                Picker("Granularity", selection: $granularity) {
-                    ForEach(Granularity.allCases) { Text($0.rawValue).tag($0) }
+        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                if Self.offersWeekly(snapshot.range) {
+                    glassMenuPicker("Granularity", selection: $granularity)
                 }
-                .labelsHidden()
-                .fixedSize()
+                glassMenuPicker("Chart style", selection: $style)
             }
-            Picker("Chart style", selection: $style) {
-                ForEach(Style.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .labelsHidden()
-            .fixedSize()
         }
         .controlSize(.small)
+    }
+
+    private func glassMenuPicker<Option: RawRepresentable<String> & CaseIterable & Identifiable & Hashable>(
+        _ title: String,
+        selection: Binding<Option>
+    ) -> some View where Option.AllCases: RandomAccessCollection {
+        Menu {
+            Picker(title, selection: selection) {
+                ForEach(Option.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Text(selection.wrappedValue.rawValue)
+        }
+        .menuStyle(.button)
+        .compatGlassButtonStyle()
+        .fixedSize()
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityValue(selection.wrappedValue.rawValue)
     }
 
     /// Weekly rollup only helps once there are more than a couple of weeks.

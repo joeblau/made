@@ -595,14 +595,25 @@ private struct RunnerDetailsSheet: View {
                         .liquidGlassField()
                 }
                 stackedRow("Hardware") {
-                    Picker("Hardware", selection: $presentation.hardware) {
-                        Text("Automatic (\(RunnerHardware.inferred(for: runner).title))").tag(nil as RunnerHardware?)
-                        ForEach(RunnerHardware.allCases) { hardware in
-                            Text(hardware.title).tag(Optional(hardware))
+                    // A glass menu rather than the unglazed system pop-up,
+                    // so it matches the glass field above it.
+                    Menu {
+                        Picker("Hardware", selection: $presentation.hardware) {
+                            Text(automaticHardwareTitle).tag(nil as RunnerHardware?)
+                            ForEach(RunnerHardware.allCases) { hardware in
+                                Text(hardware.title).tag(Optional(hardware))
+                            }
                         }
+                        .pickerStyle(.inline)
+                        .labelsHidden()
+                    } label: {
+                        Text(presentation.hardware?.title ?? automaticHardwareTitle)
                     }
-                    .labelsHidden()
+                    .menuStyle(.button)
+                    .compatGlassButtonStyle()
                     .fixedSize()
+                    .accessibilityLabel("Hardware")
+                    .accessibilityValue(presentation.hardware?.title ?? automaticHardwareTitle)
                 }
             }
             Text("Device names and images are saved in Cockpit. Runner labels come from GitHub.")
@@ -621,6 +632,10 @@ private struct RunnerDetailsSheet: View {
         }
         .padding(LiquidGlassMetrics.Spacing.xLarge)
         .frame(width: 440)
+    }
+
+    private var automaticHardwareTitle: String {
+        "Automatic (\(RunnerHardware.inferred(for: runner).title))"
     }
 
     /// A visible label above its control; the control's own title stays its
