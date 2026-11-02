@@ -345,23 +345,29 @@ struct DevicePaneMessage<Actions: View>: View {
         self.actions = actions()
     }
 
-    /// Below this width a title word like "Devices" no longer fits on a line
-    /// and ContentUnavailableView breaks it mid-word ("De- / vice / s"). That
-    /// happens when a narrow window can't give every pane the 160pt floor.
-    static var compactWidth: CGFloat { 120 }
-
     @State private var width: CGFloat = .infinity
+    /// The narrowest width at which the full message's widest title or detail
+    /// word still fits on a line, measured at the current UI zoom and Dynamic
+    /// Type. Below it ContentUnavailableView would break a word mid-word
+    /// ("De- / vice / s", "Simula / tors"), which happens when a narrow window
+    /// can't give every pane the 160pt floor.
+    @State private var wordFloor: CGFloat = 0
 
     var body: some View {
         let content = Group {
-            if width < Self.compactWidth {
+            if width < wordFloor {
                 compactMessage
             } else {
-                fullMessage
+                fullMessage(probing: false)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .background {
+            WordFloorProbe { wordFloor = $0 } content: {
+                fullMessage(probing: true)
+            }
+        }
 
         if onCanvas {
             content
@@ -404,23 +410,26 @@ struct DevicePaneMessage<Actions: View>: View {
         return "\(title). \(detail)"
     }
 
-    private var fullMessage: some View {
+    /// `probing` lays the title and detail out one word per line and leaves
+    /// out the actions (the compact layout shows the same buttons), so a
+    /// hidden copy measures the word floor in the real fonts and insets.
+    private func fullMessage(probing: Bool) -> some View {
         ContentUnavailableView {
             Label {
-                Text(title)
+                Text(WordFloorText.oneWordPerLine(title, probing: probing))
             } icon: {
                 Image(systemName: systemImage)
-                    .symbolEffect(.pulse, isActive: isLoading)
+                    .symbolEffect(.pulse, isActive: isLoading && !probing)
             }
         } description: {
             if let detail, !detail.isEmpty {
-                Text(detail)
+                Text(WordFloorText.oneWordPerLine(detail, probing: probing))
             }
         } actions: {
             if isLoading {
                 ProgressView().controlSize(.small)
             }
-            if hasActions {
+            if hasActions, !probing {
                 // Side by side when the pane is wide enough, stacked when
                 // it is narrow, so a label is never truncated ("Open Cam…").
                 CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
@@ -438,6 +447,35 @@ struct DevicePaneMessage<Actions: View>: View {
         }
         .legibleSecondaryHierarchy()
         .uiZoomedDynamicType()
+    }
+}
+
+/// A hidden, `fixedSize` copy of a pane's full layout that reports its ideal
+/// width. Laid out with one word per line (`WordFloorText`), that width is
+/// the narrowest the full layout can take without breaking inside a word, at
+/// whatever UI zoom and Dynamic Type are in effect (TYPE-2). Panes switch to
+/// their compact glyph layout below it instead of at a fixed guess.
+struct WordFloorProbe<Content: View>: View {
+    let onChange: (CGFloat) -> Void
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        content
+            .fixedSize()
+            .hidden()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { onChange($0) }
+    }
+}
+
+enum WordFloorText {
+    /// `string` with each space-separated word on its own line when
+    /// `probing`, so its ideal width is its widest word. Hyphenated words
+    /// ("Wi-Fi") stay whole.
+    static func oneWordPerLine(_ string: String, probing: Bool) -> String {
+        guard probing else { return string }
+        return string.split(whereSeparator: { $0 == " " || $0 == "\n" }).joined(separator: "\n")
     }
 }
 

@@ -84,20 +84,63 @@ struct WirelessDeviceView: View {
                 }
                 if session.status != .streaming {
                     Group {
-                        if instructionsWidth < DevicePaneMessage<EmptyView>.compactWidth {
+                        if instructionsWidth < instructionsWordFloor {
                             compactInstructions
                         } else {
-                            instructions
+                            instructions(probing: false)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { instructionsWidth = $0 }
+                    .background {
+                        WordFloorProbe { instructionsProbeWidth = $0 } content: {
+                            instructions(probing: true)
+                        }
+                        WordFloorProbe { receiverNameWidth = $0 } content: {
+                            // Same zoom as inside `instructions`, applied once.
+                            receiverName.uiZoomedDynamicType()
+                        }
+                    }
                 }
             }
         }
     }
 
     @State private var instructionsWidth: CGFloat = .infinity
+    /// Ideal width of the instructions laid out one word per line at the
+    /// narrow (`small`) margin: the widest word, code, or button plus margins.
+    @State private var instructionsProbeWidth: CGFloat = 0
+    /// Unscaled width of the receiver name, which may shrink to half size.
+    @State private var receiverNameWidth: CGFloat = 0
+
+    /// The narrowest pane that shows the full instructions without breaking
+    /// inside a word or the receiver name at the current UI zoom and Dynamic
+    /// Type (TYPE-2). Below it the compact layout takes over.
+    private var instructionsWordFloor: CGFloat {
+        max(
+            instructionsProbeWidth,
+            receiverNameWidth * Self.receiverNameMinimumScale + 2 * LiquidGlassMetrics.Spacing.small
+        )
+    }
+
+    /// The stage margin: wide when the words still fit inside it, otherwise
+    /// the narrow margin, so the text gets the width before the margin does.
+    private var instructionsPadding: CGFloat {
+        let wideMarginExtra = 2 * (LiquidGlassMetrics.Spacing.xxLarge - LiquidGlassMetrics.Spacing.small)
+        return instructionsWidth < max(240, instructionsWordFloor + wideMarginExtra)
+            ? LiquidGlassMetrics.Spacing.small
+            : LiquidGlassMetrics.Spacing.xxLarge
+    }
+
+    private static let receiverNameMinimumScale: CGFloat = 0.5
+
+    /// The name the user picks in Screen Mirroring. It shrinks rather than
+    /// breaking inside a word ("Cockpi / t F78D"); the word floor keeps the
+    /// pane wide enough for it at half size.
+    private var receiverName: some View {
+        Text(session.receiverName).font(.title2.bold())
+            .lineLimit(1).minimumScaleFactor(Self.receiverNameMinimumScale)
+    }
 
     /// One full header row. `title` nil shows only the glyph (still named for
     /// VoiceOver); `iconOnlyButtons` turns the actions into circular icon
@@ -172,44 +215,52 @@ struct WirelessDeviceView: View {
             .accessibilityLabel("Start Wireless Sharing")
     }
 
-    private var instructions: some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.medium) {
+    /// The full instructions. `probing` is the hidden measuring copy: one
+    /// word per line, the receiver name left out (measured on its own), and
+    /// the short Start button, at the narrow margin.
+    private func instructions(probing: Bool) -> some View {
+        let words = { (text: String) in Text(WordFloorText.oneWordPerLine(text, probing: probing)) }
+        return VStack(spacing: LiquidGlassMetrics.Spacing.medium) {
             Image(systemName: "airplay.video")
                 .font(.largeTitle)
                 // Pulses while the receiver is listening for a device (MOT-5).
-                .symbolEffect(.pulse, isActive: isListening)
+                .symbolEffect(.pulse, isActive: isListening && !probing)
             switch session.status {
             case .starting:
                 ProgressView()
-                Text("Starting wireless sharing…")
+                words("Starting wireless sharing…")
             case .waiting, .pairing:
-                Text("Mirror Your iPhone or iPad").font(.headline)
-                Text("On the same Wi-Fi network, open Control Center → Screen Mirroring and choose:")
-                // The name the user picks in Screen Mirroring shrinks rather
-                // than breaking inside a word ("Cockpi / t F78D").
-                Text(session.receiverName).font(.title2.bold()).textSelection(.enabled)
-                    .lineLimit(1).minimumScaleFactor(0.5)
+                words("Mirror Your iPhone or iPad").font(.headline)
+                // A non-breaking hyphen keeps "Wi‑Fi" on one line.
+                words("On the same Wi\u{2011}Fi network, open Control Center → Screen Mirroring and choose:")
+                if !probing {
+                    receiverName.textSelection(.enabled)
+                }
                 if case .pairing(let code) = session.status {
-                    Text("Enter this code on your device")
+                    words("Enter this code on your device")
                     Text(code)
                         .font(.largeTitle.monospaced().weight(.medium))
                         .textSelection(.enabled)
                 }
-                Text("Video only. Keep this pane open while sharing.")
+                words("Video only. Keep this pane open while sharing.")
                     .font(.caption).foregroundStyle(.secondary)
             case .failed(let message):
-                Text("Wireless Sharing Stopped").font(.headline)
-                Text(message)
+                words("Wireless Sharing Stopped").font(.headline)
+                words(message)
                 Button("Try Again") { session.start() }
                     .compatGlassProminentButtonStyle()
                     .buttonBorderShape(.capsule)
             case .stopped:
-                Text("Wireless Sharing Is Off").font(.headline)
+                words("Wireless Sharing Is Off").font(.headline)
                 // A narrow pane takes the short title instead of truncating
                 // the button to "Start Wireless Sh…" (LAY-6).
-                ViewThatFits(in: .horizontal) {
-                    startButton("Start Wireless Sharing")
+                if probing {
                     startButton("Start Sharing")
+                } else {
+                    ViewThatFits(in: .horizontal) {
+                        startButton("Start Wireless Sharing")
+                        startButton("Start Sharing")
+                    }
                 }
             case .streaming:
                 EmptyView()
@@ -222,7 +273,7 @@ struct WirelessDeviceView: View {
         // A narrow pane trades the stage margin for text width, so the
         // receiver name ("Cockpit F78D") fits whole instead of losing the
         // suffix that tells receivers apart.
-        .padding(instructionsWidth < 240 ? LiquidGlassMetrics.Spacing.small : LiquidGlassMetrics.Spacing.xxLarge)
+        .padding(probing ? LiquidGlassMetrics.Spacing.small : instructionsPadding)
         .frame(maxWidth: 480)
     }
 
