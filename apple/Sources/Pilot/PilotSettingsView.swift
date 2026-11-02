@@ -16,7 +16,7 @@ struct PilotSettingsView: View {
         NavigationSplitView {
             // The system sidebar search field (HIER-6) replaces a hand-drawn
             // capsule; it adopts Liquid Glass on macOS 26 automatically.
-            let showsGeneral = matchesSearch("General identity keys about version updates setup permissions tools")
+            let showsGeneral = matchesSearch("General identity keys about version updates setup permissions tools Chromium")
             let showsUsage = matchesSearch("Usage Claude Codex Kimi Grok")
             List(selection: sidebarSelection) {
                 if showsGeneral {

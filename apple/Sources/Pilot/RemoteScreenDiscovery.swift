@@ -86,6 +86,16 @@ final class RemoteScreenDiscovery {
         browser.start(queue: .main)
     }
 
+    /// Replaces a browser stuck in `.waiting`: after Local Network access is
+    /// granted, an open picker kept showing the denied state (macOS 27.2)
+    /// until it was closed and reopened. Called when the app becomes active.
+    func retryIfNeedsPermission() {
+        guard shouldBeRunning, case .needsPermission = browseState else { return }
+        browser?.cancel()
+        browser = nil
+        start()
+    }
+
     func stop() {
         shouldBeRunning = false
         restartTask?.cancel()

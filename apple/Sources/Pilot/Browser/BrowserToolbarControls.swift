@@ -234,11 +234,20 @@ struct BrowserAddressToolbarControl: View {
 struct BrowserNavigationToolbarControls: View {
     let state: BrowserState
 
+    @State private var wallets: [WalletExtension] = []
+
     var body: some View {
         // Wallets lead, separated from the navigation ControlGroup so they read
         // as their own affordance rather than a third arrow.
-        BrowserWalletToolbarControls(state: state)
+        BrowserWalletToolbarControls(state: state, wallets: wallets)
         BrowserBackForwardToolbarControls(state: state)
+            // Discovery hangs off the arrows, which are always present; the
+            // wallet controls are empty until wallets exist, so a task there
+            // never ran. Keyed by engine so a slot reused for another pane
+            // rediscovers, and WebKit panes, which cannot host extensions, skip it.
+            .task(id: state.engine) {
+                wallets = state.engine == .chromium ? WalletExtensionRegistry.discover() : []
+            }
     }
 }
 

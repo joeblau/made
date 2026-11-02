@@ -215,10 +215,13 @@ struct ScreenFrameReader: NSViewRepresentable {
 /// Each button opens that wallet's own action popup in a floating panel above
 /// the browser, the way Chrome does. Pilot holds no keys and signs nothing: the
 /// extension owns its secrets, and this is only the affordance that opens its UI.
+///
+/// The caller discovers `wallets`: this view is empty until some exist, and a
+/// `.task` on an empty `Group` never runs, so discovery here never happened.
 struct BrowserWalletToolbarControls: View {
     let state: BrowserState
+    let wallets: [WalletExtension]
 
-    @State private var wallets: [WalletExtension] = []
     @State private var anchors: [String: NSRect] = [:]
 
     var body: some View {
@@ -242,10 +245,6 @@ struct BrowserWalletToolbarControls: View {
                     .accessibilityIdentifier("browser.wallet.\(wallet.id)")
                 }
             }
-        }
-        .task {
-            guard state.engine == .chromium else { return }
-            wallets = WalletExtensionRegistry.discover()
         }
     }
 }

@@ -574,7 +574,18 @@ private struct RemoteComputerPicker: View {
                 .padding(.bottom, LiquidGlassMetrics.Spacing.medium)
         }
         .frame(width: 520)
+        // The panel floats over the always-black screen grid, where light glass
+        // turned mid-gray (title 5.9:1, secondary 4.5:1) and dark system
+        // secondary measured 3.2:1. Always dark, like `connectingOverlay`, with
+        // the legible gray for `.secondary` (TYPE-3, COL-2).
+        .legibleSecondaryHierarchy()
         .compatFloatingGlass(in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.panel, style: .continuous))
+        .environment(\.colorScheme, .dark)
+        // A browser left `.waiting` keeps reporting denied after access is
+        // granted, so coming back from System Settings starts a fresh one.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            discovery.retryIfNeedsPermission()
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.top, 60)
         .frame(maxHeight: .infinity, alignment: .top)
@@ -683,6 +694,8 @@ private struct RemoteComputerPicker: View {
             .compatGlassButtonStyle()
             .buttonBorderShape(.capsule)
             .controlSize(.small)
+            // macOS 27.2 opens the top of Privacy & Security, not the pane.
+            .help("Opens Privacy & Security; then choose Local Network")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(LiquidGlassMetrics.Spacing.xLarge)
