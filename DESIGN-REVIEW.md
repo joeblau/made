@@ -220,7 +220,7 @@ Verification: `build-ci.sh`, `test.sh all` (PilotTests 819 passed, 2 CEF skips; 
 
 An inventory listed 45 surface groups that no earlier capture had reached (55 rows once split by state). Each was then captured in light and dark mode on real glass: Cockpit in the macOS 27.2 VM, Walkie and Kneeboard in the iOS/iPadOS 27.2 simulators, and Trigger in the watchOS simulator. An independent critic re-read every capture against the zandesign checks. Hard-to-reach states use DEBUG-only fixtures: Cockpit's `-demoPairingPrompt`, `-demoPeerRecording`, `-demoPeersConnected` and `-demoSecureMessaging`, and Walkie's `-demoScenario <name>`. A fixture prompt only dismisses itself and never resolves a real pairing request. Copilot's compilation conditions now inherit `DEBUG` (`$(inherited)` in `project.yml`), so these fixtures compile in Debug and are absent from Release.
 
-Result: of the 55 rows, 48 are covered on real glass (43 before the recapture pass) and 1 is unreachable by design (No Panes; the last pane can't be closed). The wireless Device pane is partly covered: every state except a live stream. The 5 rows not captured are listed at the end of this section.
+Result: of the 55 rows, 51 are covered on real glass and 1 is unreachable by design (No Panes; the last pane can't be closed). Two are partly covered: the wireless Device pane (every state except a live stream) and the Chromium wallet popup (the button and tooltip, not the popup content). One is not captured: the USB Device stream. Both rounds below were recaptured in the VM and simulators after the fixes.
 
 Fixes from the coverage round, then from the recapture of those fixes:
 
@@ -231,7 +231,7 @@ Fixes from the coverage round, then from the recapture of those fixes:
   - Device picker titles truncate to one line with the full name in the tooltip, instead of breaking mid-word.
   - The start page keeps the port visible: the URL truncates from the front, and the hotkey badge drops first.
   - ⌘C copies a Simulator screenshot.
-  - Panes now have a 160pt minimum width. Dragging one divider no longer resizes the panes that aren't part of the drag. When the window is too narrow to give every pane 160pt, device-pane messages and the Wireless instructions switch to a glyph below 120pt, instead of breaking words ("De- / vice / s"). The text moves to the tooltip and VoiceOver label, and the Wireless pane keeps the pairing code and icon-only Start and Try Again buttons. The receiver name shrinks to fit on one line rather than breaking.
+  - Panes now have a 160pt minimum width. Dragging one divider no longer resizes the panes that aren't part of the drag. When the window is too narrow to give every pane 160pt, device-pane messages and the Wireless instructions switch to a glyph layout at the measured width where their longest word stops fitting, so no word ever breaks ("De- / vice / s"); checked from 100 to 200pt. The text moves to the tooltip and VoiceOver label, and the Wireless pane keeps the pairing code and icon-only Start and Try Again buttons. The receiver name shrinks to fit on one line rather than breaking.
   - Cleared earlier in the round: ⌘L focuses the URL field when the browser is already selected; unfocused URL text and quick-open paths meet 4.5:1; and empty states, the Lasso glyph, menus, inline rename, ink controls, PR placeholders and Docker errors were tidied.
 - Cockpit hang (it predates this branch): hiding a terminal pane in a narrow window while the wireless receiver ran froze the app in a SwiftUI layout cycle. `GhosttyMetalView` set `isHidden` inside `updateNSView`, and AppKit's key-view rebuild re-entered SwiftUI's focus graph mid-update. The hide now waits for the next main-queue turn and applies whatever state is current then.
 - Walkie:
@@ -240,17 +240,34 @@ Fixes from the coverage round, then from the recapture of those fixes:
   - It keeps the error message when opened from the "Transcription Unavailable" alert.
   - The model banner sits in the safe-area inset.
   - Fixed during review: a fixture alert no longer resolves a real pending pairing request.
-- Widgets and Live Activities (shared by Walkie, Kneeboard and Cockpit): in light mode, full-color rendering darkens the status tints (`DashboardTone`). All five tones measure 4.79–4.91:1 on white, up from 2.22:1 for green and 2.31:1 for orange. Dark, tinted and vibrant rendering keep the system colors.
+- Widgets and Live Activities (shared by Walkie, Kneeboard and Cockpit): the status tints and secondary text are named colors in `DashboardColors.xcassets`, resolved when the system draws the widget. Tints resolved inside the extension had drawn undarkened on the macOS desktop. On the light macOS 27.2 desktop all five tones measure 4.79–4.91:1 and secondary text 5.33:1, up from 2.22:1 for green and 2.31:1 for orange. Accented rendering keeps the system colors. The large AI Usage widget fills its height with the token split and a bar per plan.
 - Kneeboard and Trigger: badge menu, bounded ImageIO snapshot thumbnails (640/320px), Builds link, Runners lock-screen row and contrast fixes.
 
-Not capturable in any VM or simulator, so left unverified: the live wireless stream (no Screen Mirroring sender reaches a VM), the USB Device stream (needs a cabled iPhone), Chromium find, alerts and wallet (no CEF runtime in the VM build), Remote Desktop without Local Network access (would need a TCC decision), the "Changes could not be saved" alert (no fault-injection hook), the macOS desktop widgets (their views are the shared ones covered on iOS), and the Actions "No Actions" empty state (the test `gh` stand-in can't return zero runs; the overlay logic is unit-tested). The system's destructive alert button contrast is the platform's.
+Closing rounds, each recaptured after the fix:
 
-Also found and left open:
-- Ghostty keeps building frames for a hidden terminal, because nothing calls `ghostty_surface_set_occlusion`. This predates the branch and needs its own change.
-- The Walkie progress-row status text measures 4.0:1 in light mode (system secondary).
-- The `modelLoadingCached` fixture shows "Not downloaded" next to a cached load. That is a fixture-only gap: the asynchronous storage refresh would overwrite stored state set by a fixture.
+- Cockpit:
+  - Hidden and occluded terminals report occlusion to Ghostty (`ghostty_surface_set_occlusion`), so `drawFrame` stops while they're off screen. Ghostty still rebuilds rows for incoming output; only its drawing checks visibility.
+  - The "Changes could not be saved" alert is reviewable with the DEBUG `-demoPersistenceFailure YES` fixture. Its text measures 9.6–13.3:1 and Retry is the only prominent button.
+  - Remote Desktop's picker stays dark over the black canvas, with secondary text at 7.3:1 instead of 3.2:1. An open picker recovers on its own after Local Network access is granted, and the Settings button's tooltip says to choose Local Network (macOS 27.2 opens the top of Privacy & Security).
+  - Browser Find in Page is an in-pane glass find bar for both engines, with Edit ▸ Find…, Find Next and Find Previous. ⌘F means Find only while a browser pane is selected and is Focus Selected Pane everywhere else. Typing selects the first match and Return advances.
+  - Chromium JavaScript dialogs are window sheets titled by the page's origin. Page text is capped at 1,000 characters, stripped of control and bidi characters, and shown as plain text. beforeunload reads Leave/Stay, Stay is the default, and a page that floods dialogs is throttled. Text measures 6.7–14.9:1.
+  - A failed Chromium load shows only Chromium's error page and its Reload button, not a second Retry.
+  - Chromium settings use legible secondary text and darkened state tints, and settings search finds "Chromium".
+  - Chromium crash (it predates this branch): SwiftUI's App lifecycle creates its own `NSApplication` subclass and ignores `NSPrincipalClass`, so `PilotApplication` never ran. CEF crashed on `-isHandlingSendEvent` once the wallet button could be clicked, and quitting skipped `CefShutdown`. ChromiumKit now adds `CefAppProtocol` and the `sendEvent:` wrapper to the real `NSApp` class at launch. A Chromium-only app delegate cancels the quit, shuts CEF down (capped at 5 seconds), then quits again. A logout, restart or shutdown quit, read from the quit Apple Event, exits at once. The wallet button now appears, survives a minute of use and ⌘Q exits cleanly in the VM. Its tooltip resolves `__MSG_` names from the extension's bounded `messages.json`.
+- Walkie and Kneeboard: grouped-list headers, footers and secondary rows; the speech storage sheet; dashboard sheets and empty states all use the legible gray (5.3–6.7:1 in both modes, from 3.3–4.0:1 in light). The Kneeboard Off chip uses primary text (10.7:1 dark). The `modelLoadingCached` fixture shows the stored size.
 
-Verification: `build-ci.sh`, `test.sh all` (PilotTests 841 passed with 2 CEF skips, SharedTests 227, PlotterTests 4), `lint-swift.sh --all` (0 violations in 355 files), `app-icon-tool.swift validate`, `check-docs.sh`, and the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators all pass.
+Not capturable here:
+- USB Device stream: the pane needs the screen-capture device macOS publishes only for a physical iPhone on a USB cable. The simulator doesn't provide one, the VM tool (tart 2.41.1) has no USB passthrough, and acting on a physical device is out of bounds for this review.
+- Wireless live stream: it needs a Screen Mirroring sender. The only one available is a macOS VM, and its Screen Mirroring menu lists no receivers. The simulator has no Screen Mirroring, and every other sender is a physical device. Every other wireless state is covered.
+- Actions "No Actions" empty state: the test `gh` stand-in can't return zero runs; the overlay logic is unit-tested.
+
+Left open:
+- Chromium wallet popup (P2, Chromium build only, predates this branch): the popup shows only Rabby's loading skeleton. It asks for Chrome-style CEF but is hosted as a child of an `NSView`, which CEF doesn't support, so it falls back to Alloy style without an extension process. This needs a hosting change, not a style fix.
+- When a terminal has keyboard focus, the first click into a Chromium page field doesn't take keyboard focus (predates this branch).
+- White text on the system prominent blue button measures 3.8–4.0:1 app-wide; it's the platform's style.
+- Not captured: iOS tinted and StandBy widget modes, Secure Messaging's live-session sections, and the Chromium quit timeout and logout paths.
+
+Verification: `build-ci.sh`, `test.sh all` (PilotTests 864 passed with 2 CEF skips, SharedTests 232, PlotterTests 4), `lint-swift.sh --all` (0 violations in 359 files), `app-icon-tool.swift validate`, `check-docs.sh`, the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators, the Chromium configuration build, and an XcodeGen drift check all pass.
 
 ### Open items from round 1 (resolved above unless noted)
 
