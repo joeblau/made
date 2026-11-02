@@ -76,8 +76,8 @@ struct ColorChipTests {
     }
 }
 
-@Suite("Segmented picker selection tint")
-struct SegmentedSelectionTintTests {
+@Suite("Legible accent fill")
+struct LegibleAccentTests {
     /// The system accent colors (light and dark variants, sRGB) plus white
     /// and black: every selected segment must keep its white label at or
     /// above 4.5:1 (TYPE-3) after `legibleFill`.
@@ -95,32 +95,67 @@ struct SegmentedSelectionTintTests {
 
     @Test func everyAccentClearsTheContrastFloorWithWhite() {
         for (red, green, blue) in Self.accents {
-            let fill = SegmentedSelectionTint.legibleFill(red: red, green: green, blue: blue)
-            let contrast = SegmentedSelectionTint.contrastWithWhite(red: fill.red, green: fill.green, blue: fill.blue)
-            #expect(contrast >= SegmentedSelectionTint.minimumContrast, "\(red), \(green), \(blue) -> \(contrast)")
+            let fill = LegibleAccent.legibleFill(red: red, green: green, blue: blue)
+            let contrast = LegibleAccent.contrastWithWhite(red: fill.red, green: fill.green, blue: fill.blue)
+            #expect(contrast >= LegibleAccent.minimumContrast, "\(red), \(green), \(blue) -> \(contrast)")
             #expect(contrast >= 4.5)
         }
     }
 
     @Test func darkeningKeepsTheHueAndStopsAtTheFloor() {
-        let fill = SegmentedSelectionTint.legibleFill(red: 0, green: 0.533, blue: 1)
+        let fill = LegibleAccent.legibleFill(red: 0, green: 0.533, blue: 1)
         #expect(fill.red == 0)
         #expect(abs(fill.green / fill.blue - 0.533) < 0.0001)
         // One more step lighter would fall below the floor.
         let lighter = (fill.blue + 0.01) / fill.blue
-        let contrast = SegmentedSelectionTint.contrastWithWhite(
+        let contrast = LegibleAccent.contrastWithWhite(
             red: 0, green: fill.green * lighter, blue: fill.blue * lighter
         )
-        #expect(contrast < SegmentedSelectionTint.minimumContrast)
+        #expect(contrast < LegibleAccent.minimumContrast)
     }
 
     @Test func alreadyLegibleColorsAreUnchanged() {
-        let fill = SegmentedSelectionTint.legibleFill(red: 0.1, green: 0.2, blue: 0.5)
+        let fill = LegibleAccent.legibleFill(red: 0.1, green: 0.2, blue: 0.5)
         #expect(fill.red == 0.1 && fill.green == 0.2 && fill.blue == 0.5)
     }
 
     @Test func contrastMatchesWCAG() {
-        #expect(abs(SegmentedSelectionTint.contrastWithWhite(red: 0, green: 0, blue: 0) - 21) < 0.001)
-        #expect(abs(SegmentedSelectionTint.contrastWithWhite(red: 1, green: 1, blue: 1) - 1) < 0.001)
+        #expect(abs(LegibleAccent.contrastWithWhite(red: 0, green: 0, blue: 0) - 21) < 0.001)
+        #expect(abs(LegibleAccent.contrastWithWhite(red: 1, green: 1, blue: 1) - 1) < 0.001)
+    }
+
+    @Test func outOfRangeComponentsAreClampedToSRGB() {
+        let fill = LegibleAccent.legibleFill(red: -0.2, green: 0.5, blue: 1.3)
+        #expect(fill.red == 0)
+        #expect(fill.blue <= 1)
+        #expect(LegibleAccent.contrastWithWhite(red: fill.red, green: fill.green, blue: fill.blue) >= 4.5)
+    }
+
+    /// The prominent-button and segmented fill as AppKit draws it, in every
+    /// appearance Cockpit runs in, plus the system red a destructive fill
+    /// would use (white on it is under 4.5:1 until darkened).
+    @Test(arguments: [NSAppearance.Name.aqua, .darkAqua, .accessibilityHighContrastAqua, .accessibilityHighContrastDarkAqua])
+    func resolvedColorClearsTheFloor(_ name: NSAppearance.Name) throws {
+        let appearance = try #require(NSAppearance(named: name))
+        var resolved: NSColor?
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = LegibleAccent.nsColor.usingColorSpace(.sRGB)
+        }
+        let fill = try #require(resolved)
+        let contrast = LegibleAccent.contrastWithWhite(
+            red: fill.redComponent, green: fill.greenComponent, blue: fill.blueComponent
+        )
+        #expect(contrast >= LegibleAccent.minimumContrast, "\(name.rawValue) -> \(contrast)")
+        // Still the accent hue, not black.
+        #expect(fill.blueComponent > fill.redComponent || fill.redComponent > 0.2)
+
+        var red = NSColor.systemRed
+        appearance.performAsCurrentDrawingAppearance {
+            red = NSColor.systemRed.usingColorSpace(.sRGB) ?? .systemRed
+        }
+        let darkenedRed = LegibleAccent.legibleFill(red: red.redComponent, green: red.greenComponent, blue: red.blueComponent)
+        #expect(LegibleAccent.contrastWithWhite(
+            red: darkenedRed.red, green: darkenedRed.green, blue: darkenedRed.blue
+        ) >= LegibleAccent.minimumContrast)
     }
 }

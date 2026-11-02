@@ -41,14 +41,28 @@ extension View {
 
     /// The single primary action in a view (BTN-1): tinted Liquid Glass on
     /// macOS 26, the prominent bordered style before it. Always a capsule,
-    /// like `compatGlassButtonStyle`.
+    /// like `compatGlassButtonStyle`. The fill is the legible accent
+    /// (`LegibleAccent`), so the white label clears TYPE-3 for every system
+    /// accent; the tint sits innermost, so an outer `.tint` does not reach
+    /// it. Destructive actions stay secondary glass with a red label.
     @ViewBuilder
     func compatGlassProminentButtonStyle() -> some View {
         if #available(macOS 26.0, *) {
-            buttonBorderShape(.capsule).buttonStyle(.glassProminent)
+            buttonBorderShape(.capsule).buttonStyle(.glassProminent).tint(LegibleAccent.color)
         } else {
-            buttonBorderShape(.capsule).buttonStyle(.borderedProminent)
+            buttonBorderShape(.capsule).buttonStyle(.borderedProminent).tint(LegibleAccent.color)
         }
+    }
+
+    /// The system segmented control with a selected segment whose white
+    /// label stays legible. Use it for every segmented `Picker` in Cockpit.
+    /// White on the plain accent measured 3.79:1 (dark) and 4.26:1 (light)
+    /// on the inspector tabs; `.tint` on a segmented `Picker` sets the
+    /// backing `NSSegmentedControl.selectedSegmentBezelColor`, so the
+    /// selected fill becomes `LegibleAccent.color`.
+    func legibleSegmentedPicker() -> some View {
+        pickerStyle(.segmented)
+            .tint(LegibleAccent.color)
     }
 
     /// Glass for a floating control cluster in a capsule — toolbars, pane

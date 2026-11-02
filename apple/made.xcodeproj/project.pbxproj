@@ -301,6 +301,7 @@
 		8EB50553EC06B0918DAE2B0D /* PlotterSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE8192FB86073F87D8A875C3 /* PlotterSnapshotStore.swift */; };
 		8ED4A68F73C99325045091A9 /* SecureChannelDeadline.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF21FEF25FBF6431867348E8 /* SecureChannelDeadline.swift */; };
 		8EF1C36CA55626D9AEDBF097 /* main.mm in Sources */ = {isa = PBXBuildFile; fileRef = 64A284D5D77C849E2545B0AF /* main.mm */; };
+		8F565621CB9C3FB1C65C0FDA /* LegibleAccentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67C9AF2421C7BC4AE478C8E7 /* LegibleAccentTests.swift */; };
 		903F4AB792BCB3B8F4FE6B49 /* SimulatorRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B872566D3CBAF59D5263D3D4 /* SimulatorRegistry.swift */; };
 		90589A7C69C287120D10A563 /* AndroidScreenStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC927C007E0598E88489F912 /* AndroidScreenStream.swift */; };
 		90D4C8C9F59CCA7B4C8C445F /* TranscriptionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169A08B89F3389F8CED1B699 /* TranscriptionLifecycleTests.swift */; };
@@ -823,6 +824,7 @@
 		66B592F459C1CEFFE2076FA6 /* ChromiumFixtureServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumFixtureServerTests.swift; sourceTree = "<group>"; };
 		6732BE81058BC78D5A8C6D43 /* EmulatorBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmulatorBridgeTests.swift; sourceTree = "<group>"; };
 		674DCEC21FE7C96B5827EA31 /* PlotterWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = PlotterWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		67C9AF2421C7BC4AE478C8E7 /* LegibleAccentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegibleAccentTests.swift; sourceTree = "<group>"; };
 		688AC826114E1555689DB697 /* PacketCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketCodec.swift; sourceTree = "<group>"; };
 		695D2F9C4723D52E73ABB61B /* AndroidStreamRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidStreamRecorder.swift; sourceTree = "<group>"; };
 		699894047634BE2B6EDA6DC9 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
@@ -1776,6 +1778,7 @@
 				BE500437E4DED08ECD108821 /* DashboardSnapshotTests.swift */,
 				09BF91B947FCFCACB4B160D1 /* FrameLinkSecurityTests.swift */,
 				2C2EEEC136C43BFFC0976B61 /* FrameProtocolTests.swift */,
+				67C9AF2421C7BC4AE478C8E7 /* LegibleAccentTests.swift */,
 				0585691FB26E5955B0177341 /* PairedPeerKeyTests.swift */,
 				1D2C6CBCC8BBA484B802158F /* PeerSyncAuthenticationTests.swift */,
 				53F5C61D651C586F03E5E435 /* PeerSyncReliableSendTests.swift */,
@@ -2770,6 +2773,7 @@
 				436119C31878101943F5CC69 /* DashboardSnapshotTests.swift in Sources */,
 				EBB0296215373E7E5FFCF07A /* FrameLinkSecurityTests.swift in Sources */,
 				533F967DA527AF361D4827A6 /* FrameProtocolTests.swift in Sources */,
+				8F565621CB9C3FB1C65C0FDA /* LegibleAccentTests.swift in Sources */,
 				65D41B7890CB497E770146A3 /* PairedPeerKeyTests.swift in Sources */,
 				66A6596C0F4F870015D20B91 /* PeerSyncAuthenticationTests.swift in Sources */,
 				8A3BA56A81C7DBEDEDD82265 /* PeerSyncReliableSendTests.swift in Sources */,
