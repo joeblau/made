@@ -283,17 +283,20 @@ Fixes from the audit, each checked in the macOS 27.2 VM or the 27.2 simulators:
   - After one unclean exit, Chromium kept `profile.exit_type` at "Crashed" forever, because CEF never shows Chrome's "Restore pages?" prompt. That brought the previous session's session cookies back on every launch. A clean shutdown now records "Normal" before `CefShutdown`; a kill, logout or backstop exit still reads as a crash. This cause is inferred from the VM runs; there was no Chromium source to read.
 - Widgets: tinted (accented), clear (vibrant) and StandBy night modes can't be set in the simulator, so every widget family was rendered offline in each mode (293 renders). The fixes from those renders: accent-group status text in tinted mode, the Actions title, Build Activity captions, the Kneeboard snapshot gradient, and the Mirror status line, which now sits in its own strip in accented and vibrant modes (9.8–16.3:1, and 5.6:1 in StandBy night). In tinted mode the mirrored still renders in full color, like a photo: `.accentedDesaturated` flattened a bright window into a near-solid tinted plate, so the Mac screen it mirrors was no longer recognizable.
 
+Closeout, each checked in the macOS 27.2 VM or the 27.2 simulators:
+
+- Prominent buttons: white on the system accent measured 3.2–4.0:1. A shared `LegibleAccent` darkens the user's accent to a 5.2:1 floor and tints every prominent button and segmented picker in Cockpit, Walkie and Kneeboard, including the AppKit Chromium Retry button. On screen it measures 5.0–5.3:1 in light and dark.
+- Chromium focus (it predates this branch): with a terminal focused, the first click into a page field lost focus. Selecting the pane cleared first responder, and the focus command bounced it through the host and CEF's container view. Selection now keeps focus that is already inside the selected pane's own page; focus left in another pane's page is still cleared. In the VM, one click then typing lands in the field, ctrl-tab into a Chromium pane types into the page, and hovering a page leaves the terminal focused.
+- VoiceOver, run for real in the VM: the pane tab reads "about:blank button" and then "selected button"; the Notes tab and Remote Desktop title read as buttons; the segmented range picker is a radio group; VO-Space performs each action. The sidebar LLM gauge, shown with tmux copied in from the host and a stand-in agent, reads "1 of 1 started agent working… button" and VO-Space jumps to the agent's pane. An idle gauge was also announced as a button whose press did nothing; it now drops the trait. The decorative Remote Desktop display glyphs, which VoiceOver read as "Mac image", are now hidden from it.
+
 Not capturable here:
 - USB Device stream and wireless live stream, for the reasons above.
-- Tinted Home Screen and StandBy on device; the offline renders approximate the system compositor.
-- The sidebar LLM gauge's button role on screen: it needs a coding agent under tmux, and the VM has no tmux without a download.
-- VoiceOver itself; the button traits were checked in the accessibility tree.
+- Tinted Home Screen and StandBy on a device; the offline renders approximate the system compositor.
 
 Left open:
-- When a terminal has keyboard focus, the first click into a Chromium page field doesn't take keyboard focus (predates this branch).
-- White text on the system prominent blue button measures 3.8–4.0:1 app-wide; it's the platform's style.
+- The selected-row green LLM ring measures 2.2:1 in light mode; the "1/1" label inside it carries the information.
 
-Verification: `build-ci.sh`, `test.sh all` (PilotTests 876 passed with 2 CEF skips, SharedTests 232, PlotterTests 4), `lint-swift.sh --all` (0 violations in 359 files), `app-icon-tool.swift validate`, `check-docs.sh`, the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators, the Chromium configuration build, and an XcodeGen drift check all pass.
+Verification: `build-ci.sh`, `test.sh all` (PilotTests 882 passed with 2 CEF skips, SharedTests 235, PlotterTests 4), `lint-swift.sh --all` (0 violations in 360 files), `app-icon-tool.swift validate`, `check-docs.sh`, the Copilot (1/1) and Plotter (2/2) UI tests on the iOS 27.2 simulators, the Chromium configuration build, and an XcodeGen drift check all pass.
 
 ### Open items from round 1 (resolved above unless noted)
 
