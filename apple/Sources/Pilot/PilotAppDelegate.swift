@@ -22,6 +22,10 @@ enum ChromiumTerminationPolicy: Equatable {
     /// process goes away.
     static let shutdownTimeout: Duration = .seconds(5)
 
+    /// How long the main thread may go without answering once the shutdown
+    /// timeout has passed before the quit backstop ends the process.
+    static let mainThreadResponseTimeout: Duration = .seconds(1)
+
     /// - Parameters:
     ///   - shutdownPending: a shutdown for an earlier quit request is running.
     ///   - shutdownFinished: that shutdown completed or timed out, so the
@@ -44,6 +48,14 @@ enum ChromiumTerminationPolicy: Equatable {
         @unknown default:
             return shutdownPending ? .alreadyPending : .shutDownFirst
         }
+    }
+}
+
+private extension Duration {
+    /// Whole and fractional seconds, for Dispatch deadlines.
+    var timeInterval: TimeInterval {
+        let parts = components
+        return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
 }
 
@@ -70,6 +82,9 @@ final class PilotAppDelegate: NSObject, NSApplicationDelegate {
         // Before any Chromium pane can start the engine, so every event that
         // CEF can observe is dispatched through the wrapped -sendEvent:.
         ChromiumEngine.installApplicationIntegration()
+        // Before the engine starts, so a page an extension opens at startup
+        // is routed too.
+        WalletPopupController.shared.installExtensionPageRouting()
     }
 
     /// True when the quit being asked about comes from logout, restart or
@@ -111,7 +126,32 @@ final class PilotAppDelegate: NSObject, NSApplicationDelegate {
             try? await Task.sleep(for: ChromiumTerminationPolicy.shutdownTimeout)
             self?.finishShutdown()
         }
+        Self.startUnresponsiveMainThreadBackstop()
         return .terminateCancel
+    }
+
+    /// The timeout above runs on the main thread, so it cannot help when
+    /// Chromium blocks that thread itself. Observed in the macOS 27 VM: with
+    /// the GPU helper stopped, closing a pane's browser (`DoClose` removing
+    /// its view) waits in a synchronous Mach message to the GPU process, and
+    /// Cockpit never quit. This off-main check ends the process only when the
+    /// main thread has not answered for `mainThreadResponseTimeout` after the
+    /// shutdown timeout, which is a hung quit by definition; a responsive main
+    /// thread is left to finish (or cancel) the quit normally.
+    private nonisolated static func startUnresponsiveMainThreadBackstop() {
+        let queue = DispatchQueue(label: "app.blau.pilot.quit-backstop", qos: .userInitiated)
+        queue.asyncAfter(deadline: .now() + ChromiumTerminationPolicy.shutdownTimeout.timeInterval) {
+            let answered = DispatchSemaphore(value: 0)
+            DispatchQueue.main.async { answered.signal() }
+            let deadline = DispatchTime.now()
+                + ChromiumTerminationPolicy.mainThreadResponseTimeout.timeInterval
+            if answered.wait(timeout: deadline) == .timedOut {
+                // No clean CefShutdown is possible from here; this is the
+                // unclean exit the timeout already accepts. `_exit` skips
+                // atexit handlers that could wait on the same stuck thread.
+                _exit(EXIT_SUCCESS)
+            }
+        }
     }
 
     /// Re-issues the quit exactly once, whichever of shutdown completion and
