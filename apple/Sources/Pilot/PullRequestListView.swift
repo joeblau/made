@@ -18,62 +18,6 @@ struct InspectorTabSelector: View {
     }
 }
 
-/// The selected segment's fill for every segmented picker in Cockpit. The
-/// system draws the selected label white on the accent color, which measured
-/// 3.79:1 in dark and 4.26:1 in light on the inspector tabs (TYPE-3 needs
-/// 4.5:1). SwiftUI's `.tint` on a segmented `Picker` sets the backing
-/// `NSSegmentedControl.selectedSegmentBezelColor`, so the fill is the user's
-/// accent darkened just enough for white text to clear `minimumContrast`.
-enum SegmentedSelectionTint {
-    /// Above 4.5:1 because the dark-appearance bezel draws lighter than its
-    /// fill: a 4.8:1 fill measured 4.65:1 on screen in dark, 5.02:1 in light.
-    static let minimumContrast = 5.2
-
-    static let color = Color(nsColor: NSColor(name: nil) { appearance in
-        var accent = NSColor.systemBlue
-        appearance.performAsCurrentDrawingAppearance {
-            accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .systemBlue
-        }
-        let fill = legibleFill(red: accent.redComponent, green: accent.greenComponent, blue: accent.blueComponent)
-        return NSColor(srgbRed: fill.red, green: fill.green, blue: fill.blue, alpha: 1)
-    })
-
-    /// `red`/`green`/`blue` (sRGB, 0...1) mixed toward black in small steps
-    /// until white text on it reaches `minimumContrast`; a color that already
-    /// does is returned unchanged, so the hue stays the user's accent.
-    static func legibleFill(
-        red: Double,
-        green: Double,
-        blue: Double
-    ) -> (red: Double, green: Double, blue: Double) {
-        var scale = 1.0
-        while scale > 0, contrastWithWhite(red: red * scale, green: green * scale, blue: blue * scale) < minimumContrast {
-            scale -= 0.01
-        }
-        scale = max(0, scale)
-        return (red * scale, green * scale, blue * scale)
-    }
-
-    /// WCAG 2 contrast ratio of white against an sRGB color.
-    static func contrastWithWhite(red: Double, green: Double, blue: Double) -> Double {
-        func linear(_ channel: Double) -> Double {
-            channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
-        }
-        let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
-        return 1.05 / (luminance + 0.05)
-    }
-}
-
-extension View {
-    /// The system segmented control with a selected segment whose white
-    /// label stays legible (`SegmentedSelectionTint`). Use it for every
-    /// segmented `Picker` in Cockpit.
-    func legibleSegmentedPicker() -> some View {
-        pickerStyle(.segmented)
-            .tint(SegmentedSelectionTint.color)
-    }
-}
-
 /// One geometry for the metadata row directly beneath every inspector tab.
 /// Keeping this shared prevents icon, title, and refresh controls from shifting
 /// when the user switches between Actions, Tasks, PRs, Files, and Usage.

@@ -24,10 +24,11 @@ enum BrowserWebShortcutPolicy {
     }
 }
 
-final class BrowserWebView: WKWebView {
+final class BrowserWebView: WKWebView, BrowserPaneContent {
     var onReload: (() -> Void)?
     var onSelect: (() -> Void)?
     var isPaneSelected = false
+    weak var browserState: BrowserState?
     private var reloadKeyMonitor: Any?
 
     override func viewDidMoveToWindow() {

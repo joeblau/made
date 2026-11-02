@@ -465,8 +465,14 @@ private extension WorkspaceView {
         guard workspace.selectedPane?.isCollapsed != true else { return }
 
         if let pane = workspace.selectedPane, pane.kind == .browser {
+            let state = pane.browserState
             DispatchQueue.main.async {
-                NSApp.keyWindow?.makeFirstResponder(nil)
+                // Take keys away from a terminal or another pane's page, but
+                // keep focus a click already gave to this pane's page (see
+                // `BrowserPaneFocus`).
+                guard let window = NSApp.keyWindow,
+                      !BrowserPaneFocus.isInWebContent(window.firstResponder, ownedBy: state) else { return }
+                window.makeFirstResponder(nil)
             }
             return
         }

@@ -57,6 +57,10 @@ extension ChromiumBrowserHostView: BrowserControlling {
                 )
             )
         case .focus:
+            // Selecting the pane by clicking into the page arrives after
+            // Chromium's content view already took focus on mouse down;
+            // bouncing first responder through the host would blur the page.
+            guard !BrowserPaneFocus.responder(window?.firstResponder, isWithin: self) else { return }
             window?.makeFirstResponder(self)
             focusBrowser()
         case let .setDeveloperToolsVisible(isVisible):
@@ -137,6 +141,7 @@ struct ChromiumBrowserView: NSViewRepresentable {
 
         let host = PilotChromiumBrowserHostView(frame: .zero)
         host.onSelect = onSelect
+        host.browserState = state
         container.install(host)
         context.coordinator.attach(
             host,
@@ -1264,6 +1269,9 @@ final class ChromiumBrowserContainerView: NSView {
             retryButton.bezelStyle = .glass
             retryButton.borderShape = .capsule
             retryButton.tintProminence = .primary
+            // The legible accent, like every SwiftUI prominent button, so the
+            // white title clears TYPE-3 (the plain accent measures under 4.5:1).
+            retryButton.bezelColor = LegibleAccent.nsColor
         } else {
             retryButton.bezelStyle = .rounded
         }
@@ -1396,8 +1404,10 @@ final class ChromiumBrowserContainerView: NSView {
 @MainActor
 final class PilotChromiumBrowserHostView:
     ChromiumBrowserHostView,
-    ChromiumBrowserHosting {
+    ChromiumBrowserHosting,
+    BrowserPaneContent {
     var onSelect: (() -> Void)?
+    weak var browserState: BrowserState?
 
     override func mouseDown(with event: NSEvent) {
         onSelect?()

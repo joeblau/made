@@ -597,7 +597,16 @@ void BrowserClient::Focus() {
     browser_->GetHost()->SetFocus(true);
     NSView *view =
         CAST_CEF_WINDOW_HANDLE_TO_NSVIEW(browser_->GetHost()->GetWindowHandle());
-    [host_.window makeFirstResponder:view];
+    NSWindow *window = host_.window;
+    // SetFocus makes Chromium's content view first responder. Claiming it for
+    // the browser's container afterwards took keyboard focus back off the
+    // page, so only do so when focus is still outside the browser.
+    NSResponder *responder = window.firstResponder;
+    if (view && [responder isKindOfClass:NSView.class] &&
+        [(NSView *)responder isDescendantOf:view]) {
+        return;
+    }
+    [window makeFirstResponder:view];
 }
 void BrowserClient::SetZoom(double level) {
     if (browser_ && !closing_) browser_->GetHost()->SetZoomLevel(level);

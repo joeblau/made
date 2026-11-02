@@ -215,6 +215,10 @@ private struct WorkspaceLLMGauge: View {
             // The tap below has no button of its own, so VoiceOver gets the
             // trait and the same action while it can jump to a pane.
             .accessibilityAddTraits(running > 0 ? .isButton : [])
+            // The tap gesture alone still made VoiceOver announce an idle
+            // ring as a button whose action did nothing; only a ring that
+            // can jump to a pane is a button.
+            .accessibilityRemoveTraits(running > 0 ? [] : .isButton)
             .accessibilityAction { selectRunningPane() }
             // Tappable only while an agent is running; an idle ring has
             // no pane to jump to.

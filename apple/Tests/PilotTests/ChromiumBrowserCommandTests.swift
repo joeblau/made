@@ -1,6 +1,7 @@
 import AppKit
 @preconcurrency import ChromiumKit
 import Testing
+import WebKit
 @testable import Pilot
 
 @Suite("Chromium browser commands")
@@ -634,6 +635,112 @@ struct ChromiumLoadFailureAndDialogTests {
         throttle.reset()
         let afterReset = throttle.admit(at: start.addingTimeInterval(61))
         #expect(afterReset)
+    }
+}
+
+@Suite("Browser pane focus")
+@MainActor
+struct BrowserPaneFocusTests {
+    /// Stands in for a terminal and for CEF's content view, which takes
+    /// first responder from AppKit when a click lands in the page.
+    private final class FocusableView: NSView {
+        override var acceptsFirstResponder: Bool { true }
+    }
+
+    private struct Fixture {
+        let window: NSWindow
+        let terminal: FocusableView
+        let host: ChromiumBrowserHostView
+        let page: FocusableView
+    }
+
+    private func makeFixture() -> Fixture {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+        window.isReleasedWhenClosed = false
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        window.contentView = content
+        let terminal = FocusableView(frame: NSRect(x: 0, y: 0, width: 200, height: 200))
+        let host = ChromiumBrowserHostView(frame: NSRect(x: 200, y: 0, width: 200, height: 200))
+        let page = FocusableView(frame: host.bounds)
+        host.addSubview(page)
+        content.addSubview(terminal)
+        content.addSubview(host)
+        return Fixture(window: window, terminal: terminal, host: host, page: page)
+    }
+
+    @Test("Selecting the pane after a click into the page keeps the page focused")
+    func focusCommandKeepsClickFocus() {
+        let fixture = makeFixture()
+        // AppKit gives the clicked content view first responder on mouse
+        // down; the pane-selection focus request follows on mouse up.
+        #expect(fixture.window.makeFirstResponder(fixture.terminal))
+        #expect(fixture.window.makeFirstResponder(fixture.page))
+
+        fixture.host.performBrowserCommand(.focus)
+
+        #expect(fixture.window.firstResponder === fixture.page)
+        #expect(BrowserPaneFocus.isInWebContent(fixture.window.firstResponder))
+    }
+
+    @Test("Selecting a browser pane from a terminal still takes the terminal's keys")
+    func focusCommandMovesFocusOffTerminal() {
+        let fixture = makeFixture()
+        #expect(fixture.window.makeFirstResponder(fixture.terminal))
+        #expect(!BrowserPaneFocus.isInWebContent(fixture.window.firstResponder))
+
+        fixture.host.performBrowserCommand(.focus)
+
+        #expect(fixture.window.firstResponder !== fixture.terminal)
+        #expect(BrowserPaneFocus.responder(
+            fixture.window.firstResponder,
+            isWithin: fixture.host
+        ))
+    }
+
+    @Test("Only views inside a Chromium host or WKWebView count as page focus")
+    func webContentDetection() {
+        let fixture = makeFixture()
+        let webView = WKWebView(frame: .zero)
+        let insideWebView = FocusableView(frame: .zero)
+        webView.addSubview(insideWebView)
+
+        #expect(!BrowserPaneFocus.isInWebContent(nil))
+        #expect(!BrowserPaneFocus.isInWebContent(fixture.window))
+        #expect(!BrowserPaneFocus.isInWebContent(fixture.terminal))
+        #expect(!BrowserPaneFocus.isInWebContent(fixture.window.contentView))
+        #expect(BrowserPaneFocus.isInWebContent(fixture.host))
+        #expect(BrowserPaneFocus.isInWebContent(fixture.page))
+        #expect(BrowserPaneFocus.isInWebContent(insideWebView))
+        #expect(!BrowserPaneFocus.responder(fixture.terminal, isWithin: fixture.host))
+        #expect(!BrowserPaneFocus.responder(nil, isWithin: fixture.host))
+    }
+
+    @Test("Only the selected pane's own page keeps focus on selection")
+    func webContentOwnership() {
+        let selected = BrowserState()
+        let other = BrowserState()
+        let chromium = PilotChromiumBrowserHostView(frame: .zero)
+        chromium.browserState = other
+        let chromiumPage = FocusableView(frame: .zero)
+        chromium.addSubview(chromiumPage)
+        let webKit = BrowserWebView(frame: .zero)
+        webKit.browserState = selected
+        let webKitPage = FocusableView(frame: .zero)
+        webKit.addSubview(webKitPage)
+
+        // Focus left in another pane's page is cleared, not kept.
+        #expect(!BrowserPaneFocus.isInWebContent(chromiumPage, ownedBy: selected))
+        #expect(BrowserPaneFocus.isInWebContent(chromiumPage, ownedBy: other))
+        #expect(BrowserPaneFocus.isInWebContent(webKitPage, ownedBy: selected))
+        #expect(!BrowserPaneFocus.isInWebContent(webKitPage, ownedBy: other))
+        #expect(!BrowserPaneFocus.isInWebContent(webKitPage, ownedBy: nil))
+        // Engine views that name no pane never count.
+        #expect(!BrowserPaneFocus.isInWebContent(makeFixture().page, ownedBy: selected))
     }
 }
 
