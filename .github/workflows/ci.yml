@@ -135,6 +135,15 @@ jobs:
       # step reuses the compiled Cockpit, Walkie, and Kneeboard hosts.
       - name: Compile every application
         run: apple/bin/build-ci.sh
+      # The Drone terminal proof drives real tmux sessions; the runner image
+      # does not ship tmux.
+      - name: Install tmux
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install tmux
+          tmux -V
       - name: Run unit tests
         run: apple/bin/test.sh all
 
