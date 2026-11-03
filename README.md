@@ -165,7 +165,10 @@ Release archives retain their timestamped signing policy.
 
 `bun walkie` selects an available physical iPhone, and `bun kneeboard` selects
 an available physical iPad. Connect and unlock the device, enable Developer
-Mode, and let Xcode manage development signing. If multiple matching devices
+Mode, and let Xcode manage development signing. `bun walkie` (alias
+`bun copilot`) builds the optimized Release configuration with the APNs
+sandbox environment that development signing requires; `bun kneeboard` builds
+Debug. If multiple matching devices
 are connected, select one with `--device`, for example
 `bun kneeboard --device "My iPad"`. Set `BLAU_IOS_DEVICE` for the equivalent
 non-interactive selection.
