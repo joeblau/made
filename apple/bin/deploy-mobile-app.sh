@@ -17,10 +17,11 @@ usage() {
 Usage: deploy-mobile-app.sh <walkie|kneeboard> [options]
 
 Builds, installs, and launches a development-signed app on a physical device.
+Walkie builds the optimized Release configuration; Kneeboard builds Debug.
 
 Options:
   --device <name-or-id>  Select a device when more than one is available.
-  --skip-build           Install the existing Debug device build.
+  --skip-build           Install the existing device build.
   --no-launch            Install the app without launching it.
   -h, --help             Show this help.
 
@@ -42,6 +43,7 @@ case "$app" in
     product="Copilot"
     bundle_id="app.blau.copilot"
     device_type="iPhone"
+    configuration="Release"
     ;;
   kneeboard)
     display_name="Kneeboard"
@@ -49,6 +51,7 @@ case "$app" in
     product="Plotter"
     bundle_id="app.blau.plotter"
     device_type="iPad"
+    configuration="Debug"
     ;;
   *) usage ;;
 esac
@@ -151,10 +154,19 @@ fi
 device_name="${device_names[$selected_index]}"
 device_id="${device_ids[$selected_index]}"
 derived_data="$DERIVED_ROOT/$scheme"
-app_path="$derived_data/Build/Products/Debug-iphoneos/$product.app"
+app_path="$derived_data/Build/Products/$configuration-iphoneos/$product.app"
+
+# Device installs are development-signed whatever the configuration. Release
+# otherwise targets production APNs, which an Apple Development profile cannot
+# sign and whose tokens the sandbox gateway rejects, so pin the push
+# environment to the development profile's.
+signing_overrides=(CODE_SIGN_STYLE=Automatic)
+if [[ "$configuration" == "Release" ]]; then
+  signing_overrides+=(APS_ENVIRONMENT=development BUILD_PUSH_ENVIRONMENT=sandbox)
+fi
 
 if [[ "$skip_build" -eq 0 ]]; then
-  printf 'Building %s for %s\n' "$display_name" "$device_name"
+  printf 'Building %s (%s) for %s\n' "$display_name" "$configuration" "$device_name"
   "$APPLE_ROOT/bin/install-xcodegen.sh" generate \
     --spec "$APPLE_ROOT/project.yml" \
     --project "$APPLE_ROOT"
@@ -162,7 +174,7 @@ if [[ "$skip_build" -eq 0 ]]; then
   DISABLE_SWIFTLINT=1 xcodebuild build \
     -project "$PROJECT" \
     -scheme "$scheme" \
-    -configuration Debug \
+    -configuration "$configuration" \
     -destination "platform=iOS,id=$device_id" \
     -derivedDataPath "$derived_data" \
     -clonedSourcePackagesDirPath "$PACKAGES" \
@@ -170,7 +182,7 @@ if [[ "$skip_build" -eq 0 ]]; then
     -skipPackagePluginValidation \
     -allowProvisioningUpdates \
     -allowProvisioningDeviceRegistration \
-    CODE_SIGN_STYLE=Automatic
+    "${signing_overrides[@]}"
 fi
 
 [[ -d "$app_path" ]] \
