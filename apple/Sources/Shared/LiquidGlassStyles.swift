@@ -380,9 +380,10 @@ extension View {
 ///         .buttonStyle(.liquidGlassChip(isSelected: scope == selected))
 struct LiquidGlassChipButtonStyle: ButtonStyle {
     var isSelected: Bool
+    var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
-        ChipBody(configuration: configuration, isSelected: isSelected)
+        ChipBody(configuration: configuration, isSelected: isSelected, compact: compact)
     }
 }
 
@@ -390,6 +391,7 @@ struct LiquidGlassChipButtonStyle: ButtonStyle {
 private struct ChipBody: View {
     let configuration: ButtonStyleConfiguration
     let isSelected: Bool
+    let compact: Bool
 
     @State private var isHovered = false
 
@@ -408,8 +410,8 @@ private struct ChipBody: View {
         configuration.label
             .foregroundStyle(isSelected ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
             .lineLimit(1)
-            .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-            .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+            .padding(.horizontal, compact ? LiquidGlassMetrics.Spacing.xSmall : LiquidGlassMetrics.Spacing.small)
+            .padding(.vertical, compact ? LiquidGlassMetrics.Spacing.xxSmall : LiquidGlassMetrics.Spacing.xSmall)
             .contentShape(Capsule())
             // The same quiet wash as `HoverHighlight`, inside the glass so
             // the chip keeps one capsule silhouette. Selected chips get it
@@ -448,8 +450,8 @@ private struct ChipSurface: ViewModifier {
 }
 
 extension ButtonStyle where Self == LiquidGlassChipButtonStyle {
-    static func liquidGlassChip(isSelected: Bool) -> LiquidGlassChipButtonStyle {
-        LiquidGlassChipButtonStyle(isSelected: isSelected)
+    static func liquidGlassChip(isSelected: Bool, compact: Bool = false) -> LiquidGlassChipButtonStyle {
+        LiquidGlassChipButtonStyle(isSelected: isSelected, compact: compact)
     }
 }
 

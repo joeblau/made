@@ -64,7 +64,427 @@ extension View {
         pickerStyle(.segmented)
             .tint(LegibleAccent.color)
     }
+}
 
+struct PilotSegmentedMenuItem {
+    let title: String
+    let isEnabled: Bool
+    let isDestructive: Bool
+    let action: () -> Void
+
+    init(
+        _ title: String,
+        isEnabled: Bool = true,
+        isDestructive: Bool = false,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.isEnabled = isEnabled
+        self.isDestructive = isDestructive
+        self.action = action
+    }
+}
+
+@MainActor
+final class PilotNativeSegmentedControl: NSSegmentedControl {
+    var onDrop: ((NSPasteboard, Int) -> Bool)?
+    /// When false, a click selects its segment on mouse-down instead of
+    /// running AppKit's press tracking. That tracking lifts the pressed glass
+    /// pill from 16pt to 26pt, past a small control's 20pt bounds, so the
+    /// control appears to change height on every click. The pill still
+    /// slides to its new segment. Opt-out only: it bypasses press-and-hold
+    /// segment menus and drags that start on the control.
+    var liftsOnPress = true
+    var showsCloseButton = false
+    var isCloseHovering = false
+    var isCloseEnabled = true
+    private var closeTrackingArea: NSTrackingArea?
+    /// Alpha the close button is resting at or fading toward.
+    private var closeButtonTargetAlpha: CGFloat = 0
+
+    /// Side of the close button and of the transparent image slot reserved
+    /// for it at the start of every segment.
+    static let closeSlotSize: CGFloat = 16
+
+    /// Where AppKit draws a left-aligned segment image, measured from the
+    /// segment's leading edge (macOS 26+ capsule style, `.fillEqually`).
+    private var imageLeadingInset: CGFloat {
+        controlSize == .regular || controlSize == .large || controlSize == .extraLarge ? 14 : 12
+    }
+
+    /// Matches the workspace pane tabs: a small bold glyph on a circular
+    /// tertiary fill, sized to the slot instead of scaled up to fill it.
+    lazy var closeButton: NSButton = {
+        let button = NSButton()
+        button.isBordered = false
+        button.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 8, weight: .bold))
+        button.image?.isTemplate = true
+        button.imageScaling = .scaleNone
+        button.contentTintColor = NSColor.secondaryLabelColor
+        button.wantsLayer = true
+        button.layer?.cornerRadius = Self.closeSlotSize / 2
+        button.alphaValue = 0
+        return button
+    }()
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateCloseButtonFill()
+    }
+
+    private func updateCloseButtonFill() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            closeButton.layer?.backgroundColor = NSColor.tertiarySystemFill.cgColor
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        updateCloseButton()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard !liftsOnPress else { return super.mouseDown(with: event) }
+        guard isEnabled, segmentCount > 0, bounds.width > 0 else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        let segment = min(max(0, Int(location.x * CGFloat(segmentCount) / bounds.width)), segmentCount - 1)
+        guard isEnabled(forSegment: segment), segment != selectedSegment else { return }
+        // Implicit animation keeps the glass pill's slide between segments.
+        NSAnimationContext.runAnimationGroup { context in
+            context.allowsImplicitAnimation = true
+            selectedSegment = segment
+        }
+        sendAction(action, to: target)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateCloseButton()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let closeTrackingArea { removeTrackingArea(closeTrackingArea) }
+        closeTrackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        if let closeTrackingArea { addTrackingArea(closeTrackingArea) }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        isCloseHovering = true
+        updateCloseButton()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        isCloseHovering = false
+        updateCloseButton()
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        onDrop == nil ? [] : .move
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        onDrop == nil ? [] : .move
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard segmentCount > 0, bounds.width > 0 else { return false }
+        let location = convert(sender.draggingLocation, from: nil)
+        let segment = min(max(0, Int(location.x * CGFloat(segmentCount) / bounds.width)), segmentCount - 1)
+        return onDrop?(sender.draggingPasteboard, segment) ?? false
+    }
+
+    func updateCloseButton() {
+        let isVisible = showsCloseButton && isCloseHovering && selectedSegment >= 0 && segmentCount > 0
+        closeButton.isHidden = !showsCloseButton || selectedSegment < 0
+        closeButton.isEnabled = isVisible && isCloseEnabled
+        if isVisible {
+            // Sits on the selected segment's reserved image slot, inside the
+            // segment and to the left of its title.
+            let segmentWidth = bounds.width / CGFloat(segmentCount)
+            let side = Self.closeSlotSize
+            closeButton.frame = NSRect(
+                x: segmentWidth * CGFloat(selectedSegment) + imageLeadingInset,
+                y: (bounds.height - side) / 2,
+                width: side,
+                height: side
+            )
+            updateCloseButtonFill()
+        }
+        // `layout()` and every SwiftUI update call this; start a fade only
+        // when visibility actually flips.
+        let targetAlpha: CGFloat = isVisible ? 1 : 0
+        guard closeButtonTargetAlpha != targetAlpha else { return }
+        closeButtonTargetAlpha = targetAlpha
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            closeButton.animator().alphaValue = targetAlpha
+        }
+    }
+}
+
+/// AppKit's native single-select segmented control, with the Liquid Glass
+/// appearance supplied by macOS 26 and the standard bezel on earlier systems.
+struct PilotSegmentedControl<Value: Hashable>: NSViewRepresentable {
+    @Binding var selection: Value
+    let accessibilityLabel: String
+    let options: [Value]
+    let title: (Value) -> String
+    let systemImage: (Value) -> String?
+    let showsTitles: Bool
+    let controlSize: NSControl.ControlSize
+    let liftsOnPress: Bool
+    let menuItems: ((Value) -> [PilotSegmentedMenuItem])?
+    let dropTypes: [NSPasteboard.PasteboardType]
+    let onDrop: ((NSPasteboard, Int) -> Bool)?
+    let closeLabel: String
+    let canClose: ((Value) -> Bool)?
+    let onClose: ((Value) -> Void)?
+
+    init(
+        _ accessibilityLabel: String,
+        selection: Binding<Value>,
+        options: [Value],
+        title: @escaping (Value) -> String,
+        systemImage: @escaping (Value) -> String? = { _ in nil },
+        showsTitles: Bool = true,
+        controlSize: NSControl.ControlSize = .regular,
+        liftsOnPress: Bool = true,
+        menuItems: ((Value) -> [PilotSegmentedMenuItem])? = nil,
+        dropTypes: [NSPasteboard.PasteboardType] = [.string],
+        onDrop: ((NSPasteboard, Int) -> Bool)? = nil,
+        closeLabel: String = "Close",
+        canClose: ((Value) -> Bool)? = nil,
+        onClose: ((Value) -> Void)? = nil
+    ) {
+        _selection = selection
+        self.accessibilityLabel = accessibilityLabel
+        self.options = options
+        self.title = title
+        self.systemImage = systemImage
+        self.showsTitles = showsTitles
+        self.controlSize = controlSize
+        self.liftsOnPress = liftsOnPress
+        self.menuItems = menuItems
+        self.dropTypes = dropTypes
+        self.onDrop = onDrop
+        self.closeLabel = closeLabel
+        self.canClose = canClose
+        self.onClose = onClose
+    }
+
+    func makeNSView(context: Context) -> PilotNativeSegmentedControl {
+        let control = PilotNativeSegmentedControl(
+            labels: options.map { _ in "" },
+            trackingMode: .selectOne,
+            target: context.coordinator,
+            action: #selector(Coordinator.selectSegment(_:))
+        )
+        control.segmentStyle = .capsule
+        if #available(macOS 26.0, *) {
+            control.borderShape = .capsule
+        }
+        // The tabs role is what draws the Liquid Glass track and pill; the
+        // default role falls back to the flat bezel with separators.
+        if #available(macOS 27.0, *) {
+            control.role = .tabs
+        }
+        if onDrop != nil {
+            control.registerForDraggedTypes(dropTypes)
+        }
+        if onClose != nil {
+            control.closeButton.target = context.coordinator
+            control.closeButton.action = #selector(Coordinator.closeSelected(_:))
+            control.addSubview(control.closeButton)
+        }
+        control.segmentDistribution = .fillEqually
+        control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        configure(control, coordinator: context.coordinator)
+        return control
+    }
+
+    func updateNSView(_ control: PilotNativeSegmentedControl, context: Context) {
+        configure(control, coordinator: context.coordinator)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(options: options, selection: $selection, menuItems: menuItems)
+    }
+
+    private static var closeSlotImage: NSImage {
+        let side = PilotNativeSegmentedControl.closeSlotSize
+        return NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in true }
+    }
+
+    /// What one segment draws. `configure` runs on every SwiftUI update,
+    /// including the one a selection change causes, so segments are rewritten
+    /// only when this changes. Re-setting labels, images and menus invalidated
+    /// the control mid-switch and stalled the pill's slide.
+    struct SegmentContent: Equatable {
+        struct MenuItem: Equatable {
+            let title: String
+            let isEnabled: Bool
+            let isDestructive: Bool
+        }
+
+        let title: String
+        let systemImage: String?
+        let menu: [MenuItem]?
+    }
+
+    struct AppliedContent: Equatable {
+        let segments: [SegmentContent]
+        let showsTitles: Bool
+        let reservesCloseSlot: Bool
+    }
+
+    private func configure(_ control: PilotNativeSegmentedControl, coordinator: Coordinator) {
+        coordinator.options = options
+        coordinator.selection = $selection
+        coordinator.menuItems = menuItems
+        coordinator.onClose = onClose
+        control.onDrop = onDrop
+        control.liftsOnPress = liftsOnPress
+        control.showsCloseButton = onClose != nil
+        if control.controlSize != controlSize { control.controlSize = controlSize }
+        control.setAccessibilityLabel(accessibilityLabel)
+
+        let content = AppliedContent(
+            segments: options.map { option in
+                SegmentContent(
+                    title: title(option),
+                    systemImage: systemImage(option),
+                    menu: menuItems.map { items in
+                        items(option).map {
+                            SegmentContent.MenuItem(
+                                title: $0.title,
+                                isEnabled: $0.isEnabled,
+                                isDestructive: $0.isDestructive
+                            )
+                        }
+                    }
+                )
+            },
+            showsTitles: showsTitles,
+            reservesCloseSlot: onClose != nil
+        )
+        if coordinator.appliedContent != content {
+            coordinator.appliedContent = content
+            applySegments(content, to: control, coordinator: coordinator)
+        }
+
+        let selectedIndex = options.firstIndex(of: selection) ?? -1
+        if control.selectedSegment != selectedIndex { control.selectedSegment = selectedIndex }
+        control.closeButton.setAccessibilityLabel(closeLabel)
+        control.isCloseEnabled = canClose?(selection) ?? true
+        control.updateCloseButton()
+    }
+
+    private func applySegments(
+        _ content: AppliedContent,
+        to control: PilotNativeSegmentedControl,
+        coordinator: Coordinator
+    ) {
+        if control.segmentCount != content.segments.count { control.segmentCount = content.segments.count }
+        for (index, segment) in content.segments.enumerated() {
+            let title = segment.title
+            control.setLabel(content.showsTitles ? title : "", forSegment: index)
+            control.setToolTip(title, forSegment: index)
+            if let symbol = segment.systemImage {
+                let image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+                image?.isTemplate = true
+                control.setImage(image, forSegment: index)
+            } else if content.reservesCloseSlot {
+                // An empty slot the close button covers on hover. Every
+                // segment reserves it, so titles never shift or overlap.
+                control.setImage(Self.closeSlotImage, forSegment: index)
+                control.setImageScaling(.scaleNone, forSegment: index)
+            } else {
+                control.setImage(nil, forSegment: index)
+            }
+            // Leading content, like the workspace pane tabs, so the slot sits
+            // at a known offset from the segment's edge.
+            control.setAlignment(content.reservesCloseSlot ? .left : .center, forSegment: index)
+            if let items = segment.menu {
+                let menu = NSMenu()
+                for (itemIndex, item) in items.enumerated() {
+                    let menuItem = NSMenuItem(
+                        title: item.title,
+                        action: #selector(Coordinator.selectMenuItem(_:)),
+                        keyEquivalent: ""
+                    )
+                    menuItem.target = coordinator
+                    menuItem.tag = index
+                    menuItem.representedObject = itemIndex
+                    menuItem.isEnabled = item.isEnabled
+                    if item.isDestructive {
+                        menuItem.attributedTitle = NSAttributedString(
+                            string: item.title,
+                            attributes: [.foregroundColor: NSColor.systemRed]
+                        )
+                    }
+                    menu.addItem(menuItem)
+                }
+                control.setMenu(menu, forSegment: index)
+            } else {
+                control.setMenu(nil, forSegment: index)
+            }
+        }
+    }
+
+    @MainActor final class Coordinator: NSObject {
+        var options: [Value]
+        var selection: Binding<Value>
+        var menuItems: ((Value) -> [PilotSegmentedMenuItem])?
+        var onClose: ((Value) -> Void)?
+        /// Last segment content written to the control; see `SegmentContent`.
+        var appliedContent: AppliedContent?
+
+        init(
+            options: [Value],
+            selection: Binding<Value>,
+            menuItems: ((Value) -> [PilotSegmentedMenuItem])?
+        ) {
+            self.options = options
+            self.selection = selection
+            self.menuItems = menuItems
+        }
+
+        @objc func selectSegment(_ sender: NSSegmentedControl) {
+            guard options.indices.contains(sender.selectedSegment) else { return }
+            // Commit the pill's slide to the render server before the
+            // selection change reaches SwiftUI. Whatever the new selection
+            // rebuilds (the Notes editor restyles a whole document) then runs
+            // after the animation has started instead of delaying its first
+            // frame.
+            sender.displayIfNeeded()
+            CATransaction.flush()
+            selection.wrappedValue = options[sender.selectedSegment]
+        }
+
+        @objc func selectMenuItem(_ sender: NSMenuItem) {
+            guard options.indices.contains(sender.tag),
+                  let itemIndex = sender.representedObject as? Int,
+                  let items = menuItems?(options[sender.tag]),
+                  items.indices.contains(itemIndex) else { return }
+            items[itemIndex].action()
+        }
+
+        @objc func closeSelected(_ sender: NSButton) {
+            guard let control = sender.superview as? PilotNativeSegmentedControl,
+                  options.indices.contains(control.selectedSegment) else { return }
+            onClose?(options[control.selectedSegment])
+        }
+    }
+}
+
+extension View {
     /// Glass for a floating control cluster in a capsule — toolbars, pane
     /// headers, and overlay controls. Never for content surfaces.
     func compatGlassCapsule(tint: Color? = nil, interactive: Bool = false) -> some View {

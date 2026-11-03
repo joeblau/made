@@ -60,10 +60,10 @@ struct AgenticUseDailyChartPanel: View {
                     description: Text(emptyDescription)
                 )
                 .legibleSecondaryHierarchy()
-                .frame(minHeight: 240)
+                .frame(height: 280)
             } else {
                 chart(cells)
-                    .frame(minHeight: 240, idealHeight: 280)
+                    .frame(height: 280)
             }
             legend
         }
@@ -73,6 +73,7 @@ struct AgenticUseDailyChartPanel: View {
             selection = nil
         }
         .onChange(of: metric) { selection = nil }
+        .onChange(of: style) { selection = nil }
         .onChange(of: granularity) { selection = nil }
         .onChange(of: snapshot.providerTotals.map(\.provider)) { _, providers in
             if let isolated, !providers.contains(isolated) { self.isolated = nil }
@@ -133,15 +134,17 @@ struct AgenticUseDailyChartPanel: View {
         }
     }
 
-    /// The system segmented control: a capsule with a sliding selection on
-    /// 26+, so no custom segmented control is needed here.
+    /// No press lift: AppKit's press tracking grows the glass pill past the
+    /// control's bounds, so the picker appeared to change height on click.
     private var metricPicker: some View {
-        Picker("Metric", selection: $metric) {
-            ForEach(Metric.allCases) { Text($0.rawValue).tag($0) }
-        }
-        .legibleSegmentedPicker()
-        .labelsHidden()
-        .controlSize(.small)
+        PilotSegmentedControl(
+            "Metric",
+            selection: $metric,
+            options: Metric.allCases,
+            title: { $0.rawValue },
+            controlSize: .small,
+            liftsOnPress: false
+        )
         .fixedSize()
     }
 
@@ -354,6 +357,10 @@ struct AgenticUseDailyChartPanel: View {
                 }
             }
         }
+        .id(style)
+        .transition(.opacity)
+        .animation(.easeInOut(duration: 0.25), value: style)
+        .animation(.easeInOut(duration: 0.25), value: metric)
     }
 
     /// The rule's x within the plot area. Marks with a date `unit` sit at the

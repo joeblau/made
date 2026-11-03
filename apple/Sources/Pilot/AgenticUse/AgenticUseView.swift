@@ -59,14 +59,13 @@ struct AgenticUseView: View {
             // glass refresh blends with it inside one container.
             CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
                 HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    Picker("Range", selection: $store.range) {
-                        ForEach(AgenticUseRange.allCases) { range in
-                            Text(range.label).tag(range)
-                        }
-                    }
-                    .legibleSegmentedPicker()
-                    .controlSize(.small)
-                    .labelsHidden()
+                    PilotSegmentedControl(
+                        "Range",
+                        selection: $store.range,
+                        options: AgenticUseRange.allCases,
+                        title: { $0.label },
+                        controlSize: .small
+                    )
                     .fixedSize()
 
                     Button {
@@ -385,6 +384,7 @@ struct AgenticUseDashboard: View {
         } action: { newWidth in
             width = newWidth
         }
+        .animation(.easeInOut(duration: 0.25), value: snapshot.range)
     }
 
     @ViewBuilder

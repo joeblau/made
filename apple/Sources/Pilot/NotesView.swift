@@ -48,8 +48,6 @@ struct NotesView: View {
     @AppStorage("notes.wordWrap") private var wordWrapRawValue = NoteWordWrap.eighty.rawValue
     @State private var showCopiedToast = false
     @State private var toastDismiss: DispatchWorkItem?
-    /// Tab the dragged note would be inserted before; drives the insertion marker.
-    @State private var dropTargetNoteID: UUID?
 
     var body: some View {
         let notes = store.notes
@@ -115,37 +113,7 @@ struct NotesView: View {
         HStack(spacing: 0) {
             GlassChipScroller {
                 HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    ForEach(notes) { note in
-                        NoteTab(
-                            title: note.displayTitle,
-                            isSelected: note.id == store.selectedNoteID,
-                            isDropTarget: dropTargetNoteID == note.id,
-                            onSelect: { store.selectedNoteID = note.id },
-                            onClose: { store.requestCloseNote(note) }
-                        )
-                        // Drag-to-reorder (issue #67). The note rides along as a
-                        // dedicated Transferable payload; dropping onto another tab
-                        // inserts the dragged note just before it and persists the
-                        // new order.
-                        .draggable(NoteTabTransfer(id: note.id)) {
-                            // Legible chip under the cursor while dragging,
-                            // in the same capsule as the tab it came from.
-                            Text(note.displayTitle)
-                                .scaledFont(size: 12)
-                                .lineLimit(1)
-                                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-                                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-                                .background(.ultraThinMaterial, in: Capsule())
-                        }
-                        .dropDestination(for: NoteTabTransfer.self) { items, _ in
-                            dropTargetNoteID = nil
-                            guard let dragged = items.first else { return false }
-                            store.moveNote(dragged.id, before: note.id)
-                            return true
-                        } isTargeted: { targeted in
-                            dropTargetNoteID = targeted ? note.id : nil
-                        }
-                    }
+                    NotesSegmentedControl(notes: notes, store: store)
 
                     Button {
                         store.addNote()
@@ -199,12 +167,12 @@ struct NotesView: View {
             }
             .menuStyle(.button)
             .compatGlassButtonStyle()
-            .controlSize(.small)
-            .fixedSize()
+            .controlSize(.regular)
+            .frame(minWidth: 112)
             .accessibilityLabel("Word Wrap")
             .accessibilityValue(selectedWordWrap.title)
         }
-        .scaledFont(size: 11, weight: .medium)
+        .scaledFont(size: 12, weight: .medium)
         .help("Word Wrap")
     }
 
@@ -371,7 +339,12 @@ struct NoteTextView: NSViewRepresentable {
 
         scrollView.drawsBackground = false
         scrollView.hasVerticalScroller = true
-        applyWordWrap(to: textView, in: scrollView)
+        // No forced layout here: the editor is recreated on every note
+        // switch, and laying out the whole document synchronously held up
+        // the tab bar's selection animation. TextKit lays out what's visible
+        // on first draw.
+        applyWordWrap(to: textView, in: scrollView, forceLayout: false)
+        context.coordinator.appliedWrap = WrapSettings(columns: wordWrapColumns, fontSize: fontSize)
 
         return scrollView
     }
@@ -388,7 +361,13 @@ struct NoteTextView: NSViewRepresentable {
             }
         }
 
-        applyWordWrap(to: textView, in: scrollView)
+        // Every SwiftUI update lands here (each keystroke, each tab switch);
+        // re-wrap only when the wrap width or font actually changed.
+        let wrap = WrapSettings(columns: wordWrapColumns, fontSize: fontSize)
+        if context.coordinator.appliedWrap != wrap {
+            context.coordinator.appliedWrap = wrap
+            applyWordWrap(to: textView, in: scrollView, forceLayout: true)
+        }
 
         // Only overwrite when the model diverges from the view (e.g. an
         // external edit) — never on the user's own keystrokes, which would
@@ -399,7 +378,12 @@ struct NoteTextView: NSViewRepresentable {
         }
     }
 
-    private func applyWordWrap(to textView: NSTextView, in scrollView: NSScrollView) {
+    struct WrapSettings: Equatable {
+        let columns: Int?
+        let fontSize: CGFloat
+    }
+
+    private func applyWordWrap(to textView: NSTextView, in scrollView: NSScrollView, forceLayout: Bool) {
         guard let textContainer = textView.textContainer else { return }
 
         textContainer.widthTracksTextView = false
@@ -426,7 +410,9 @@ struct NoteTextView: NSViewRepresentable {
             scrollView.hasHorizontalScroller = true
         }
 
-        textView.layoutManager?.ensureLayout(for: textContainer)
+        if forceLayout {
+            textView.layoutManager?.ensureLayout(for: textContainer)
+        }
         textView.needsDisplay = true
     }
 
@@ -437,6 +423,8 @@ struct NoteTextView: NSViewRepresentable {
         private let parent: NoteTextView
         let styler: MarkdownStyler
         let maskController = EnvMaskController()
+        /// Wrap width and font last applied to the text container.
+        var appliedWrap: WrapSettings?
 
         init(_ parent: NoteTextView) {
             self.parent = parent
@@ -468,74 +456,54 @@ private struct CopiedSecretToast: View {
     }
 }
 
-private struct NoteTab: View {
-    let title: String
-    let isSelected: Bool
-    let isDropTarget: Bool
-    let onSelect: () -> Void
-    let onClose: () -> Void
+private struct NotesSegmentedControl: View {
+    let notes: [Note]
+    @Bindable var store: WorkspaceStore
 
-    @State private var isHovering = false
-
-    /// The close target is a circle inset from the tab's trailing edge by the
-    /// same amount vertically and horizontally, so it nests concentrically in
-    /// the capsule tab (LAY-4).
-    private static let closeSize: CGFloat = 18
-    private static let closeInset = LiquidGlassMetrics.Spacing.xxSmall
-
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-            Text(title)
-                .font(isSelected ? .body.weight(.semibold) : .body)
-                .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                // The capsule selects on a plain tap (the close button stays
-                // its own target), so the title carries the button semantics.
-                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-                .accessibilityAction { onSelect() }
-
-            // Plain inside the tab (the tab is the glass), with its own
-            // hover/press feedback (BTN-5).
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .scaledFont(size: 9, weight: .bold)
-                    .frame(width: Self.closeSize, height: Self.closeSize)
+        let control = PilotSegmentedControl<UUID>(
+            "Notes",
+            selection: Binding(
+                get: { store.selectedNoteID ?? UUID() },
+                set: { store.selectedNoteID = $0 }
+            ),
+            options: notes.map(\.id),
+            title: { noteID in
+                notes.first(where: { $0.id == noteID })?.displayTitle ?? ""
+            },
+            menuItems: { noteID in
+                guard let note = notes.first(where: { $0.id == noteID }) else { return [] }
+                return [PilotSegmentedMenuItem("Close Note") { store.requestCloseNote(note) }]
+            },
+            dropTypes: [NSPasteboard.PasteboardType(UTType.pilotNoteTab.identifier)],
+            onDrop: { pasteboard, index in
+                guard notes.indices.contains(index),
+                      let data = pasteboard.data(forType: NSPasteboard.PasteboardType(UTType.pilotNoteTab.identifier)),
+                      let dragged = try? JSONDecoder().decode(NoteTabTransfer.self, from: data)
+                else { return false }
+                store.moveNote(dragged.id, before: notes[index].id)
+                return true
+            },
+            closeLabel: "Close Note",
+            onClose: { noteID in
+                guard let note = notes.first(where: { $0.id == noteID }) else { return }
+                store.requestCloseNote(note)
             }
-            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.closeSize / 2))
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Close Note")
-            // Reserve the trailing slot so hovering never shifts the title.
-            .opacity(isHovering || isSelected ? 1 : 0)
-            .disabled(!isHovering && !isSelected)
-            .allowsHitTesting(isHovering || isSelected)
-            .accessibilityHidden(!isHovering && !isSelected)
-            .help("Close Note")
-        }
-        .padding(.leading, LiquidGlassMetrics.Spacing.small)
-        .padding(.trailing, Self.closeInset)
-        .padding(.vertical, Self.closeInset)
-        .frame(maxWidth: 170, alignment: .leading)
-        // Capsule tabs, like the system segmented and tab controls on 26.
-        .compatGlassEffect(
-            tint: isSelected ? Color.accentColor.opacity(0.14) : nil,
-            interactive: true,
-            in: Capsule()
         )
-        .animation(LiquidGlassMetrics.stateChange, value: isSelected)
-        // Insertion marker on the leading edge — a drop places the dragged tab
-        // just before this one.
-        .overlay(alignment: .leading) {
-            if isDropTarget {
-                Capsule()
-                    .fill(Color.accentColor)
-                    .frame(width: 3)
-                    .padding(.vertical, 2)
-                    .offset(x: -4)
+        .fixedSize()
+
+        if let selectedNote = notes.first(where: { $0.id == store.selectedNoteID }) {
+            control.draggable(NoteTabTransfer(id: selectedNote.id)) {
+                Text(selectedNote.displayTitle)
+                    .scaledFont(size: 12)
+                    .lineLimit(1)
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
+                    .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
+                    .background(.ultraThinMaterial, in: Capsule())
             }
+        } else {
+            control
         }
-        .animation(LiquidGlassMetrics.stateChange, value: isDropTarget)
-        .contentShape(Capsule())
-        .onTapGesture(perform: onSelect)
-        .onHover { isHovering = $0 }
     }
 }
