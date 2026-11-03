@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import XCTest
 @testable import Pilot
 
 @Suite("Agentic usage providers")
@@ -456,6 +457,22 @@ struct AgenticUsageProviderTests {
         let cached = try await loader.load()
         #expect(cached.skippedLineCount == 1)
         #expect(cached.records == result.records)
+        #expect(cached.parsedByteCount == 0)
+
+        let response = """
+        {"type":"token_usage_record","timestamp":"2026-08-14T02:35:35.653Z","payload":{"response_id":"after-large-prefix","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}}
+        """
+        let appendedData = Data(("\n" + response + "\n").utf8)
+        let appendHandle = try FileHandle(forWritingTo: url)
+        try appendHandle.seekToEnd()
+        try appendHandle.write(contentsOf: appendedData)
+        try appendHandle.close()
+        let appended = try await loader.load()
+        #expect(appended.parsedByteCount == appendedData.count)
+        #expect(appended.skippedLineCount == 1)
+        #expect(appended.records.count == 2)
+        #expect(appended.records.last?.model == "gpt-5.6-sol")
+        #expect(appended.records.last?.outputTokens == 10)
     }
 
     @Test("Grok context pricing includes the 200K boundary and preserves older cache rates")
@@ -489,4 +506,174 @@ struct AgenticUsageProviderTests {
         #expect(AgenticModel.canonicalize("claude-haiku-4-5-20251001") == "claude-haiku-4-5")
     }
 
+}
+
+final class AgenticUsagePerformanceTests: XCTestCase {
+    private struct Corpus: Sendable {
+        let root: URL
+        let sources: [AgenticUsageLoader.Source]
+        let kimiFile: URL
+        let recordCount: Int
+    }
+
+    private static func claude(_ serial: Int) -> String {
+        """
+        {"type":"assistant","requestId":"req_\(serial)","timestamp":"2026-08-14T10:00:00.000Z","message":{"id":"msg_\(serial)","model":"claude-opus-5","usage":{"input_tokens":10,"cache_read_input_tokens":1000,"output_tokens":40}}}
+        """
+    }
+
+    private static func codex(_ serial: Int) -> String {
+        """
+        {"type":"token_usage_record","timestamp":"2026-08-14T02:34:35.653Z","payload":{"model":"gpt-6.1-sol","response_id":"response-\(serial)","usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":10}}}
+        """
+    }
+
+    private static func grok(_ serial: Int) -> String {
+        """
+        {"timestamp":1784526657,"method":"_x.ai/session/update","params":{"sessionId":"s\(serial)","update":{"sessionUpdate":"turn_completed","usage":{"inputTokens":100,"outputTokens":10,"totalTokens":110,"cachedReadTokens":20}}}}
+        """
+    }
+
+    private static func kimi(_ serial: Int) -> String {
+        """
+        {"type":"usage.record","model":"kimi-code/k3","usage":{"inputOther":100,"output":10,"inputCacheRead":20},"usageScope":"turn","time":1786115071956}
+        """
+    }
+
+    private func makeCorpus(recordsPerProvider: Int) throws -> Corpus {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("agentic-benchmark-\(UUID().uuidString)", isDirectory: true)
+        let files: [(AgenticProvider, String, [String])] = [
+            (.claude, "history.jsonl", (0..<recordsPerProvider).map(Self.claude)),
+            (.codex, "rollout.jsonl", (0..<recordsPerProvider).map(Self.codex)),
+            (.grok, "updates.jsonl", (0..<recordsPerProvider).map(Self.grok)),
+            (.kimi, "wire.jsonl", (0..<recordsPerProvider).map(Self.kimi)),
+        ]
+        var sources: [AgenticUsageLoader.Source] = []
+        var kimiFile = root
+        for (provider, name, lines) in files {
+            let directoryURL = root.appendingPathComponent(provider.rawValue, isDirectory: true)
+            try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            let url = directoryURL.appendingPathComponent(name)
+            try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
+            sources.append(.init(provider: provider, rootDirectory: directoryURL))
+            if provider == .kimi { kimiFile = url }
+        }
+        return Corpus(
+            root: root, sources: sources, kimiFile: kimiFile, recordCount: recordsPerProvider * files.count
+        )
+    }
+
+    private func withCorpus(
+        recordsPerProvider: Int = 256,
+        _ body: (Corpus) -> Void
+    ) {
+        do {
+            let corpus = try makeCorpus(recordsPerProvider: recordsPerProvider)
+            defer { try? FileManager.default.removeItem(at: corpus.root) }
+            body(corpus)
+        } catch {
+            XCTFail("Could not create benchmark corpus: \(error)")
+        }
+    }
+
+    private func run(_ operation: @Sendable @escaping () async throws -> Void) {
+        let completed = expectation(description: "Async workload")
+        Task {
+            do { try await operation() } catch { XCTFail("Workload failed: \(error)") }
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 120)
+    }
+
+    private func measureWorkload(_ body: () -> Void) {
+        let options = XCTMeasureOptions()
+        options.invocationOptions = [.manuallyStart, .manuallyStop]
+        measure(metrics: [XCTClockMetric()], options: options, block: body)
+    }
+
+    func testColdLoadMultiProviderCorpus() {
+        measureWorkload {
+            withCorpus { corpus in
+                startMeasuring()
+                run {
+                    let result = try await AgenticUsageLoader(sources: corpus.sources).load()
+                    XCTAssertEqual(result.records.count, corpus.recordCount)
+                }
+                stopMeasuring()
+            }
+        }
+    }
+
+    func testUnchangedRefreshMultiProviderCorpus() {
+        measureWorkload {
+            withCorpus { corpus in
+                let loader = AgenticUsageLoader(sources: corpus.sources)
+                run { _ = try await loader.load() }
+                startMeasuring()
+                run {
+                    let result = try await loader.load()
+                    XCTAssertFalse(result.changed)
+                    XCTAssertEqual(result.parsedByteCount, 0)
+                    XCTAssertEqual(result.records.count, corpus.recordCount)
+                }
+                stopMeasuring()
+            }
+        }
+    }
+
+    func testSmallAppendMultiProviderCorpus() {
+        measureWorkload {
+            withCorpus { corpus in
+                let loader = AgenticUsageLoader(sources: corpus.sources)
+                run { _ = try await loader.load() }
+                do {
+                    let appended = Data((Self.kimi(256) + "\n").utf8)
+                    let handle = try FileHandle(forWritingTo: corpus.kimiFile)
+                    try handle.seekToEnd()
+                    try handle.write(contentsOf: appended)
+                    try handle.close()
+                    startMeasuring()
+                    run {
+                        let result = try await loader.load()
+                        XCTAssertEqual(result.parsedByteCount, appended.count)
+                        XCTAssertEqual(result.records.count, corpus.recordCount + 1)
+                    }
+                    stopMeasuring()
+                } catch {
+                    XCTFail("Could not append benchmark record: \(error)")
+                }
+            }
+        }
+    }
+
+    func testCancellationMultiProviderCorpus() {
+        measureWorkload {
+            withCorpus(recordsPerProvider: 16_384) { corpus in
+                let loader = AgenticUsageLoader(sources: corpus.sources)
+                let started = expectation(description: "Scan started")
+                let task = Task {
+                    try await loader.load { scanned, _ in
+                        if scanned == 0 { started.fulfill() }
+                    }
+                }
+                wait(for: [started], timeout: 30)
+                startMeasuring()
+                task.cancel()
+                let completed = expectation(description: "Scan cancelled")
+                Task {
+                    do {
+                        _ = try await task.value
+                        XCTFail("Cancelled workload completed")
+                    } catch is CancellationError {
+                    } catch {
+                        XCTFail("Unexpected cancellation error: \(error)")
+                    }
+                    completed.fulfill()
+                }
+                wait(for: [completed], timeout: 30)
+                stopMeasuring()
+            }
+        }
+    }
 }

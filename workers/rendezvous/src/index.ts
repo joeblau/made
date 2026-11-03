@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { AlarmSchedule } from "./alarm";
 import { SignalingRoom } from "./signaling";
 import { handleBuildActivity } from "./build-activity";
 export { BuildActivityRoom } from "./build-activity";
@@ -259,6 +260,8 @@ async function handleGetPeer(request: Request, env: WorkerEnv): Promise<Response
 
 /** A bounded, hibernatable two-party WebSocket relay. */
 export class RendezvousRoom extends DurableObject<WorkerEnv> {
+  private readonly expiry = new AlarmSchedule(this.ctx.storage);
+
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return new Response("Expected a WebSocket upgrade", { status: 426 });
@@ -364,9 +367,7 @@ export class RendezvousRoom extends DurableObject<WorkerEnv> {
   }
 
   async alarm(): Promise<void> {
-    const now = Date.now();
-    this.activeSockets(now);
-    await this.armAlarm(now);
+    await this.expiry.replace(this.alarmDeadline(Date.now()));
   }
 
   private attachment(socket: WebSocket, now: number): SocketAttachment {
@@ -398,6 +399,10 @@ export class RendezvousRoom extends DurableObject<WorkerEnv> {
   }
 
   private async armAlarm(now: number): Promise<void> {
+    await this.expiry.require(this.alarmDeadline(now));
+  }
+
+  private alarmDeadline(now: number): number | null {
     const deadlines = this.activeSockets(now).map((socket) => {
       const attachment = this.attachment(socket, now);
       return Math.min(
@@ -405,11 +410,7 @@ export class RendezvousRoom extends DurableObject<WorkerEnv> {
         attachment.connectedAt + SOCKET_LIFETIME_MS,
       );
     });
-    if (deadlines.length === 0) {
-      await this.ctx.storage.deleteAlarm();
-      return;
-    }
-    await this.ctx.storage.setAlarm(Math.min(...deadlines));
+    return deadlines.length === 0 ? null : Math.min(...deadlines);
   }
 
   private notifyPeerLeft(sender: WebSocket): void {

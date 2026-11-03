@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Pilot
 
@@ -110,5 +111,28 @@ struct MarkdownTaskFormatterTests {
         """
 
         #expect(MarkdownTaskFormatter.reflow(checklist) == expected)
+    }
+}
+
+@Suite("Regional Markdown reflow")
+struct RegionalMarkdownReflowTests {
+    @Test("Only the touched table block is aligned")
+    func tableScope() {
+        let text = "| a | b |\n| - | - |\n| 1 | 2 |\n\n| c | d |\n| - | - |\n| 3 | 4 |"
+        let expected = "| a   | b   |\n| --- | --- |\n| 1   | 2   |\n\n| c | d |\n| - | - |\n| 3 | 4 |"
+        #expect(MarkdownTableFormatter.reflow(
+            text, touching: [NSRange(location: 2, length: 0)]
+        ) == expected)
+        #expect(MarkdownTableFormatter.reflow(text, touching: []) == nil)
+    }
+
+    @Test("Only the touched task group is reordered")
+    func taskScope() {
+        let text = "- [x] a\n- [ ] b\n\n- [x] c\n- [ ] d"
+        let expected = "- [ ] b\n- [x] a\n\n- [x] c\n- [ ] d"
+        #expect(MarkdownTaskFormatter.reflow(
+            text, touching: [NSRange(location: 3, length: 0)]
+        ) == expected)
+        #expect(MarkdownTaskFormatter.reflow(text, touching: []) == nil)
     }
 }

@@ -707,9 +707,9 @@ private struct HiddenTerminalIndicator: View {
         .animation(LiquidGlassMetrics.spring, value: executableCommand != nil)
         .task(id: isWorkspaceActive) {
             guard isWorkspaceActive else { return }
-            let sessionName = pane.persistentSessionName
+            let session = pane.terminalSession
             while !Task.isCancelled {
-                activity = await PersistentTerminalSession.foregroundActivity(sessionName: sessionName)
+                activity = await session.foregroundActivity(unavailableActivity: .idle)
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -798,19 +798,12 @@ private struct HiddenTerminalIndicator: View {
             switch action {
             case .play:
                 if let executableCommand {
-                    _ = await PersistentTerminalSession.runFastCommand(
-                        executableCommand,
-                        sessionName: pane.persistentSessionName
-                    )
+                    _ = await pane.terminalSession.runFastCommand(executableCommand)
                 }
             case .stop:
-                _ = await PersistentTerminalSession.stopForegroundCommand(
-                    sessionName: pane.persistentSessionName
-                )
+                _ = await pane.terminalSession.interrupt()
             }
-            activity = await PersistentTerminalSession.foregroundActivity(
-                sessionName: pane.persistentSessionName
-            )
+            activity = await pane.terminalSession.foregroundActivity(unavailableActivity: .idle)
             activeAction = nil
         }
     }
@@ -824,11 +817,15 @@ struct PaneView: View {
     var body: some View {
         switch pane.kind {
         case .terminal:
-            TerminalViewRepresentable(
-                pane: pane,
-                isActive: isWorkspaceActive,
-                isCollapsed: pane.isCollapsed
-            )
+            if pane.terminalDestination.kind == .drone {
+                DroneTerminalView(pane: pane)
+            } else {
+                TerminalViewRepresentable(
+                    pane: pane,
+                    isActive: isWorkspaceActive,
+                    isCollapsed: pane.isCollapsed
+                )
+            }
         case .browser:
             if let state = pane.browserState {
                 BrowserPaneView(

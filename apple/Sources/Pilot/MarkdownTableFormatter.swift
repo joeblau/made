@@ -9,20 +9,26 @@ enum MarkdownTableFormatter {
     /// Returns the text with every GFM table block reflowed, or `nil` if nothing
     /// changed. Blocks containing any line index in `skipLines` are left as-is
     /// (used to avoid reformatting the table the caret is inside while typing).
-    static func reflow(_ text: String, skipLines: Set<Int> = []) -> String? {
-        reflowReportingSkipped(text, skipLines: skipLines).text
+    static func reflow(
+        _ text: String, skipLines: Set<Int> = [], touching ranges: [NSRange]? = nil
+    ) -> String? {
+        reflowReportingSkipped(text, skipLines: skipLines, touching: ranges).text
     }
 
     /// `reflow`, plus whether a block left alone because of `skipLines` still
     /// needs formatting. The editor keeps such a table pending so it aligns
-    /// on the next edit once the caret has left it.
+    /// on the next edit once the caret has left it. When `ranges` is supplied,
+    /// only table blocks touching those post-edit UTF-16 ranges are considered.
     static func reflowReportingSkipped(
         _ text: String,
-        skipLines: Set<Int> = []
+        skipLines: Set<Int> = [],
+        touching ranges: [NSRange]? = nil
     ) -> (text: String?, skippedBlockNeedsFormatting: Bool) {
         // Called on every keystroke — a table needs a pipe somewhere, so skip
         // the full line-split for the common case of a note with none.
         guard text.contains("|") else { return (nil, false) }
+        let touchedLines = ranges.map { markdownTouchedLineIndices($0, in: text as NSString) }
+        if touchedLines?.isEmpty == true { return (nil, false) }
         var lines = text.components(separatedBy: "\n")
         var changed = false
         var skippedBlockNeedsFormatting = false
@@ -30,6 +36,10 @@ enum MarkdownTableFormatter {
         while i < lines.count {
             guard let block = tableBlock(in: lines, startingAt: i) else {
                 i += 1
+                continue
+            }
+            if let touchedLines, !block.contains(where: { touchedLines.contains($0) }) {
+                i = block.upperBound
                 continue
             }
             let original = Array(lines[block])
@@ -234,6 +244,33 @@ enum MarkdownTableFormatter {
     }
 }
 
+private func markdownTouchedLineIndices(_ ranges: [NSRange], in text: NSString) -> Set<Int> {
+    func lineIndex(at location: Int) -> Int {
+        let end = min(location, text.length)
+        var index = 0
+        var searchStart = 0
+        while searchStart < end {
+            let newline = text.range(
+                of: "\n", options: .literal,
+                range: NSRange(location: searchStart, length: end - searchStart)
+            )
+            guard newline.location != NSNotFound else { break }
+            index += 1
+            searchStart = newline.location + 1
+        }
+        return index
+    }
+
+    var result: Set<Int> = []
+    for range in ranges {
+        let covered = text.newlineDelimitedLines(covering: range)
+        let first = lineIndex(at: covered.location)
+        let last = lineIndex(at: max(covered.location, NSMaxRange(covered) - 1))
+        for index in first...last { result.insert(index) }
+    }
+    return result
+}
+
 /// Stable-sorts root checklist items by completion while treating every
 /// indented descendant as part of its root item. This keeps nested checklists
 /// structurally intact when the editor reflows completed work.
@@ -249,9 +286,13 @@ enum MarkdownTaskFormatter {
     )
 
     /// Returns reordered text, or `nil` when the checklist is already settled.
-    static func reflow(_ text: String) -> String? {
+    /// When `ranges` is supplied, only groups touching those post-edit UTF-16
+    /// ranges are considered.
+    static func reflow(_ text: String, touching ranges: [NSRange]? = nil) -> String? {
         // Runs on every keystroke, so avoid splitting ordinary notes.
         guard text.contains("[x]") || text.contains("[X]") else { return nil }
+        let touchedLines = ranges.map { markdownTouchedLineIndices($0, in: text as NSString) }
+        if touchedLines?.isEmpty == true { return nil }
 
         var lines = text.components(separatedBy: "\n")
         var changed = false
@@ -268,6 +309,10 @@ enum MarkdownTaskFormatter {
             while end < lines.count, let task = parse(lines[end]) {
                 group.append(task)
                 end += 1
+            }
+            if let touchedLines, !(index..<end).contains(where: { touchedLines.contains($0) }) {
+                index = end
+                continue
             }
 
             let baseline = group.map(\.indentation).min() ?? 0

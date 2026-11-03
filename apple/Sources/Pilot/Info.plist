@@ -54,6 +54,7 @@
 		<string>_blau-sync._tcp</string>
 		<string>_blau-sync._udp</string>
 		<string>_rfb._tcp</string>
+		<string>_blau-drone._tcp</string>
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>

@@ -1,18 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROJECT="$APPLE_ROOT/made.xcodeproj"
+# shellcheck source-path=SCRIPTDIR source=lib/xcodebuild-ci.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/xcodebuild-ci.sh"
 SUITE="${1:-all}"
-# The default root and the per-scheme subdirectories below must match
-# build-ci.sh so a test run reuses the app products a preceding build
-# produced instead of cold-compiling them into a disjoint DerivedData tree.
-DERIVED_ROOT="${BLAU_DERIVED_DATA:-${TMPDIR:-/tmp}/blau-builds}"
-PACKAGES="${BLAU_SOURCE_PACKAGES:-${TMPDIR:-/tmp}/blau-source-packages}"
 
 case "$SUITE" in
-  pilot|shared|plotter|all) ;;
-  *) echo "Usage: apple/bin/test.sh [pilot|shared|plotter|all]" >&2; exit 2 ;;
+  pilot|shared|plotter|drone|drone-protocol|drone-lifecycle|all) ;;
+  *) echo "Usage: apple/bin/test.sh [pilot|shared|plotter|drone|drone-protocol|drone-lifecycle|all]" >&2; exit 2 ;;
 esac
 
 # Result bundles from earlier runs persist in the shared derived data; only
@@ -34,16 +29,28 @@ report_failure() {
 }
 trap report_failure EXIT
 
+# Builds Cockpit as the test host incrementally: after build-ci.sh only the test
+# bundle compiles.
 pilot() {
-  DISABLE_SWIFTLINT=1 xcodebuild test -quiet \
-    -project "$PROJECT" \
+  ci_xcodebuild test "$MACOS_DERIVED_DATA" \
     -scheme PilotTests \
-    -destination "platform=macOS,arch=$(uname -m)" \
-    -derivedDataPath "$DERIVED_ROOT/Pilot" \
-    -clonedSourcePackagesDirPath "$PACKAGES" \
-    -onlyUsePackageVersionsFromResolvedFile \
-    -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO
+    -destination "$MACOS_DESTINATION"
+}
+
+hosted_test() {
+  local scheme="$1"
+  local udid="$2"
+  # Build the host and tests for the same generic destination as build-ci.sh so
+  # the host is reused, then run exactly the products this invocation built.
+  # Removing earlier descriptions and stopping on a failed build (set -e) keeps
+  # test-without-building from running stale or foreign products.
+  rm -f "$IOS_SIMULATOR_DERIVED_DATA"/Build/Products/"${scheme}"_*.xctestrun
+  ci_xcodebuild build-for-testing "$IOS_SIMULATOR_DERIVED_DATA" \
+    -scheme "$scheme" \
+    -destination "$IOS_SIMULATOR_BUILD_DESTINATION"
+  ci_xcodebuild test-without-building "$IOS_SIMULATOR_DERIVED_DATA" \
+    -scheme "$scheme" \
+    -destination "platform=iOS Simulator,id=$udid"
 }
 
 shared() {
@@ -57,15 +64,7 @@ shared() {
     ')"
   fi
   [[ -n "$udid" ]] || { echo "No available iPhone simulator; set IOS_SIMULATOR_UDID." >&2; exit 1; }
-  DISABLE_SWIFTLINT=1 xcodebuild test -quiet \
-    -project "$PROJECT" \
-    -scheme SharedTests \
-    -destination "platform=iOS Simulator,id=$udid" \
-    -derivedDataPath "$DERIVED_ROOT/Copilot" \
-    -clonedSourcePackagesDirPath "$PACKAGES" \
-    -onlyUsePackageVersionsFromResolvedFile \
-    -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO
+  hosted_test SharedTests "$udid"
 }
 
 plotter() {
@@ -79,20 +78,29 @@ plotter() {
     ')"
   fi
   [[ -n "$udid" ]] || { echo "No available iPad simulator; set IPAD_SIMULATOR_UDID." >&2; exit 1; }
-  DISABLE_SWIFTLINT=1 xcodebuild test -quiet \
-    -project "$PROJECT" \
-    -scheme PlotterTests \
-    -destination "platform=iOS Simulator,id=$udid" \
-    -derivedDataPath "$DERIVED_ROOT/Plotter" \
-    -clonedSourcePackagesDirPath "$PACKAGES" \
-    -onlyUsePackageVersionsFromResolvedFile \
-    -skipPackagePluginValidation \
-    CODE_SIGNING_ALLOWED=NO
+  hosted_test PlotterTests "$udid"
+}
+
+drone_lifecycle() {
+  ci_xcodebuild test "$MACOS_DERIVED_DATA" \
+    -scheme DroneTests \
+    -destination "$MACOS_DESTINATION"
+  "$APPLE_ROOT/bin/test-drone-launchd.sh"
+}
+
+drone_execution() {
+  "$APPLE_ROOT/bin/test-drone-jobs.sh"
+  "$APPLE_ROOT/bin/test-drone-terminal.sh"
+  "$APPLE_ROOT/bin/test-drone-tools.sh"
+  "$APPLE_ROOT/bin/test-drone-worker.sh"
 }
 
 case "$SUITE" in
   pilot) pilot ;;
   shared) shared ;;
   plotter) plotter ;;
-  all) pilot; shared; plotter ;;
+  drone-protocol) "$APPLE_ROOT/bin/test-drone-protocol.sh" ;;
+  drone-lifecycle) drone_lifecycle ;;
+  drone) "$APPLE_ROOT/bin/test-drone-protocol.sh"; drone_lifecycle; drone_execution ;;
+  all) pilot; shared; plotter; "$APPLE_ROOT/bin/test-drone-protocol.sh"; drone_lifecycle; drone_execution ;;
 esac

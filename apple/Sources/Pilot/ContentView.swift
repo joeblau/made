@@ -62,29 +62,6 @@ struct PaneToolbarContent: ToolbarContent {
     }
 }
 
-/// One browser-only slot of `PaneToolbarContent`. Resolving the pane inside a
-/// view body keeps the slot observing collapse and kind changes.
-private struct BrowserPaneToolbarSlot: View {
-    enum Slot {
-        case navigation
-        case address
-    }
-
-    let pane: Pane?
-    let slot: Slot
-
-    var body: some View {
-        if let state = BrowserToolbarSelection.state(for: pane) {
-            switch slot {
-            case .navigation:
-                BrowserNavigationToolbarControls(state: state)
-            case .address:
-                BrowserAddressToolbarControl(state: state)
-            }
-        }
-    }
-}
-
 /// The pane-kind tools of `PaneToolbarContent`, after any browser navigation
 /// and address items.
 struct PaneToolbarControls: View {

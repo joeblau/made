@@ -11,6 +11,7 @@ struct PilotSettingsView: View {
     @State private var searchText = ""
 
     let updater: SPUUpdater
+    let droneStore: DroneStore
 
     var body: some View {
         NavigationSplitView {
@@ -18,10 +19,15 @@ struct PilotSettingsView: View {
             // capsule; it adopts Liquid Glass on macOS 26 automatically.
             let showsGeneral = matchesSearch("General identity keys about version updates setup permissions tools Chromium")
             let showsUsage = matchesSearch("Usage Claude Codex Kimi Grok")
+            let showsDrones = matchesSearch("Drones remote workers pairing Bonjour")
             List(selection: sidebarSelection) {
                 if showsGeneral {
                     Label("General", systemImage: "gearshape")
                         .tag(SettingsTab.general)
+                }
+                if showsDrones {
+                    Label("Drones", systemImage: "server.rack")
+                        .tag(SettingsTab.drones)
                 }
                 if showsUsage {
                     Label("Usage", systemImage: "chart.bar.xaxis")
@@ -31,7 +37,7 @@ struct PilotSettingsView: View {
             .listStyle(.sidebar)
             // A designed no-results state instead of a blank sidebar (MOT-6).
             .overlay {
-                if !showsGeneral && !showsUsage {
+                if !showsGeneral && !showsDrones && !showsUsage {
                     ContentUnavailableView.search(text: searchText)
                     .legibleSecondaryHierarchy()
                 }
@@ -64,6 +70,8 @@ struct PilotSettingsView: View {
         case SettingsTab.usage:
             UsageSettingsView(showsPageHeader: true)
                 .formStyle(.grouped)
+        case SettingsTab.drones:
+            DroneSettingsView(store: droneStore)
         default:
             Form {
                 PilotSettingsPageHeader(

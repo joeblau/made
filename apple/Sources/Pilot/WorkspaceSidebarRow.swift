@@ -253,7 +253,7 @@ private struct WorkspaceLLMGauge: View {
                 // of its own and just idles until a pane appears.
                 let terminals = workspace.panes.filter { $0.kind == .terminal }
                 if !terminals.isEmpty, graceTicks > 0,
-                   !PersistentTerminalSession.hasPaneRuntimeSnapshot() {
+                   terminals.contains(where: { !$0.hasTerminalRuntimeSnapshot }) {
                     graceTicks -= 1
                     try? await Task.sleep(for: .seconds(2))
                     continue
@@ -269,9 +269,7 @@ private struct WorkspaceLLMGauge: View {
                     // above fell back to cursor state alone and can misreport
                     // idle, so treat this tick as unresolved too.
                     if status.agent.needsVisibleTerminalContentsForActivity,
-                       PersistentTerminalSession.visibleContents(
-                           sessionName: pane.persistentSessionName
-                       ) == nil {
+                       pane.visibleTerminalContents() == nil {
                         contentsPending = true
                     }
                     if status.activity == .running {

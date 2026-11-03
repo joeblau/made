@@ -61,10 +61,7 @@ struct TerminalFastCommandToolbarField: View {
             return
         }
         Task {
-            _ = await PersistentTerminalSession.runFastCommand(
-                command,
-                sessionName: pane.persistentSessionName
-            )
+            _ = await pane.terminalSession.runFastCommand(command)
         }
     }
 }
@@ -111,9 +108,9 @@ struct TerminalFastCommandToolbarActions: View {
         }
         .controlGroupStyle(.navigation)
         .task(id: pane.id) {
-            let sessionName = pane.persistentSessionName
+            let session = pane.terminalSession
             while !Task.isCancelled {
-                activity = await PersistentTerminalSession.foregroundActivity(sessionName: sessionName)
+                activity = await session.foregroundActivity(unavailableActivity: .idle)
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -139,10 +136,7 @@ struct TerminalFastCommandToolbarActions: View {
         guard activeAction == nil, let executableCommand else { return }
         activeAction = .play
         Task {
-            _ = await PersistentTerminalSession.runFastCommand(
-                executableCommand,
-                sessionName: pane.persistentSessionName
-            )
+            _ = await pane.terminalSession.runFastCommand(executableCommand)
             activeAction = nil
         }
     }
@@ -151,25 +145,23 @@ struct TerminalFastCommandToolbarActions: View {
         guard activeAction == nil else { return }
         activeAction = .stop
         Task {
-            _ = await PersistentTerminalSession.stopForegroundCommand(
-                sessionName: pane.persistentSessionName
-            )
+            _ = await pane.terminalSession.interrupt()
             activeAction = nil
         }
     }
 }
 
-/// All destructive terminal UI actions pass through this gate. Check tmux at
-/// close time rather than relying on the periodically refreshed tab indicator.
+/// All destructive terminal UI actions pass through this gate. Check live
+/// activity at close time rather than relying on the periodically refreshed tab indicator.
 @MainActor
 enum TerminalCloseConfirmation {
     private static var pendingPaneIDs: Set<UUID> = []
 
     static func perform(
         panes: [Pane],
-        activity: @MainActor (String) async -> TerminalProcessActivity = {
+        activity: @MainActor (Pane) async -> TerminalProcessActivity = {
             // If runtime state cannot be verified, ask before destroying it.
-            await PersistentTerminalSession.foregroundActivity(sessionName: $0, unavailableActivity: .running)
+            await $0.terminalSession.foregroundActivity(unavailableActivity: .running)
         },
         confirm: @MainActor ([Pane]) async -> Bool = { await present(for: $0) },
         action: @MainActor () -> Void
@@ -182,7 +174,7 @@ enum TerminalCloseConfirmation {
 
         var busy: [Pane] = []
         for pane in terminals {
-            if await activity(pane.persistentSessionName) == .running {
+            if await activity(pane) == .running {
                 busy.append(pane)
             }
         }

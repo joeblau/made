@@ -6,18 +6,24 @@
  */
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { createCockpitController, disposeCockpitResources } from './cockpit-lifecycle.js';
+
+const activeCockpits = new WeakMap();
 
 /**
- * Builds the scene inside `root` and starts its capped loop. Returns a truthy
- * value on success, or null when the canvases are missing or WebGL is
+ * Builds the scene inside `root` and starts its capped loop. Returns a scene
+ * controller on success, or null when the canvases are missing or WebGL is
  * unavailable so the loader keeps the static fallback.
  */
 export function initCockpit(root = document) {
+  const existing = activeCockpits.get(root);
+  if (existing) return existing;
   const sceneCanvas = root.querySelector('[data-cockpit-scene]');
   const hudCanvas = root.querySelector('[data-cockpit-hud]');
   if (!(sceneCanvas instanceof HTMLCanvasElement) || !(hudCanvas instanceof HTMLCanvasElement)) return null;
 
-  const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const motionPreference = matchMedia('(prefers-reduced-motion: reduce)');
+  let reducedMotion = motionPreference.matches;
 
   /* ============================== helpers ============================== */
   const cnv = (w, h) => {
@@ -37,6 +43,11 @@ export function initCockpit(root = document) {
   const lerp = (a, b, t) => a + (b - a) * t;
   const integerFormat = new Intl.NumberFormat('en-US');
   const D2R = Math.PI / 180;
+  const listenerCleanups = [];
+  function listen(target, type, listener, options) {
+    target.addEventListener(type, listener, options);
+    listenerCleanups.push(() => target.removeEventListener(type, listener, options));
+  }
 
   /* ============================== renderer ============================== */
   let renderer;
@@ -1061,6 +1072,7 @@ export function initCockpit(root = document) {
   /* ============================== HMD overlay ============================== */
   const hg = hudCanvas.getContext('2d');
   let W = 0, H = 0, DPR = 1;
+  let renderController;
   function resize() {
     W = innerWidth;
     H = innerHeight;
@@ -1070,8 +1082,9 @@ export function initCockpit(root = document) {
     camera.updateProjectionMatrix();
     hudCanvas.width = W * DPR;
     hudCanvas.height = H * DPR;
+    if (renderController && reducedMotion) renderStatic();
   }
-  addEventListener('resize', resize);
+  listen(window, 'resize', resize);
   resize();
 
   const _v = new THREE.Vector3();
@@ -1227,70 +1240,62 @@ export function initCockpit(root = document) {
   const coarsePointer = matchMedia('(pointer: coarse)').matches;
   if (!coarsePointer) {
     let bounds = root.getBoundingClientRect();
-    let boundsQueued = false;
+    let boundsFrame = null;
     const updateBounds = () => {
       bounds = root.getBoundingClientRect();
-      boundsQueued = false;
+      boundsFrame = null;
     };
     const queueBounds = () => {
-      if (boundsQueued) return;
-      boundsQueued = true;
-      requestAnimationFrame(updateBounds);
+      if (boundsFrame !== null) return;
+      boundsFrame = requestAnimationFrame(updateBounds);
     };
-    interactionRoot.addEventListener('mouseenter', updateBounds, { passive: true });
-    addEventListener('resize', queueBounds, { passive: true });
-    addEventListener('scroll', queueBounds, { passive: true });
-    // Desktop: absolute mouse position steers the view. Skipped on touch
-    // devices so iOS's synthetic mousemove after a tap can't snap the camera.
-    interactionRoot.addEventListener('mousemove', (e) => {
+    const moveMouse = (e) => {
       tgtX = clamp(((e.clientX - bounds.left) / bounds.width - 0.5) * 2, -1, 1);
       tgtY = clamp(((e.clientY - bounds.top) / bounds.height - 0.5) * 2, -1, 1);
+    };
+    listen(interactionRoot, 'mouseenter', updateBounds, { passive: true });
+    listen(window, 'resize', queueBounds, { passive: true });
+    listen(window, 'scroll', queueBounds, { passive: true });
+    // Desktop: absolute mouse position steers the view. Skipped on touch
+    // devices so iOS's synthetic mousemove after a tap can't snap the camera.
+    listen(interactionRoot, 'mousemove', moveMouse);
+    listenerCleanups.push(() => {
+      if (boundsFrame !== null) cancelAnimationFrame(boundsFrame);
     });
   }
   // Touch pans only inside the hero; normal page scrolling stays untouched.
   let lastTX = null, lastTY = null;
-  interactionRoot.addEventListener('touchstart', (e) => {
+  const startTouch = (e) => {
     if (e.touches.length === 1) {
       lastTX = e.touches[0].clientX;
       lastTY = e.touches[0].clientY;
     }
-  }, { passive: true });
-  interactionRoot.addEventListener('touchmove', (e) => {
+  };
+  const moveTouch = (e) => {
     const t = e.touches[0];
     if (!t || lastTX === null) return;
     tgtX = clamp(tgtX - (t.clientX - lastTX) * 2.2 / W, -1, 1);
     tgtY = clamp(tgtY - (t.clientY - lastTY) * 2.2 / H, -1, 1);
     lastTX = t.clientX;
     lastTY = t.clientY;
-  }, { passive: true });
+  };
   const resetTouch = () => {
     lastTX = null;
     lastTY = null;
   };
-  interactionRoot.addEventListener('touchend', resetTouch, { passive: true });
-  interactionRoot.addEventListener('touchcancel', resetTouch, { passive: true });
-  addEventListener('keydown', (e) => {
+  const toggleHMD = (e) => {
     if (e.key === 'h' || e.key === 'H') S.hmd = !S.hmd;
-  });
+  };
+  listen(interactionRoot, 'touchstart', startTouch, { passive: true });
+  listen(interactionRoot, 'touchmove', moveTouch, { passive: true });
+  listen(interactionRoot, 'touchend', resetTouch, { passive: true });
+  listen(interactionRoot, 'touchcancel', resetTouch, { passive: true });
+  listen(window, 'keydown', toggleHMD);
 
   /* ============================== main loop ============================== */
-  const timer = new THREE.Timer();
   const MFD_INTERVAL = 1 / 12;
   let mfdAcc = 1; // paint the instruments on the very first frame
-  /* The scene is a decorative background, so ~30fps is plenty: elapsed time
-     accumulates across skipped rAF ticks and a frame only renders once it
-     crosses FRAME_MIN (just under 1/30 s so 60/120 Hz displays land on 30). */
-  const FRAME_MIN = 1 / 34;
-  let frameAcc = 0;
-  let rafId = 0;
-  let running = false;
-  function frame() {
-    if (running) rafId = requestAnimationFrame(frame);
-    timer.update();
-    frameAcc += Math.min(timer.getDelta(), 0.05);
-    if (running && frameAcc < FRAME_MIN) return;
-    const dt = Math.min(frameAcc, 0.05);
-    frameAcc = 0;
+  function frame(dt) {
     const t = (S.t += dt);
 
     /* attitude: slow wandering bank + pitch + turbulence */
@@ -1352,36 +1357,88 @@ export function initCockpit(root = document) {
     drawHMD();
   }
 
-  if (reducedMotion) {
-    frame(); // one static frame, no loop
-    return true;
+  function renderStatic() {
+    renderer.render(scene, camera);
+    drawHMD();
   }
-  /* Pause the loop while the tab is hidden or the canvas is scrolled out of
-     view; resume drops the paused interval so dt stays bounded. */
+
+  renderController = createCockpitController({ render: frame });
   let pageVisible = document.visibilityState !== 'hidden';
+  let pageActive = true;
   let canvasInView = true;
+  let requested = false;
+  let disposed = false;
+  let observer;
   function syncLoop() {
-    const shouldRun = pageVisible && canvasInView;
-    if (shouldRun === running) return;
-    running = shouldRun;
-    if (shouldRun) {
-      timer.update();
-      timer.getDelta();
-      rafId = requestAnimationFrame(frame);
-    } else {
-      cancelAnimationFrame(rafId);
-    }
+    const shouldRun = requested && !reducedMotion && pageVisible && pageActive && canvasInView && !disposed;
+    if (shouldRun) renderController.resume();
+    else renderController.pause();
   }
-  document.addEventListener('visibilitychange', () => {
+  const updateVisibility = () => {
     pageVisible = document.visibilityState !== 'hidden';
     syncLoop();
-  });
+  };
+  const updateMotion = (event) => {
+    reducedMotion = event.matches;
+    syncLoop();
+  };
+  const hidePage = () => {
+    pageActive = false;
+    syncLoop();
+  };
+  const showPage = () => {
+    pageActive = true;
+    pageVisible = document.visibilityState !== 'hidden';
+    syncLoop();
+  };
+  listen(document, 'visibilitychange', updateVisibility);
+  listen(motionPreference, 'change', updateMotion);
+  listen(window, 'pagehide', hidePage);
+  listen(window, 'pageshow', showPage);
   if (typeof IntersectionObserver === 'function') {
-    new IntersectionObserver((entries) => {
+    observer = new IntersectionObserver((entries) => {
       canvasInView = entries.some((entry) => entry.isIntersecting);
       syncLoop();
-    }).observe(sceneCanvas);
+    });
+    observer.observe(sceneCanvas);
   }
-  syncLoop();
-  return true;
+
+  const cockpit = {
+    start() {
+      if (disposed) return;
+      requested = true;
+      syncLoop();
+    },
+    pause() {
+      requested = false;
+      syncLoop();
+    },
+    resume() {
+      if (disposed) return;
+      requested = true;
+      syncLoop();
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      requested = false;
+      renderController.dispose();
+      for (const cleanup of listenerCleanups) cleanup();
+      observer?.disconnect();
+      disposeCockpitResources(scene, environmentTarget, renderer);
+      if (activeCockpits.get(root) === cockpit) activeCockpits.delete(root);
+    },
+    get running() { return renderController.running; },
+    get disposed() { return disposed; },
+  };
+  activeCockpits.set(root, cockpit);
+  if (reducedMotion) {
+    paintLeft();
+    paintRight();
+    paintStandby();
+    mfdAcc = 0;
+    renderStatic();
+  }
+  cockpit.start();
+  return cockpit;
 }

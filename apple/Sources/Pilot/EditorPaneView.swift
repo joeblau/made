@@ -87,7 +87,6 @@ struct EditorPaneView: View {
     @State private var session = EditorDocumentSession()
     @State private var editorState = SourceEditorState()
 
-    // Fuzzy finder overlay.
     @State private var showFinder = false
     @State private var finder = FileFinder()
     @State private var searchQuery = ""
@@ -97,7 +96,6 @@ struct EditorPaneView: View {
     @State private var finderListHeight: CGFloat?
     @FocusState private var searchFocused: Bool
 
-    // Arrow-key fallback for the finder; see `installKeyMonitor()`.
     @State private var keyMonitor: Any?
 
     @Environment(\.colorScheme) private var colorScheme
@@ -256,7 +254,6 @@ struct EditorPaneView: View {
         } else if !showFinder {
             emptyState
         } else {
-            // Finder is up over a blank canvas — let the overlay carry the UI.
             Color.clear
         }
     }
@@ -272,8 +269,6 @@ struct EditorPaneView: View {
         )
     }
 
-    /// No buffer and no finder: name the state and offer the one next action
-    /// (MOT-6), keeping the ⌘P hint as the description.
     private var emptyState: some View {
         ContentUnavailableView {
             Label("No File Open", systemImage: "curlybraces")
@@ -300,15 +295,8 @@ struct EditorPaneView: View {
     // MARK: - Finder overlay
 
     private var finderOverlay: some View {
-        // Quick open is a transient control layer over the editor, laid out
-        // like Spotlight on macOS 26: the search field is its own glass
-        // capsule and the results float as a separate glass card below it
-        // (material + shadow before 26). Neither sits on the other, and one
-        // container renders and morphs the two glass shapes together.
         CompatGlassContainer(spacing: Self.finderGlassBlendSpacing) {
             VStack(spacing: Self.finderSectionSpacing) {
-                // The magnifier and the always-focused capsule identify the
-                // field, Spotlight-style.
                 TextField("Search files…", text: $searchQuery)
                     .scaledFont(size: 14)
                     .focused($searchFocused)
@@ -333,14 +321,12 @@ struct EditorPaneView: View {
         .frame(maxHeight: 360, alignment: .top)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-        .padding(.top, 60)             // float the card toward the top third
+        .padding(.top, 60)
         .frame(maxHeight: .infinity, alignment: .top)
     }
 
-    /// CodeEdit persists both axes of its clip-view origin, even when wrapping
-    /// hides the horizontal scroller. A sideways trackpad gesture can therefore
-    /// leave wrapped text shifted underneath the floating gutter. Wrapped code
-    /// has no valid horizontal offset, so retain only the vertical position.
+    /// CodeEdit can restore a horizontal clip-view offset even though wrapped
+    /// text has no horizontal scrollable extent.
     private func normalizeWrappedEditorScrollPosition() {
         let current = editorState.scrollPosition
         let normalized = EditorViewportPolicy.normalizedWrappedScrollPosition(current)
@@ -384,10 +370,7 @@ struct EditorPaneView: View {
     private var resultsList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // A short list is laid out eagerly so its measured height is
-                // exact; a lazy stack's estimated row heights left the card
-                // taller than its rows after a narrowing query. Long lists
-                // overflow the cap anyway, so they stay lazy.
+                // Measure short lists eagerly for an exact height; keep long lists lazy.
                 Group {
                     if finder.results.count <= Self.finderEagerRowLimit {
                         VStack(spacing: 0) { resultRows }
@@ -405,10 +388,8 @@ struct EditorPaneView: View {
                     finderListHeight = height
                 }
             }
-            // A scroll view takes all the height it is offered, which left a
-            // one-result card stretched to the 360pt cap and mostly empty.
-            // Cap it at the list's own height so the card grows with the
-            // results, Spotlight-style, and scrolls only past the cap.
+            // Cap the scroll view at the measured list height so short result
+            // lists do not stretch to the palette's 360pt limit.
             .frame(maxHeight: finderListHeight)
             // Keep the scroller on the card's straight edge: a full-height
             // legacy scroller otherwise runs into the rounded corners.
@@ -423,8 +404,6 @@ struct EditorPaneView: View {
 
     private var resultRows: some View {
         ForEach(Array(finder.results.enumerated()), id: \.element.id) { index, item in
-            // A real button so each row has hover/press feedback (BTN-5) and
-            // reads as actionable to VoiceOver.
             Button {
                 selectedIndex = index
                 openSelected()
@@ -464,8 +443,6 @@ struct EditorPaneView: View {
         .accessibilityAddTraits(isHighlighted ? .isSelected : [])
     }
 
-    /// Compact, palette-sized status: a quiet symbol anchors the message so
-    /// empty and error states read at a glance (MOT-6, HIER-3).
     private func finderMessage(_ message: String, systemImage: String) -> some View {
         VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Image(systemName: systemImage)
@@ -482,12 +459,7 @@ struct EditorPaneView: View {
 
     // MARK: - Error banner
 
-    /// Compact, dismissible banner pinned to the top of the editor. Surfaces ⌘S /
-    /// auto-save failures (and load errors) without stealing the buffer.
-    ///
-    /// The banner floats over the buffer, so it is the glass layer; its dismiss
-    /// control stays a plain circle with hover/press feedback inside it rather
-    /// than a second glass shape (no glass on glass, BTN-5).
+    /// Displays save and load failures without replacing the editor buffer.
     private func errorBanner(_ message: String) -> some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -557,12 +529,11 @@ struct EditorPaneView: View {
 
     private func openFinder() {
         guard isActive else { return }
-        // Claim selection so the gated ⌘P/⌘O/⌘S shortcuts target this pane.
         onSelect()
         searchQuery = ""
         selectedIndex = 0
         if rootPath != nil {
-            finder.start(root: rootPath!)   // coalesces while an index scan is in flight
+            finder.start(root: rootPath!)
         }
         showFinder = true
     }
@@ -575,9 +546,6 @@ struct EditorPaneView: View {
     }
 
     private func focusSearchAndInstallMonitor() {
-        // Gated on selection as well as activity: two panes in one active workspace
-        // both have isActive == true, so without the isSelected gate both would
-        // install a monitor and one arrow keypress would move both result lists.
         guard isActive && isSelected else { return }
         searchFocused = true
         installKeyMonitor()
@@ -604,19 +572,13 @@ struct EditorPaneView: View {
         session.requestOpen(url, completion: handleLoadOutcome)
     }
 
-    /// Presentation for a load that was not superseded. The session has already
-    /// set the buffer, error message, and persisted path.
     private func handleLoadOutcome(_ outcome: EditorLoadOutcome) {
         switch outcome {
         case .loaded:
             editorState = SourceEditorState()
             showFinder = false
-            // Opening a file is an interaction with this pane; claim selection so
-            // the gated ⌘S/⌘P/⌘O shortcuts target it.
             onSelect()
         case .blockedBySave, .blockedByEdits:
-            // Return to the unsaved buffer; for a failed save the banner explains
-            // why it stayed.
             showFinder = false
         case .tooLarge, .binary, .failed:
             presentFinder()

@@ -499,6 +499,21 @@ struct H264AnnexBAssemblerTests {
         }
         return chunks
     }
+
+    @Test
+    func matchesReferenceParserAcrossPeriodicCompactions() {
+        var nalu = Data([0x41, 0x9A])
+        nalu.append(Data(repeating: 0x55, count: 254))
+        let input = stream(Array(repeating: nalu, count: 300))
+        for chunkSize in [1, 3, 64, 1_024, 4_096] {
+            let chunks = stride(from: 0, to: input.count, by: chunkSize).map {
+                input.subdata(in: $0..<min($0 + chunkSize, input.count))
+            }
+            let actual = Self.run(H264AnnexBAssembler.self, chunks: chunks)
+            let expected = Self.run(ReferenceH264AnnexBAssembler.self, chunks: chunks)
+            #expect(actual == expected, "chunk size \(chunkSize)")
+        }
+    }
 }
 
 // MARK: - Idle-tail flush (AndroidScreenStream)
@@ -720,50 +735,43 @@ private struct SplitMix64: RandomNumberGenerator {
     }
 }
 
-/// Throughput benchmark for the start-code scanner: a few MB of synthetic
-/// annex-B fed in 64 KB chunks, the shape of a keyframe arriving across many
-/// pipe reads — the case the assembler's scan watermark exists for. XCTest
-/// because Swift Testing has no `measure` equivalent.
+/// Reproduces issue #265: eight independent parsers each receive one 262,150
+/// byte access unit, then flush its trailing NALU. Run this suite in a Release
+/// configuration; use Instruments' Allocations template to compare allocations.
 final class H264AnnexBAssemblerPerformanceTests: XCTestCase {
-    func testChunkedFeedThroughput() {
-        var full = Data()
-        full.append(contentsOf: [0, 0, 0, 1, 0x67, 0x42, 0xC0, 0x32, 0x8D, 0x68])
-        full.append(contentsOf: [0, 0, 0, 1, 0x68, 0xCE, 0x01, 0xA8])
-        // Payload bytes are never zero, so the only start codes are the real
-        // ones; each ~512 KB NALU stays buffered across several feeds.
-        var payload = Data(capacity: 512 * 1_024)
-        for i in 0..<(512 * 1_024) {
-            payload.append(UInt8(truncatingIfNeeded: i) | 1)
-        }
-        for i in 0..<8 {
-            full.append(contentsOf: [0, 0, 0, 1, i == 0 ? 0x65 : 0x41, 0xB8])
-            full.append(payload)
-        }
-        let chunkSize = 64 * 1_024
-        var chunks: [Data] = []
-        var offset = 0
-        while offset < full.count {
-            let next = min(offset + chunkSize, full.count)
-            chunks.append(full.subdata(in: offset..<next))
-            offset = next
+    func test1KiBFeeds() {
+        measureFeeds(chunkSize: 1_024)
+    }
+
+    func test4KiBFeeds() {
+        measureFeeds(chunkSize: 4 * 1_024)
+    }
+
+    func test64KiBFeeds() {
+        measureFeeds(chunkSize: 64 * 1_024)
+    }
+
+    private func measureFeeds(chunkSize: Int) {
+        var accessUnit = Data([0, 0, 0, 1, 0x65, 0x80])
+        accessUnit.append(Data(repeating: 0x55, count: 262_144))
+        let chunks = stride(from: 0, to: accessUnit.count, by: chunkSize).map {
+            accessUnit.subdata(in: $0..<min($0 + chunkSize, accessUnit.count))
         }
 
-        measure {
-            var assembler = H264AnnexBAssembler()
-            var accessUnits = 0
-            do {
-                for chunk in chunks {
-                    for event in try assembler.feed(chunk) {
-                        if case .accessUnit = event { accessUnits += 1 }
+        measure(metrics: [XCTClockMetric()]) {
+            var eventCount = 0
+            for _ in 0..<8 {
+                var assembler = H264AnnexBAssembler()
+                do {
+                    for chunk in chunks {
+                        eventCount += try assembler.feed(chunk).count
                     }
+                    eventCount += try assembler.flushTrailing().count
+                } catch {
+                    XCTFail("feed threw: \(error)")
                 }
-                for event in try assembler.flushTrailing() {
-                    if case .accessUnit = event { accessUnits += 1 }
-                }
-            } catch {
-                XCTFail("feed threw: \(error)")
             }
-            XCTAssertEqual(accessUnits, 8)
+            XCTAssertEqual(eventCount, 8)
         }
     }
 }

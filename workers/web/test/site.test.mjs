@@ -100,3 +100,13 @@ test('Three.js and optional interactions stay out of the critical script graph',
     assert.ok(!html.includes(scene[0].url), `${page} never preloads the scene`);
   }
 });
+
+test('unreachable React client output stays out of both JavaScript transfer budgets', async () => {
+  const { analyzeScripts } = await import('../scripts/script-graph.mjs');
+  const graph = await analyzeScripts(dist, '/made', { compress: false });
+  const clients = graph.unreferenced.files.filter(({ url }) => /\/client\.[\w-]+\.js$/.test(url));
+  assert.equal(clients.length, 1, 'the build-time-only React integration emits one unreachable client');
+  for (const group of [graph.initial, graph.deferred]) {
+    assert.ok(!group.files.some(({ url }) => url === clients[0].url));
+  }
+});

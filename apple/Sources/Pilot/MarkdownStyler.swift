@@ -1,13 +1,5 @@
 import AppKit
 
-/// Shared geometry between Markdown styling (which reserves the space) and the
-/// text-view overlays (which draw the decoded image inside that space).
-enum MarkdownImagePresentation {
-    static let previewHeight: CGFloat = 220
-    static let gap: CGFloat = 8
-    static let stride = previewHeight + gap
-}
-
 /// Live GitHub-Flavored-Markdown styling for an `NSTextView`. The raw
 /// markdown stays in the text storage (and is what we persist) — this only
 /// layers visual attributes on top, in place, so `# Hello` renders at H1
@@ -44,6 +36,9 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
     /// Document-wide structure from the last pass, in that pass's coordinates.
     /// `nil` forces the next edit to take a full pass.
     private var structure: DocumentStructure?
+    /// The styling pass's secret index, reused by glyph masking so an edit
+    /// doesn't parse the same note a second time.
+    var secretMatches: [EnvSecret.Match] { structure?.secrets ?? [] }
     private(set) var lastPass = PassReport(isFullPass: true, styledLength: 0, documentLength: 0, regionCount: 0)
 
     /// Above this share of the document, one full pass is cheaper than
@@ -94,7 +89,9 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
             style(storage)
             return
         }
-        let current = DocumentStructure(string)
+        let current = DocumentStructure(
+            string, updating: previous, editedRange: editedRange, delta: delta
+        )
 
         var dirty = IndexSet()
         func markLines(_ range: NSRange) {
@@ -150,34 +147,35 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
     static func changedRanges(_ old: [NSRange], _ new: [NSRange],
                               editedRange: NSRange, delta: Int) -> [NSRange] {
         guard !old.isEmpty || !new.isEmpty else { return [] }
-        let editStart = editedRange.location
-        let newEditEnd = NSMaxRange(editedRange)
-        let oldEditEnd = newEditEnd - delta
-
         struct Key: Hashable { let location: Int; let length: Int }
         func key(_ range: NSRange) -> Key { Key(location: range.location, length: range.length) }
 
-        let mapped = old.map { range -> NSRange in
-            if NSMaxRange(range) <= editStart { return range }
-            if range.location >= oldEditEnd {
-                return NSRange(location: range.location + delta, length: range.length)
-            }
-            let start = min(range.location, editStart)
-            let end = NSMaxRange(range) > oldEditEnd ? NSMaxRange(range) + delta : newEditEnd
-            return NSRange(location: start, length: max(0, end - start))
-        }
+        let mapped = old.map { mappedRange($0, editedRange: editedRange, delta: delta) }
         let before = Set(mapped.map(key))
         let after = Set(new.map(key))
         return mapped.filter { !after.contains(key($0)) } + new.filter { !before.contains(key($0)) }
     }
 
-    /// The parts of styling that depend on more than one line, plus the
-    /// whole-document secret and color-chip scans the regional pass filters
-    /// from (their matches never cross a line, so filtering a full scan to a
-    /// line-aligned region finds exactly what a full pass would). Rebuilt per
-    /// edit (a few linear scans) and diffed against the previous pass to find
-    /// what an edit invalidated beyond its own lines.
+    private static func mappedRange(_ range: NSRange, editedRange: NSRange, delta: Int) -> NSRange {
+        let editStart = editedRange.location
+        let newEditEnd = NSMaxRange(editedRange)
+        let oldEditEnd = newEditEnd - delta
+        if NSMaxRange(range) <= editStart { return range }
+        if range.location >= oldEditEnd {
+            return NSRange(location: range.location + delta, length: range.length)
+        }
+        let start = min(range.location, editStart)
+        let end = NSMaxRange(range) > oldEditEnd ? NSMaxRange(range) + delta : newEditEnd
+        return NSRange(location: start, length: max(0, end - start))
+    }
+
+    /// Document structure is updated in place coordinate-by-coordinate. Line-
+    /// local matches are reparsed only on edited lines. Fences and images keep
+    /// their previous matches when an edit cannot change their parsing; syntax
+    /// edits conservatively rebuild those indexes and let the dirty-range diff
+    /// invalidate every dependent region.
     private struct DocumentStructure {
+        let string: String
         let length: Int
         let fences: [NSRange]
         let images: [MarkdownImage.Match]
@@ -185,20 +183,107 @@ final class MarkdownStyler: NSObject, NSTextStorageDelegate {
         let colorChips: [ColorChip.Match]
 
         init(_ string: String) {
+            self.string = string
             let ns = string as NSString
             length = ns.length
-            var fences: [NSRange] = []
-            if ns.range(of: "```", options: .literal).location != NSNotFound {
-                MarkdownStyler.fencedCode.enumerateMatches(
-                    in: string, range: NSRange(location: 0, length: ns.length)
-                ) { match, _, _ in
-                    if let match { fences.append(match.range) }
-                }
-            }
-            self.fences = fences
+            fences = Self.fences(in: string)
             images = MarkdownImage.matches(in: string)
             secrets = EnvSecret.matches(in: string)
             colorChips = ColorChip.matches(in: string)
+        }
+
+        init(_ string: String, updating previous: DocumentStructure,
+             editedRange: NSRange, delta: Int) {
+            self.string = string
+            let ns = string as NSString
+            let previousNS = previous.string as NSString
+            length = ns.length
+
+            let oldEdit = NSRange(location: editedRange.location, length: editedRange.length - delta)
+            let oldLines = previousNS.newlineDelimitedLines(covering: oldEdit)
+            let newLines = ns.newlineDelimitedLines(covering: editedRange)
+            let oldContext = previousNS.substring(with: oldLines)
+            let newContext = ns.substring(with: newLines)
+
+            let rebuildFences = oldContext.contains("`") || newContext.contains("`")
+            if rebuildFences {
+                fences = Self.fences(in: string)
+            } else {
+                fences = previous.fences.map {
+                    MarkdownStyler.mappedRange($0, editedRange: editedRange, delta: delta)
+                }
+            }
+
+            let rebuildImages = rebuildFences
+                || Self.hasImageSyntax(oldContext) || Self.hasImageSyntax(newContext)
+                || previous.images.contains {
+                    NSLocationInRange($0.range.location, oldLines)
+                        || NSIntersectionRange($0.range, oldLines).length > 0
+                }
+            if rebuildImages {
+                images = MarkdownImage.matches(in: string)
+            } else {
+                images = previous.images.map {
+                    MarkdownImage.Match(
+                        range: MarkdownStyler.mappedRange($0.range, editedRange: editedRange, delta: delta),
+                        altText: $0.altText, urlString: $0.urlString, url: $0.url
+                    )
+                }
+            }
+
+            secrets = Self.updatedLineMatches(
+                previous.secrets, range: { $0.keyRange },
+                replacing: { match, range in
+                    EnvSecret.Match(key: match.key, keyRange: range,
+                                    valueRange: NSRange(
+                                        location: range.location + (match.valueRange.location - match.keyRange.location),
+                                        length: match.valueRange.length
+                                    ),
+                                    value: match.value)
+                },
+                oldLines: oldLines, delta: delta,
+                matches: { EnvSecret.matches(in: string, range: newLines) }
+            )
+            colorChips = Self.updatedLineMatches(
+                previous.colorChips, range: { $0.range },
+                replacing: { match, range in
+                    ColorChip.Match(range: range, value: match.value, color: match.color)
+                },
+                oldLines: oldLines, delta: delta,
+                matches: { ColorChip.matches(in: string, range: newLines) }
+            )
+        }
+
+        private static func fences(in string: String) -> [NSRange] {
+            let ns = string as NSString
+            guard ns.range(of: "```", options: .literal).location != NSNotFound else { return [] }
+            var result: [NSRange] = []
+            MarkdownStyler.fencedCode.enumerateMatches(
+                in: string, range: NSRange(location: 0, length: ns.length)
+            ) { match, _, _ in
+                if let match { result.append(match.range) }
+            }
+            return result
+        }
+
+        private static func hasImageSyntax(_ string: String) -> Bool {
+            string.contains { "![]()`~\\".contains($0) }
+        }
+
+        private static func updatedLineMatches<Match>(
+            _ previous: [Match], range: (Match) -> NSRange,
+            replacing: (Match, NSRange) -> Match,
+            oldLines: NSRange, delta: Int,
+            matches: () -> [Match]
+        ) -> [Match] {
+            var result = previous.compactMap { match -> Match? in
+                let oldRange = range(match)
+                if NSMaxRange(oldRange) <= oldLines.location { return match }
+                guard oldRange.location >= NSMaxRange(oldLines) else { return nil }
+                return replacing(match, NSRange(location: oldRange.location + delta, length: oldRange.length))
+            }
+            result.append(contentsOf: matches())
+            return result.sorted { range($0).location < range($1).location }
         }
     }
 

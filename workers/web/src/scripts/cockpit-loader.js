@@ -7,8 +7,7 @@
  *
  *   pending - waiting to load or initialize
  *   ready   - the scene initialized; canvases fade in
- *   static  - deliberate fallback: reduced motion, Save-Data, 2G, no WebGL,
- *             or a load failure
+ *   static  - deliberate fallback: Save-Data, 2G, no WebGL, or a load failure
  */
 
 const IDLE_TIMEOUT_MS = 2000;
@@ -20,7 +19,6 @@ const SLOW_CONNECTIONS = new Set(['slow-2g', '2g']);
  * waits until after load (see startCockpit).
  */
 export function staticReason(env) {
-  if (env.reducedMotion?.()) return 'reduced-motion';
   const connection = env.navigator?.connection;
   if (connection?.saveData === true) return 'save-data';
   if (SLOW_CONNECTIONS.has(connection?.effectiveType)) return 'slow-connection';

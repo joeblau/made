@@ -329,12 +329,11 @@ struct NoteTextView: NSViewRepresentable {
         if let storage = textView.textStorage {
             styler.style(storage)
         }
-        maskController.refresh()
+        maskController.refresh(secretMatches: styler.secretMatches)
         // Sort any already-completed tasks to the bottom of their group, and
         // align every markdown table, on load.
         DispatchQueue.main.async {
-            textView.reorderCompletedTasks()
-            textView.formatMarkdownTables(protectingCaret: false)
+            textView.settleAutomaticReflows()
         }
 
         scrollView.drawsBackground = false
@@ -434,13 +433,13 @@ struct NoteTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? MultiCursorTextView else { return }
             parent.text = textView.string
-            maskController.refresh()
+            maskController.refresh(secretMatches: styler.secretMatches)
             textView.applyAutomaticReflows()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             // Reveal the secret on the line being edited, re-mask the rest.
-            maskController.refresh()
+            maskController.refresh(secretMatches: styler.secretMatches)
         }
     }
 }
