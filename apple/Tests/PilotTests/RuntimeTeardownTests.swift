@@ -46,8 +46,8 @@ struct RuntimeTeardownTests {
         var didClose = false
         await TerminalCloseConfirmation.perform(
             panes: [terminal, browser],
-            activity: { session in
-                #expect(session == terminal.persistentSessionName)
+            activity: { pane in
+                #expect(pane === terminal)
                 checks += 1
                 return .idle
             },

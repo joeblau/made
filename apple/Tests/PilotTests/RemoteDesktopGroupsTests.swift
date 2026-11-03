@@ -24,6 +24,28 @@ struct RemoteDesktopGroupsTests {
         }
     }
 
+    @Test("Native segmented control positions its inline close button")
+    func inlineCloseButtonLayout() {
+        let control = PilotNativeSegmentedControl(
+            labels: ["One", "Two"], trackingMode: .selectOne, target: nil, action: nil
+        )
+        control.addSubview(control.closeButton)
+        control.showsCloseButton = true
+        control.selectedSegment = 0
+        control.frame = NSRect(x: 0, y: 0, width: 200, height: 24)
+
+        control.updateCloseButton()
+        #expect(control.closeButton.alphaValue == 0)
+        #expect(!control.closeButton.isEnabled)
+
+        control.isCloseHovering = true
+        control.updateCloseButton()
+
+        #expect(!control.closeButton.isHidden)
+        #expect(control.closeButton.frame.midX < control.bounds.midX)
+        #expect(control.closeButton.frame.minX >= 0)
+    }
+
     @Test("Selecting the current group does not rewrite preferences")
     func unchangedSelectionDoesNotSave() throws {
         try withGroups { groups, defaults in

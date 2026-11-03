@@ -14,7 +14,6 @@ enum AgenticUseRange: String, CaseIterable, Sendable, Identifiable {
 
     var id: String { rawValue }
 
-    /// Segmented-control label.
     var label: String {
         switch self {
         case .day: "24h"
@@ -98,12 +97,10 @@ enum AgenticUseRange: String, CaseIterable, Sendable, Identifiable {
 
 // MARK: - Aggregates
 
-/// One model's totals for the selected range — the hero breakdown list and
-/// the Breakdown table's MODEL mode.
+/// One model's totals for the selected range.
 struct AgenticModelTotal: Sendable, Identifiable, Equatable {
     /// Canonical model id — the palette/legend key.
     let model: String
-    /// "Opus 5", "Fable 5", …
     let displayName: String
     /// USD. Zero when `isUnpriced`.
     let cost: Double
@@ -114,7 +111,6 @@ struct AgenticModelTotal: Sendable, Identifiable, Equatable {
     /// True when the model has no pricing table entry; render the badge, do
     /// not present the zero cost as real.
     let isUnpriced: Bool
-    /// The CLI or editor that logged the model's calls.
     let provider: AgenticProvider
     /// Token-type split for the token-flow diagram; sums to `tokens`.
     var inputTokens = 0
@@ -132,7 +128,6 @@ struct AgenticModelTotal: Sendable, Identifiable, Equatable {
 }
 
 /// One chart bucket for one provider, zero-filled like `AgenticDailyPoint`.
-/// Drives the provider-stacked chart and the KPI sparklines.
 struct AgenticProviderPoint: Sendable, Identifiable, Equatable {
     /// Bucket start (local midnight, or top of the hour for 24h).
     let day: Date
@@ -171,7 +166,6 @@ struct AgenticUsePeriodSummary: Sendable, Equatable {
 struct AgenticDailyPoint: Sendable, Identifiable, Equatable {
     /// Bucket start (local midnight, or top of the hour for 24h).
     let day: Date
-    /// Canonical model id.
     let model: String
     let displayName: String
     let cost: Double
@@ -190,20 +184,17 @@ struct AgenticDayTotal: Sendable, Identifiable, Equatable {
     var id: Date { day }
 }
 
-/// The five headline stats, pre-summed for the stat row.
+/// Headline statistics for the selected range.
 struct AgenticUseStats: Sendable, Equatable {
     /// input + cache write + cache read + output.
     let processedTokens: Int
     let activeDays: Int
     /// processedTokens / activeDays (0 when no active days).
     let processedPerActiveDay: Int
-    /// Cache-read tokens.
     let cachedInputTokens: Int
     /// cacheRead / (input + cacheWrite + cacheRead); 0 when nothing observed.
     let cachedInputShare: Double
-    /// Plain input tokens.
     let uncachedInputTokens: Int
-    /// Cache-write tokens (the "N cache writes" caption).
     let cacheWriteTokens: Int
     let outputTokens: Int
     /// Reported reasoning tokens. Only recent Claude Code versions log
@@ -225,16 +216,14 @@ struct AgenticProviderTotal: Sendable, Equatable {
 /// Everything the dashboard renders for one (records, range) pair.
 struct AgenticUseSnapshot: Sendable, Equatable {
     let range: AgenticUseRange
-    /// The filtered window — drives the header's "Jul 11 – Aug 9" subtitle.
     let interval: DateInterval
-    /// Actual cost of the range, USD (the hero number).
+    /// Actual cost of the range, USD.
     let totalCostUSD: Double
     let providerTotals: [AgenticProviderTotal]
     /// Zero-filled provider series: every bucket x every provider present,
     /// sorted by bucket then `AgenticProvider.allCases` order.
     var providerSeries: [AgenticProviderPoint] = []
     var cachedBucketTotals: [AgenticBucketTotal]? = nil
-    /// The selected window's headline totals.
     var current: AgenticUsePeriodSummary?
     /// The equally long window before it; `nil` for `.all`.
     var previous: AgenticUsePeriodSummary?
@@ -251,7 +240,6 @@ struct AgenticUseSnapshot: Sendable, Equatable {
     /// Newest first.
     let dayTotals: [AgenticDayTotal]
     let stats: AgenticUseStats
-    /// True when any model in range is missing from the pricing table.
     let hasUnpricedModels: Bool
     var unpricedTokens: Int = 0
 
@@ -275,12 +263,10 @@ final class AgenticUsageStore {
         case idle
         /// Initial full scan, with determinate progress.
         case scanning(scanned: Int, total: Int)
-        /// Records loaded; `snapshot` is being kept in sync with `range`.
         case loaded
         /// The transcript tree exists but produced zero usage records (or
         /// does not exist at all).
         case empty
-        /// The transcript directory could not be read.
         case failed(reason: String)
     }
 
@@ -546,8 +532,6 @@ final class AgenticUsageStore {
     // MARK: Aggregation
 
     /// Recompute the snapshot for the current range off the main actor.
-    /// 60K+ records reduce in a few milliseconds, but not milliseconds the
-    /// main thread needs to spend.
     private func recompute() {
         aggregateTask?.cancel()
         guard !records.isEmpty else { return }
@@ -808,7 +792,6 @@ final class AgenticUsageStore {
         )
     }
 
-    /// Per-model accumulator for `makeSnapshot`.
     struct ModelBucket {
         var cost = 0.0
         var tokens = 0
@@ -820,7 +803,6 @@ final class AgenticUsageStore {
         var outputTokens = 0
     }
 
-    /// Per-provider, per-bucket accumulator for `makeSnapshot`.
     struct ProviderCell {
         var cost = 0.0
         var tokens = 0

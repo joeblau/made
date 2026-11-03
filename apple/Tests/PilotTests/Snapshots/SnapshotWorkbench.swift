@@ -147,9 +147,14 @@ struct SnapshotWorkbench: View {
                 HStack {
                     Text("Sep 24 – Oct 23").fontWeight(.medium).foregroundStyle(.secondary)
                     Spacer()
-                    Picker("Range", selection: .constant("30d")) {
-                        ForEach(["24h", "7d", "30d", "90d", "All"], id: \.self) { Text($0) }
-                    }.pickerStyle(.segmented).frame(width: 230)
+                    PilotSegmentedControl(
+                        "Range",
+                        selection: .constant("30d"),
+                        options: ["24h", "7d", "30d", "90d", "All"],
+                        title: { $0 },
+                        controlSize: .small
+                    )
+                    .frame(width: 230)
                 }.font(.system(size: 12)).padding(.horizontal, 16).frame(height: 44)
                 AgenticUseDashboard(snapshot: fixtures.history, pricingStatus: "Pricing reviewed Oct 23, 2026")
             }

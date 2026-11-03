@@ -190,7 +190,7 @@ struct DockerView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
                 ForEach(store.groupedContainers(from: visibleContainers)) { group in
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
                         HStack(spacing: 6) {
                             if group.isCompose {
                                 Image(systemName: "square.stack.3d.up")
@@ -200,7 +200,6 @@ struct DockerView: View {
                         }
                         .scaledFont(size: 12, weight: .semibold)
                         .foregroundStyle(.secondary)
-                        .padding(.leading, 4)
                         .accessibilityAddTraits(.isHeader)
 
                         ForEach(group.containers) { container in
@@ -217,11 +216,13 @@ struct DockerView: View {
                                 }
                             )
                             .onTapGesture { store.selectedContainerID = container.id }
+                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
                 }
             }
-            .padding(.horizontal, 16)
+            .animation(LiquidGlassMetrics.spring, value: store.showsStopped)
+            .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
             .padding(.top, 8)
             .padding(.bottom, 16)
         }

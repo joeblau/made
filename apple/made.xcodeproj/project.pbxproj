@@ -13,24 +13,32 @@
 		01C5649DD6261BC21A6C7BC3 /* PilotAppearanceReporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F74D9367520698B5B5170B0 /* PilotAppearanceReporter.swift */; };
 		01D0822AD2F5C8ACC865E594 /* RoyalVNCKit in Frameworks */ = {isa = PBXBuildFile; productRef = 8A4B097559F1F3BAEC1B3370 /* RoyalVNCKit */; };
 		0229F1C2D35799A4F45EF4E1 /* LandingSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A89C20B948283C5026686CE0 /* LandingSnapshotTests.swift */; };
+		03767AC38F40FE07A941999F /* ReplayWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF2CE47E300C860F3A949839 /* ReplayWindow.swift */; };
+		03AD1A8041D7F56BCDEEBEB9 /* DroneStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCAA42DDEA89511E4A832E31 /* DroneStore.swift */; };
 		0457DCF165E639DBD59F0204 /* UsageConsentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F068B533E482497628B96825 /* UsageConsentTests.swift */; };
+		04666F2DB74208739E05862E /* DroneProcessRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD05ED9AA028D836501900C7 /* DroneProcessRunner.swift */; };
 		04966F6AA804ED42754B78AF /* BuildActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57D9D6571DE3AC6DF52DE6FC /* BuildActivityAttributes.swift */; };
 		053870D07B450A7904CC5517 /* RemoteDesktopView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1A7CA986AF67208DE04201F /* RemoteDesktopView.swift */; };
 		05BFFB4B8D3A9D58FC305AF2 /* AndroidInputInjector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 268DE5CA8E14D127C3AA54D3 /* AndroidInputInjector.swift */; };
+		05C40A209FD422A7F330B5E7 /* DroneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 848BD10A11FFF6F9EB5E866E /* DroneProtocol.swift */; };
 		05F73AF9BA815A0A615B4FBC /* PlotterActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A41F3A9CC73ED4D24965D612 /* PlotterActivityAttributes.swift */; };
+		06261CAC0E55E443CAF9845B /* DroneToolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE1FDA9F6023B44BF887D0F9 /* DroneToolClient.swift */; };
 		068EE933A47A8C6EEC20D00A /* PilotWalkieInputState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7182ED8C2CFB3338C6E80FDB /* PilotWalkieInputState.swift */; };
 		075DCC5A61A08C8605A4249A /* DashboardColors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2BD3D08B6AB43D26076EFF9F /* DashboardColors.xcassets */; };
 		0766FA955D7727EC1A131D7F /* FrameProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04BC608D7929CA32C073186 /* FrameProtocol.swift */; };
 		0785B2AE89D065F4B6A64465 /* UIZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A48BB8B28996667E215BC4E /* UIZoom.swift */; };
 		07F1B6AD12372EFBA3B98E9A /* AgenticUsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67A2B4718DE8059B84367B8 /* AgenticUsageStore.swift */; };
+		088BBF6C8DBC124DF348B85B /* DronePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68441D2A13F39E44D91BAD65 /* DronePaths.swift */; };
 		08CA454023B86BFAC8BC7CE1 /* PilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B802877FCCBEB9F318728CDD /* PilotApp.swift */; };
 		08DD49F5AAEFF7B638031970 /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */; };
 		08DEECFA8B05625A91F7C904 /* LiquidGlassStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */; };
+		09330D2A5DDB7E981084600B /* DroneRemoteTerminalClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A987929F39225C2CFFCED57 /* DroneRemoteTerminalClient.swift */; };
 		094EF307CA9081D03EE059EC /* SetupPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA88105961B3F738C76B55DB /* SetupPresentationTests.swift */; };
 		0A48AE7E34524871F0A92274 /* CursorUsageHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */; };
 		0ABA4A2179B50C85A13C6EB6 /* PlotterUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6013148EE4B3B5AAC6B3719A /* PlotterUITests.swift */; };
 		0AF3B095E3BC4FFB592C5745 /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F894A09A33E9EAE02EB8CF /* Workspace.swift */; };
 		0B0AE5A89351AACCBF8EB97B /* PeerSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072174CC5D47F85E892E627D /* PeerSyncService.swift */; };
+		0B21B043713A6CF157186B40 /* DroneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 848BD10A11FFF6F9EB5E866E /* DroneProtocol.swift */; };
 		0B7F84855286079E2B55EDD5 /* PlotterSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE8192FB86073F87D8A875C3 /* PlotterSnapshotStore.swift */; };
 		0B9DA9C01CA6F536648DABE6 /* SetupProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E73674C4269EAED2D4745B /* SetupProgress.swift */; };
 		0BDF90EF029950F14DBDB482 /* BrowserWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CB8A07D158C045B6417EB3B /* BrowserWebView.swift */; };
@@ -38,6 +46,7 @@
 		0C41A7F3276A938EC20C25E7 /* SidebarSelection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 779D10CE98783ECA02B8C4A4 /* SidebarSelection.swift */; };
 		0C8B006D9F12128A982540DF /* BuildActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57D9D6571DE3AC6DF52DE6FC /* BuildActivityAttributes.swift */; };
 		0CCBAFB1AA5F67D9DC6E887C /* DashboardActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308C132FEE9B9BA8C797CDD8 /* DashboardActivityController.swift */; };
+		0DA4FE002C0C48D2B35C80E7 /* NoiseIKHandshake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119C8FFB6902A8C0B22BA479 /* NoiseIKHandshake.swift */; };
 		0E066620BF4A5A6D085E097B /* ExtensionWindowSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91DA92F745D31E1163B46A77 /* ExtensionWindowSyncTests.swift */; };
 		0E5CB93DD5EE4F3DE7456EAC /* UsageModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0ACC92423F05948877C412 /* UsageModels.swift */; };
 		0E90A34266814B4EE528F9CE /* BuildWorkflowRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */; };
@@ -57,6 +66,11 @@
 		12F1EDE40C3AA559A29C936D /* NoiseIKHandshake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119C8FFB6902A8C0B22BA479 /* NoiseIKHandshake.swift */; };
 		130CC503548F0FA57F589772 /* PinnedQuickJumpTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070DEF0707E3D775E0143EA8 /* PinnedQuickJumpTests.swift */; };
 		141D808D53D0F488B00F0248 /* PlotterSnapshotWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC15E9A51BEA782B83DD93B /* PlotterSnapshotWidget.swift */; };
+		14F5713B3FF224389CD15D44 /* CryptoCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F927D073C933040C7FC25A5B /* CryptoCore.swift */; };
+		1619DC5278CE96E210166755 /* DroneJobStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0D41A674017781DD6ED0896 /* DroneJobStore.swift */; };
+		161AF7575E80A574472B3E9D /* DroneTmux.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11308B8A5E8D0D3CE74D74C7 /* DroneTmux.swift */; };
+		16A4A823891145201ED784FF /* DroneTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B91588BE0E9294B97B875EED /* DroneTransport.swift */; };
+		16F1CF2A8BB65B067E80B1AB /* DroneDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96FF9907D8B377986D246B1D /* DroneDiscovery.swift */; };
 		1759C87EC9985DFE5E832530 /* DockerEngineSmokeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0D1B4F15F96F23AFD699685 /* DockerEngineSmokeTests.swift */; };
 		17AF9F5C2B610A6127A09495 /* FrameProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04BC608D7929CA32C073186 /* FrameProtocol.swift */; };
 		1864C88EB0C0EEC276034B72 /* ChromiumDiagnosticsSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7270EF11025F63E660529CD8 /* ChromiumDiagnosticsSettings.swift */; };
@@ -65,18 +79,26 @@
 		1A76C42637242FD8A7F18998 /* PilotSchemaMigrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E905969F090DE9F4B90DD97 /* PilotSchemaMigrationTests.swift */; };
 		1AEA8BA19CC862B3ED8AD226 /* GitHubTasksStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C49BE3995F68E7CF284D531B /* GitHubTasksStore.swift */; };
 		1CBBEA8AE26C69B8050D281B /* DockerEngineClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B6894B06257EAC0A54053D9 /* DockerEngineClient.swift */; };
+		1CEF25A25A34A56D1A6A1788 /* DroneVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 203E708FB79B3C3775AEC4C6 /* DroneVersion.swift */; };
 		1D6E2CAFD666B9F9206ACAC0 /* DashboardPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB19B50737A2C2F3296B202 /* DashboardPresentation.swift */; };
+		1E7387F0932CCA05C49D8037 /* DroneTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D61FBBB6CA5A8F042E072AD /* DroneTerminal.swift */; };
 		1E8634A2640A03720B032D49 /* ChromiumKitSupport.mm in Sources */ = {isa = PBXBuildFile; fileRef = F8D35A9879E13BFE1CA24AC8 /* ChromiumKitSupport.mm */; };
 		1F153D0F57E16BF640A2ACA1 /* CursorUsageHistory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80B23B3E4C6E3094EA9E25C /* CursorUsageHistory.swift */; };
 		1F17BC9BB1CF4B6C10CB0038 /* DashboardLiveActivities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A05441A61E4210FE4AC47C /* DashboardLiveActivities.swift */; };
+		1FF0BF5BE9E8AD598AAA0DF3 /* DroneTerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26173A4D19F8BFBF637D9136 /* DroneTerminalView.swift */; };
 		20099376DC8AA9646A894A0C /* BuildWorkflowRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */; };
+		207BAB92223834F215EDE199 /* DroneSecureChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15E8FF16508C122FAED2F70 /* DroneSecureChannel.swift */; };
 		20962CC5037E40D82C69BD9F /* WingmanDeliveryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD24581F338C2987036C440 /* WingmanDeliveryState.swift */; };
 		215ED32D633C89B6FDDBA247 /* UsageSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD99993E8B657F9B0A13D6EA /* UsageSettingsView.swift */; };
+		22255DB64B84705EE0A1EA82 /* SnapshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265760C371C397CD01098144 /* SnapshotHelper.swift */; };
 		2235CBB76A698AA2F4D83D45 /* UsageDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A767C11A9F11986E76B3DD17 /* UsageDashboardSnapshot.swift */; };
 		2289A58CCC3DADC0FC2E11DF /* AirPlayVideoRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F5C475300C597A18AC0E0D1 /* AirPlayVideoRenderer.swift */; };
+		22B66306A597021DEA354EA0 /* DronePairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0742F056AD6240EAFF25A49E /* DronePairing.swift */; };
 		22C355111F82861536312DEE /* AgenticUsageCancellationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D6BC42AFAC4FEDB5E5AB293 /* AgenticUsageCancellationTests.swift */; };
 		22DE0F27FF9A8F302239D87C /* WingmanCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F3D30C121CEFFCF4014D811 /* WingmanCommandTests.swift */; };
 		23C2B2CF7C421A6234942B1D /* TerminalToolbarControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB65BD6645ABED2F3C334A40 /* TerminalToolbarControls.swift */; };
+		2449FCA971A729DA964E374B /* DroneWorkerSupervisor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CE283FE8FDEDCC8D826DC253 /* DroneWorkerSupervisor.swift */; };
+		244B35BA80A80ED7A87AE125 /* DroneRegistryPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8374E4371A25C059C91CC94A /* DroneRegistryPersistence.swift */; };
 		24629E03835FE283F6058FB5 /* RemoteDesktopConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E409FEF0C1085401347F420 /* RemoteDesktopConnection.swift */; };
 		251F06D64D36DABEB92B4018 /* SignalingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F1B539CB5FFBDE29FBA5DC /* SignalingClient.swift */; };
 		256050E22C440BA07F5889A9 /* AndroidDeviceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FD8F6A2DF17BA6E97F4D980 /* AndroidDeviceRegistry.swift */; };
@@ -92,12 +114,14 @@
 		280A45EF76051DED0A29BEDF /* ChromiumProcessObserverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A5E1A4FAABADF61C36FDE3E /* ChromiumProcessObserverTests.swift */; };
 		286CD816B02FA573A936937B /* ChromiumBrowserCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD0ED03F523171F3EEF25C9A /* ChromiumBrowserCommandTests.swift */; };
 		2878EBE026481B061075520D /* BuildPushCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF70723F1D4C5CE4C5941440 /* BuildPushCoordinator.swift */; };
+		28FB5D734B9F85DC8F5E0795 /* DronePTY.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60811F57ED5DA0FF3E0E3AD /* DronePTY.swift */; };
 		2979C6BB84EAF157844A532D /* AgenticUseModelPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 31BD7F8FEA34B2C3CD4CD25C /* AgenticUseModelPalette.swift */; };
 		29EFD0F2EFA12648B34CC3F4 /* AirPlayVideoRendererTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70AD4872269E54D2304FD9BF /* AirPlayVideoRendererTests.swift */; };
 		2A507DF97966D339ADC42942 /* RuntimeTeardownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 469F7189628EC950A12BE1AB /* RuntimeTeardownTests.swift */; };
-		2AAF4E97A8611EAAA6A0484A /* SnapshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D4B475DC1B0C35E65E10BF5 /* SnapshotHelper.swift */; };
+		2A6A1C0957FD008E9A17C655 /* DroneTmux.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11308B8A5E8D0D3CE74D74C7 /* DroneTmux.swift */; };
 		2B13E8D231A761F1019802DF /* RunnerFleetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CEC4C80E968EB6D40EA7B7 /* RunnerFleetTests.swift */; };
 		2B278E56F9F802144A04776B /* CopilotWalkieTalkieTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6287B4C91222DAA0BC988A5 /* CopilotWalkieTalkieTests.swift */; };
+		2BA217F57D15A2103258A1CE /* DroneWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 237EE3F2B15717B61616E3D9 /* DroneWorkspace.swift */; };
 		2BDE3A32D94C27E2A0AB017F /* WebKitBrowserController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C4298B84C0234ED9649863E9 /* WebKitBrowserController.swift */; };
 		2BEC495AB3F755D4F731A5A2 /* MarkdownImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87ECE49033A754A3D5C7DC36 /* MarkdownImage.swift */; };
 		2CA9255A664E228A47C5F334 /* BuildActivityRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB08BEBB79E6729C42CFE16 /* BuildActivityRelay.swift */; };
@@ -121,6 +145,7 @@
 		339AD6F3DDDF14EA70862993 /* AgenticUseProviderBreakdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 491FF5DBB6C9B0E15C93F127 /* AgenticUseProviderBreakdown.swift */; };
 		345E33CD9766CD298899740F /* CopilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F576C8972BAC59C65A4821C /* CopilotApp.swift */; };
 		348DDEF33CA8AF30542ACD1C /* ChromiumEngine.mm in Sources */ = {isa = PBXBuildFile; fileRef = B27F75406AA43CFCE2A71E76 /* ChromiumEngine.mm */; };
+		35BAA21F624D910C2420B584 /* DronePairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0742F056AD6240EAFF25A49E /* DronePairing.swift */; };
 		36F527562E8712741C069DFA /* CodeEditSourceEditor in Frameworks */ = {isa = PBXBuildFile; productRef = 95745E830EB40847F21156F5 /* CodeEditSourceEditor */; };
 		36FDF7734DB6046F41DB6583 /* TerminalRuntimeCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8641E882636D576B1BB4083A /* TerminalRuntimeCache.swift */; };
 		37B5F73B75296C172335EC70 /* NoteCaretAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 385F4056FA9E8B1C1CA930AD /* NoteCaretAnchor.swift */; };
@@ -129,23 +154,30 @@
 		39151714C394CCD9C76CB590 /* FuzzyMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB13DCB657B0C6955CA55F8F /* FuzzyMatcher.swift */; };
 		3994990CA085818C389E8716 /* ChromiumApplicationIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5EC5FBBF73CE05AC8E9EA26 /* ChromiumApplicationIntegrationTests.swift */; };
 		39B2EDB2589BDF9CAA23B8DA /* RunnersDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9CE2FBBA7531EC7B7A75B02 /* RunnersDashboardSnapshot.swift */; };
+		3A1E9FD599DD590634F63C35 /* DronePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68441D2A13F39E44D91BAD65 /* DronePaths.swift */; };
 		3A41CBA8EBCB60BD895602B5 /* SecureChannelDeadline.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF21FEF25FBF6431867348E8 /* SecureChannelDeadline.swift */; };
 		3A4DB69296C56B23A9C6E4C2 /* SimulatorFramebuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA54B06694B062B4888A4637 /* SimulatorFramebuffer.swift */; };
 		3A57602374141050CD9865B1 /* PlotterActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A41F3A9CC73ED4D24965D612 /* PlotterActivityAttributes.swift */; };
 		3AB476C8ACF5E79B03F98EFD /* BuildWorkflowRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */; };
 		3AB9FF50676D07A5377D78AA /* DashboardWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5AE5E187359518E47BBDE6 /* DashboardWidgets.swift */; };
+		3B3C798D4D97AF013A091191 /* DroneModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DD9E7869DBAE8250257FF9D /* DroneModels.swift */; };
 		3C0FBF70AB51CBE6E8BBE793 /* PlotterGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8918F120AC89BE6FDE09CD52 /* PlotterGeometry.swift */; };
 		3C11DEF1A11CA4A6C51A6195 /* DashboardActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 377A4EA6281662FCFDEFA37B /* DashboardActivityAttributes.swift */; };
 		3DF30C1B8AF9EFE349F1C73E /* SecureIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA6C3C2EB63210A93CA8B501 /* SecureIdentity.swift */; };
+		3DF6E2B9EF191C3F0DC03674 /* DroneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 848BD10A11FFF6F9EB5E866E /* DroneProtocol.swift */; };
 		3E71E8807A7CD662102CECBF /* FileFinderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6BB061510E1CB0FE5CC715C /* FileFinderTests.swift */; };
 		3EE70FBDC1FFF95A2250E99C /* DashboardPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB19B50737A2C2F3296B202 /* DashboardPresentation.swift */; };
+		400EECA24552A2296010686B /* DroneToolProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCD7D859DD14A3508AAD841E /* DroneToolProtocol.swift */; };
 		409A73FD10B13F651129790A /* ReferenceH264AnnexBAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD3BFD0B8D39B025F34E323F /* ReferenceH264AnnexBAssembler.swift */; };
 		40B64C3D0340C2BEC27B4B90 /* DashboardFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206FBB9131DEEA1ABDC15629 /* DashboardFamily.swift */; };
+		40DFFF04CA74F6FE14FB2D35 /* DroneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849E9F7E927A9213DEC4CFDC /* DroneLog.swift */; };
+		418A57FD7E2C803DA4157D65 /* PacketCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 688AC826114E1555689DB697 /* PacketCodec.swift */; };
 		431D3C7F1FD6BD5BBEBB0D23 /* ActionsDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DBBC3A65D13058197DC255E /* ActionsDashboardSnapshot.swift */; };
 		436119C31878101943F5CC69 /* DashboardSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE500437E4DED08ECD108821 /* DashboardSnapshotTests.swift */; };
 		43C4CB189F104C58F3403238 /* PersistenceReporting.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7F1FA056B2B49AAA5BEFA0A /* PersistenceReporting.swift */; };
 		43EBAA3B6945DB0C4ADEA757 /* InkOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A733DD090F36816EFC9A0A65 /* InkOverlay.swift */; };
 		44140A9FE2502ED264800C9E /* DirectoryFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81ABCD61526CD46017EB9508 /* DirectoryFinder.swift */; };
+		44D4D3A876112AF1F7B640A8 /* DroneLANTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11CD5C7D0D5146196CCBA470 /* DroneLANTransport.swift */; };
 		44ED9C241F201D62AA4102C4 /* ActionsDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DBBC3A65D13058197DC255E /* ActionsDashboardSnapshot.swift */; };
 		45AF6BFEAF467B7CE59FD550 /* BuildWorkflowRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E575CF8C74D5CA4DD2834F94 /* BuildWorkflowRunTests.swift */; };
 		47459A9EAFC99F12CEAEC119 /* PilotWalkieInputTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D829B59AB61D1084FACEF6D /* PilotWalkieInputTests.swift */; };
@@ -162,6 +194,8 @@
 		4BE8FE1F050D5115D605276A /* RoyalVNCKit in Frameworks */ = {isa = PBXBuildFile; productRef = 9DD27D6D14B17F860EBB8A6E /* RoyalVNCKit */; };
 		4C05C71F22789133262ED630 /* AirPlayProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE8833C0B8A3A5EEE358BE8 /* AirPlayProtocol.swift */; };
 		4C1A2D74D98BDE09AF7A4245 /* SecureChannelResponder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F2FAA91CD094C780B3CF6F0 /* SecureChannelResponder.swift */; };
+		4C37B01FF6FA0449B7D0CE31 /* DroneProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 848BD10A11FFF6F9EB5E866E /* DroneProtocol.swift */; };
+		4CEEB2D2485D3D2B0AE735E3 /* DroneToolProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCD7D859DD14A3508AAD841E /* DroneToolProtocol.swift */; };
 		4D1F92AA9BC820F9B2AF22DF /* PacketCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 688AC826114E1555689DB697 /* PacketCodec.swift */; };
 		4DA471D4B37B87D4859606D5 /* UsageStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E316E4A6222A86D176C7BBD /* UsageStore.swift */; };
 		4DECFFCECF61BBA7C64B14AA /* EncodedVideoSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5285BF549F96968D98F2D02 /* EncodedVideoSample.swift */; };
@@ -169,7 +203,9 @@
 		4EF74EF351071FC8DE98A9F3 /* PeerSyncReliableSend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F680F71ECBB3B7379C90A4 /* PeerSyncReliableSend.swift */; };
 		4F980E2CD368C317B2025A72 /* PacketCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 688AC826114E1555689DB697 /* PacketCodec.swift */; };
 		50109C9259452CE218FD49D6 /* DashboardPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB19B50737A2C2F3296B202 /* DashboardPresentation.swift */; };
+		50401E6FD0278562B395C8A5 /* DronePTY.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60811F57ED5DA0FF3E0E3AD /* DronePTY.swift */; };
 		506AA814EB71EA2ADA7DEAEB /* DashboardActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 377A4EA6281662FCFDEFA37B /* DashboardActivityAttributes.swift */; };
+		523E1C94BCA84A18B92CC21A /* DroneVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 203E708FB79B3C3775AEC4C6 /* DroneVersion.swift */; };
 		52437762B5F8931F0023ACDA /* PlotterGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FB0200E90EA9510E8762246 /* PlotterGeometryTests.swift */; };
 		5299BE4F7A17E90C77A65C3C /* EncodedVideoSampleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85B225D4E2F6A862436589E5 /* EncodedVideoSampleTests.swift */; };
 		533F967DA527AF361D4827A6 /* FrameProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C2EEEC136C43BFFC0976B61 /* FrameProtocolTests.swift */; };
@@ -181,12 +217,14 @@
 		569D8EF2A35144C395DA8DB2 /* SyncMessages.swift in Sources */ = {isa = PBXBuildFile; fileRef = C973E585B45DEE04F917F2A9 /* SyncMessages.swift */; };
 		5708B18178578CE2FE2F5881 /* MarkdownStyler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18C6547433BE509A5ED8E581 /* MarkdownStyler.swift */; };
 		57749F47853C01624E91F7EE /* LiquidGlassStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */; };
+		58739804984E8DD74FE64118 /* DroneJobModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A539CE47DA92CB36482E3D5 /* DroneJobModels.swift */; };
 		58886B09AE38DC7B6664EE86 /* PlotterDashboardStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8489709E6EE5732DBC3AF4 /* PlotterDashboardStateTests.swift */; };
 		58E53056E176FA19B29F600E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16C8820FF1D60784570BE850 /* ContentView.swift */; };
 		5A1338AA5781BDFD987F059E /* PlotterApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 458E916CF174CE8E23102739 /* PlotterApp.swift */; };
 		5A1FACF763C45CAD27CA21C2 /* RepositoryPollingScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = F494B70BE7239A214ED3F27F /* RepositoryPollingScheduler.swift */; };
 		5A8552C5C6684B322B5B4A7C /* WorkspaceQuickJump.swift in Sources */ = {isa = PBXBuildFile; fileRef = B937A3E020F2099C3A80F812 /* WorkspaceQuickJump.swift */; };
 		5B9D47A5BEC1E53CCA4F409D /* SimulatorPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7FF06552F3744B76571236C /* SimulatorPaneView.swift */; };
+		5BE83DB84F16375400A5B77D /* NotesGutter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0378FEA34B1E6E31D0949241 /* NotesGutter.swift */; };
 		5BF9BEB9622DF3CA05E2685C /* WorkspaceSidebarList.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6956D170AED16754A78A493 /* WorkspaceSidebarList.swift */; };
 		5C17D3C9E677B3F2BC7C0CFE /* H264AnnexBAssemblerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99FBD4FF911ED668812EFC61 /* H264AnnexBAssemblerTests.swift */; };
 		5C2875927067257B7F473A77 /* DashboardColors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2BD3D08B6AB43D26076EFF9F /* DashboardColors.xcassets */; };
@@ -207,6 +245,7 @@
 		620624BE841EF9BEC841BBF7 /* BuildElapsedTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B987ABD2F97F5D5DA70271D2 /* BuildElapsedTime.swift */; };
 		6356DA38E09145518B9A6886 /* DockerSocketTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 176DF1F870EDAF255D2D908C /* DockerSocketTransport.swift */; };
 		648566C69FBA74C2E0F0289D /* KimiUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6307EEAE97190468F55B3C26 /* KimiUsageAdapter.swift */; };
+		6526D8D5DEE0251E2245BF94 /* DroneRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D9F2CCBA1890E01988BAD33 /* DroneRegistryTests.swift */; };
 		6541385F4ADCC078F2A2083E /* DashboardColors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2BD3D08B6AB43D26076EFF9F /* DashboardColors.xcassets */; };
 		65D41B7890CB497E770146A3 /* PairedPeerKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0585691FB26E5955B0177341 /* PairedPeerKeyTests.swift */; };
 		667A7E23B6D233EA4348A561 /* TranscriptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 699894047634BE2B6EDA6DC9 /* TranscriptionService.swift */; };
@@ -216,19 +255,24 @@
 		6771951855BBDC19C7CD43F8 /* WorkspaceActionWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6289A972508DA3BFFB8A8354 /* WorkspaceActionWatcher.swift */; };
 		67DB1978A83A29E056BCDA6C /* DockerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9ACA8A4BE76545CC5012F33 /* DockerView.swift */; };
 		6825F0D4BA49D41F4D9C8AC4 /* PlotterActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB5231560EF50C6F842CED76 /* PlotterActivityController.swift */; };
+		6828B4DB140805EA4B7CD583 /* DroneLaunchd.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6CDEFF2D0BABB4F9AA4C818 /* DroneLaunchd.swift */; };
 		68A8BBF00D8F070DA2EA194E /* PlotterDashboardState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F9C32308E75461684DF061E /* PlotterDashboardState.swift */; };
+		68B1BAA0A984C2B0D6E26D2C /* PilotCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0D7E29E91F2CF89A180C279 /* PilotCommands.swift */; };
 		6950A63DE9B1306F79B161EA /* ActiveConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 245AF30397DB998A089D3DE7 /* ActiveConnectionTests.swift */; };
 		6A3701C1670BC5F0B4C36ECB /* DashboardWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5AE5E187359518E47BBDE6 /* DashboardWidgets.swift */; };
 		6AECEA1ADD946DB5611B6B1E /* CodexUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6F34939461E806B0772CD72 /* CodexUsageAdapter.swift */; };
 		6B15902D43A6001476CFB1C3 /* DashboardWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5AE5E187359518E47BBDE6 /* DashboardWidgets.swift */; };
 		6C23F1AA95331EFDB98B0F14 /* SecureChannelTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41A77B50AE767C1B6C3BB22 /* SecureChannelTransport.swift */; };
+		6D1882BB022DF4CD9E73E1A4 /* TerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99A5F54E39090B59AB133F69 /* TerminalSession.swift */; };
 		6D985EF40AC9962EA1EDFA6A /* CopilotDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EDB2B1A2C505CE8D10B7FC4 /* CopilotDeepLink.swift */; };
 		6DDE2FE93E5B9751DDEE1F01 /* BrowserFindInPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 826E1BFEF2D1F74D70FA8CE3 /* BrowserFindInPage.swift */; };
 		6F524FEF291D54B853D15F77 /* CopilotWalkieTalkie.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0CC82C38AB58E2E91915D02 /* CopilotWalkieTalkie.swift */; };
 		70FD3DDE32127F726CD63056 /* HeadphoneDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E916F3025B5146E3D37DAD /* HeadphoneDetector.swift */; };
+		71117B96480C92E2411783E3 /* DroneLANTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11CD5C7D0D5146196CCBA470 /* DroneLANTransport.swift */; };
 		71DE831F2FF8442C666B35C4 /* ConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395E05EAD577069EA0423647 /* ConnectionState.swift */; };
 		7270AE1F635EDFE6DF1F02F9 /* SecureMessagingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0449657650498C38E5EDC9E /* SecureMessagingView.swift */; };
 		728F2F9AEE22C01E1C8BB17D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 5FE2EB583B10A6711F23ACBB /* Assets.xcassets */; };
+		72A230B7225B91716C2C6ED0 /* DroneDaemon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 472EA84863E0E398E639554C /* DroneDaemon.swift */; };
 		72CE2A7F744E4A87D8BC4FCF /* UsageProviderSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40B8E031A603C505CA1307D8 /* UsageProviderSupport.swift */; };
 		72E976D1F7965B556298A0C9 /* EncodedVideoSample.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5285BF549F96968D98F2D02 /* EncodedVideoSample.swift */; };
 		730B73A16DB785CA4524E8E2 /* WingmanDeliveryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD24581F338C2987036C440 /* WingmanDeliveryState.swift */; };
@@ -237,6 +281,7 @@
 		7378670A5DA44AEF15C8AA1C /* RunnersDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9CE2FBBA7531EC7B7A75B02 /* RunnersDashboardSnapshot.swift */; };
 		73795BE06EB3CE58151FFD5B /* UsageSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B8FFE42FBC3B8F82ED2E42A /* UsageSessions.swift */; };
 		73CE61D4E43C8D7A3E9593B4 /* CopilotDashboardModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4CD07EC3F78FACD519E3095 /* CopilotDashboardModel.swift */; };
+		745840DC6BB22136E456B9A1 /* DroneJobToolEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7202D816A88347AA9789318E /* DroneJobToolEngine.swift */; };
 		74ECF956E863457BDAEF3595 /* RemoteDesktopGroupsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 606938B713FB5569C5337313 /* RemoteDesktopGroupsTests.swift */; };
 		75341211412B23C472525A50 /* MarkdownImageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7502053C980F1473B1F9C2 /* MarkdownImageTests.swift */; };
 		75C16309C3A1A6AC4D329C90 /* BrowserStartPageVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A84884E4B150F3373624885B /* BrowserStartPageVisibilityTests.swift */; };
@@ -255,11 +300,14 @@
 		7BC87B0EAC1EEE6C41E79F2A /* DashboardWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5AE5E187359518E47BBDE6 /* DashboardWidgets.swift */; };
 		7C23307F8CE9E725A9FD48B7 /* TerminalRuntimeCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8BBD45248A0E9BB55D36174 /* TerminalRuntimeCacheTests.swift */; };
 		7C77758BB694F8C65D4AFC82 /* PilotAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80B9BF7F976268E260891B7 /* PilotAppDelegate.swift */; };
+		7CB47E7342BE1789E7DDAAC2 /* DronePTY.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60811F57ED5DA0FF3E0E3AD /* DronePTY.swift */; };
 		7D67FEA191C1BE7B6A1B71C6 /* AgenticUsageProviderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA8B2C4A55B63DED9DB4AE47 /* AgenticUsageProviderTests.swift */; };
 		7DAA6C66BE1EA7788D846C05 /* DashboardPublisher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4BCA570DA0C79BD094EC49B /* DashboardPublisher.swift */; };
 		7DB692B5A779B84128DA84B5 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 54CE720A16BE9E6193C72CDD /* ContentView.swift */; };
 		7E31D62C556591CE12D13E94 /* GhosttyInputRegressionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F701DE8E0ECF0BEF74B77C9 /* GhosttyInputRegressionTests.swift */; };
 		7E87CDDF44A5E494E6EE79D4 /* WorkspaceGlobalModeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D57056E552FF34A7FDA93FEA /* WorkspaceGlobalModeTests.swift */; };
+		7E9F6BF96F78674015AE6F7F /* DroneTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D61FBBB6CA5A8F042E072AD /* DroneTerminal.swift */; };
+		7F3958861A7F580252869C12 /* DroneLANTransportFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8300B8FFB152A920094E4CE /* DroneLANTransportFactory.swift */; };
 		805001BFA917FEB1949E72EE /* DashboardSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49030B685CAE6599FA5D04F /* DashboardSnapshotStore.swift */; };
 		8088D26D2615B9DC51E5F91B /* UsageProviderAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2307A244B06EF550533AA6D0 /* UsageProviderAdapterTests.swift */; };
 		80BE92B32FA6EEDBE84BB724 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58DB20A29ED93A7D1EE1CE0A /* ContentView.swift */; };
@@ -275,7 +323,9 @@
 		834D49C547CDE10B45C80604 /* UsageReportingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D973404A2A1D671B48713D3 /* UsageReportingTests.swift */; };
 		83B26B035BA0053614F29480 /* AndroidStreamRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 695D2F9C4723D52E73ABB61B /* AndroidStreamRecorder.swift */; };
 		83D43229B26354D4C52EEE57 /* UsageDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A767C11A9F11986E76B3DD17 /* UsageDashboardSnapshot.swift */; };
+		847A0D5654FB19727E069AE3 /* DroneCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53E9632E52DD8D0C5D919DC0 /* DroneCLI.swift */; };
 		84B98CDC6165F8BCA11E8BC7 /* SetupPermissions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 388D18FFFF89A243816C1B1D /* SetupPermissions.swift */; };
+		84D202B5791C5F0BF0067E49 /* TerminalSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B7B9F544778FDD192A79D6D /* TerminalSessionTests.swift */; };
 		854E59D441BA70DB5F4D5A10 /* CodeEditLanguages in Frameworks */ = {isa = PBXBuildFile; productRef = C2A7EC318BFE6F60314AC3CC /* CodeEditLanguages */; };
 		8597884A07403C6F633C6647 /* UsageDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A767C11A9F11986E76B3DD17 /* UsageDashboardSnapshot.swift */; };
 		85A425C02FD3FADAE5A8F818 /* SnapshotFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5EA3C5D4AAEA10EA9734D7C /* SnapshotFixtures.swift */; };
@@ -283,6 +333,8 @@
 		860447AC880E7D0BF67464DC /* DashboardWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5AE5E187359518E47BBDE6 /* DashboardWidgets.swift */; };
 		866347C63A0AD5857F628740 /* PreviewCanvasBackground.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD3F2C3AA86E055D88F6A47A /* PreviewCanvasBackground.swift */; };
 		866AE70FD0F440BA7EC13BD1 /* NewWorkspaceSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1CA837EBF2CBD3E45ED8A2C8 /* NewWorkspaceSheet.swift */; };
+		8711EBE657DA708D43543F41 /* DroneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849E9F7E927A9213DEC4CFDC /* DroneLog.swift */; };
+		878551B70876E729461D3145 /* DroneWorkerService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 485B1AC3F8C9E26023F107F2 /* DroneWorkerService.swift */; };
 		87BB6DD5EE62D44D5CF44A40 /* ColorChip.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C4CCB05F271DB9D1F898BE2 /* ColorChip.swift */; };
 		87F2B8D3C0C1BED54EA72D69 /* DeviceScreenDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C119771A703C467716155C1 /* DeviceScreenDrag.swift */; };
 		88991BDCD3D88CF0388C6E12 /* ChromiumBrowserHostView.mm in Sources */ = {isa = PBXBuildFile; fileRef = A70DB383FCAA1B187CE0FF99 /* ChromiumBrowserHostView.mm */; };
@@ -291,12 +343,16 @@
 		89AD4385A7B01326E9191617 /* RunnersDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9CE2FBBA7531EC7B7A75B02 /* RunnersDashboardSnapshot.swift */; };
 		89B4A111D3D1ADC1310003E2 /* NoiseIKHandshake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 119C8FFB6902A8C0B22BA479 /* NoiseIKHandshake.swift */; };
 		89B7F3EB786A9A51835641FE /* DashboardFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206FBB9131DEEA1ABDC15629 /* DashboardFamily.swift */; };
+		89F480117D05AAA526ABAFEA /* SnapshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265760C371C397CD01098144 /* SnapshotHelper.swift */; };
 		89FE56F94BBF3E4D7CC06F30 /* WingmanApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B41194C93DE9EA99211BF02C /* WingmanApp.swift */; };
 		8A3BA56A81C7DBEDEDD82265 /* PeerSyncReliableSendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53F5C61D651C586F03E5E435 /* PeerSyncReliableSendTests.swift */; };
 		8A5420D65878085329C3B891 /* BrowserPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56BC610879B8BA6872DEB7DB /* BrowserPaneView.swift */; };
 		8A55381DAFE84C6DBBE5C8C2 /* WalkieWorkspaceSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40864BFD3506A2C983170A72 /* WalkieWorkspaceSyncTests.swift */; };
+		8B1D620C8888F625205FE7CF /* DroneTmux.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11308B8A5E8D0D3CE74D74C7 /* DroneTmux.swift */; };
 		8B33668B45875B6C848BCD1A /* DashboardLiveActivities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A05441A61E4210FE4AC47C /* DashboardLiveActivities.swift */; };
+		8B540406467C0AB54F312915 /* DroneTerminalEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0D2941A595A3C10E1243C0 /* DroneTerminalEngine.swift */; };
 		8B767361BF660BEE5528F292 /* PullRequestListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25F7342047ADD2BC10513404 /* PullRequestListView.swift */; };
+		8B7ADDEA1C3D31F31142E2E0 /* DroneProtocolFuzzTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5971CC70B2ACDB99F11E96A9 /* DroneProtocolFuzzTests.swift */; };
 		8BB192F74FF6F49A9F342D69 /* RemoteDesktopSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8ECB489A2897EA740A61DB4 /* RemoteDesktopSessionTests.swift */; };
 		8EB50553EC06B0918DAE2B0D /* PlotterSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE8192FB86073F87D8A875C3 /* PlotterSnapshotStore.swift */; };
 		8ED4A68F73C99325045091A9 /* SecureChannelDeadline.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF21FEF25FBF6431867348E8 /* SecureChannelDeadline.swift */; };
@@ -307,6 +363,7 @@
 		90D4C8C9F59CCA7B4C8C445F /* TranscriptionLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 169A08B89F3389F8CED1B699 /* TranscriptionLifecycleTests.swift */; };
 		9103B41E444CAFDCCC84139C /* DashboardSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49030B685CAE6599FA5D04F /* DashboardSnapshotStore.swift */; };
 		91B077D421EE902EE8B8C77F /* DeviceScreenDragTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51C2163FE76090C1BA0609D /* DeviceScreenDragTests.swift */; };
+		91E35834F40040A329D7EE19 /* DroneAgentDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68BAB06E9440593B2C0F5CB7 /* DroneAgentDriver.swift */; };
 		938B318063DF041917442BAD /* PeerSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 072174CC5D47F85E892E627D /* PeerSyncService.swift */; };
 		93FA7938B2D62A4DA2A8FD47 /* BuildActivityRelay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0CB08BEBB79E6729C42CFE16 /* BuildActivityRelay.swift */; };
 		94C7B6F837C5EC62BF028695 /* MouseBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FF74DA627D281896CA6280E /* MouseBridge.swift */; };
@@ -319,6 +376,7 @@
 		991827D4A2559E0B1BF072DA /* SimctlBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4683F17F6EB9C54A98EFB520 /* SimctlBridge.swift */; };
 		992FD2EC0C030866CF7BA91A /* ChromiumRuntimeProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7E6F64E494F4DE49EFD95B /* ChromiumRuntimeProbe.swift */; };
 		9934A67223746B6C71D8996A /* PlotterGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8918F120AC89BE6FDE09CD52 /* PlotterGeometry.swift */; };
+		99539320BFC7A4CD3C8A317F /* DroneControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CEFD94E2A0ED7B5C0B4F08 /* DroneControl.swift */; };
 		9B7015566BCD76B714835579 /* performance-budgets.json in Resources */ = {isa = PBXBuildFile; fileRef = 1AE65C7964876746CBA511CB /* performance-budgets.json */; };
 		9BEDF32A9EA4BE218F5F5067 /* EditorDocumentSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 891501BF1C5DFC63468EF179 /* EditorDocumentSessionTests.swift */; };
 		9C160EF5F03BDE65DDE04A7E /* ActionsDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DBBC3A65D13058197DC255E /* ActionsDashboardSnapshot.swift */; };
@@ -329,6 +387,7 @@
 		9E5CA98D818836DE6591E209 /* DashboardSnapshotStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5ABC06040C984B5F70185E3 /* DashboardSnapshotStoreTests.swift */; };
 		9ECF226D1061C49A839C3EF0 /* EditorPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F46D7F05FDC4239EFB222A9 /* EditorPaneView.swift */; };
 		9F7E41BF18917AC3B365D496 /* WingmanDeliveryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD24581F338C2987036C440 /* WingmanDeliveryState.swift */; };
+		9FA4F3A8A28243E0B3CCEA2A /* DroneJobEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4345E8B6EBCC9DFC2DCE39BC /* DroneJobEngine.swift */; };
 		A17DC66197C2173412CCD083 /* WorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE76BCC8661C0796E3E8070 /* WorkspaceView.swift */; };
 		A215AA129022ACF2524AC79F /* PeerSyncAuthentication.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05EF8C2CD7538ADD56AE2E0 /* PeerSyncAuthentication.swift */; };
 		A2CB200BD5921075E9B4B709 /* UsageDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A767C11A9F11986E76B3DD17 /* UsageDashboardSnapshot.swift */; };
@@ -339,7 +398,9 @@
 		A7D1D93B5F82F03710844E28 /* BrowserAnnotate.swift in Sources */ = {isa = PBXBuildFile; fileRef = C88113B94930C4212D76BB8B /* BrowserAnnotate.swift */; };
 		A7DEC532F35AE7AE1EC7CDDA /* TextPromptSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = B966B592A4F0BF8900F1E5A4 /* TextPromptSheet.swift */; };
 		A860163FE87E9BC3674457B3 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85260B5081A688BB7B0EDE3F /* SettingsView.swift */; };
+		A8992290EFF6F29AC86473A2 /* DronePairingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3AF0144B15C629445225176 /* DronePairingTests.swift */; };
 		A8E7EFC51E25DCA00CA6F82E /* FrameLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAC3752576097566EE9DE7DB /* FrameLink.swift */; };
+		A99152C04299FA87D3449E5E /* DroneSecureChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15E8FF16508C122FAED2F70 /* DroneSecureChannel.swift */; };
 		A996832376661FDABAF60692 /* RepositoryPollingSchedulerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFF7AED59B28AA2AC56C7B66 /* RepositoryPollingSchedulerTests.swift */; };
 		A9BA49E877A893113B6A0D70 /* WorkspacePinOrderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A17BDDCBA5DEDFFC24A3DB /* WorkspacePinOrderingTests.swift */; };
 		A9D9B094D5BB8453AD529E15 /* ChromiumProfilePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8101EC64E16D67A381BBCC4 /* ChromiumProfilePolicyTests.swift */; };
@@ -349,6 +410,7 @@
 		AA982A91EEB44B992DE2150A /* RunnersStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8E0F88AD215D877791905E2 /* RunnersStore.swift */; };
 		AAF2C1ED07ED6D8932A3C909 /* ReplayWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF2CE47E300C860F3A949839 /* ReplayWindow.swift */; };
 		AB04703081BECBFF93C1B85A /* DashboardSnapshotEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3246D0DD0F103F56461AE5F3 /* DashboardSnapshotEnvelope.swift */; };
+		AB22694F1C709F25C28AFDE1 /* DroneTerminalEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0D2941A595A3C10E1243C0 /* DroneTerminalEngine.swift */; };
 		ABAF0EA8BE56AA03E49C694C /* WorkspaceSidebarDrag.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC6F7D223D434BBC284EFA9A /* WorkspaceSidebarDrag.swift */; };
 		AC8B869380086B835B35979E /* AgenticUseFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6BECAF1FB2AA8B36E370120 /* AgenticUseFormat.swift */; };
 		AD355A463C2DCAEF572D8586 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A727A54C54BA82A6AFA8E10 /* DeviceIdentity.swift */; };
@@ -363,11 +425,14 @@
 		B06FF86605839B44B7A816D6 /* SecureMessagingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DE55B88D5D3190AEF8E2F0F /* SecureMessagingView.swift */; };
 		B0DC4F509CE9C37A11AAACBD /* DeviceCaptureLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D20724997EA356496283A78 /* DeviceCaptureLifecycleTests.swift */; };
 		B115EB864FD05DF60BAC25ED /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = ABCE779B35860E96EB91C769 /* Sparkle */; };
+		B1D7F25C83F2CB2373B2F2EF /* DroneToolProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCD7D859DD14A3508AAD841E /* DroneToolProtocol.swift */; };
 		B39AA38050847619968A4C2B /* ActionsDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DBBC3A65D13058197DC255E /* ActionsDashboardSnapshot.swift */; };
 		B3A13212F14CF01D2B137125 /* BuildLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C85516EF30C4D4D9F5FCEC7A /* BuildLiveActivity.swift */; };
+		B3CF002CD08B0E0FF91335D4 /* MarkdownImagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 479EEB75340491931A458873 /* MarkdownImagePreview.swift */; };
 		B405BA99D59457D691096C6F /* RemoteDesktopSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DE8ADBBF3B8943C0BA06601 /* RemoteDesktopSession.swift */; };
 		B42FDC61EF8C7F8777B974F3 /* VNCPreferencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9567DBB2DCD2F5574747E15 /* VNCPreferencesTests.swift */; };
 		B464B1528D91F1E02B082EE5 /* PeerSyncAuthentication.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05EF8C2CD7538ADD56AE2E0 /* PeerSyncAuthentication.swift */; };
+		B576A37F63AAA0F049B38697 /* DroneSecureChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15E8FF16508C122FAED2F70 /* DroneSecureChannel.swift */; };
 		B7083B08C98E8819C5485D26 /* PeerSyncReliableSend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F680F71ECBB3B7379C90A4 /* PeerSyncReliableSend.swift */; };
 		B74549D40A1BD6102FFF77C5 /* PlotterLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBB5EF8CB13C5B1AED66F1D1 /* PlotterLiveActivity.swift */; };
 		B79C4DFAB3EE3DDB28B77F72 /* WorkspaceGroups.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0996308D95F727BDE1DE2596 /* WorkspaceGroups.swift */; };
@@ -394,8 +459,11 @@
 		BF3E4E90380626AA6028479C /* SecureIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA6C3C2EB63210A93CA8B501 /* SecureIdentity.swift */; };
 		BFAF4B34A3ADCAB17AAD903A /* PrivacyManifestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BD82BE89471EC957C86AB57 /* PrivacyManifestTests.swift */; };
 		C0109B11E0E3274753A4FD87 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85260B5081A688BB7B0EDE3F /* SettingsView.swift */; };
+		C120FC2768DD245E374CF325 /* DroneControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CEFD94E2A0ED7B5C0B4F08 /* DroneControl.swift */; };
+		C1EB7BD679EFC40FFA5B0112 /* DroneLaunchd.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6CDEFF2D0BABB4F9AA4C818 /* DroneLaunchd.swift */; };
 		C20C9BE72E48F27400380527 /* SimulatorSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9B4F312BD0ADA7C292ADAE3 /* SimulatorSession.swift */; };
 		C3ECD0ABFF2A8DCC2188A234 /* DashboardSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49030B685CAE6599FA5D04F /* DashboardSnapshotStore.swift */; };
+		C40D7752054EB3293441765F /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A727A54C54BA82A6AFA8E10 /* DeviceIdentity.swift */; };
 		C4E33A0CF342BB5491808C1C /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */; };
 		C52B37AE1168E1BA35A86EB0 /* CryptoCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F927D073C933040C7FC25A5B /* CryptoCore.swift */; };
 		C5F971A995B51C6C2F4F1A38 /* LocalServerScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C8F0E890B9D47195C90B9CA /* LocalServerScanner.swift */; };
@@ -410,31 +478,43 @@
 		C9198D210B5690806FD8A552 /* DashboardActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308C132FEE9B9BA8C797CDD8 /* DashboardActivityController.swift */; };
 		C95AAD8A852FB560384E46C9 /* ClaudeUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A39CC94BE2E1707FC45C92D /* ClaudeUsageAdapter.swift */; };
 		C99B811E4AE730D0E6B6A384 /* ChromiumBrowserClient.mm in Sources */ = {isa = PBXBuildFile; fileRef = FBA6010FCD9FAF9ED422CDB2 /* ChromiumBrowserClient.mm */; };
+		C9C5231DF540F3A0F7470C04 /* DroneTerminalEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0D2941A595A3C10E1243C0 /* DroneTerminalEngine.swift */; };
 		C9D28F672935924512591F9F /* ReliableMessenger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026F88DA72C107C5BA21FA51 /* ReliableMessenger.swift */; };
 		CA360CB663FE3F019D3A576B /* ChromiumSecurityPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BCEBB051ACB9E218285E8A /* ChromiumSecurityPolicy.swift */; };
 		CAF154C293BCB0ECA66FE37B /* GhosttyTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 816C193307796EC2AFCFAE3E /* GhosttyTerminal.swift */; };
 		CB9D4C3F39001B4770DC3CC0 /* UsageDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A767C11A9F11986E76B3DD17 /* UsageDashboardSnapshot.swift */; };
+		CBFF8A52BCDBBE02D3BED525 /* NotesTextReflow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B2D3228C89A87F300952389 /* NotesTextReflow.swift */; };
+		CC025E29FF859CCAE604789B /* DroneSecureChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15E8FF16508C122FAED2F70 /* DroneSecureChannel.swift */; };
 		CC24857BF396A5684F9CDDC1 /* ActiveConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A59083B564B415C04500D75 /* ActiveConnection.swift */; };
+		CC896B8298EA82783D48D55B /* DronePairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0742F056AD6240EAFF25A49E /* DronePairing.swift */; };
 		CCBB02465ABE4D2516B3C5C2 /* InspectorHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2A47BE5A323BDC3BC5A998 /* InspectorHelper.swift */; };
+		CCF6C2FF6BD32F6CFCF9414E /* DroneTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D61FBBB6CA5A8F042E072AD /* DroneTerminal.swift */; };
 		CD7EB08D14A25F6AB172A462 /* DockerHTTPParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E9C030E0F4E4C15C365301F /* DockerHTTPParsingTests.swift */; };
 		CDA0BB613367D8A562152638 /* RemoteDesktopViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A241584504866AF2EDBDBD41 /* RemoteDesktopViewer.swift */; };
 		CDBB0FD5D8F4F4200CF818D4 /* AdbBridgeParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E1B563FC6199F022C118B2A /* AdbBridgeParsingTests.swift */; };
+		CDF0273B93B1A04168599D2B /* DroneToolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE1FDA9F6023B44BF887D0F9 /* DroneToolClient.swift */; };
 		CEB8B97646E0C940E536641C /* LiquidGlassStyles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */; };
 		CEBF3C40420A95330345F2F0 /* ReliableMessenger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 026F88DA72C107C5BA21FA51 /* ReliableMessenger.swift */; };
 		CED8F47482262495F165BEA8 /* AndroidDeviceSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0E0AC685082B8093A20DB18 /* AndroidDeviceSession.swift */; };
+		CEE2600E7771997020BA02F9 /* DroneTmux.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11308B8A5E8D0D3CE74D74C7 /* DroneTmux.swift */; };
+		CF60EC0023231C16AE253760 /* DronePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68441D2A13F39E44D91BAD65 /* DronePaths.swift */; };
 		CFBC7A794318D7D45008992C /* BuildActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 17A16F92DC1036A143A79F04 /* BuildActivityController.swift */; };
+		CFECEB0E0C290FD0D751E9F3 /* DroneSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11689BD030DCBB4A8C068DDC /* DroneSettingsView.swift */; };
 		D0CD5D540743FDE3174C5CC1 /* SecureChannelCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06860477F9E8DCA481E6C60D /* SecureChannelCore.swift */; };
 		D1147BE270041035313AFABF /* PilotWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 9C197E7776E833629288F072 /* PilotWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		D1AF5F28F832EC477461933A /* DashboardFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206FBB9131DEEA1ABDC15629 /* DashboardFamily.swift */; };
 		D226B640FD86B04F20646F6A /* AgenticUsageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B7749702FA560F58E4B08EF /* AgenticUsageLoader.swift */; };
+		D2A89E593ABE86C152102536 /* DroneVersion.swift in Sources */ = {isa = PBXBuildFile; fileRef = 203E708FB79B3C3775AEC4C6 /* DroneVersion.swift */; };
 		D30FFAF4D6DB9A9F6F9C49A6 /* DashboardActivityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 308C132FEE9B9BA8C797CDD8 /* DashboardActivityController.swift */; };
 		D3F39788AD02D6DB23879F39 /* DashboardPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BB19B50737A2C2F3296B202 /* DashboardPresentation.swift */; };
+		D415E39DC31CDF65369BC05C /* DroneAgentDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68BAB06E9440593B2C0F5CB7 /* DroneAgentDriver.swift */; };
 		D465EA9AB9826AC0F3C51572 /* UsageDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = A767C11A9F11986E76B3DD17 /* UsageDashboardSnapshot.swift */; };
 		D4BCDEE977204E97CDE59A27 /* FileFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41ED62C27A49FC9A43211C06 /* FileFinder.swift */; };
 		D4CE3A404DCAA382B27FC32C /* AndroidStreamPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84BF3FE9198D1D4DD048DE14 /* AndroidStreamPolicy.swift */; };
 		D57D58A491A275D365270B9F /* WorkspaceRootTrackingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C98CA31709CDAB1928FBD83F /* WorkspaceRootTrackingTests.swift */; };
 		D5AFF82CF7F4BF59940C6A9A /* ScreenMirrorBitrateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF418EA6C835E25C52FD6BB6 /* ScreenMirrorBitrateTests.swift */; };
 		D5B90FB0D541A102C859F050 /* UsageInspectorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73AF9BD439FA62891892E9DD /* UsageInspectorView.swift */; };
+		D6E029A462079DF4237DFF27 /* DroneAgentDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68BAB06E9440593B2C0F5CB7 /* DroneAgentDriver.swift */; };
 		D83512367F8AFE82612824C5 /* RelativeTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7C1D5A7C67AF7445067B30 /* RelativeTime.swift */; };
 		D845D9321724CC9BB353E2A1 /* VolumeButtonGestureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39138DED3FCC239CAB9C20B7 /* VolumeButtonGestureTests.swift */; };
 		D871B77281D11FE838A099AF /* BuildWorkflowRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */; };
@@ -442,7 +522,6 @@
 		D9164D6F5F01FB6822B66A0B /* SignalingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F1B539CB5FFBDE29FBA5DC /* SignalingClient.swift */; };
 		D94334ED2B64D28507666E0F /* ActionsDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DBBC3A65D13058197DC255E /* ActionsDashboardSnapshot.swift */; };
 		D9846B416D29D284EAEDED6A /* ScreenMirror.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F639FE26F211489B9C04F0C /* ScreenMirror.swift */; };
-		D9AD662FAC07298F44D7CA73 /* SnapshotHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 63E7D0DE27EB43C5768097E6 /* SnapshotHelper.swift */; };
 		D9D40432FB26E5E5E4AAEA61 /* SyncMessagesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBB26FBD42A09BC8554BB536 /* SyncMessagesTests.swift */; };
 		DA494FBB0633A2ECC6222181 /* DashboardSnapshotEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3246D0DD0F103F56461AE5F3 /* DashboardSnapshotEnvelope.swift */; };
 		DA74321E6457C331B038DD11 /* ChromiumDiagnosticsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 013D7CA36924CAD376D9E6DC /* ChromiumDiagnosticsTests.swift */; };
@@ -454,6 +533,7 @@
 		DECFFE8AFD2D48FF43178B6A /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = B239107086C142E0601CFF02 /* Note.swift */; };
 		DEECAA88721DE82F0542668C /* AndroidPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F18ABBB7169768D48E2E063 /* AndroidPaneView.swift */; };
 		DF6EB298E28D7AE15ECC3DFE /* GitStatusCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C811A810B523C3BCE9433BE /* GitStatusCacheTests.swift */; };
+		E046345E24E83AB8ADBA64D1 /* DroneLANTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11CD5C7D0D5146196CCBA470 /* DroneLANTransport.swift */; };
 		E09EBC388A78CCFCAB913527 /* LocalServerScannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18553CE7573D81D708F4F79F /* LocalServerScannerTests.swift */; };
 		E0B626ADC8EBB24696180AA4 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A727A54C54BA82A6AFA8E10 /* DeviceIdentity.swift */; };
 		E11F370F2CC286F498EE7801 /* TranscriptionModelSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 319966EF9B5B3C488FC91B04 /* TranscriptionModelSupport.swift */; };
@@ -463,6 +543,7 @@
 		E28B5B4BE4CE07EC9DEBA62C /* TrackpadMoveCoalescerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D853C0693C0D4789BD1F68F3 /* TrackpadMoveCoalescerTests.swift */; };
 		E2D666AC069B6A7EB3ADBBA8 /* DashboardLiveActivities.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A05441A61E4210FE4AC47C /* DashboardLiveActivities.swift */; };
 		E2D6726FB8D8C11C5FEAA487 /* AgenticUsageCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972BE56074632447C4CAEA08 /* AgenticUsageCacheTests.swift */; };
+		E3B97367F02102A398F8D096 /* DroneTerminal.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D61FBBB6CA5A8F042E072AD /* DroneTerminal.swift */; };
 		E4056106EAD88A11E314970C /* ChromiumKitUnavailable.mm in Sources */ = {isa = PBXBuildFile; fileRef = D4886B01D81ECE0ECF43C99F /* ChromiumKitUnavailable.mm */; };
 		E4328A994D626C02453C68BD /* PaneRuntimeBatchParsingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D141E1F351055EF5391E13B /* PaneRuntimeBatchParsingTests.swift */; };
 		E452B0A129A991CD10F4646C /* DashboardColors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2BD3D08B6AB43D26076EFF9F /* DashboardColors.xcassets */; };
@@ -470,13 +551,20 @@
 		E49FBE1E06701E4C67EDFD5D /* SnapshotCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = E06B77D7005C415E4B97853A /* SnapshotCatalog.swift */; };
 		E4D3CC4A2518243E28D53ECF /* BrowserFaviconTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1BF64BD7C8B9FAE9409467D /* BrowserFaviconTests.swift */; };
 		E52E76CBF3A1ED94D8503D0F /* CryptoCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F927D073C933040C7FC25A5B /* CryptoCore.swift */; };
+		E68B7A85EBDDD464E56ABADC /* DroneLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 849E9F7E927A9213DEC4CFDC /* DroneLog.swift */; };
 		E6BF23A2F041FCB4878EA56D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8D0F5F9F88A0C88D5916ACC /* ContentView.swift */; };
 		E73A9089A1FF24203B8D3E53 /* AdbBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC7E0AE4C7E6AB9EA45ED412 /* AdbBridge.swift */; };
+		E8A2A91571369961E8AB664E /* DroneToolClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE1FDA9F6023B44BF887D0F9 /* DroneToolClient.swift */; };
+		E98D902A1595D87E36AB4956 /* DroneProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A46C7C51E959007EC44B38B6 /* DroneProtocolTests.swift */; };
+		EAA7D0FEA591229D4EDA2B23 /* DroneToolProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = DCD7D859DD14A3508AAD841E /* DroneToolProtocol.swift */; };
 		EB4100146B4F7D6B55F5A93E /* PilotWidgetsBundle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F202CAAC79BCE4873CAAE472 /* PilotWidgetsBundle.swift */; };
 		EB418EA6BCDE956F2E823566 /* WorkspaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7544DB2CD816807473787E40 /* WorkspaceStore.swift */; };
+		EB810528EDC961DFE6BF5C3D /* DroneLifecycleTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E009A23F7F0FBA507E80E74 /* DroneLifecycleTests.swift */; };
 		EBB0296215373E7E5FFCF07A /* FrameLinkSecurityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09BF91B947FCFCACB4B160D1 /* FrameLinkSecurityTests.swift */; };
 		EBEF419831478D483685AE7F /* DashboardFamily.swift in Sources */ = {isa = PBXBuildFile; fileRef = 206FBB9131DEEA1ABDC15629 /* DashboardFamily.swift */; };
+		EBFC75FDF685324E0EB4A5A0 /* DroneTerminalEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A0D2941A595A3C10E1243C0 /* DroneTerminalEngine.swift */; };
 		EC178CBBC9B9CF33A04016DB /* WebKitBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C90E8C08C00C3480164671FE /* WebKitBrowserView.swift */; };
+		EC8786950321F27785377C62 /* DronePTY.swift in Sources */ = {isa = PBXBuildFile; fileRef = B60811F57ED5DA0FF3E0E3AD /* DronePTY.swift */; };
 		EDF01B12DBBEA5210BE4D55C /* WorkspaceTabItem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AAF973E526C4E90667634BF /* WorkspaceTabItem.swift */; };
 		EDF233D9921218C07665FE57 /* AgenticUsageRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = D56ECCC75B17868891040306 /* AgenticUsageRecord.swift */; };
 		EE0B3A1D4CC379EE3CD383D5 /* RunnersTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A5F3573ECA214F122B1F094 /* RunnersTests.swift */; };
@@ -488,6 +576,8 @@
 		EF6BF77AE8BEBC652F65E74D /* BuildWorkflowRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */; };
 		EF8F46868E2CE510909F0916 /* BuildWorkflowRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */; };
 		EF98B8882DFF2788874C75ED /* PlotterDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC07894BCEF167B9AD3504EE /* PlotterDashboardView.swift */; };
+		EFA4157E391ED7DCAF9C339B /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */; };
+		F025F6923FB9A48527D25536 /* PilotSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAC543C2FE51BD76F946DC31 /* PilotSchema.swift */; };
 		F048618B74847D13B0962992 /* DevicePaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFDEABC5E473F6AB22D30F16 /* DevicePaneView.swift */; };
 		F18C696B1DC6F161E3F6C4DA /* SignalingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F1B539CB5FFBDE29FBA5DC /* SignalingClient.swift */; };
 		F18F828DC097B92E98BA64DB /* DashboardSnapshotEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3246D0DD0F103F56461AE5F3 /* DashboardSnapshotEnvelope.swift */; };
@@ -508,16 +598,21 @@
 		F7DE505D0C09F4D88362A408 /* BrowserController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F75191853E82811C304A16BF /* BrowserController.swift */; };
 		F7F70CCCD82FED358961E934 /* WorkspaceBranchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA21CE5F668A930A95245288 /* WorkspaceBranchStore.swift */; };
 		F8F4DA9F53EB3CCCC9BA3F48 /* ConnectionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 395E05EAD577069EA0423647 /* ConnectionState.swift */; };
+		F9EFFACC3A965906CE81AD9B /* DroneLANTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11CD5C7D0D5146196CCBA470 /* DroneLANTransport.swift */; };
+		FA68CEABB248F9D3290979E8 /* PeerSyncAuthentication.swift in Sources */ = {isa = PBXBuildFile; fileRef = A05EF8C2CD7538ADD56AE2E0 /* PeerSyncAuthentication.swift */; };
 		FAB5C1140E3E572463F3B254 /* NotesSecurityBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E9CE6A40937B1C93B916C57 /* NotesSecurityBoundaryTests.swift */; };
 		FBAE23769FBF48D3B57BA0D3 /* TerminalDropText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28CD946096B98D73287B1E30 /* TerminalDropText.swift */; };
+		FC271A672924CE982A85E799 /* DroneLaunchd.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6CDEFF2D0BABB4F9AA4C818 /* DroneLaunchd.swift */; };
 		FCBE9E13AFDE3B77389669A4 /* BrowserControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88F331652324BCBEDED1485F /* BrowserControllerTests.swift */; };
 		FD33DDC94BC4DC3C68632E48 /* SecurePairingStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46AD7879E93CFA7C19B281CA /* SecurePairingStoreTests.swift */; };
 		FD6FD7421D0462B32FDD9EFA /* MacMini.usdz in Resources */ = {isa = PBXBuildFile; fileRef = 3B7EB9EECE8109721851CDCC /* MacMini.usdz */; };
 		FDB22C255AF1E10CC262C264 /* WalletPopupPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4964B07F4BFF22977DDCB169 /* WalletPopupPanel.swift */; };
 		FDD63501A309DB55427BF066 /* DockerContainerDecodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 553A35BBB5134886F77EA5F0 /* DockerContainerDecodingTests.swift */; };
+		FE5481626031FAD964B25F07 /* DroneControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CEFD94E2A0ED7B5C0B4F08 /* DroneControl.swift */; };
 		FE9DF0D42CC3C44E1A094C1F /* EditorState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E164E2A5EC4293B161BE9A63 /* EditorState.swift */; };
 		FF0157FFB7DC8C3FA910FA0F /* PilotWalkieDelivery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46D01BA1950FB279D464ECC3 /* PilotWalkieDelivery.swift */; };
 		FF5026A359A057E89A5ADEAB /* PersistenceReportingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 291474D85FF92A9D26A1ACC4 /* PersistenceReportingTests.swift */; };
+		FF8CCD3BC340057B52A50272 /* DronePairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0742F056AD6240EAFF25A49E /* DronePairing.swift */; };
 		FFBFC7B9B3B069C4A137D3E4 /* PacketCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 688AC826114E1555689DB697 /* PacketCodec.swift */; };
 /* End PBXBuildFile section */
 
@@ -669,6 +764,7 @@
 /* Begin PBXFileReference section */
 		013D7CA36924CAD376D9E6DC /* ChromiumDiagnosticsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumDiagnosticsTests.swift; sourceTree = "<group>"; };
 		026F88DA72C107C5BA21FA51 /* ReliableMessenger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReliableMessenger.swift; sourceTree = "<group>"; };
+		0378FEA34B1E6E31D0949241 /* NotesGutter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesGutter.swift; sourceTree = "<group>"; };
 		054B3286C64414670AD92A9A /* ChromiumProcessObserver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumProcessObserver.swift; sourceTree = "<group>"; };
 		0585691FB26E5955B0177341 /* PairedPeerKeyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairedPeerKeyTests.swift; sourceTree = "<group>"; };
 		05F65749197056761B9D8E8F /* PilotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PilotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -677,6 +773,7 @@
 		06860477F9E8DCA481E6C60D /* SecureChannelCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelCore.swift; sourceTree = "<group>"; };
 		070DEF0707E3D775E0143EA8 /* PinnedQuickJumpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinnedQuickJumpTests.swift; sourceTree = "<group>"; };
 		072174CC5D47F85E892E627D /* PeerSyncService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerSyncService.swift; sourceTree = "<group>"; };
+		0742F056AD6240EAFF25A49E /* DronePairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DronePairing.swift; sourceTree = "<group>"; };
 		0996308D95F727BDE1DE2596 /* WorkspaceGroups.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceGroups.swift; sourceTree = "<group>"; };
 		09BF91B947FCFCACB4B160D1 /* FrameLinkSecurityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameLinkSecurityTests.swift; sourceTree = "<group>"; };
 		0A48BB8B28996667E215BC4E /* UIZoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIZoom.swift; sourceTree = "<group>"; };
@@ -692,8 +789,11 @@
 		0EA8E47EFDBB2F97086B2ADF /* ColorChipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorChipTests.swift; sourceTree = "<group>"; };
 		0FB0200E90EA9510E8762246 /* PlotterGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterGeometryTests.swift; sourceTree = "<group>"; };
 		10A05441A61E4210FE4AC47C /* DashboardLiveActivities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardLiveActivities.swift; sourceTree = "<group>"; };
+		11308B8A5E8D0D3CE74D74C7 /* DroneTmux.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneTmux.swift; sourceTree = "<group>"; };
+		11689BD030DCBB4A8C068DDC /* DroneSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneSettingsView.swift; sourceTree = "<group>"; };
 		1187B803F5DBE26FA2A6EC40 /* ChromiumProfilePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumProfilePolicy.swift; sourceTree = "<group>"; };
 		119C8FFB6902A8C0B22BA479 /* NoiseIKHandshake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoiseIKHandshake.swift; sourceTree = "<group>"; };
+		11CD5C7D0D5146196CCBA470 /* DroneLANTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneLANTransport.swift; sourceTree = "<group>"; };
 		156F3F81E7795278C2B8A61E /* CheckForSoftwareUpdatesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckForSoftwareUpdatesView.swift; sourceTree = "<group>"; };
 		169A08B89F3389F8CED1B699 /* TranscriptionLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionLifecycleTests.swift; sourceTree = "<group>"; };
 		16C8820FF1D60784570BE850 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -704,9 +804,11 @@
 		18BCEBB051ACB9E218285E8A /* ChromiumSecurityPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumSecurityPolicy.swift; sourceTree = "<group>"; };
 		18C6547433BE509A5ED8E581 /* MarkdownStyler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownStyler.swift; sourceTree = "<group>"; };
 		1A7C1D5A7C67AF7445067B30 /* RelativeTime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelativeTime.swift; sourceTree = "<group>"; };
+		1A987929F39225C2CFFCED57 /* DroneRemoteTerminalClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneRemoteTerminalClient.swift; sourceTree = "<group>"; };
 		1A9D497323DE9BCD1F4C8ADE /* PlotterWidgetsBundle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterWidgetsBundle.swift; sourceTree = "<group>"; };
 		1AB56ABB04AB4C6982A8A253 /* TrackpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackpadView.swift; sourceTree = "<group>"; };
 		1AE65C7964876746CBA511CB /* performance-budgets.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "performance-budgets.json"; sourceTree = "<group>"; };
+		1B7B9F544778FDD192A79D6D /* TerminalSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSessionTests.swift; sourceTree = "<group>"; };
 		1BD82BE89471EC957C86AB57 /* PrivacyManifestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyManifestTests.swift; sourceTree = "<group>"; };
 		1C8F0E890B9D47195C90B9CA /* LocalServerScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalServerScanner.swift; sourceTree = "<group>"; };
 		1CA837EBF2CBD3E45ED8A2C8 /* NewWorkspaceSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewWorkspaceSheet.swift; sourceTree = "<group>"; };
@@ -718,18 +820,24 @@
 		1E5AE5E187359518E47BBDE6 /* DashboardWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardWidgets.swift; sourceTree = "<group>"; };
 		1F2FAA91CD094C780B3CF6F0 /* SecureChannelResponder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelResponder.swift; sourceTree = "<group>"; };
 		1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildWorkflowRun.swift; sourceTree = "<group>"; };
+		203E708FB79B3C3775AEC4C6 /* DroneVersion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneVersion.swift; sourceTree = "<group>"; };
 		206FBB9131DEEA1ABDC15629 /* DashboardFamily.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardFamily.swift; sourceTree = "<group>"; };
+		2077F1A6A207F654BF5E33D6 /* drone */ = {isa = PBXFileReference; includeInIndex = 0; path = drone; sourceTree = BUILT_PRODUCTS_DIR; };
 		20BD0ECBEF38020DEA31A295 /* RemoteDesktopKeyboardInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopKeyboardInput.swift; sourceTree = "<group>"; };
 		2307A244B06EF550533AA6D0 /* UsageProviderAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageProviderAdapterTests.swift; sourceTree = "<group>"; };
+		237EE3F2B15717B61616E3D9 /* DroneWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneWorkspace.swift; sourceTree = "<group>"; };
 		245AF30397DB998A089D3DE7 /* ActiveConnectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveConnectionTests.swift; sourceTree = "<group>"; };
 		2548132E7CDFC78289E291E5 /* RunnerFleetView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerFleetView.swift; sourceTree = "<group>"; };
 		25F7342047ADD2BC10513404 /* PullRequestListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PullRequestListView.swift; sourceTree = "<group>"; };
+		26173A4D19F8BFBF637D9136 /* DroneTerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneTerminalView.swift; sourceTree = "<group>"; };
 		265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageHistoryTests.swift; sourceTree = "<group>"; };
+		265760C371C397CD01098144 /* SnapshotHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotHelper.swift; sourceTree = "<group>"; };
 		268DE5CA8E14D127C3AA54D3 /* AndroidInputInjector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidInputInjector.swift; sourceTree = "<group>"; };
 		28CD946096B98D73287B1E30 /* TerminalDropText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalDropText.swift; sourceTree = "<group>"; };
 		291474D85FF92A9D26A1ACC4 /* PersistenceReportingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceReportingTests.swift; sourceTree = "<group>"; };
 		29FBE1AF3B6C990F797CEBD1 /* ChromiumKit.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChromiumKit.h; sourceTree = "<group>"; };
 		2AC5A20B37D98D2733EC6AB1 /* BrowserToolbarControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserToolbarControls.swift; sourceTree = "<group>"; };
+		2B2D3228C89A87F300952389 /* NotesTextReflow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesTextReflow.swift; sourceTree = "<group>"; };
 		2BD3D08B6AB43D26076EFF9F /* DashboardColors.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = DashboardColors.xcassets; sourceTree = "<group>"; };
 		2C2EEEC136C43BFFC0976B61 /* FrameProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProtocolTests.swift; sourceTree = "<group>"; };
 		2CA50CD82BC124C8966C5BCE /* SafariWebInspector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafariWebInspector.swift; sourceTree = "<group>"; };
@@ -766,6 +874,7 @@
 		40B8E031A603C505CA1307D8 /* UsageProviderSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageProviderSupport.swift; sourceTree = "<group>"; };
 		41A7C535EF3B8D6621278079 /* SetupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SetupTests.swift; sourceTree = "<group>"; };
 		41ED62C27A49FC9A43211C06 /* FileFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileFinder.swift; sourceTree = "<group>"; };
+		4345E8B6EBCC9DFC2DCE39BC /* DroneJobEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneJobEngine.swift; sourceTree = "<group>"; };
 		458E916CF174CE8E23102739 /* PlotterApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterApp.swift; sourceTree = "<group>"; };
 		4648BA584E03882419D9E36E /* Copilot.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Copilot.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4683F17F6EB9C54A98EFB520 /* SimctlBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimctlBridge.swift; sourceTree = "<group>"; };
@@ -774,10 +883,15 @@
 		46D01BA1950FB279D464ECC3 /* PilotWalkieDelivery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotWalkieDelivery.swift; sourceTree = "<group>"; };
 		47290F44A2E7A13BD8B8C011 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		47297EA47ACF2F52F4DDA1A0 /* ChromiumCEFInternal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ChromiumCEFInternal.h; sourceTree = "<group>"; };
+		472EA84863E0E398E639554C /* DroneDaemon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneDaemon.swift; sourceTree = "<group>"; };
+		479EEB75340491931A458873 /* MarkdownImagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImagePreview.swift; sourceTree = "<group>"; };
 		47C38847F5E93CB5B1D87A04 /* NotesEditorTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesEditorTextView.swift; sourceTree = "<group>"; };
 		48465A9AC711AF1733BDA6CB /* Cockpit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cockpit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		485B1AC3F8C9E26023F107F2 /* DroneWorkerService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneWorkerService.swift; sourceTree = "<group>"; };
 		491FF5DBB6C9B0E15C93F127 /* AgenticUseProviderBreakdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseProviderBreakdown.swift; sourceTree = "<group>"; };
 		4964B07F4BFF22977DDCB169 /* WalletPopupPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletPopupPanel.swift; sourceTree = "<group>"; };
+		4A0D2941A595A3C10E1243C0 /* DroneTerminalEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneTerminalEngine.swift; sourceTree = "<group>"; };
+		4A539CE47DA92CB36482E3D5 /* DroneJobModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneJobModels.swift; sourceTree = "<group>"; };
 		4A727A54C54BA82A6AFA8E10 /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		4A90D826F4A0CF8C54737CCA /* AgenticUseKPICards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseKPICards.swift; sourceTree = "<group>"; };
 		4B30F9AAA7AAB1EE1430E870 /* AgenticUseTokenFlow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseTokenFlow.swift; sourceTree = "<group>"; };
@@ -792,7 +906,9 @@
 		4FF74DA627D281896CA6280E /* MouseBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MouseBridge.swift; sourceTree = "<group>"; };
 		50DB102BE8ED0A27030EED8D /* ChromiumBrowser */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ChromiumBrowser; path = Tests/Fixtures/ChromiumBrowser; sourceTree = SOURCE_ROOT; };
 		51A70D298D596C2164CF3AB7 /* CursorUsageAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CursorUsageAdapter.swift; sourceTree = "<group>"; };
+		53729A46E30A8128403005CA /* droned */ = {isa = PBXFileReference; includeInIndex = 0; path = droned; sourceTree = BUILT_PRODUCTS_DIR; };
 		53CBB9C8A05D046F1D1B7C2A /* DeviceCaptureRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCaptureRegistry.swift; sourceTree = "<group>"; };
+		53E9632E52DD8D0C5D919DC0 /* DroneCLI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneCLI.swift; sourceTree = "<group>"; };
 		53F5C61D651C586F03E5E435 /* PeerSyncReliableSendTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerSyncReliableSendTests.swift; sourceTree = "<group>"; };
 		54CE720A16BE9E6193C72CDD /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		552715A9B1E5BC229D56BA6A /* ChromiumFixtureServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumFixtureServer.swift; sourceTree = "<group>"; };
@@ -802,11 +918,13 @@
 		57CF76500FC35A1C764A0C38 /* PilotSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotSettingsView.swift; sourceTree = "<group>"; };
 		57D9D6571DE3AC6DF52DE6FC /* BuildActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildActivityAttributes.swift; sourceTree = "<group>"; };
 		58DB20A29ED93A7D1EE1CE0A /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		5971CC70B2ACDB99F11E96A9 /* DroneProtocolFuzzTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneProtocolFuzzTests.swift; sourceTree = "<group>"; };
 		5A5E1A4FAABADF61C36FDE3E /* ChromiumProcessObserverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumProcessObserverTests.swift; sourceTree = "<group>"; };
 		5AAF973E526C4E90667634BF /* WorkspaceTabItem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceTabItem.swift; sourceTree = "<group>"; };
 		5B3ACA9A0F569FE71344FD94 /* PaneCyclingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneCyclingTests.swift; sourceTree = "<group>"; };
 		5C0317B2BF9E05842D73ABB1 /* WorkspaceGroupsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceGroupsTests.swift; sourceTree = "<group>"; };
 		5CCC0B3BF93E10E650959B49 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		5D9F2CCBA1890E01988BAD33 /* DroneRegistryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneRegistryTests.swift; sourceTree = "<group>"; };
 		5E316E4A6222A86D176C7BBD /* UsageStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageStore.swift; sourceTree = "<group>"; };
 		5E905969F090DE9F4B90DD97 /* PilotSchemaMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotSchemaMigrationTests.swift; sourceTree = "<group>"; };
 		5EB900A2EB6CAB3FA405DAFA /* VolumeScrollListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VolumeScrollListView.swift; sourceTree = "<group>"; };
@@ -818,19 +936,20 @@
 		61F680F71ECBB3B7379C90A4 /* PeerSyncReliableSend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeerSyncReliableSend.swift; sourceTree = "<group>"; };
 		6289A972508DA3BFFB8A8354 /* WorkspaceActionWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceActionWatcher.swift; sourceTree = "<group>"; };
 		6307EEAE97190468F55B3C26 /* KimiUsageAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KimiUsageAdapter.swift; sourceTree = "<group>"; };
-		63E7D0DE27EB43C5768097E6 /* SnapshotHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotHelper.swift; sourceTree = "<group>"; };
 		64A284D5D77C849E2545B0AF /* main.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = main.mm; sourceTree = "<group>"; };
 		65737F61991D3C49A690A476 /* SecureChannelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelTests.swift; sourceTree = "<group>"; };
 		66B592F459C1CEFFE2076FA6 /* ChromiumFixtureServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumFixtureServerTests.swift; sourceTree = "<group>"; };
 		6732BE81058BC78D5A8C6D43 /* EmulatorBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmulatorBridgeTests.swift; sourceTree = "<group>"; };
 		674DCEC21FE7C96B5827EA31 /* PlotterWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = PlotterWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		67C9AF2421C7BC4AE478C8E7 /* LegibleAccentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LegibleAccentTests.swift; sourceTree = "<group>"; };
+		68441D2A13F39E44D91BAD65 /* DronePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DronePaths.swift; sourceTree = "<group>"; };
 		688AC826114E1555689DB697 /* PacketCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketCodec.swift; sourceTree = "<group>"; };
+		68BAB06E9440593B2C0F5CB7 /* DroneAgentDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneAgentDriver.swift; sourceTree = "<group>"; };
 		695D2F9C4723D52E73ABB61B /* AndroidStreamRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidStreamRecorder.swift; sourceTree = "<group>"; };
 		699894047634BE2B6EDA6DC9 /* TranscriptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionService.swift; sourceTree = "<group>"; };
 		6A644070194904025F9F3EDF /* RemoteDesktopGroups.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopGroups.swift; sourceTree = "<group>"; };
 		6D20724997EA356496283A78 /* DeviceCaptureLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCaptureLifecycleTests.swift; sourceTree = "<group>"; };
-		6D4B475DC1B0C35E65E10BF5 /* SnapshotHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotHelper.swift; sourceTree = "<group>"; };
+		6E009A23F7F0FBA507E80E74 /* DroneLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneLifecycleTests.swift; sourceTree = "<group>"; };
 		6E421C4CAAF6E272D94C221B /* LiquidGlassStyles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiquidGlassStyles.swift; sourceTree = "<group>"; };
 		6E9C030E0F4E4C15C365301F /* DockerHTTPParsingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerHTTPParsingTests.swift; sourceTree = "<group>"; };
 		6FB9DCB7C4FF99FDDF01BB19 /* GitStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitStatus.swift; sourceTree = "<group>"; };
@@ -839,6 +958,7 @@
 		71420FAACEC2B371853A8B9B /* RepositoryPolledResourcesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryPolledResourcesTests.swift; sourceTree = "<group>"; };
 		7182ED8C2CFB3338C6E80FDB /* PilotWalkieInputState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotWalkieInputState.swift; sourceTree = "<group>"; };
 		71E117602C645CA06C80D9B2 /* SnapshotWorkbench.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotWorkbench.swift; sourceTree = "<group>"; };
+		7202D816A88347AA9789318E /* DroneJobToolEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneJobToolEngine.swift; sourceTree = "<group>"; };
 		7270EF11025F63E660529CD8 /* ChromiumDiagnosticsSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumDiagnosticsSettings.swift; sourceTree = "<group>"; };
 		730CAADECFA121BB0719111E /* AgenticUseDailyChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseDailyChart.swift; sourceTree = "<group>"; };
 		73AF9BD439FA62891892E9DD /* UsageInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageInspectorView.swift; sourceTree = "<group>"; };
@@ -849,6 +969,7 @@
 		7877E029BC589303CAAA1399 /* AndroidGestureClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidGestureClassifier.swift; sourceTree = "<group>"; };
 		78F894A09A33E9EAE02EB8CF /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
 		7948D4B8A588730E26B022EF /* PlotterWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PlotterWidgets.entitlements; sourceTree = "<group>"; };
+		79CEFD94E2A0ED7B5C0B4F08 /* DroneControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneControl.swift; sourceTree = "<group>"; };
 		79E505DC2441458F64FFEA45 /* DockerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerStore.swift; sourceTree = "<group>"; };
 		7A39CC94BE2E1707FC45C92D /* ClaudeUsageAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeUsageAdapter.swift; sourceTree = "<group>"; };
 		7B4D8BB3D1FD85853FA94875 /* BrowserJavaScriptDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserJavaScriptDialog.swift; sourceTree = "<group>"; };
@@ -869,6 +990,10 @@
 		816C193307796EC2AFCFAE3E /* GhosttyTerminal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyTerminal.swift; sourceTree = "<group>"; };
 		81ABCD61526CD46017EB9508 /* DirectoryFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DirectoryFinder.swift; sourceTree = "<group>"; };
 		826E1BFEF2D1F74D70FA8CE3 /* BrowserFindInPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserFindInPage.swift; sourceTree = "<group>"; };
+		829511F0553F7A9E44A9493D /* DroneTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DroneTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		8374E4371A25C059C91CC94A /* DroneRegistryPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneRegistryPersistence.swift; sourceTree = "<group>"; };
+		848BD10A11FFF6F9EB5E866E /* DroneProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneProtocol.swift; sourceTree = "<group>"; };
+		849E9F7E927A9213DEC4CFDC /* DroneLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneLog.swift; sourceTree = "<group>"; };
 		84BF3FE9198D1D4DD048DE14 /* AndroidStreamPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidStreamPolicy.swift; sourceTree = "<group>"; };
 		85260B5081A688BB7B0EDE3F /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		854F5C59C2F6EDF14C12B73F /* ChromiumRealEngineSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumRealEngineSmokeTests.swift; sourceTree = "<group>"; };
@@ -881,7 +1006,9 @@
 		88F331652324BCBEDED1485F /* BrowserControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserControllerTests.swift; sourceTree = "<group>"; };
 		891501BF1C5DFC63468EF179 /* EditorDocumentSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorDocumentSessionTests.swift; sourceTree = "<group>"; };
 		8918F120AC89BE6FDE09CD52 /* PlotterGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterGeometry.swift; sourceTree = "<group>"; };
+		8D61FBBB6CA5A8F042E072AD /* DroneTerminal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneTerminal.swift; sourceTree = "<group>"; };
 		8DBBC3A65D13058197DC255E /* ActionsDashboardSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionsDashboardSnapshot.swift; sourceTree = "<group>"; };
+		8DD9E7869DBAE8250257FF9D /* DroneModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneModels.swift; sourceTree = "<group>"; };
 		8E7E6F64E494F4DE49EFD95B /* ChromiumRuntimeProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumRuntimeProbe.swift; sourceTree = "<group>"; };
 		8F3D30C121CEFFCF4014D811 /* WingmanCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WingmanCommandTests.swift; sourceTree = "<group>"; };
 		8F46D7F05FDC4239EFB222A9 /* EditorPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPaneView.swift; sourceTree = "<group>"; };
@@ -895,7 +1022,9 @@
 		941AFCF1EFB53E8D1CAD5B5F /* Renderer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Renderer.entitlements; sourceTree = "<group>"; };
 		948AB2018F218B875833A701 /* AwakeSessionController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwakeSessionController.swift; sourceTree = "<group>"; };
 		95C1CA5AF0F78C873A2C334B /* DockerStoreRefreshTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerStoreRefreshTests.swift; sourceTree = "<group>"; };
+		96FF9907D8B377986D246B1D /* DroneDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneDiscovery.swift; sourceTree = "<group>"; };
 		972BE56074632447C4CAEA08 /* AgenticUsageCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUsageCacheTests.swift; sourceTree = "<group>"; };
+		99A5F54E39090B59AB133F69 /* TerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSession.swift; sourceTree = "<group>"; };
 		99FBD4FF911ED668812EFC61 /* H264AnnexBAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264AnnexBAssemblerTests.swift; sourceTree = "<group>"; };
 		9A59083B564B415C04500D75 /* ActiveConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveConnection.swift; sourceTree = "<group>"; };
 		9C197E7776E833629288F072 /* PilotWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PilotWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -908,17 +1037,21 @@
 		A1BF64BD7C8B9FAE9409467D /* BrowserFaviconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserFaviconTests.swift; sourceTree = "<group>"; };
 		A241584504866AF2EDBDBD41 /* RemoteDesktopViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopViewer.swift; sourceTree = "<group>"; };
 		A34287C4931EBC63C2DCF06A /* CopilotWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = CopilotWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A3AF0144B15C629445225176 /* DronePairingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DronePairingTests.swift; sourceTree = "<group>"; };
 		A41F3A9CC73ED4D24965D612 /* PlotterActivityAttributes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterActivityAttributes.swift; sourceTree = "<group>"; };
 		A4427660F2B3B662FC34F67A /* SimctlRuntimeNameTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimctlRuntimeNameTests.swift; sourceTree = "<group>"; };
+		A46C7C51E959007EC44B38B6 /* DroneProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneProtocolTests.swift; sourceTree = "<group>"; };
 		A5C13691A97640D6126B5C03 /* Pilot.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Pilot.entitlements; sourceTree = "<group>"; };
 		A5EA3C5D4AAEA10EA9734D7C /* SnapshotFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotFixtures.swift; sourceTree = "<group>"; };
 		A6287B4C91222DAA0BC988A5 /* CopilotWalkieTalkieTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotWalkieTalkieTests.swift; sourceTree = "<group>"; };
 		A6956D170AED16754A78A493 /* WorkspaceSidebarList.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSidebarList.swift; sourceTree = "<group>"; };
 		A6BECAF1FB2AA8B36E370120 /* AgenticUseFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseFormat.swift; sourceTree = "<group>"; };
+		A6CDEFF2D0BABB4F9AA4C818 /* DroneLaunchd.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneLaunchd.swift; sourceTree = "<group>"; };
 		A6DC9C91B2F017F673927008 /* MarkdownTableFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTableFormatter.swift; sourceTree = "<group>"; };
 		A70DB383FCAA1B187CE0FF99 /* ChromiumBrowserHostView.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ChromiumBrowserHostView.mm; sourceTree = "<group>"; };
 		A733DD090F36816EFC9A0A65 /* InkOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InkOverlay.swift; sourceTree = "<group>"; };
 		A767C11A9F11986E76B3DD17 /* UsageDashboardSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageDashboardSnapshot.swift; sourceTree = "<group>"; };
+		A8300B8FFB152A920094E4CE /* DroneLANTransportFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneLANTransportFactory.swift; sourceTree = "<group>"; };
 		A84884E4B150F3373624885B /* BrowserStartPageVisibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserStartPageVisibilityTests.swift; sourceTree = "<group>"; };
 		A8739E2A29A92AE8043B2A88 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A89C20B948283C5026686CE0 /* LandingSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LandingSnapshotTests.swift; sourceTree = "<group>"; };
@@ -943,6 +1076,7 @@
 		B4CD07EC3F78FACD519E3095 /* CopilotDashboardModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotDashboardModel.swift; sourceTree = "<group>"; };
 		B4F1B539CB5FFBDE29FBA5DC /* SignalingClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignalingClient.swift; sourceTree = "<group>"; };
 		B51C2163FE76090C1BA0609D /* DeviceScreenDragTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceScreenDragTests.swift; sourceTree = "<group>"; };
+		B60811F57ED5DA0FF3E0E3AD /* DronePTY.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DronePTY.swift; sourceTree = "<group>"; };
 		B6238E7669905C82F3C49E3A /* ProcessRunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessRunnerTests.swift; sourceTree = "<group>"; };
 		B64B2275F5B86DE8CBD99D2A /* RemoteScreenDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteScreenDiscovery.swift; sourceTree = "<group>"; };
 		B802877FCCBEB9F318728CDD /* PilotApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotApp.swift; sourceTree = "<group>"; };
@@ -950,6 +1084,7 @@
 		B872566D3CBAF59D5263D3D4 /* SimulatorRegistry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorRegistry.swift; sourceTree = "<group>"; };
 		B8DF9E14832354A249E4A4A0 /* ChromiumRequestPolicy.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ChromiumRequestPolicy.mm; sourceTree = "<group>"; };
 		B8ECB489A2897EA740A61DB4 /* RemoteDesktopSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopSessionTests.swift; sourceTree = "<group>"; };
+		B91588BE0E9294B97B875EED /* DroneTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneTransport.swift; sourceTree = "<group>"; };
 		B937A3E020F2099C3A80F812 /* WorkspaceQuickJump.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceQuickJump.swift; sourceTree = "<group>"; };
 		B9567DBB2DCD2F5574747E15 /* VNCPreferencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VNCPreferencesTests.swift; sourceTree = "<group>"; };
 		B966B592A4F0BF8900F1E5A4 /* TextPromptSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextPromptSheet.swift; sourceTree = "<group>"; };
@@ -962,14 +1097,17 @@
 		BBB26FBD42A09BC8554BB536 /* SyncMessagesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncMessagesTests.swift; sourceTree = "<group>"; };
 		BC07894BCEF167B9AD3504EE /* PlotterDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterDashboardView.swift; sourceTree = "<group>"; };
 		BC7502053C980F1473B1F9C2 /* MarkdownImageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImageTests.swift; sourceTree = "<group>"; };
+		BD05ED9AA028D836501900C7 /* DroneProcessRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneProcessRunner.swift; sourceTree = "<group>"; };
 		BD3330C3920045805B3D1F83 /* AwakeSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AwakeSessionTests.swift; sourceTree = "<group>"; };
 		BD664CE1F161D29FC785CA5B /* WalletExtension.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletExtension.swift; sourceTree = "<group>"; };
 		BD99993E8B657F9B0A13D6EA /* UsageSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageSettingsView.swift; sourceTree = "<group>"; };
+		BE1FDA9F6023B44BF887D0F9 /* DroneToolClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneToolClient.swift; sourceTree = "<group>"; };
 		BE500437E4DED08ECD108821 /* DashboardSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSnapshotTests.swift; sourceTree = "<group>"; };
 		BE87061FFEBAF3694C17DABE /* DockerContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerContainer.swift; sourceTree = "<group>"; };
 		BF21FEF25FBF6431867348E8 /* SecureChannelDeadline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelDeadline.swift; sourceTree = "<group>"; };
 		BF418EA6C835E25C52FD6BB6 /* ScreenMirrorBitrateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirrorBitrateTests.swift; sourceTree = "<group>"; };
 		BF4B29FE0CA33B98A83D39B0 /* SharedTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SharedTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0D7E29E91F2CF89A180C279 /* PilotCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotCommands.swift; sourceTree = "<group>"; };
 		C1FE9203FCB2AFE2E08809A5 /* AndroidKeyMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidKeyMap.swift; sourceTree = "<group>"; };
 		C2147E29B3253F46979AE96A /* Plotter.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Plotter.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		C31F6B28F8E695EF20655394 /* AgenticUseDashboardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseDashboardTests.swift; sourceTree = "<group>"; };
@@ -996,12 +1134,14 @@
 		CD3F2C3AA86E055D88F6A47A /* PreviewCanvasBackground.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewCanvasBackground.swift; sourceTree = "<group>"; };
 		CDC15E9A51BEA782B83DD93B /* PlotterSnapshotWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterSnapshotWidget.swift; sourceTree = "<group>"; };
 		CDC5A116B616E14BD4E34FDD /* AgenticUseInsightsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseInsightsView.swift; sourceTree = "<group>"; };
+		CE283FE8FDEDCC8D826DC253 /* DroneWorkerSupervisor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneWorkerSupervisor.swift; sourceTree = "<group>"; };
 		CE9B2428EEF2726A517AF98A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		CEFA45E1D941D66C60C3DF7D /* ChromiumBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumBrowserView.swift; sourceTree = "<group>"; };
 		CFBB1E55183AA79592BD4FDD /* EnvSecret.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EnvSecret.swift; sourceTree = "<group>"; };
 		CFF7AED59B28AA2AC56C7B66 /* RepositoryPollingSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryPollingSchedulerTests.swift; sourceTree = "<group>"; };
 		D04BC608D7929CA32C073186 /* FrameProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameProtocol.swift; sourceTree = "<group>"; };
 		D0CC82C38AB58E2E91915D02 /* CopilotWalkieTalkie.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotWalkieTalkie.swift; sourceTree = "<group>"; };
+		D0D41A674017781DD6ED0896 /* DroneJobStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneJobStore.swift; sourceTree = "<group>"; };
 		D10C34904F077BF787DB9F3C /* CopilotWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = CopilotWidgets.entitlements; sourceTree = "<group>"; };
 		D4886B01D81ECE0ECF43C99F /* ChromiumKitUnavailable.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ChromiumKitUnavailable.mm; sourceTree = "<group>"; };
 		D49030B685CAE6599FA5D04F /* DashboardSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSnapshotStore.swift; sourceTree = "<group>"; };
@@ -1018,11 +1158,13 @@
 		DA05E246368E9655194D3F73 /* TerminalAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalAgent.swift; sourceTree = "<group>"; };
 		DA54B06694B062B4888A4637 /* SimulatorFramebuffer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorFramebuffer.swift; sourceTree = "<group>"; };
 		DA5D71034397A579AF6EC4E9 /* SimulatorPrivateFrameworks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorPrivateFrameworks.swift; sourceTree = "<group>"; };
+		DAC543C2FE51BD76F946DC31 /* PilotSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotSchema.swift; sourceTree = "<group>"; };
 		DAE3BC2659B3EFE952940D66 /* NotesEditingSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesEditingSmokeTests.swift; sourceTree = "<group>"; };
 		DB09B38E48EEE3B8B55E3119 /* EditorDocumentSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorDocumentSession.swift; sourceTree = "<group>"; };
 		DB13DCB657B0C6955CA55F8F /* FuzzyMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuzzyMatcher.swift; sourceTree = "<group>"; };
 		DB65BD6645ABED2F3C334A40 /* TerminalToolbarControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalToolbarControls.swift; sourceTree = "<group>"; };
 		DBB5EF8CB13C5B1AED66F1D1 /* PlotterLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterLiveActivity.swift; sourceTree = "<group>"; };
+		DCD7D859DD14A3508AAD841E /* DroneToolProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneToolProtocol.swift; sourceTree = "<group>"; };
 		DE24BD01E50882A66E53190A /* MarkdownStylerIncrementalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownStylerIncrementalTests.swift; sourceTree = "<group>"; };
 		DE7557B5A46C13F0FB040D19 /* GPU.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = GPU.entitlements; sourceTree = "<group>"; };
 		DF2CE47E300C860F3A949839 /* ReplayWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayWindow.swift; sourceTree = "<group>"; };
@@ -1030,6 +1172,7 @@
 		E049F62849A8FF8619A7E61E /* CopilotUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = CopilotUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E06B77D7005C415E4B97853A /* SnapshotCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotCatalog.swift; sourceTree = "<group>"; };
 		E0D1B4F15F96F23AFD699685 /* DockerEngineSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerEngineSmokeTests.swift; sourceTree = "<group>"; };
+		E15E8FF16508C122FAED2F70 /* DroneSecureChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneSecureChannel.swift; sourceTree = "<group>"; };
 		E164E2A5EC4293B161BE9A63 /* EditorState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorState.swift; sourceTree = "<group>"; };
 		E1BDD5448EBAAF4BFA31959E /* RemoteDesktopKeyboardInputTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopKeyboardInputTests.swift; sourceTree = "<group>"; };
 		E31BC7E4C70C121AFB598165 /* DockerHTTP.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerHTTP.swift; sourceTree = "<group>"; };
@@ -1075,6 +1218,7 @@
 		FAF6720CB686DB62B6EBCC37 /* MirrorModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MirrorModel.swift; sourceTree = "<group>"; };
 		FBA6010FCD9FAF9ED422CDB2 /* ChromiumBrowserClient.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = ChromiumBrowserClient.mm; sourceTree = "<group>"; };
 		FC2A47BE5A323BDC3BC5A998 /* InspectorHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InspectorHelper.swift; sourceTree = "<group>"; };
+		FCAA42DDEA89511E4A832E31 /* DroneStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneStore.swift; sourceTree = "<group>"; };
 		FD8489709E6EE5732DBC3AF4 /* PlotterDashboardStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterDashboardStateTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -1171,6 +1315,7 @@
 				E0D1B4F15F96F23AFD699685 /* DockerEngineSmokeTests.swift */,
 				6E9C030E0F4E4C15C365301F /* DockerHTTPParsingTests.swift */,
 				95C1CA5AF0F78C873A2C334B /* DockerStoreRefreshTests.swift */,
+				5D9F2CCBA1890E01988BAD33 /* DroneRegistryTests.swift */,
 				891501BF1C5DFC63468EF179 /* EditorDocumentSessionTests.swift */,
 				6732BE81058BC78D5A8C6D43 /* EmulatorBridgeTests.swift */,
 				85B225D4E2F6A862436589E5 /* EncodedVideoSampleTests.swift */,
@@ -1213,6 +1358,7 @@
 				A4427660F2B3B662FC34F67A /* SimctlRuntimeNameTests.swift */,
 				D6AC3E6AD7492810963D3FBF /* TerminalAgentTests.swift */,
 				F8BBD45248A0E9BB55D36174 /* TerminalRuntimeCacheTests.swift */,
+				1B7B9F544778FDD192A79D6D /* TerminalSessionTests.swift */,
 				F068B533E482497628B96825 /* UsageConsentTests.swift */,
 				2307A244B06EF550533AA6D0 /* UsageProviderAdapterTests.swift */,
 				4D973404A2A1D671B48713D3 /* UsageReportingTests.swift */,
@@ -1253,6 +1399,16 @@
 			path = SecureMessaging;
 			sourceTree = "<group>";
 		};
+		2C2421E31E69432DC8396BE4 /* Droned */ = {
+			isa = PBXGroup;
+			children = (
+				472EA84863E0E398E639554C /* DroneDaemon.swift */,
+				485B1AC3F8C9E26023F107F2 /* DroneWorkerService.swift */,
+			);
+			name = Droned;
+			path = Sources/Droned;
+			sourceTree = "<group>";
+		};
 		38200ACC519FDB73EFB9E5E0 /* Device */ = {
 			isa = PBXGroup;
 			children = (
@@ -1282,6 +1438,29 @@
 			path = Docker;
 			sourceTree = "<group>";
 		};
+		3EE00AD2189D8453F02A4EBB /* JobEngine */ = {
+			isa = PBXGroup;
+			children = (
+				4345E8B6EBCC9DFC2DCE39BC /* DroneJobEngine.swift */,
+				4A539CE47DA92CB36482E3D5 /* DroneJobModels.swift */,
+				D0D41A674017781DD6ED0896 /* DroneJobStore.swift */,
+				7202D816A88347AA9789318E /* DroneJobToolEngine.swift */,
+				BD05ED9AA028D836501900C7 /* DroneProcessRunner.swift */,
+				237EE3F2B15717B61616E3D9 /* DroneWorkspace.swift */,
+			);
+			name = JobEngine;
+			path = Sources/Drone/JobEngine;
+			sourceTree = "<group>";
+		};
+		4B1FC18556223516CC432141 /* UITestSupport */ = {
+			isa = PBXGroup;
+			children = (
+				265760C371C397CD01098144 /* SnapshotHelper.swift */,
+			);
+			name = UITestSupport;
+			path = Tests/UITestSupport;
+			sourceTree = "<group>";
+		};
 		5092CDBA608A2D090EF21DA5 /* ChromiumKit */ = {
 			isa = PBXGroup;
 			children = (
@@ -1303,7 +1482,6 @@
 			isa = PBXGroup;
 			children = (
 				6013148EE4B3B5AAC6B3719A /* PlotterUITests.swift */,
-				63E7D0DE27EB43C5768097E6 /* SnapshotHelper.swift */,
 			);
 			name = PlotterUITests;
 			path = Tests/PlotterUITests;
@@ -1313,10 +1491,26 @@
 			isa = PBXGroup;
 			children = (
 				F4B1CB42E023D3F070FE75AD /* CopilotUITests.swift */,
-				6D4B475DC1B0C35E65E10BF5 /* SnapshotHelper.swift */,
 			);
 			name = CopilotUITests;
 			path = Tests/CopilotUITests;
+			sourceTree = "<group>";
+		};
+		5837B61666CF5FCFEC6DCD10 /* Drones */ = {
+			isa = PBXGroup;
+			children = (
+				96FF9907D8B377986D246B1D /* DroneDiscovery.swift */,
+				A8300B8FFB152A920094E4CE /* DroneLANTransportFactory.swift */,
+				8DD9E7869DBAE8250257FF9D /* DroneModels.swift */,
+				8374E4371A25C059C91CC94A /* DroneRegistryPersistence.swift */,
+				1A987929F39225C2CFFCED57 /* DroneRemoteTerminalClient.swift */,
+				11689BD030DCBB4A8C068DDC /* DroneSettingsView.swift */,
+				FCAA42DDEA89511E4A832E31 /* DroneStore.swift */,
+				26173A4D19F8BFBF637D9136 /* DroneTerminalView.swift */,
+				B91588BE0E9294B97B875EED /* DroneTransport.swift */,
+				CE283FE8FDEDCC8D826DC253 /* DroneWorkerSupervisor.swift */,
+			);
+			path = Drones;
 			sourceTree = "<group>";
 		};
 		5974B77E797CE4048BEE7E8C /* PlotterShared */ = {
@@ -1382,6 +1576,11 @@
 				A325DEE7F2FD52598EC06DDD /* CopilotWidgets */,
 				7B8CAA9E1D38094AD24609A3 /* DashboardActivities */,
 				A2F549C85446C79528702AA2 /* DashboardShared */,
+				AF7F32F579DEF8CDBF5E9098 /* DroneCLI */,
+				2C2421E31E69432DC8396BE4 /* Droned */,
+				F7DCC60D6514F4EF425DDFD7 /* DroneSupport */,
+				AD7773CEC00A08988F86FB7E /* DroneTests */,
+				3EE00AD2189D8453F02A4EBB /* JobEngine */,
 				CFDB4867AB2E4922F4EAE110 /* Packages */,
 				7CC86BB7CC331B09675E1E0C /* Pilot */,
 				8F16AC2BF93C13937CF5B384 /* PilotChromiumHelper */,
@@ -1394,6 +1593,7 @@
 				800812F20BC92574BB5A2387 /* PlotterWidgets */,
 				A7BAF1D48BF866250B1EDAB5 /* Shared */,
 				D87B0DFF7320F190F3BE8DD2 /* SharedTests */,
+				4B1FC18556223516CC432141 /* UITestSupport */,
 				C4A6142A4072D3154C098005 /* Wingman Watch App */,
 				B3B73D0C1573C12CD678BF08 /* Products */,
 			);
@@ -1468,6 +1668,7 @@
 				A733DD090F36816EFC9A0A65 /* InkOverlay.swift */,
 				FC2A47BE5A323BDC3BC5A998 /* InspectorHelper.swift */,
 				87ECE49033A754A3D5C7DC36 /* MarkdownImage.swift */,
+				479EEB75340491931A458873 /* MarkdownImagePreview.swift */,
 				18C6547433BE509A5ED8E581 /* MarkdownStyler.swift */,
 				A6DC9C91B2F017F673927008 /* MarkdownTableFormatter.swift */,
 				4FF74DA627D281896CA6280E /* MouseBridge.swift */,
@@ -1475,13 +1676,17 @@
 				B239107086C142E0601CFF02 /* Note.swift */,
 				385F4056FA9E8B1C1CA930AD /* NoteCaretAnchor.swift */,
 				47C38847F5E93CB5B1D87A04 /* NotesEditorTextView.swift */,
+				0378FEA34B1E6E31D0949241 /* NotesGutter.swift */,
+				2B2D3228C89A87F300952389 /* NotesTextReflow.swift */,
 				C9065A68503ECF45158B100B /* NotesView.swift */,
 				D7F1FA056B2B49AAA5BEFA0A /* PersistenceReporting.swift */,
 				A5C13691A97640D6126B5C03 /* Pilot.entitlements */,
 				B802877FCCBEB9F318728CDD /* PilotApp.swift */,
 				F80B9BF7F976268E260891B7 /* PilotAppDelegate.swift */,
 				5F74D9367520698B5B5170B0 /* PilotAppearanceReporter.swift */,
+				C0D7E29E91F2CF89A180C279 /* PilotCommands.swift */,
 				364A99D5E241228A8E17E2A4 /* PilotEditorTheme.swift */,
+				DAC543C2FE51BD76F946DC31 /* PilotSchema.swift */,
 				57CF76500FC35A1C764A0C38 /* PilotSettingsView.swift */,
 				46D01BA1950FB279D464ECC3 /* PilotWalkieDelivery.swift */,
 				7182ED8C2CFB3338C6E80FDB /* PilotWalkieInputState.swift */,
@@ -1503,6 +1708,7 @@
 				DA05E246368E9655194D3F73 /* TerminalAgent.swift */,
 				28CD946096B98D73287B1E30 /* TerminalDropText.swift */,
 				8641E882636D576B1BB4083A /* TerminalRuntimeCache.swift */,
+				99A5F54E39090B59AB133F69 /* TerminalSession.swift */,
 				DB65BD6645ABED2F3C334A40 /* TerminalToolbarControls.swift */,
 				B966B592A4F0BF8900F1E5A4 /* TextPromptSheet.swift */,
 				0A48BB8B28996667E215BC4E /* UIZoom.swift */,
@@ -1524,6 +1730,7 @@
 				E03C86BAAF7CF36163955364 /* Browser */,
 				38200ACC519FDB73EFB9E5E0 /* Device */,
 				3B0FE0E3F4A2E645E2F85238 /* Docker */,
+				5837B61666CF5FCFEC6DCD10 /* Drones */,
 				0ECE4A37B221AD8D284DE1B9 /* Runners */,
 				26917C8A3A67664A66ABE189 /* SecureMessaging */,
 				9A1CE14DA609FAF89A90A234 /* Setup */,
@@ -1660,6 +1867,17 @@
 			children = (
 				0CB08BEBB79E6729C42CFE16 /* BuildActivityRelay.swift */,
 				1FD1142F8E918160F700F385 /* BuildWorkflowRun.swift */,
+				68BAB06E9440593B2C0F5CB7 /* DroneAgentDriver.swift */,
+				11CD5C7D0D5146196CCBA470 /* DroneLANTransport.swift */,
+				0742F056AD6240EAFF25A49E /* DronePairing.swift */,
+				848BD10A11FFF6F9EB5E866E /* DroneProtocol.swift */,
+				B60811F57ED5DA0FF3E0E3AD /* DronePTY.swift */,
+				E15E8FF16508C122FAED2F70 /* DroneSecureChannel.swift */,
+				8D61FBBB6CA5A8F042E072AD /* DroneTerminal.swift */,
+				4A0D2941A595A3C10E1243C0 /* DroneTerminalEngine.swift */,
+				11308B8A5E8D0D3CE74D74C7 /* DroneTmux.swift */,
+				BE1FDA9F6023B44BF887D0F9 /* DroneToolClient.swift */,
+				DCD7D859DD14A3508AAD841E /* DroneToolProtocol.swift */,
 				C5285BF549F96968D98F2D02 /* EncodedVideoSample.swift */,
 				BAC3752576097566EE9DE7DB /* FrameLink.swift */,
 				0CFE4E5AA08D63CC728530B3 /* FrameLinkSecurity.swift */,
@@ -1678,6 +1896,24 @@
 			path = Sources/Shared;
 			sourceTree = "<group>";
 		};
+		AD7773CEC00A08988F86FB7E /* DroneTests */ = {
+			isa = PBXGroup;
+			children = (
+				6E009A23F7F0FBA507E80E74 /* DroneLifecycleTests.swift */,
+			);
+			name = DroneTests;
+			path = Tests/DroneTests;
+			sourceTree = "<group>";
+		};
+		AF7F32F579DEF8CDBF5E9098 /* DroneCLI */ = {
+			isa = PBXGroup;
+			children = (
+				53E9632E52DD8D0C5D919DC0 /* DroneCLI.swift */,
+			);
+			name = DroneCLI;
+			path = Sources/DroneCLI;
+			sourceTree = "<group>";
+		};
 		B3B73D0C1573C12CD678BF08 /* Products */ = {
 			isa = PBXGroup;
 			children = (
@@ -1686,6 +1922,9 @@
 				4648BA584E03882419D9E36E /* Copilot.app */,
 				E049F62849A8FF8619A7E61E /* CopilotUITests.xctest */,
 				A34287C4931EBC63C2DCF06A /* CopilotWidgets.appex */,
+				2077F1A6A207F654BF5E33D6 /* drone */,
+				53729A46E30A8128403005CA /* droned */,
+				829511F0553F7A9E44A9493D /* DroneTests.xctest */,
 				2E6A0599CC51C7335D7308E7 /* PilotChromiumHelperTemplate.app */,
 				05F65749197056761B9D8E8F /* PilotTests.xctest */,
 				9C197E7776E833629288F072 /* PilotWidgets.appex */,
@@ -1776,6 +2015,9 @@
 				A6287B4C91222DAA0BC988A5 /* CopilotWalkieTalkieTests.swift */,
 				C5ABC06040C984B5F70185E3 /* DashboardSnapshotStoreTests.swift */,
 				BE500437E4DED08ECD108821 /* DashboardSnapshotTests.swift */,
+				A3AF0144B15C629445225176 /* DronePairingTests.swift */,
+				5971CC70B2ACDB99F11E96A9 /* DroneProtocolFuzzTests.swift */,
+				A46C7C51E959007EC44B38B6 /* DroneProtocolTests.swift */,
 				09BF91B947FCFCACB4B160D1 /* FrameLinkSecurityTests.swift */,
 				2C2EEEC136C43BFFC0976B61 /* FrameProtocolTests.swift */,
 				67C9AF2421C7BC4AE478C8E7 /* LegibleAccentTests.swift */,
@@ -1843,6 +2085,19 @@
 			);
 			name = PilotWidgets;
 			path = Sources/PilotWidgets;
+			sourceTree = "<group>";
+		};
+		F7DCC60D6514F4EF425DDFD7 /* DroneSupport */ = {
+			isa = PBXGroup;
+			children = (
+				79CEFD94E2A0ED7B5C0B4F08 /* DroneControl.swift */,
+				A6CDEFF2D0BABB4F9AA4C818 /* DroneLaunchd.swift */,
+				849E9F7E927A9213DEC4CFDC /* DroneLog.swift */,
+				68441D2A13F39E44D91BAD65 /* DronePaths.swift */,
+				203E708FB79B3C3775AEC4C6 /* DroneVersion.swift */,
+			);
+			name = DroneSupport;
+			path = Sources/DroneSupport;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -1931,6 +2186,23 @@
 			productReference = F0562E4DE3DD61CCBA735BBC /* ChromiumKit.framework */;
 			productType = "com.apple.product-type.framework.static";
 		};
+		4387E8307303DC5771055964 /* DroneCLI */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D382633F403A035684B67EF8 /* Build configuration list for PBXNativeTarget "DroneCLI" */;
+			buildPhases = (
+				F0B59844F018E57DFB3CF339 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DroneCLI;
+			packageProductDependencies = (
+			);
+			productName = DroneCLI;
+			productReference = 2077F1A6A207F654BF5E33D6 /* drone */;
+			productType = "com.apple.product-type.tool";
+		};
 		472071522D3CF7AE2690BA29 /* Plotter */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = C5F7E4BE02FFD5EB4592B8EF /* Build configuration list for PBXNativeTarget "Plotter" */;
@@ -1987,6 +2259,23 @@
 			productReference = 9C197E7776E833629288F072 /* PilotWidgets.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		6622F373ECB2E20119F6EE0A /* DroneTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F289B6D4CA5FBBA693E34D9A /* Build configuration list for PBXNativeTarget "DroneTests" */;
+			buildPhases = (
+				86BA018FF20423FCF69B8385 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = DroneTests;
+			packageProductDependencies = (
+			);
+			productName = DroneTests;
+			productReference = 829511F0553F7A9E44A9493D /* DroneTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		676A888A0D880E6243B7F62A /* Wingman Watch App */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 996D87B3E7F7180BE9A86448 /* Build configuration list for PBXNativeTarget "Wingman Watch App" */;
@@ -2004,6 +2293,23 @@
 			productName = "Wingman Watch App";
 			productReference = 90278014728B63F7EB42304C /* Wingman Watch App.app */;
 			productType = "com.apple.product-type.application";
+		};
+		8B3DC974545878A77C5E1570 /* Drone */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 3AEB742FFE2BE61048DB845E /* Build configuration list for PBXNativeTarget "Drone" */;
+			buildPhases = (
+				FD9EFD623A2536433F25224F /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Drone;
+			packageProductDependencies = (
+			);
+			productName = Drone;
+			productReference = 53729A46E30A8128403005CA /* droned */;
+			productType = "com.apple.product-type.tool";
 		};
 		B56FAA8F6EF63F11878AE746 /* CopilotUITests */ = {
 			isa = PBXNativeTarget;
@@ -2159,6 +2465,9 @@
 					373AFDBAE9808C9D0650D8EC = {
 						DevelopmentTeam = K78G42H4U2;
 					};
+					4387E8307303DC5771055964 = {
+						DevelopmentTeam = K78G42H4U2;
+					};
 					472071522D3CF7AE2690BA29 = {
 						DevelopmentTeam = K78G42H4U2;
 					};
@@ -2169,7 +2478,13 @@
 					661A6607A7E60A1347AB3951 = {
 						DevelopmentTeam = K78G42H4U2;
 					};
+					6622F373ECB2E20119F6EE0A = {
+						DevelopmentTeam = K78G42H4U2;
+					};
 					676A888A0D880E6243B7F62A = {
+						DevelopmentTeam = K78G42H4U2;
+					};
+					8B3DC974545878A77C5E1570 = {
 						DevelopmentTeam = K78G42H4U2;
 					};
 					B56FAA8F6EF63F11878AE746 = {
@@ -2219,6 +2534,9 @@
 				C50B63D57972D4B958D611DC /* Copilot */,
 				B56FAA8F6EF63F11878AE746 /* CopilotUITests */,
 				C290EED61FB5DE6E7FF8FE57 /* CopilotWidgets */,
+				8B3DC974545878A77C5E1570 /* Drone */,
+				4387E8307303DC5771055964 /* DroneCLI */,
+				6622F373ECB2E20119F6EE0A /* DroneTests */,
 				F6906DBE47B9A9844F2DCF39 /* Pilot */,
 				07B3F160026C8A988CB35053 /* PilotChromiumHelperTemplate */,
 				CE658DD51669137314C0B129 /* PilotTests */,
@@ -2481,6 +2799,27 @@
 				6356DA38E09145518B9A6886 /* DockerSocketTransport.swift in Sources */,
 				2657BB2F946289788FD0A698 /* DockerStore.swift in Sources */,
 				67DB1978A83A29E056BCDA6C /* DockerView.swift in Sources */,
+				91E35834F40040A329D7EE19 /* DroneAgentDriver.swift in Sources */,
+				16F1CF2A8BB65B067E80B1AB /* DroneDiscovery.swift in Sources */,
+				71117B96480C92E2411783E3 /* DroneLANTransport.swift in Sources */,
+				7F3958861A7F580252869C12 /* DroneLANTransportFactory.swift in Sources */,
+				3B3C798D4D97AF013A091191 /* DroneModels.swift in Sources */,
+				EC8786950321F27785377C62 /* DronePTY.swift in Sources */,
+				35BAA21F624D910C2420B584 /* DronePairing.swift in Sources */,
+				05C40A209FD422A7F330B5E7 /* DroneProtocol.swift in Sources */,
+				244B35BA80A80ED7A87AE125 /* DroneRegistryPersistence.swift in Sources */,
+				09330D2A5DDB7E981084600B /* DroneRemoteTerminalClient.swift in Sources */,
+				CC025E29FF859CCAE604789B /* DroneSecureChannel.swift in Sources */,
+				CFECEB0E0C290FD0D751E9F3 /* DroneSettingsView.swift in Sources */,
+				03AD1A8041D7F56BCDEEBEB9 /* DroneStore.swift in Sources */,
+				7E9F6BF96F78674015AE6F7F /* DroneTerminal.swift in Sources */,
+				C9C5231DF540F3A0F7470C04 /* DroneTerminalEngine.swift in Sources */,
+				1FF0BF5BE9E8AD598AAA0DF3 /* DroneTerminalView.swift in Sources */,
+				2A6A1C0957FD008E9A17C655 /* DroneTmux.swift in Sources */,
+				06261CAC0E55E443CAF9845B /* DroneToolClient.swift in Sources */,
+				EAA7D0FEA591229D4EDA2B23 /* DroneToolProtocol.swift in Sources */,
+				16A4A823891145201ED784FF /* DroneTransport.swift in Sources */,
+				2449FCA971A729DA964E374B /* DroneWorkerSupervisor.swift in Sources */,
 				27DC9E5F3882BCCC1C8BD5E6 /* EditorDocumentSession.swift in Sources */,
 				9ECF226D1061C49A839C3EF0 /* EditorPaneView.swift in Sources */,
 				FE9DF0D42CC3C44E1A094C1F /* EditorState.swift in Sources */,
@@ -2508,6 +2847,7 @@
 				4BA36EFA60662D0F8E788796 /* LocalServerProbe.swift in Sources */,
 				C5F971A995B51C6C2F4F1A38 /* LocalServerScanner.swift in Sources */,
 				2BEC495AB3F755D4F731A5A2 /* MarkdownImage.swift in Sources */,
+				B3CF002CD08B0E0FF91335D4 /* MarkdownImagePreview.swift in Sources */,
 				5708B18178578CE2FE2F5881 /* MarkdownStyler.swift in Sources */,
 				E459F20532E2EDF344A4D3B4 /* MarkdownTableFormatter.swift in Sources */,
 				94C7B6F837C5EC62BF028695 /* MouseBridge.swift in Sources */,
@@ -2516,6 +2856,8 @@
 				DECFFE8AFD2D48FF43178B6A /* Note.swift in Sources */,
 				37B5F73B75296C172335EC70 /* NoteCaretAnchor.swift in Sources */,
 				30F82116C7ED24FED72FC0D6 /* NotesEditorTextView.swift in Sources */,
+				5BE83DB84F16375400A5B77D /* NotesGutter.swift in Sources */,
+				CBFF8A52BCDBBE02D3BED525 /* NotesTextReflow.swift in Sources */,
 				82C0B8AA6FF2F07DABBF0A89 /* NotesView.swift in Sources */,
 				4F980E2CD368C317B2025A72 /* PacketCodec.swift in Sources */,
 				B464B1528D91F1E02B082EE5 /* PeerSyncAuthentication.swift in Sources */,
@@ -2525,7 +2867,9 @@
 				08CA454023B86BFAC8BC7CE1 /* PilotApp.swift in Sources */,
 				7C77758BB694F8C65D4AFC82 /* PilotAppDelegate.swift in Sources */,
 				01C5649DD6261BC21A6C7BC3 /* PilotAppearanceReporter.swift in Sources */,
+				68B1BAA0A984C2B0D6E26D2C /* PilotCommands.swift in Sources */,
 				AA438D367553C3A1D274D4A4 /* PilotEditorTheme.swift in Sources */,
+				F025F6923FB9A48527D25536 /* PilotSchema.swift in Sources */,
 				31F2CB1B17A6D25B56004852 /* PilotSettingsView.swift in Sources */,
 				FF0157FFB7DC8C3FA910FA0F /* PilotWalkieDelivery.swift in Sources */,
 				068EE933A47A8C6EEC20D00A /* PilotWalkieInputState.swift in Sources */,
@@ -2577,6 +2921,7 @@
 				617D1D3C2E6AEFA720CEE80B /* TerminalAgent.swift in Sources */,
 				FBAE23769FBF48D3B57BA0D3 /* TerminalDropText.swift in Sources */,
 				36FDF7734DB6046F41DB6583 /* TerminalRuntimeCache.swift in Sources */,
+				6D1882BB022DF4CD9E73E1A4 /* TerminalSession.swift in Sources */,
 				23C2B2CF7C421A6234942B1D /* TerminalToolbarControls.swift in Sources */,
 				A7DEC532F35AE7AE1EC7CDDA /* TextPromptSheet.swift in Sources */,
 				0785B2AE89D065F4B6A64465 /* UIZoom.swift in Sources */,
@@ -2629,6 +2974,17 @@
 				9103B41E444CAFDCCC84139C /* DashboardSnapshotStore.swift in Sources */,
 				6B15902D43A6001476CFB1C3 /* DashboardWidgets.swift in Sources */,
 				E0B626ADC8EBB24696180AA4 /* DeviceIdentity.swift in Sources */,
+				D415E39DC31CDF65369BC05C /* DroneAgentDriver.swift in Sources */,
+				F9EFFACC3A965906CE81AD9B /* DroneLANTransport.swift in Sources */,
+				7CB47E7342BE1789E7DDAAC2 /* DronePTY.swift in Sources */,
+				FF8CCD3BC340057B52A50272 /* DronePairing.swift in Sources */,
+				3DF6E2B9EF191C3F0DC03674 /* DroneProtocol.swift in Sources */,
+				A99152C04299FA87D3449E5E /* DroneSecureChannel.swift in Sources */,
+				E3B97367F02102A398F8D096 /* DroneTerminal.swift in Sources */,
+				8B540406467C0AB54F312915 /* DroneTerminalEngine.swift in Sources */,
+				CEE2600E7771997020BA02F9 /* DroneTmux.swift in Sources */,
+				CDF0273B93B1A04168599D2B /* DroneToolClient.swift in Sources */,
+				400EECA24552A2296010686B /* DroneToolProtocol.swift in Sources */,
 				5CAA3515B3A1D05E00DACCB8 /* EncodedVideoSample.swift in Sources */,
 				00112F8A51263248448B9811 /* FrameLink.swift in Sources */,
 				11F1F96A10E11D3CD284EF52 /* FrameLinkSecurity.swift in Sources */,
@@ -2737,12 +3093,25 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		86BA018FF20423FCF69B8385 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				99539320BFC7A4CD3C8A317F /* DroneControl.swift in Sources */,
+				C1EB7BD679EFC40FFA5B0112 /* DroneLaunchd.swift in Sources */,
+				EB810528EDC961DFE6BF5C3D /* DroneLifecycleTests.swift in Sources */,
+				40DFFF04CA74F6FE14FB2D35 /* DroneLog.swift in Sources */,
+				3A1E9FD599DD590634F63C35 /* DronePaths.swift in Sources */,
+				D2A89E593ABE86C152102536 /* DroneVersion.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		8F7B512FF38F111C6532DBF4 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				982D03F1A0F0B6723133A689 /* CopilotUITests.swift in Sources */,
-				2AAF4E97A8611EAAA6A0484A /* SnapshotHelper.swift in Sources */,
+				22255DB64B84705EE0A1EA82 /* SnapshotHelper.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2771,6 +3140,9 @@
 				2B278E56F9F802144A04776B /* CopilotWalkieTalkieTests.swift in Sources */,
 				9E5CA98D818836DE6591E209 /* DashboardSnapshotStoreTests.swift in Sources */,
 				436119C31878101943F5CC69 /* DashboardSnapshotTests.swift in Sources */,
+				A8992290EFF6F29AC86473A2 /* DronePairingTests.swift in Sources */,
+				8B7ADDEA1C3D31F31142E2E0 /* DroneProtocolFuzzTests.swift in Sources */,
+				E98D902A1595D87E36AB4956 /* DroneProtocolTests.swift in Sources */,
 				EBB0296215373E7E5FFCF07A /* FrameLinkSecurityTests.swift in Sources */,
 				533F967DA527AF361D4827A6 /* FrameProtocolTests.swift in Sources */,
 				8F565621CB9C3FB1C65C0FDA /* LegibleAccentTests.swift in Sources */,
@@ -2828,6 +3200,7 @@
 				1759C87EC9985DFE5E832530 /* DockerEngineSmokeTests.swift in Sources */,
 				CD7EB08D14A25F6AB172A462 /* DockerHTTPParsingTests.swift in Sources */,
 				487E41C66441FF84A4E15B90 /* DockerStoreRefreshTests.swift in Sources */,
+				6526D8D5DEE0251E2245BF94 /* DroneRegistryTests.swift in Sources */,
 				9BEDF32A9EA4BE218F5F5067 /* EditorDocumentSessionTests.swift in Sources */,
 				302A7AAFF1DFBF76EC4AE3FD /* EmulatorBridgeTests.swift in Sources */,
 				5299BE4F7A17E90C77A65C3C /* EncodedVideoSampleTests.swift in Sources */,
@@ -2875,6 +3248,7 @@
 				94E8164CDDCC436016E866A2 /* SnapshotWorkbench.swift in Sources */,
 				F53D63EA25CAF45A0681281F /* TerminalAgentTests.swift in Sources */,
 				7C23307F8CE9E725A9FD48B7 /* TerminalRuntimeCacheTests.swift in Sources */,
+				84D202B5791C5F0BF0067E49 /* TerminalSessionTests.swift in Sources */,
 				0457DCF165E639DBD59F0204 /* UsageConsentTests.swift in Sources */,
 				8088D26D2615B9DC51E5F91B /* UsageProviderAdapterTests.swift in Sources */,
 				834D49C547CDE10B45C80604 /* UsageReportingTests.swift in Sources */,
@@ -2895,7 +3269,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				0ABA4A2179B50C85A13C6EB6 /* PlotterUITests.swift in Sources */,
-				D9AD662FAC07298F44D7CA73 /* SnapshotHelper.swift in Sources */,
+				89F480117D05AAA526ABAFEA /* SnapshotHelper.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2937,6 +3311,17 @@
 				805001BFA917FEB1949E72EE /* DashboardSnapshotStore.swift in Sources */,
 				12C091B5DE8A20CA254BA09E /* DashboardWidgets.swift in Sources */,
 				E187C1693F63A6B4B2F4064C /* DeviceIdentity.swift in Sources */,
+				D6E029A462079DF4237DFF27 /* DroneAgentDriver.swift in Sources */,
+				44D4D3A876112AF1F7B640A8 /* DroneLANTransport.swift in Sources */,
+				50401E6FD0278562B395C8A5 /* DronePTY.swift in Sources */,
+				CC896B8298EA82783D48D55B /* DronePairing.swift in Sources */,
+				4C37B01FF6FA0449B7D0CE31 /* DroneProtocol.swift in Sources */,
+				207BAB92223834F215EDE199 /* DroneSecureChannel.swift in Sources */,
+				1E7387F0932CCA05C49D8037 /* DroneTerminal.swift in Sources */,
+				EBFC75FDF685324E0EB4A5A0 /* DroneTerminalEngine.swift in Sources */,
+				161AF7575E80A574472B3E9D /* DroneTmux.swift in Sources */,
+				E8A2A91571369961E8AB664E /* DroneToolClient.swift in Sources */,
+				4CEEB2D2485D3D2B0AE735E3 /* DroneToolProtocol.swift in Sources */,
 				72E976D1F7965B556298A0C9 /* EncodedVideoSample.swift in Sources */,
 				9E00C48C604CCF1F81761C5B /* FrameLink.swift in Sources */,
 				B8E191A74EF4F41881F9BDA5 /* FrameLinkSecurity.swift in Sources */,
@@ -2970,6 +3355,19 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F0B59844F018E57DFB3CF339 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				847A0D5654FB19727E069AE3 /* DroneCLI.swift in Sources */,
+				FE5481626031FAD964B25F07 /* DroneControl.swift in Sources */,
+				FC271A672924CE982A85E799 /* DroneLaunchd.swift in Sources */,
+				E68B7A85EBDDD464E56ABADC /* DroneLog.swift in Sources */,
+				088BBF6C8DBC124DF348B85B /* DronePaths.swift in Sources */,
+				1CEF25A25A34A56D1A6A1788 /* DroneVersion.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		F2D446A55C045C67A75A28FB /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -2977,6 +3375,42 @@
 				7DB692B5A779B84128DA84B5 /* ContentView.swift in Sources */,
 				89FE56F94BBF3E4D7CC06F30 /* WingmanApp.swift in Sources */,
 				797D0930B714141F808BBDA9 /* WingmanDeliveryState.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FD9EFD623A2536433F25224F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				14F5713B3FF224389CD15D44 /* CryptoCore.swift in Sources */,
+				C40D7752054EB3293441765F /* DeviceIdentity.swift in Sources */,
+				C120FC2768DD245E374CF325 /* DroneControl.swift in Sources */,
+				72A230B7225B91716C2C6ED0 /* DroneDaemon.swift in Sources */,
+				9FA4F3A8A28243E0B3CCEA2A /* DroneJobEngine.swift in Sources */,
+				58739804984E8DD74FE64118 /* DroneJobModels.swift in Sources */,
+				1619DC5278CE96E210166755 /* DroneJobStore.swift in Sources */,
+				745840DC6BB22136E456B9A1 /* DroneJobToolEngine.swift in Sources */,
+				E046345E24E83AB8ADBA64D1 /* DroneLANTransport.swift in Sources */,
+				6828B4DB140805EA4B7CD583 /* DroneLaunchd.swift in Sources */,
+				8711EBE657DA708D43543F41 /* DroneLog.swift in Sources */,
+				28FB5D734B9F85DC8F5E0795 /* DronePTY.swift in Sources */,
+				22B66306A597021DEA354EA0 /* DronePairing.swift in Sources */,
+				CF60EC0023231C16AE253760 /* DronePaths.swift in Sources */,
+				04666F2DB74208739E05862E /* DroneProcessRunner.swift in Sources */,
+				0B21B043713A6CF157186B40 /* DroneProtocol.swift in Sources */,
+				B576A37F63AAA0F049B38697 /* DroneSecureChannel.swift in Sources */,
+				CCF6C2FF6BD32F6CFCF9414E /* DroneTerminal.swift in Sources */,
+				AB22694F1C709F25C28AFDE1 /* DroneTerminalEngine.swift in Sources */,
+				8B1D620C8888F625205FE7CF /* DroneTmux.swift in Sources */,
+				B1D7F25C83F2CB2373B2F2EF /* DroneToolProtocol.swift in Sources */,
+				523E1C94BCA84A18B92CC21A /* DroneVersion.swift in Sources */,
+				878551B70876E729461D3145 /* DroneWorkerService.swift in Sources */,
+				2BA217F57D15A2103258A1CE /* DroneWorkspace.swift in Sources */,
+				0DA4FE002C0C48D2B35C80E7 /* NoiseIKHandshake.swift in Sources */,
+				418A57FD7E2C803DA4157D65 /* PacketCodec.swift in Sources */,
+				FA68CEABB248F9D3290979E8 /* PeerSyncAuthentication.swift in Sources */,
+				03767AC38F40FE07A941999F /* ReplayWindow.swift in Sources */,
+				EFA4157E391ED7DCAF9C339B /* SecurePairingStore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3124,6 +3558,30 @@
 			};
 			name = Release;
 		};
+		11399EF4CC02F624D79ADD65 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "arm64 x86_64";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone.cli;
+				PRODUCT_NAME = drone;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 		140B6B798056C581A09D829E /* Chromium */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3172,6 +3630,22 @@
 			};
 			name = Release;
 		};
+		300739445B3B98D4AF61FD83 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone.tests;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
 		3264280F396E527230B3DBEC /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3192,6 +3666,22 @@
 				SKIP_INSTALL = YES;
 			};
 			name = Release;
+		};
+		3455F089B19CEB4526198DD3 /* Chromium */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone.tests;
+				SDKROOT = macosx;
+			};
+			name = Chromium;
 		};
 		3521A4B7F0D6A9B7131E2FAC /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -3249,6 +3739,25 @@
 				TARGETED_DEVICE_FAMILY = 4;
 			};
 			name = Release;
+		};
+		47A5405010BD00496077EDEA /* Chromium */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone.cli;
+				PRODUCT_NAME = drone;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Chromium;
 		};
 		4815A89182CE10103EBA047C /* Chromium */ = {
 			isa = XCBuildConfiguration;
@@ -3366,6 +3875,43 @@
 			};
 			name = Debug;
 		};
+		52831DDDA35D592513C926A8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone.cli;
+				PRODUCT_NAME = drone;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		52F936002E7AA59263C4F6AB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				COMBINE_HIDPI_IMAGES = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@loader_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone.tests;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
 		5D85CA67AB8DD7A2F9ABDB30 /* Chromium */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -3447,6 +3993,27 @@
 				SDKROOT = macosx;
 			};
 			name = Release;
+		};
+		6EB8964358384BD6CD155F18 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone;
+				PRODUCT_NAME = droned;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
 		};
 		70BE13B5DB191560A6C3D201 /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -3728,6 +4295,25 @@
 			};
 			name = Debug;
 		};
+		A1DF622BDD80DF58A911818B /* Chromium */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone;
+				PRODUCT_NAME = droned;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Chromium;
+		};
 		AFC7D2754F46330DA7D06DC9 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -4005,6 +4591,30 @@
 			};
 			name = Release;
 		};
+		D86680750025E701143D3FD4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = "arm64 x86_64";
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				ONLY_ACTIVE_ARCH = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = app.blau.drone;
+				PRODUCT_NAME = droned;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
 		E09B043D1EB634DEEE2BCC9A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -4269,6 +4879,16 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Chromium;
 		};
+		3AEB742FFE2BE61048DB845E /* Build configuration list for PBXNativeTarget "Drone" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1DF622BDD80DF58A911818B /* Chromium */,
+				6EB8964358384BD6CD155F18 /* Debug */,
+				D86680750025E701143D3FD4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Chromium;
+		};
 		5A679E83D63AA56709AC0F25 /* Build configuration list for PBXProject "made" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -4369,12 +4989,32 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Chromium;
 		};
+		D382633F403A035684B67EF8 /* Build configuration list for PBXNativeTarget "DroneCLI" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				47A5405010BD00496077EDEA /* Chromium */,
+				52831DDDA35D592513C926A8 /* Debug */,
+				11399EF4CC02F624D79ADD65 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Chromium;
+		};
 		D9144706BBF508FB8E8A104B /* Build configuration list for PBXNativeTarget "CopilotUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				87990B87FA0E1476A0A19DFF /* Chromium */,
 				70BE13B5DB191560A6C3D201 /* Debug */,
 				1122848B6067E0734EE5B101 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Chromium;
+		};
+		F289B6D4CA5FBBA693E34D9A /* Build configuration list for PBXNativeTarget "DroneTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3455F089B19CEB4526198DD3 /* Chromium */,
+				300739445B3B98D4AF61FD83 /* Debug */,
+				52F936002E7AA59263C4F6AB /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Chromium;

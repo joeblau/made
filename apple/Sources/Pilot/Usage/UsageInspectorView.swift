@@ -6,6 +6,7 @@ enum SettingsTab {
     static let storageKey = "settings.selectedTab"
     static let general = "general"
     static let usage = "usage"
+    static let drones = "drones"
 }
 
 /// Inspector "Usage" tab. Provider cards show plan usage windows (utilization + reset

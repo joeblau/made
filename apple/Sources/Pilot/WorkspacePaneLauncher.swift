@@ -7,6 +7,7 @@ import SwiftUI
 struct WorkspacePaneLauncher: View {
     let workspace: Workspace?
 
+    private let droneStore = DroneStore.shared
     @ObservedObject private var chromiumDiagnostics = ChromiumDiagnosticsCenter.shared
     @ObservedObject private var chromiumProfileAccess =
         ChromiumProfileAccessCoordinator.shared
@@ -39,12 +40,30 @@ struct WorkspacePaneLauncher: View {
 
     @ViewBuilder
     private var paneButtons: some View {
-        Button {
-            workspace?.addPane(kind: .terminal, side: .right)
+        Menu {
+            Button {
+                workspace?.addPane(kind: .terminal, side: .right)
+            } label: {
+                Label("Local", systemImage: "macbook")
+            }
+            ForEach(droneStore.records) { record in
+                Button {
+                    workspace?.addPane(
+                        kind: .terminal,
+                        side: .right,
+                        terminalDestination: .drone(droneID: record.id, name: record.name)
+                    )
+                } label: {
+                    Label(record.name, systemImage: "server.rack")
+                }
+                .disabled(droneStore.states[record.id]?.isConnected != true)
+            }
         } label: {
             launcherLabel("New Terminal", systemImage: PaneKind.terminal.systemImageName)
         }
+        .menuIndicator(.hidden)
         .launcherSlot()
+        .help("Open a terminal locally or on a connected Drone")
 
         // No `primaryAction`: clicking opens the engine chooser rather than
         // silently picking WebKit, matching the Apple and Android buttons beside

@@ -189,10 +189,10 @@ enum PersistentTerminalSession {
         "/usr/bin/tmux",
     ]
 
-    static func bootstrapCommand(for pane: Pane, workingDirectory: String?) -> String? {
+    static func bootstrapCommand(sessionName: String, workingDirectory: String?) -> String? {
         guard let tmuxPath = tmuxExecutablePath() else { return nil }
 
-        let sessionName = shellEscape(pane.persistentSessionName)
+        let escapedSessionName = shellEscape(sessionName)
         let tmux = shellEscape(tmuxPath)
         let createCommand: String
         // Panes render in Ghostty, a truecolor terminal, so a NO_COLOR leaked
@@ -201,44 +201,44 @@ enum PersistentTerminalSession {
         // seeds every session from it. Strip it from the server, the session,
         // and the server-creating new-session itself.
         let configureSessionCommand = """
-        \(tmux) set-option -t \(sessionName) status off >/dev/null 2>&1
-        \(tmux) set-option -t \(sessionName) mouse on >/dev/null 2>&1
+        \(tmux) set-option -t \(escapedSessionName) status off >/dev/null 2>&1
+        \(tmux) set-option -t \(escapedSessionName) mouse on >/dev/null 2>&1
         \(tmux) set-environment -gu NO_COLOR >/dev/null 2>&1
-        \(tmux) set-environment -t \(sessionName) -u NO_COLOR >/dev/null 2>&1
-        \(tmux) set-environment -t \(sessionName) COLORTERM truecolor >/dev/null 2>&1
+        \(tmux) set-environment -t \(escapedSessionName) -u NO_COLOR >/dev/null 2>&1
+        \(tmux) set-environment -t \(escapedSessionName) COLORTERM truecolor >/dev/null 2>&1
         """
 
         if let workingDirectory = validWorkingDirectory(workingDirectory) {
-            createCommand = "env -u NO_COLOR \(tmux) new-session -d -s \(sessionName) -c \(shellEscape(workingDirectory))"
+            createCommand = "env -u NO_COLOR \(tmux) new-session -d -s \(escapedSessionName) -c \(shellEscape(workingDirectory))"
         } else {
-            createCommand = "env -u NO_COLOR \(tmux) new-session -d -s \(sessionName)"
+            createCommand = "env -u NO_COLOR \(tmux) new-session -d -s \(escapedSessionName)"
         }
 
         return """
-        if \(tmux) has-session -t \(sessionName) 2>/dev/null; then
+        if \(tmux) has-session -t \(escapedSessionName) 2>/dev/null; then
           \(configureSessionCommand)
-          exec \(tmux) attach-session -t \(sessionName)
+          exec \(tmux) attach-session -t \(escapedSessionName)
         else
           \(createCommand)
           \(configureSessionCommand)
-          exec \(tmux) attach-session -t \(sessionName)
+          exec \(tmux) attach-session -t \(escapedSessionName)
         fi
         """ + "\n"
     }
 
-    static func killSession(for pane: Pane) {
-        guard pane.kind == .terminal,
-              let tmuxPath = tmuxExecutablePath() else { return }
-
-        let sessionName = pane.persistentSessionName
+    static func closeSession(sessionName: String) async -> Bool {
+        guard let tmuxPath = tmuxExecutablePath() else { return false }
         runtimeCache.invalidate(runtimeCacheKey)
         contentsCache.invalidate(sessionName)
-        Task {
-            _ = try? await ProcessRunner.run(ProcessInvocation(
+        do {
+            let result = try await ProcessRunner.run(ProcessInvocation(
                 executableURL: URL(fileURLWithPath: tmuxPath),
                 arguments: ["kill-session", "-t", sessionName],
                 timeout: .seconds(1), standardOutputLimit: 1024, standardErrorLimit: 4096
             ))
+            return result.termination == .exit(0)
+        } catch {
+            return false
         }
     }
 
@@ -304,6 +304,19 @@ enum PersistentTerminalSession {
 
     static func paneShellPID(sessionName: String) -> pid_t? {
         paneRuntime(sessionName: sessionName)?.shellPID
+    }
+
+    static func currentDirectory(sessionName: String) -> String? {
+        guard let pid = paneShellPID(sessionName: sessionName) else { return nil }
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
+        let result = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size)
+        guard result == size else { return nil }
+        return withUnsafePointer(to: &info.pvi_cdir.vip_path) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                String(cString: $0)
+            }
+        }
     }
 
     /// The visible viewport only, served from the snapshot cache: the first
@@ -374,17 +387,14 @@ enum PersistentTerminalSession {
         return false
     }
 
-    /// Stops the active job, inserts the exact command text at the returned
-    /// shell prompt, and executes it. `send-keys -l` prevents tmux from treating
-    /// command fragments as named keys.
-    static func runFastCommand(_ command: String, sessionName: String) async -> Bool {
-        guard let command = TerminalFastCommandStore.executableCommand(from: command),
-              await stopForegroundCommand(sessionName: sessionName),
-              let tmuxPath = tmuxExecutablePath(),
-              await sendLiteral(command, to: sessionName, using: tmuxPath) else {
-            return false
-        }
-        return await sendKeys(["Enter"], to: sessionName, using: tmuxPath)
+    static func sendKeys(_ keys: [String], sessionName: String) async -> Bool {
+        guard let tmuxPath = tmuxExecutablePath() else { return false }
+        return await sendKeys(keys, to: sessionName, using: tmuxPath)
+    }
+
+    static func sendLiteral(_ text: String, sessionName: String) async -> Bool {
+        guard let tmuxPath = tmuxExecutablePath() else { return false }
+        return await sendLiteral(text, to: sessionName, using: tmuxPath)
     }
 
     private static func sendKeys(
@@ -692,6 +702,10 @@ final class Pane {
     var isCollapsed: Bool = false
     var restoredSizeFraction: Double = 0
     var wasCollapsedBeforeFocus: Bool = false
+    var terminalDestinationRaw: String?
+    var terminalDroneIDRaw: String?
+    var terminalRemoteSessionIDRaw: String?
+    var terminalDroneNameRaw: String?
 
     @Relationship(deleteRule: .cascade)
     var browserState: BrowserState?
@@ -710,7 +724,8 @@ final class Pane {
         kind: PaneKind = .terminal,
         sortOrder: Int = 0,
         currentDirectory: String = "",
-        browserEngine: BrowserEngine = .webKit
+        browserEngine: BrowserEngine = .webKit,
+        terminalDestination: TerminalDestination = .local
     ) {
         self.id = UUID()
         self.kindRaw = kind.rawValue
@@ -718,7 +733,12 @@ final class Pane {
         self.currentDirectory = currentDirectory
         switch kind {
         case .terminal:
-            break
+            if terminalDestination.kind != .local {
+                self.terminalDestinationRaw = terminalDestination.kind.rawValue
+                self.terminalDroneIDRaw = terminalDestination.droneID?.uuidString
+                self.terminalRemoteSessionIDRaw = terminalDestination.remoteSessionID?.uuidString
+                self.terminalDroneNameRaw = terminalDestination.droneName
+            }
         case .browser:
             self.browserState = BrowserState(engine: browserEngine)
         case .device:
@@ -769,34 +789,44 @@ final class Pane {
         "pilot-\(id.uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
     }
 
-    /// The pid of the pane's in-session shell, straight from tmux: the root
-    /// process of the pane's session, which stays the shell even while a
-    /// foreground job (the agent) owns the pty. Asking the server beats
-    /// recording pids from the pane's spawn environment — tmux sessions
-    /// outlive the app, so anything keyed to the app instance or the spawning
-    /// shell goes stale across a relaunch and every pane reads as shell-less.
-    func liveShellPID() -> pid_t? {
-        guard kind == .terminal else { return nil }
-        return PersistentTerminalSession.paneShellPID(sessionName: persistentSessionName)
+    @MainActor
+    func adoptRemoteSessionID(_ sessionID: UUID, identity: TerminalSessionIdentity) throws {
+        guard identity.paneID == id,
+              identity.ownership == terminalDestination.ownership,
+              terminalDestination.kind == .drone,
+              terminalDestination.droneID != nil else {
+            throw TerminalSessionFailure.destinationChanged
+        }
+        if let existing = terminalDestination.remoteSessionID {
+            guard existing == sessionID else { throw TerminalSessionFailure.remoteSessionConflict }
+            return
+        }
+        terminalRemoteSessionIDRaw = sessionID.uuidString
+        _ = modelContext?.saveReporting(operation: "Binding Drone terminal session")
     }
 
-    /// The coding agent started under the pane's shell, or `nil` when no
-    /// supported agent process is open in the terminal.
+    var hasTerminalRuntimeSnapshot: Bool {
+        terminalSession.hasRuntimeSnapshot
+    }
+
+    func liveShellPID() -> pid_t? {
+        guard kind == .terminal else { return nil }
+        return terminalSession.runtimeSnapshot()?.shellPID
+    }
+
     func liveShellAgent() -> TerminalAgent? {
         guard let pid = liveShellPID() else { return nil }
         return TerminalAgent.started(under: pid)
     }
 
-    /// A started coding agent plus whether its current turn is active. Keeping
-    /// these separate is important: an idle TUI remains a live child of the
-    /// shell, but it should contribute only to the sidebar denominator.
     @MainActor
     func liveShellAgentStatus() -> LiveTerminalAgent? {
         guard kind == .terminal,
-              let runtime = PersistentTerminalSession.paneRuntime(sessionName: persistentSessionName),
-              let agent = TerminalAgent.started(under: runtime.shellPID) else { return nil }
+              let runtime = terminalSession.runtimeSnapshot(),
+              let shellPID = runtime.shellPID,
+              let agent = TerminalAgent.started(under: shellPID) else { return nil }
         let contents: String? = if agent.needsVisibleTerminalContentsForActivity {
-            PersistentTerminalSession.visibleContents(sessionName: persistentSessionName)
+            terminalSession.visibleContents()
         } else {
             nil
         }
@@ -809,25 +839,6 @@ final class Pane {
         )
     }
 
-    /// Reads the live cwd of the pane's shell process from the kernel.
-    /// Unlike `currentDirectory` (updated only when the shell emits OSC 7 on
-    /// each prompt), this works even while a foreground process like Claude
-    /// Code owns the pty — the shell is paused but its cwd is still current.
-    func liveShellCurrentDirectory() -> String? {
-        guard let pid = liveShellPID() else { return nil }
-
-        var info = proc_vnodepathinfo()
-        let size = Int32(MemoryLayout<proc_vnodepathinfo>.size)
-        let result = proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size)
-        guard result == size else { return nil }
-
-        return withUnsafePointer(to: &info.pvi_cdir.vip_path) {
-            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
-                String(cString: $0)
-            }
-        }
-    }
-
     /// Stops every runtime-only resource owned by this pane. During a
     /// transactional deletion, iOS capture is deliberately left alive until
     /// the save succeeds: a rollback can keep presenting the same SwiftUI view,
@@ -835,15 +846,23 @@ final class Pane {
     /// clears its preference and evicts/stops the session immediately after a
     /// successful save.
     func tearDownRuntimeResources(preservingDevicePreference: Bool = false) {
-        PersistentTerminalSession.killSession(for: self)
+        if kind == .terminal {
+            let session = terminalSession
+            TerminalSessionProvider.shared.invalidate(pane: self, session: session)
+            Task { _ = await session.close() }
+        }
         if preservingDevicePreference, kind == .device { return }
         stopRuntimeResources(isDestructive: true)
     }
 
-    /// Stops window-bound capture sessions without killing a terminal's tmux
-    /// identity. Persisted Extension panes use this when their window closes so
-    /// reopening can restore the same terminal session and pane configuration.
+    /// Suspends window-bound resources without destroying terminal execution.
+    /// Local tmux stays attached on the next surface; a Drone detaches and keeps
+    /// its remote session available for restoration.
     func suspendRuntimeResources() {
+        if kind == .terminal {
+            let session = terminalSession
+            Task { await session.suspend() }
+        }
         stopRuntimeResources(isDestructive: false)
     }
 
@@ -986,14 +1005,16 @@ final class Workspace {
     func addPane(
         kind: PaneKind,
         side: Side,
-        browserEngine: BrowserEngine = .webKit
+        browserEngine: BrowserEngine = .webKit,
+        terminalDestination: TerminalDestination = .local
     ) -> Pane {
         let maxOrder = panes.map(\.sortOrder).max() ?? -1
         let pane = Pane(
             kind: kind,
             sortOrder: maxOrder + 1,
             currentDirectory: kind == .terminal ? inheritedDirectoryForNewTerminal() : "",
-            browserEngine: browserEngine
+            browserEngine: browserEngine,
+            terminalDestination: terminalDestination
         )
 
         if let selectedID = selectedPaneID,

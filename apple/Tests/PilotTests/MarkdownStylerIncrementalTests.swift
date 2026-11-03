@@ -233,6 +233,10 @@ struct MarkdownStylerIncrementalTests {
         live.replace(NSRange(location: 7, length: 0), with: "x ")
         #expect(!live.styler.lastPass.isFullPass)
         Self.expectMatchesFullPass(live, "edit before image")
+        let continuation = Self.range(of: "text](https://example.com/a.png)", in: live)
+        live.replace(NSRange(location: continuation.location, length: 0), with: "more ")
+        #expect(!live.styler.lastPass.isFullPass)
+        Self.expectMatchesFullPass(live, "edit inside image continuation")
         let tail = Self.range(of: "after", in: live)
         live.replace(NSRange(location: tail.location, length: 0), with: "**z** ")
         #expect(!live.styler.lastPass.isFullPass)
@@ -289,5 +293,46 @@ struct MarkdownStylerIncrementalTests {
         let repaired = [NSRange(location: 0, length: 23)]
         let changed = MarkdownStyler.changedRanges(old, repaired, editedRange: NSRange(location: 10, length: 3), delta: 3)
         #expect(changed.count == 4)
+    }
+
+    @Test("Main-thread edit latency is compared with a full styling pass")
+    func editLatencyProfile() {
+        func milliseconds(since start: Date) -> Double {
+            Date().timeIntervalSince(start) * 1_000
+        }
+        func median(_ samples: [Double]) -> Double {
+            samples.sorted()[samples.count / 2]
+        }
+        func profile(_ text: String) -> (incremental: Double, full: Double) {
+            let live = Live(text)
+            var incremental: [Double] = []
+            var full: [Double] = []
+            for iteration in 0..<24 {
+                let target = Self.range(of: "Quoted ", in: live)
+                let inserting = iteration.isMultiple(of: 2)
+                let edit = NSRange(location: NSMaxRange(target), length: inserting ? 0 : 1)
+                let incrementalStart = Date()
+                live.replace(edit, with: inserting ? "x" : "")
+                incremental.append(milliseconds(since: incrementalStart))
+
+                let reference = NSTextStorage(string: live.storage.string)
+                let styler = MarkdownStyler(baseSize: 13)
+                let fullStart = Date()
+                styler.style(reference)
+                full.append(milliseconds(since: fullStart))
+            }
+            Self.expectMatchesFullPass(live, "latency profile")
+            return (median(incremental), median(full))
+        }
+
+        let long = Array(repeating: Self.fixture, count: 40).joined(separator: "\n\n")
+        for (name, text) in [("small", Self.fixture), ("long mixed", long)] {
+            let result = profile(text)
+            let improvement = result.full / max(result.incremental, 0.000_001)
+            print(String(
+                format: "Notes edit latency (%@): incremental %.3f ms, full %.3f ms, %.2fx",
+                name, result.incremental, result.full, improvement
+            ))
+        }
     }
 }

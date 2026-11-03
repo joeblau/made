@@ -7,7 +7,7 @@ import SwiftData
 /// (macOS advertises this as the Bonjour service `_rfb._tcp`).
 ///
 /// Only non-secret connection metadata is persisted in SwiftData. When the user
-/// opts into auto-connect, the password is stored separately in Keychain.
+/// opts into saving the password, it is stored separately in Keychain.
 @Model
 final class RemoteDesktopConnection {
     #Unique([\RemoteDesktopConnection.id])
@@ -48,6 +48,7 @@ final class RemoteDesktopConnection {
 /// off because a remote server can otherwise read or replace the local pasteboard.
 enum VNCPreferences {
     private static let clipboardPrefix = "vnc.clipboard."
+    private static let autoConnectPrefix = "vnc.autoConnect."
 
     static func isClipboardRedirectionEnabled(id: UUID, defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: clipboardPrefix + id.uuidString)
@@ -61,8 +62,30 @@ enum VNCPreferences {
         defaults.set(enabled, forKey: clipboardPrefix + id.uuidString)
     }
 
+    /// Whether to connect on its own when the pane appears. It needs a saved
+    /// password, so it is never on without one. Saving the password and
+    /// auto-connecting used to be a single choice: a connection with a saved
+    /// password and no stored preference is one that opted into both.
+    static func isAutoConnectEnabled(
+        id: UUID,
+        hasSavedPassword: Bool,
+        defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard hasSavedPassword else { return false }
+        return defaults.object(forKey: autoConnectPrefix + id.uuidString) as? Bool ?? true
+    }
+
+    static func setAutoConnectEnabled(
+        _ enabled: Bool,
+        id: UUID,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(enabled, forKey: autoConnectPrefix + id.uuidString)
+    }
+
     static func remove(id: UUID, defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: clipboardPrefix + id.uuidString)
+        defaults.removeObject(forKey: autoConnectPrefix + id.uuidString)
     }
 }
 

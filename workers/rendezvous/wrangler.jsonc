@@ -43,7 +43,7 @@
   //    sockets and relays messages between them (Plotter live relay).
   //  - SIGNALS: one instance per pairing token records the <=2 peers'
   //    public key + observed IP + UDP port so the two devices can learn
-  //    each other's endpoint and hole-punch (issue #51 signaling server).
+  //    each other's endpoint and hole-punch.
   "durable_objects": {
     "bindings": [
       { "name": "ROOMS", "class_name": "RendezvousRoom" },
@@ -52,8 +52,8 @@
     ]
   },
   // SQLite-backed classes so this runs on the Workers free plan. ROOMS keeps
-  // sockets in memory (no storage); SIGNALS persists a tiny peer map with TTL
-  // eviction. Both must still be declared as sqlite-backed migrations.
+  // sockets in memory but persists expiry alarms; SIGNALS persists a tiny peer
+  // map with TTL eviction. Both must still be declared as sqlite-backed migrations.
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["RendezvousRoom"] },
     { "tag": "v2", "new_sqlite_classes": ["SignalingRoom"] },

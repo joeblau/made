@@ -50,6 +50,19 @@ packages:
     revision: 92d4427c73817d8f849bb289ff190aa4b40c44ea
 
 schemes:
+  DroneTools:
+    build:
+      targets:
+        Drone: [run, test, profile, analyze, archive]
+        DroneCLI: [run, test, profile, analyze, archive]
+  DroneTests:
+    build:
+      targets:
+        DroneTests: [test]
+    test:
+      targets:
+        - name: DroneTests
+          parallelizable: false
   SharedTests:
     build:
       targets:
@@ -479,6 +492,88 @@ targets:
         GENERATE_INFOPLIST_FILE: true
         SDKROOT: watchos
 
+  Drone:
+    type: tool
+    platform: macOS
+    productName: droned
+    sources:
+      - Sources/Droned
+      - Sources/DroneSupport
+      - Sources/Drone/JobEngine
+      - Sources/Shared/DroneProtocol.swift
+      - Sources/Shared/DroneSecureChannel.swift
+      - Sources/Shared/DronePairing.swift
+      - Sources/Shared/DroneLANTransport.swift
+      - Sources/Shared/DroneTerminal.swift
+      - Sources/Shared/DroneTmux.swift
+      - Sources/Shared/DronePTY.swift
+      - Sources/Shared/DroneTerminalEngine.swift
+      - Sources/Shared/DroneToolProtocol.swift
+      - Sources/Shared/PeerSyncAuthentication.swift
+      - Sources/Shared/SecureChannel/CryptoCore.swift
+      - Sources/Shared/SecureChannel/DeviceIdentity.swift
+      - Sources/Shared/SecureChannel/NoiseIKHandshake.swift
+      - Sources/Shared/SecureChannel/PacketCodec.swift
+      - Sources/Shared/SecureChannel/ReplayWindow.swift
+      - Sources/Shared/SecureChannel/SecurePairingStore.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.blau.drone
+        PRODUCT_NAME: droned
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: false
+        SKIP_INSTALL: true
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+        Release:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+          ENABLE_HARDENED_RUNTIME: true
+          ARCHS: "arm64 x86_64"
+          ONLY_ACTIVE_ARCH: false
+
+  DroneCLI:
+    type: tool
+    platform: macOS
+    productName: drone
+    sources:
+      - Sources/DroneCLI
+      - Sources/DroneSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.blau.drone.cli
+        PRODUCT_NAME: drone
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: 1
+        GENERATE_INFOPLIST_FILE: true
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: false
+        SKIP_INSTALL: true
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+        Release:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "Apple Development"
+          ENABLE_HARDENED_RUNTIME: true
+          ARCHS: "arm64 x86_64"
+          ONLY_ACTIVE_ARCH: false
+
+  DroneTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/DroneTests
+      - Sources/DroneSupport
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.blau.drone.tests
+        GENERATE_INFOPLIST_FILE: true
+
   SharedTests:
     type: bundle.unit-test
     platform: iOS
@@ -542,6 +637,7 @@ targets:
     platform: iOS
     sources:
       - Tests/CopilotUITests
+      - Tests/UITestSupport/SnapshotHelper.swift
     dependencies:
       - target: Copilot
     settings:
@@ -555,6 +651,7 @@ targets:
     platform: iOS
     sources:
       - Tests/PlotterUITests
+      - Tests/UITestSupport/SnapshotHelper.swift
     dependencies:
       - target: Plotter
     settings:

@@ -22,7 +22,9 @@ rendezvous relay.
 
 The peer trust, verification-code, encryption, replay, and framing design is
 documented in [device pairing and FrameLink](docs/device-pairing-and-framelink.md)
-and [secure messaging](docs/p2p-secure-messaging.md).
+and [secure messaging](docs/p2p-secure-messaging.md). The reviewed Drone execution
+architecture and versioned protocol baseline are in
+[Drone execution protocol](docs/drone-execution-protocol.md).
 
 ## Project identity
 
@@ -113,19 +115,26 @@ bin/check-docs.sh
 ```
 
 `apple/bin/test.sh pilot` runs only the macOS suite,
-`apple/bin/test.sh shared` runs only the Walkie iOS Simulator suite, and
-`apple/bin/test.sh plotter` runs only the Kneeboard iPad Simulator suite. Set
+`apple/bin/test.sh shared` runs only the Walkie iOS Simulator suite,
+`apple/bin/test.sh plotter` runs only the Kneeboard iPad Simulator suite, and
+`apple/bin/test.sh drone` runs the protocol, lifecycle, durable-job, PTY, tool,
+and encrypted worker proofs. See the
+[Drone installation and controlled rollout guide](docs/drone-rollout.md) for
+multi-Mac setup, pairing, recovery, and the remaining physical rollout gates. Set
 `IOS_SIMULATOR_UDID` or `IPAD_SIMULATOR_UDID` to select an installed simulator
 for the corresponding mobile suite. The scripts pin
 `Package.resolved`, disable signing, and build the Debug configuration. They
-share one derived-data directory per scheme under `BLAU_DERIVED_DATA`
-(default `$TMPDIR/blau-builds`), so `test.sh` after `build-ci.sh` can reuse
-the application hosts instead of rebuilding them. Because the two scripts
-share those directories, run them one after the other rather than
-concurrently, or point each at its own `BLAU_DERIVED_DATA`; Xcode locks the
-build database. Result bundles accumulate under the shared directories;
-delete `BLAU_DERIVED_DATA` to reclaim the space. Chromium and release builds
-keep their own derived data.
+share one derived-data directory per platform under `BLAU_DERIVED_DATA`
+(default `$TMPDIR/blau-apple-ci`), so `test.sh` after `build-ci.sh` reuses the
+application hosts instead of rebuilding them. Because the two scripts share
+those directories, run them one after the other rather than concurrently, or
+point each at its own `BLAU_DERIVED_DATA`; Xcode locks the build database.
+The mobile suites build for the generic iOS Simulator destination, as
+`build-ci.sh` does, and then run on the selected simulator without rebuilding.
+Result bundles accumulate under the shared directories; delete
+`BLAU_DERIVED_DATA` to reclaim the space. Chromium and release builds keep
+their own derived data. See the
+[clean-run build-reuse measurements](docs/benchmarks/apple-ci-build-reuse.md).
 
 To lint only a branch diff, run
 `apple/bin/lint-swift.sh --changed origin/main`. Suppress a SwiftLint rule only
@@ -178,7 +187,13 @@ For populated desktop feature scenes in both appearances, run
 and a review gallery to `apple/.build/snapshots/output/`. See the
 [Cockpit screenshot guide](docs/cockpit-snapshots.md) for scene selection,
 fixture editing, and website embedding. The older mobile screenshot harness
-writes to `workers/web/public/screenshots/` and never requires a live peer.
+writes to `workers/web/public/screenshots/` and never requires a live peer. Both
+mobile UI-test targets compile the canonical Fastlane helper at
+`apple/Tests/UITestSupport/SnapshotHelper.swift`. To update it, replace only that
+file with Fastlane's upstream helper, reapply the local Swift 6 `@MainActor`
+compatibility annotations, and retain the upstream `SnapshotHelperVersion`
+marker; do not add target-local copies. Regenerate the Xcode project and run
+`fastlane snapshotAll` to verify the update.
 
 ## Deployment and secrets
 

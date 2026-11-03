@@ -112,7 +112,10 @@ struct WorkspaceView: View {
         VStack(spacing: 0) {
             tabBar
             panesContent
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
         }
+        .background(.bar)
         .onAppear {
             syncFocusForSelectedPane()
         }
@@ -131,6 +134,7 @@ struct WorkspaceView: View {
         Group {
             if workspace.axis == .vertical {
                 resizableTabBar
+                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
                     .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
             } else {
                 let sorted = workspace.sortedPanes
@@ -642,6 +646,7 @@ private struct CollapsedPaneSlit: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.85))
+        .clipShape(RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous))
     }
 
     @ViewBuilder
@@ -702,9 +707,9 @@ private struct HiddenTerminalIndicator: View {
         .animation(LiquidGlassMetrics.spring, value: executableCommand != nil)
         .task(id: isWorkspaceActive) {
             guard isWorkspaceActive else { return }
-            let sessionName = pane.persistentSessionName
+            let session = pane.terminalSession
             while !Task.isCancelled {
-                activity = await PersistentTerminalSession.foregroundActivity(sessionName: sessionName)
+                activity = await session.foregroundActivity(unavailableActivity: .idle)
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -749,14 +754,14 @@ private struct HiddenTerminalIndicator: View {
                         .controlSize(.mini)
                 } else {
                     Image(systemName: systemName)
-                        .scaledFont(size: compact ? 7 : 8, weight: .semibold)
+                        .scaledFont(size: compact ? 8 : 10, weight: .semibold)
                 }
             }
             .foregroundStyle(action == .play ? Color.primary : Color.secondary)
-            .frame(width: 12, height: 12)
+            .frame(width: 14, height: 14)
         }
         // Icon-only circular glass, one control size for the whole column.
-        .compatGlassIconButton(controlSize: .mini)
+        .compatGlassIconButton(controlSize: .small)
         .disabled(activeAction != nil)
         .help(help)
         .accessibilityLabel(help)
@@ -793,19 +798,12 @@ private struct HiddenTerminalIndicator: View {
             switch action {
             case .play:
                 if let executableCommand {
-                    _ = await PersistentTerminalSession.runFastCommand(
-                        executableCommand,
-                        sessionName: pane.persistentSessionName
-                    )
+                    _ = await pane.terminalSession.runFastCommand(executableCommand)
                 }
             case .stop:
-                _ = await PersistentTerminalSession.stopForegroundCommand(
-                    sessionName: pane.persistentSessionName
-                )
+                _ = await pane.terminalSession.interrupt()
             }
-            activity = await PersistentTerminalSession.foregroundActivity(
-                sessionName: pane.persistentSessionName
-            )
+            activity = await pane.terminalSession.foregroundActivity(unavailableActivity: .idle)
             activeAction = nil
         }
     }
@@ -819,11 +817,15 @@ struct PaneView: View {
     var body: some View {
         switch pane.kind {
         case .terminal:
-            TerminalViewRepresentable(
-                pane: pane,
-                isActive: isWorkspaceActive,
-                isCollapsed: pane.isCollapsed
-            )
+            if pane.terminalDestination.kind == .drone {
+                DroneTerminalView(pane: pane)
+            } else {
+                TerminalViewRepresentable(
+                    pane: pane,
+                    isActive: isWorkspaceActive,
+                    isCollapsed: pane.isCollapsed
+                )
+            }
         case .browser:
             if let state = pane.browserState {
                 BrowserPaneView(
@@ -834,6 +836,7 @@ struct PaneView: View {
                     onSelect: { pane.workspace?.selectedPaneID = pane.id },
                     targetTerminalPaneID: { pane.workspace?.frontmostTerminalPane?.id }
                 )
+                .clipShape(RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous))
             }
         case .device:
             DevicePaneView(
@@ -872,5 +875,6 @@ struct TerminalViewRepresentable: View {
 
     var body: some View {
         GhosttyTerminalView(pane: pane, isActive: isActive, isCollapsed: isCollapsed)
+            .clipShape(RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous))
     }
 }

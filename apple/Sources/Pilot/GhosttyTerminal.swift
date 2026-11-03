@@ -450,10 +450,9 @@ class GhosttyMetalView: NSView, CALayerDelegate {
                 ("__PILOT_REAL_ZDOTDIR", NSHomeDirectory()),
               ]
             : []
-        let persistentSessionInput = PersistentTerminalSession.bootstrapCommand(
-            for: pane,
-            workingDirectory: persistedDirectory
-        )
+        let bootstrap = pane.terminalSession.bootstrap(workingDirectory: persistedDirectory)
+        let persistentSessionInput: String?
+        if case .local(let initialInput) = bootstrap { persistentSessionInput = initialInput } else { persistentSessionInput = nil }
 
         let surface = Self.makeSurface(
             app: app,

@@ -111,6 +111,7 @@ final class DockerStore {
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored private var eventDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var listTask: Task<Void, Never>?
+    @ObservationIgnored private var actionTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var refreshGate = DockerRefreshGate()
 
     private static let showsStoppedKey = "docker.showsStopped"
@@ -150,7 +151,7 @@ final class DockerStore {
     }
 
     /// Stop all socket work. The section is a full-detail mode, so leaving it
-    /// leaves nothing running behind it except lifecycle requests already sent.
+    /// leaves nothing running behind it.
     func stop() {
         isRunning = false
         retireConnection()
@@ -179,6 +180,10 @@ final class DockerStore {
         eventDebounceTask = nil
         listTask?.cancel()
         listTask = nil
+        for task in actionTasks.values { task.cancel() }
+        actionTasks.removeAll()
+        busyContainerIDs.removeAll()
+        actionError = nil
         refreshGate.reset()
         isRefreshing = false
     }
@@ -338,16 +343,14 @@ final class DockerStore {
 
     // MARK: - Actions
 
-    /// Starts a lifecycle request. The task is deliberately not retained or
-    /// cancelled on stop or reconnect: cancelling closes the socket, and a stop
-    /// or remove the daemon is partway through should finish rather than be
-    /// abandoned. `busyContainerIDs` guards the row until it ends, and the
-    /// generation check keeps a retired client's outcome off the UI.
+    /// Starts a lifecycle request owned by the current connection. Cancelling
+    /// the task on stop or reconnect closes its socket; a late reply is also
+    /// rejected by generation in case the transport answers after cancellation.
     func perform(_ action: DockerContainerAction, on container: DockerContainerSummary) {
         guard isRunning, let client, !busyContainerIDs.contains(container.id) else { return }
         busyContainerIDs.insert(container.id)
         let generation = generation
-        Task { [weak self] in
+        actionTasks[container.id] = Task { [weak self] in
             let failure: (any Error)?
             do {
                 try await client.perform(action, containerID: container.id)
@@ -365,19 +368,15 @@ final class DockerStore {
         issuedUnder generation: UInt64,
         failure: (any Error)?
     ) {
-        // The request is over whichever client sent it, so the row is free.
+        guard isCurrent(generation) else { return }
+        actionTasks[container.id] = nil
         busyContainerIDs.remove(container.id)
 
         if let failure {
-            guard isCurrent(generation) else { return }
             actionError = "\(action.label) “\(container.name)” failed: \(Self.describe(failure))"
             return
         }
-        if isCurrent(generation) {
-            actionError = nil
-        }
-        // The daemon's state changed either way; read it through the current
-        // client, if the section is still showing.
+        actionError = nil
         requestRefresh(.action)
     }
 

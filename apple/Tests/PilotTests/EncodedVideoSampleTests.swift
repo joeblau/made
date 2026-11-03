@@ -3,8 +3,8 @@ import Foundation
 import Testing
 @testable import Pilot
 
-/// The shared encoded-sample builder used by the Android mirror and the
-/// AirPlay renderer. Callers own timing and attachment policy, so these
+/// The shared encoded-sample builder used by the Android mirror, AirPlay
+/// renderer, and Kneeboard. Callers own timing and attachment policy, so these
 /// checks pin that both survive construction unchanged.
 @Suite("Encoded video sample construction")
 struct EncodedVideoSampleTests {

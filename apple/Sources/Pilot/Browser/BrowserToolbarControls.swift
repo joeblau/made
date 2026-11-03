@@ -14,6 +14,29 @@ enum BrowserToolbarSelection {
     }
 }
 
+/// One browser-only slot of `PaneToolbarContent`. Resolving the pane inside a
+/// view body keeps the slot observing collapse and kind changes.
+struct BrowserPaneToolbarSlot: View {
+    enum Slot {
+        case navigation
+        case address
+    }
+
+    let pane: Pane?
+    let slot: Slot
+
+    var body: some View {
+        if let state = BrowserToolbarSelection.state(for: pane) {
+            switch slot {
+            case .navigation:
+                BrowserNavigationToolbarControls(state: state)
+            case .address:
+                BrowserAddressToolbarControl(state: state)
+            }
+        }
+    }
+}
+
 /// Scene-local browser selection used by menu commands. Revealing a browser
 /// preserves focused-pane mode by moving that focus to the browser instead of
 /// leaving `focusedPaneID` attached to a hidden pane.

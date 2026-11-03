@@ -32,14 +32,20 @@ struct H264AnnexBAssembler {
     static let maxParameterSetSize = 1_024
     static let maxBufferSize = 4 * 1_024 * 1_024
 
+    private static let compactionThreshold = 64 * 1_024
+
     private var buffer = Data()
+    /// Start of the unterminated NALU. Complete units remain in front of this
+    /// cursor until periodic compaction, avoiding a move of the buffered tail
+    /// for every NALU.
+    private var consumedOffset = 0
     /// Scan watermark: no start code begins before this offset. Lets each
     /// fed byte be scanned once — without it an unterminated multi-chunk NALU
     /// (a keyframe arriving in 64 KB pipe reads) is rescanned from 0 on every
     /// feed, quadratic on the frame-delivery path. A failed scan can only
     /// leave a dangling start-code prefix of ≤ 3 trailing zeros, so resuming
-    /// at count - 3 misses no code that later bytes complete. Must be reset
-    /// whenever bytes are removed from the front of `buffer`.
+    /// at count - 3 misses no code that later bytes complete. Compaction
+    /// shifts both cursors by the number of bytes removed.
     private var scanOffset = 0
     #if DEBUG
     /// Test seam (Debug builds only): total candidate positions the
@@ -65,7 +71,8 @@ struct H264AnnexBAssembler {
 
     /// Feed a chunk from the pipe; returns the events it completed.
     mutating func feed(_ chunk: Data) throws -> [Event] {
-        guard buffer.count + chunk.count <= Self.maxBufferSize else {
+        compactBufferIfNeeded(incomingByteCount: chunk.count)
+        guard buffer.count - consumedOffset + chunk.count <= Self.maxBufferSize else {
             throw ParseError.bufferOverflow
         }
         buffer.append(chunk)
@@ -82,21 +89,21 @@ struct H264AnnexBAssembler {
             guard first.index <= Self.maxLeadingGarbage else {
                 throw ParseError.leadingGarbageExceeded
             }
-            buffer.removeSubrange(0..<(first.index + first.length))
-            scanOffset = 0
+            consumedOffset = first.index + first.length
+            scanOffset = consumedOffset
             sawFirstStartCode = true
         }
 
-        // The buffer now begins with a NALU payload. Emit every NALU that is
-        // terminated by a following start code; keep the unterminated tail.
+        // Emit every NALU that is terminated by a following start code; keep
+        // the unterminated tail and defer moving it until compaction.
         while let next = findStartCode(in: buffer, from: scanOffset) {
-            let nalu = buffer.prefix(next.index)
-            buffer.removeSubrange(0..<(next.index + next.length))
-            scanOffset = 0
-            try handle(nalu: Data(nalu), into: &events)
+            let nalu = Data(buffer[consumedOffset..<next.index])
+            consumedOffset = next.index + next.length
+            scanOffset = consumedOffset
+            try handle(nalu: nalu, into: &events)
         }
-        scanOffset = max(0, buffer.count - 3)
-        guard buffer.count <= Self.maxNALUSize else { throw ParseError.naluTooLarge }
+        scanOffset = max(consumedOffset, buffer.count - 3)
+        guard buffer.count - consumedOffset <= Self.maxNALUSize else { throw ParseError.naluTooLarge }
         // Flush the batch's final access unit now rather than waiting for the
         // next chunk: encoders write whole frames per pipe write, so a
         // continuation slice split across writes is a tolerated rarity while
@@ -108,7 +115,7 @@ struct H264AnnexBAssembler {
     /// Whether `flushTrailing` would consume buffered NAL bytes. Lets the
     /// idle flush tell "flushed a tail" from "nothing buffered" even when the
     /// tail is a dropped NAL type (SEI, AUD) that yields no event.
-    var hasBufferedTail: Bool { sawFirstStartCode && !buffer.isEmpty }
+    var hasBufferedTail: Bool { sawFirstStartCode && buffer.count > consumedOffset }
 
     /// Emit the buffered trailing NALU. Annex-B has no NAL length field, so
     /// byte silence can never prove that a tail is complete: USB scheduling
@@ -119,14 +126,24 @@ struct H264AnnexBAssembler {
     /// (`AndroidScreenStream.flushIdleTail`).
     mutating func flushTrailing() throws -> [Event] {
         var events: [Event] = []
-        if sawFirstStartCode, !buffer.isEmpty {
+        if sawFirstStartCode, buffer.count > consumedOffset {
+            buffer.removeSubrange(0..<consumedOffset)
             let nalu = buffer
             buffer = Data()
+            consumedOffset = 0
             scanOffset = 0
             try handle(nalu: nalu, into: &events)
         }
         flushPendingAccessUnit(into: &events)
         return events
+    }
+
+    private mutating func compactBufferIfNeeded(incomingByteCount: Int) {
+        guard consumedOffset > 0,
+              consumedOffset >= Self.compactionThreshold || buffer.count + incomingByteCount > Self.maxBufferSize else { return }
+        buffer.removeSubrange(0..<consumedOffset)
+        scanOffset -= consumedOffset
+        consumedOffset = 0
     }
 
     // MARK: - NALU handling

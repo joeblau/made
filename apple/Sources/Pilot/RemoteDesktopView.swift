@@ -116,33 +116,30 @@ struct RemoteDesktopView: View {
         )
     }
 
-    /// Group tabs are capsule glass chips above the screen grid; only the
-    /// selected group carries the accent tint, as a state signal (COL-4). The
-    /// chips, New Group, Rename, and Add Computer are one control cluster, so
-    /// each run of neighboring glass shares a container.
+    /// Group tabs use the native Liquid Glass segmented control, with per-group
+    /// menus and drag-and-drop preserved from the original separate buttons.
     private var groupBar: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.small) {
             GlassChipScroller {
                 groupChips
             }
             if let group = groups.selectedGroup {
-                CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        Button { rename(group) } label: {
-                            Label("Rename Group", systemImage: "pencil")
-                        }
-                        .compatGlassIconButton()
-                        .help("Rename Group")
-                        Text("\(group.connectionIDs.count)/4")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        Button { pickerGroupID = group.id } label: {
-                            Label("Add Computer", systemImage: "plus")
-                        }
-                        .compatGlassButtonStyle()
-                        .disabled(group.isFull)
-                        .help(group.isFull ? "This group already has four computers" : "Add a computer to this group")
+                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
+                    Button { rename(group) } label: {
+                        Label("Rename Group", systemImage: "pencil")
                     }
+                    .compatGlassIconButton(controlSize: .small)
+                    .help("Rename Group")
+                    Text("\(group.connectionIDs.count)/4")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Button { pickerGroupID = group.id } label: {
+                        Label("Add Computer", systemImage: "plus")
+                    }
+                    .compatGlassButtonStyle()
+                    .controlSize(.small)
+                    .disabled(group.isFull)
+                    .help(group.isFull ? "This group already has four computers" : "Add a computer to this group")
                 }
             }
         }
@@ -153,26 +150,46 @@ struct RemoteDesktopView: View {
 
     private var groupChips: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            ForEach(groups.groups) { group in
-                let isSelected = group.id == groups.selectedGroupID
-                Button {
-                    store.selectedRemoteConnectionID = groups.selectGroup(
-                        group.id, preserving: store.selectedRemoteConnectionID
-                    )
-                } label: {
-                    Label(group.name, systemImage: "square.grid.2x2")
-                }
-                .buttonStyle(.liquidGlassChip(isSelected: isSelected))
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-                .contextMenu {
-                    Button("Rename Group…") { rename(group) }
-                    Button("Delete Empty Group", role: .destructive) { groups.deleteEmptyGroup(group.id) }
-                        .disabled(!group.connectionIDs.isEmpty || groups.groups.count == 1)
-                }
-                .dropDestination(for: String.self) { items, _ in
-                    return moveDroppedMachine(items, to: group.id)
-                }
-            }
+            // Same native glass control and structure as the Notes tabs: the
+            // delete button sits inside the selected segment, left of its name.
+            PilotSegmentedControl(
+                "Remote Desktop Group",
+                selection: Binding(
+                    get: { groups.selectedGroupID ?? UUID() },
+                    set: { groupID in
+                        store.selectedRemoteConnectionID = groups.selectGroup(
+                            groupID, preserving: store.selectedRemoteConnectionID
+                        )
+                    }
+                ),
+                options: groups.groups.map(\.id),
+                title: { groupID in
+                    groups.groups.first(where: { $0.id == groupID })?.name ?? ""
+                },
+                menuItems: { groupID in
+                    guard let group = groups.groups.first(where: { $0.id == groupID }) else { return [] }
+                    return [
+                        PilotSegmentedMenuItem("Rename Group…") { rename(group) },
+                        PilotSegmentedMenuItem(
+                            "Delete Empty Group",
+                            isEnabled: group.connectionIDs.isEmpty && groups.groups.count > 1,
+                            isDestructive: true
+                        ) { groups.deleteEmptyGroup(group.id) }
+                    ]
+                },
+                onDrop: { pasteboard, index in
+                    let items = pasteboard.readObjects(forClasses: [NSString.self], options: nil) as? [String] ?? []
+                    guard groups.groups.indices.contains(index) else { return false }
+                    return moveDroppedMachine(items, to: groups.groups[index].id)
+                },
+                closeLabel: "Delete Empty Group",
+                canClose: { groupID in
+                    guard let group = groups.groups.first(where: { $0.id == groupID }) else { return false }
+                    return group.connectionIDs.isEmpty && groups.groups.count > 1
+                },
+                onClose: { groupID in groups.deleteEmptyGroup(groupID) }
+            )
+            .fixedSize()
             Button {
                 let id = groups.addGroup()
                 store.selectedRemoteConnectionID = nil
@@ -180,7 +197,7 @@ struct RemoteDesktopView: View {
             } label: {
                 Label("New Group", systemImage: "plus")
             }
-            .compatGlassIconButton()
+            .compatGlassIconButton(controlSize: .small)
             .help("New Group")
         }
         .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
@@ -188,9 +205,11 @@ struct RemoteDesktopView: View {
     }
 
     /// Outer margin and gutter of the 2×2 grid. Each machine is its own card.
-    private static let gridInset: CGFloat = 16
-    private static let gridGap: CGFloat = 12
-    static let cardShape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+    private static let gridInset = LiquidGlassMetrics.Spacing.xSmall
+    private static let gridGap = LiquidGlassMetrics.Spacing.small
+    /// Rounded so the selection ring, the clip, and the empty-slot outline
+    /// all share one continuous corner.
+    static let cardShape = RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.field, style: .continuous)
 
     private var grid: some View {
         GeometryReader { geometry in
@@ -342,14 +361,14 @@ private struct RemoteConnectionPane: View {
 
     @State private var password = ""
     @State private var savePassword = false
+    @State private var autoConnect = false
     @State private var shareClipboard = false
     @State private var didTryAutoConnect = false
 
     var body: some View {
         VStack(spacing: 0) {
             screen
-                // The remote screen runs edge to edge across the card; the
-                // card's own clip shape rounds it.
+                // The remote screen runs edge to edge within the card's square bounds.
                 .clipShape(Rectangle())
             footer
         }
@@ -369,6 +388,13 @@ private struct RemoteConnectionPane: View {
         }
         .onChange(of: shareClipboard) { _, enabled in
             VNCPreferences.setClipboardRedirectionEnabled(enabled, id: connection.id)
+        }
+        // Auto-connect replays the saved password, so it cannot outlive it.
+        .onChange(of: savePassword) { _, saving in
+            if !saving { autoConnect = false }
+        }
+        .onChange(of: autoConnect) { _, enabled in
+            VNCPreferences.setAutoConnectEnabled(enabled, id: connection.id)
         }
     }
 
@@ -446,17 +472,27 @@ private struct RemoteConnectionPane: View {
         connect()
     }
 
-    /// Auto-connect when a password was saved. A session that is already live
-    /// (the common case when tabbing back) is left exactly as it is — that is
-    /// the whole point of hoisting session ownership out of this view.
+    /// Restores both checkboxes from what is stored for this connection.
+    private func restoreCredentialPreferences(savedPassword: String?) {
+        let hasSavedPassword = !(savedPassword ?? "").isEmpty
+        savePassword = hasSavedPassword
+        autoConnect = VNCPreferences.isAutoConnectEnabled(id: connection.id, hasSavedPassword: hasSavedPassword)
+    }
+
+    /// Auto-connect when a password was saved and auto-connect is on. A
+    /// session that is already live (the common case when tabbing back) is
+    /// left exactly as it is — that is the whole point of hoisting session
+    /// ownership out of this view.
     private func restoreSavedPasswordAndConnect() {
         guard !didTryAutoConnect else { return }
         didTryAutoConnect = true
         // Restore the form even after a network failure. Auto-connect remains
         // gated below, so returning to a failed session does not retry it.
-        guard let saved = VNCKeychain.load(id: connection.id), !saved.isEmpty else { return }
+        let saved = VNCKeychain.load(id: connection.id)
+        restoreCredentialPreferences(savedPassword: saved)
+        guard let saved, !saved.isEmpty else { return }
         password = saved
-        savePassword = true
+        guard autoConnect else { return }
         // `.failed` is deliberately excluded: a rejected credential must not be
         // retried on every tab-in, which is the loop this whole change removes.
         switch session.status {
@@ -537,10 +573,21 @@ private struct RemoteConnectionPane: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 280)
                     .onSubmit(connect)
-                Toggle("Save password & auto-connect", isOn: $savePassword)
-                    .toggleStyle(.checkbox)
-                    .controlSize(.small)
-                    .frame(maxWidth: 280, alignment: .leading)
+                // Two separate choices: keeping the password in the Keychain
+                // and connecting on its own when the pane appears. The second
+                // replays the first, so it is only offered once that is on.
+                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
+                    Toggle("Save password", isOn: $savePassword)
+                        .help("Keep this password in your Keychain after the server accepts it")
+                    Toggle("Connect automatically", isOn: $autoConnect)
+                        .disabled(!savePassword)
+                        .help(savePassword
+                              ? "Connect with the saved password when this computer appears"
+                              : "Save the password to connect automatically")
+                }
+                .toggleStyle(.checkbox)
+                .controlSize(.small)
+                .frame(maxWidth: 280, alignment: .leading)
 
                 if let error {
                     Label(error, systemImage: "exclamationmark.triangle.fill")
@@ -688,8 +735,11 @@ private struct RemoteComputerPicker: View {
                 .onSubmit(connectManual)
                 .liquidGlassField(systemImage: "network", isFocused: manualFocused)
 
+                // Large, like the pane's own Connect button, so it stands level
+                // with the glass field instead of a regular 24pt capsule.
                 Button("Connect", action: connectManual)
                     .compatGlassProminentButtonStyle()
+                    .controlSize(.large)
                     .disabled(manualHost.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }

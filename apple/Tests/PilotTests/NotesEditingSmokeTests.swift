@@ -48,7 +48,7 @@ struct NotesEditingSmokeTests {
 
         func textDidChange(_ notification: Notification) {
             changeCount += 1
-            mask.refresh()
+            mask.refresh(secretMatches: styler.secretMatches)
             textView.applyAutomaticReflows()
         }
 

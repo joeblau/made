@@ -64,6 +64,12 @@ struct TabItemContent: View {
                     .lineLimit(1)
                     .foregroundStyle(isSelected ? .primary : .secondary)
 
+                if pane.terminalDestination.kind == .drone {
+                    Text(pane.terminalDroneNameRaw ?? "Drone")
+                        .scaledFont(size: 10, weight: .medium)
+                        .foregroundStyle(.secondary)
+                }
+
                 if pane.kind == .terminal {
                     TerminalAgentBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
                     TerminalDirtyBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)

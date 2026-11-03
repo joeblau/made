@@ -11,13 +11,13 @@ import Foundation
 ///   (or `$KIMI_DATA_DIR`).
 ///
 /// The corpus is large (thousands of files, gigabytes of append-only logs),
-/// so files parse in parallel off the main actor and a
-/// `(path, size, mtime)` cache makes every load after the first near-instant
-/// — unchanged files never re-parse. The cache persists to disk (versioned,
-/// written off the load path) so relaunches only parse files that changed
-/// since the last run. The logs are untrusted input: files stream with
-/// bounded lines, malformed lines are skipped, and no single bad file fails
-/// a load. The persisted cache gets the same treatment on restore.
+/// so files parse in parallel off the main actor. The cache retains file
+/// identity, complete-line offsets, trailing bytes, and provider state:
+/// unchanged files do no parsing and safe appends read only their new bytes.
+/// The cache persists to disk (versioned, written off the load path), giving
+/// relaunches the same behavior. The logs are untrusted input: files stream
+/// with bounded lines, malformed lines are skipped, and no single bad file
+/// fails a load. The persisted cache gets the same treatment on restore.
 actor AgenticUsageLoader {
     /// One scan root and the parser its files get.
     struct Source: Sendable {
@@ -42,7 +42,10 @@ actor AgenticUsageLoader {
         /// Files that could not be read.
         let unreadableFileCount: Int
         var skippedLineCount: Int = 0
-        /// False when no source file changed since the previous load and
+        /// Bytes read from disk for full or incremental parses. Unchanged
+        /// files contribute zero.
+        var parsedByteCount: Int = 0
+        /// False when every live path produced the same ordered records and
         /// `records` is the previous array verbatim — the store can skip
         /// re-ingesting it.
         var changed: Bool = true
@@ -59,10 +62,16 @@ actor AgenticUsageLoader {
         }
     }
 
+    private struct FileIdentity: Codable, Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+    }
+
     private struct FileJob: Sendable {
         let path: String
         let url: URL
         let provider: AgenticProvider
+        let identity: FileIdentity?
         let size: Int
         let modificationDate: Date
     }
@@ -70,15 +79,57 @@ actor AgenticUsageLoader {
     private struct ParseOutcome: Sendable {
         let job: FileJob
         /// `nil` means the file was unreadable.
-        let records: [AgenticUsageRecord]?
-        var skippedLineCount: Int = 0
+        let entry: CacheEntry?
+        var parsedByteCount: Int = 0
     }
 
     private struct CacheEntry: Codable, Sendable {
+        let provider: AgenticProvider
+        let identity: FileIdentity?
         let size: Int
         let modificationDate: Date
+        /// Byte immediately after the last newline parsed into `records` and
+        /// `codex`. Bytes after it are provisional until a newline arrives.
+        let committedOffset: Int
+        let trailingLine: Data
+        let trailingLineIsOversized: Bool
+        let trailingLineNeedsWarning: Bool
+        let codex: CodexState
+        /// Records and warnings from newline-terminated lines.
         let records: [AgenticUsageRecord]
         let skippedLineCount: Int
+        /// A valid unterminated final line is visible like it is in a full
+        /// scan, but is not committed to the resumable parser state.
+        let trailingRecords: [AgenticUsageRecord]
+        let trailingSkippedLineCount: Int
+
+        var totalSkippedLineCount: Int { skippedLineCount + trailingSkippedLineCount }
+        var totalRecordCount: Int { records.count + trailingRecords.count }
+
+        var isValid: Bool {
+            guard size >= 0, committedOffset >= 0, committedOffset <= size,
+                  trailingLine.count <= AgenticUsageLoader.maxLineBytes,
+                  skippedLineCount >= 0, (0...1).contains(trailingSkippedLineCount) else { return false }
+            let trailingByteCount = size - committedOffset
+            if trailingLineIsOversized {
+                return trailingLine.isEmpty && trailingByteCount > AgenticUsageLoader.maxLineBytes
+            }
+            return trailingLine.count == trailingByteCount
+        }
+
+        private func hasCompatibleIdentity(with job: FileJob) -> Bool {
+            guard let identity, let jobIdentity = job.identity else { return false }
+            return provider == job.provider && identity == jobIdentity
+        }
+
+        func matchesUnchanged(_ job: FileJob) -> Bool {
+            isValid && hasCompatibleIdentity(with: job) && size == job.size
+                && modificationDate == job.modificationDate
+        }
+
+        func canResume(_ job: FileJob) -> Bool {
+            isValid && hasCompatibleIdentity(with: job) && job.size > size
+        }
     }
 
     /// Bound individual lines while streaming files of any size.
@@ -186,9 +237,9 @@ actor AgenticUsageLoader {
         // Serve unchanged files from the cache; parse the rest in parallel.
         var pending: [FileJob] = []
         var cachedCount = 0
-        for file in files {
-            if let entry = cache[file.path], entry.size == file.size,
-               entry.modificationDate == file.modificationDate {
+        for (index, file) in files.enumerated() {
+            if index.isMultiple(of: 256) { try Task.checkCancellation() }
+            if let entry = cache[file.path], entry.matchesUnchanged(file) {
                 cachedCount += 1
             } else {
                 pending.append(file)
@@ -198,6 +249,7 @@ actor AgenticUsageLoader {
 
         let outcomes = try await Self.parseFiles(
             pending,
+            cache: cache,
             alreadyScanned: cachedCount,
             total: files.count,
             onProgress: onProgress
@@ -215,20 +267,29 @@ actor AgenticUsageLoader {
         var nextCache = cache
         var unreadableCount = 0
         var cacheChanged = false
-        for outcome in outcomes {
-            if let records = outcome.records {
-                nextCache[outcome.job.path] = CacheEntry(
-                    size: outcome.job.size,
-                    modificationDate: outcome.job.modificationDate,
-                    records: records,
-                    skippedLineCount: outcome.skippedLineCount
-                )
+        var recordsChanged = false
+        var parsedByteCount = 0
+        for (index, outcome) in outcomes.enumerated() {
+            if index.isMultiple(of: 64) { try Task.checkCancellation() }
+            parsedByteCount += outcome.parsedByteCount
+            if let entry = outcome.entry {
+                if let previous = cache[outcome.job.path] {
+                    if previous.records != entry.records || previous.trailingRecords != entry.trailingRecords {
+                        recordsChanged = true
+                    }
+                } else if entry.totalRecordCount > 0 {
+                    recordsChanged = true
+                }
+                nextCache[outcome.job.path] = entry
                 cacheChanged = true
             } else {
                 // Unreadable files are never cached, so a file that fails
                 // every refresh usually removes an absent key: only a real
                 // removal dirties the persisted blob.
-                if nextCache.removeValue(forKey: outcome.job.path) != nil { cacheChanged = true }
+                if let previous = nextCache.removeValue(forKey: outcome.job.path) {
+                    cacheChanged = true
+                    if previous.totalRecordCount > 0 { recordsChanged = true }
+                }
                 unreadableCount += 1
             }
         }
@@ -239,18 +300,23 @@ actor AgenticUsageLoader {
         nextCache = nextCache.filter { livePaths.contains($0.key) }
         let droppedDeletedFiles = nextCache.count != countBeforeDrop
 
-        let skippedLineCount = nextCache.values.reduce(0) { $0 + $1.skippedLineCount }
-        // Nothing on disk changed since the last load: the previous
-        // dedup/sort result is still exact, so skip rebuilding it.
-        if pending.isEmpty, !droppedDeletedFiles, let lastRecords {
+        var skippedLineCount = 0
+        for entry in nextCache.values {
+            skippedLineCount += entry.totalSkippedLineCount
+        }
+        // The previous dedup/sort result remains exact while every live path
+        // still produces the same ordered records, even if harmless bytes or
+        // metadata changed on disk.
+        if !recordsChanged, !droppedDeletedFiles, let lastRecords {
             cache = nextCache
             if cacheChanged { cacheDirty = true }
             scheduleCacheSave()
             return LoadResult(
                 records: lastRecords,
                 fileCount: files.count,
-                unreadableFileCount: 0,
+                unreadableFileCount: unreadableCount,
                 skippedLineCount: skippedLineCount,
+                parsedByteCount: parsedByteCount,
                 changed: false
             )
         }
@@ -258,9 +324,11 @@ actor AgenticUsageLoader {
         // Flatten in stable path order so dedup is deterministic, then dedup
         // across ALL files before any date filtering happens.
         var all: [AgenticUsageRecord] = []
-        for file in files {
+        for (index, file) in files.enumerated() {
+            if index.isMultiple(of: 64) { try Task.checkCancellation() }
             if let entry = nextCache[file.path] {
                 all.append(contentsOf: entry.records)
+                all.append(contentsOf: entry.trailingRecords)
             }
         }
         willMerge?()
@@ -268,6 +336,7 @@ actor AgenticUsageLoader {
         var records = Self.deduplicate(all)
         try Task.checkCancellation()
         records.sort { $0.timestamp < $1.timestamp }
+        try Task.checkCancellation()
         cache = nextCache
         if cacheChanged || droppedDeletedFiles { cacheDirty = true }
         scheduleCacheSave()
@@ -276,16 +345,17 @@ actor AgenticUsageLoader {
             records: records,
             fileCount: files.count,
             unreadableFileCount: unreadableCount,
-            skippedLineCount: skippedLineCount
+            skippedLineCount: skippedLineCount,
+            parsedByteCount: parsedByteCount
         )
     }
 
     // MARK: - Disk cache
 
-    /// Mirror of `cache` persisted across launches so a relaunch only
-    /// re-parses files whose (size, mtime) changed. It regenerates from the
-    /// logs, so a missing, corrupt, oversized, or stale-version blob is a
-    /// cold start, never an error.
+    /// Mirror of `cache` persisted across launches so a relaunch only reads
+    /// appended bytes or rebuilds files with incompatible identity/metadata.
+    /// It regenerates from the logs, so a missing, corrupt, oversized, or
+    /// stale-version blob is a cold start, never an error.
     private struct PersistedCache: Codable, Sendable {
         let version: Int
         let entries: [String: CacheEntry]
@@ -294,7 +364,7 @@ actor AgenticUsageLoader {
     /// Bump whenever a provider parser, a dedup heuristic, or an
     /// `AgenticUsageRecord` field changes, so stale parses can't silently
     /// misreport costs.
-    private static let persistedCacheVersion = 1
+    private static let persistedCacheVersion = 2
     /// The persisted blob is untrusted input like any other file: bound what
     /// restore will read and decode, and what save will write.
     private static let maxPersistedCacheBytes = 256 * 1024 * 1024
@@ -314,10 +384,11 @@ actor AgenticUsageLoader {
               let data = try? Data(contentsOf: cacheURL),
               let persisted = try? JSONDecoder().decode(PersistedCache.self, from: data),
               persisted.version == Self.persistedCacheVersion,
-              persisted.entries.values.reduce(0, { $0 + $1.records.count }) <= Self.maxPersistedRecordCount
+              persisted.entries.values.allSatisfy(\.isValid),
+              persisted.entries.values.reduce(0, { $0 + $1.totalRecordCount }) <= Self.maxPersistedRecordCount
         else { return }
         // Unreadable files were never cached, so they retry naturally; stale
-        // entries fall to the size/mtime check or the deleted-file filter.
+        // entries fall to the identity/metadata checks or deleted-file filter.
         cache = persisted.entries
     }
 
@@ -432,6 +503,7 @@ actor AgenticUsageLoader {
                     path: url.path,
                     url: url,
                     provider: source.provider,
+                    identity: Self.fileIdentity(at: url),
                     size: values.fileSize ?? 0,
                     modificationDate: values.contentModificationDate ?? .distantPast
                 )
@@ -440,10 +512,18 @@ actor AgenticUsageLoader {
         try Task.checkCancellation()
     }
 
+    private nonisolated static func fileIdentity(at url: URL) -> FileIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber else { return nil }
+        return FileIdentity(device: device.uint64Value, inode: inode.uint64Value)
+    }
+
     // MARK: - Parallel parsing
 
     private nonisolated static func parseFiles(
         _ jobs: [FileJob],
+        cache: [String: CacheEntry],
         alreadyScanned: Int,
         total: Int,
         onProgress: (@Sendable (Int, Int) -> Void)?
@@ -460,7 +540,7 @@ actor AgenticUsageLoader {
             for _ in 0..<width {
                 guard let job = iterator.next() else { break }
                 group.addTask {
-                    Self.parseJob(job)
+                    try Self.parseJob(job, cachedEntry: cache[job.path])
                 }
             }
             while let outcome = try await group.next() {
@@ -474,7 +554,7 @@ actor AgenticUsageLoader {
                 }
                 if let job = iterator.next() {
                     group.addTask {
-                        Self.parseJob(job)
+                        try Self.parseJob(job, cachedEntry: cache[job.path])
                     }
                 }
             }
@@ -494,7 +574,7 @@ actor AgenticUsageLoader {
         let decoder = JSONDecoder()
     }
 
-    private struct CodexState {
+    private struct CodexState: Codable, Sendable {
         var model: String?
         var totals: RawCodexTokenUsage?
         var sessionID: String?
@@ -502,57 +582,143 @@ actor AgenticUsageLoader {
         var lastResponseUsage: RawCodexTokenUsage?
     }
 
-    private nonisolated static func parseJob(_ job: FileJob) -> ParseOutcome {
-        guard let state = parseFileState(at: job.url, provider: job.provider) else {
-            return ParseOutcome(job: job, records: nil)
+    private struct FileReadResult {
+        let committedOffset: Int
+        let bytesRead: Int
+    }
+
+    private nonisolated static func parseJob(_ job: FileJob, cachedEntry: CacheEntry?) throws -> ParseOutcome {
+        let resumed = cachedEntry?.canResume(job) == true ? cachedEntry : nil
+        var state = ParseState()
+        if let resumed {
+            state.records = resumed.records
+            state.codex = resumed.codex
+            state.line = resumed.trailingLine
+            state.oversizedLine = resumed.trailingLineIsOversized
+            state.oversizedLineNeedsWarning = resumed.trailingLineNeedsWarning
+            state.skippedLineCount = resumed.skippedLineCount
         }
-        return ParseOutcome(job: job, records: state.records, skippedLineCount: state.skippedLineCount)
+        let readOffset = resumed?.size ?? 0
+        do {
+            let read = try readFile(
+                at: job.url,
+                provider: job.provider,
+                readOffset: readOffset,
+                byteCount: job.size - readOffset,
+                initialCommittedOffset: readOffset,
+                state: &state
+            )
+            let committedRecordCount = state.records.count
+            let committedSkippedLineCount = state.skippedLineCount
+            let committedCodex = state.codex
+            let trailingLine = state.line
+            let trailingLineIsOversized = state.oversizedLine
+            let trailingLineNeedsWarning = state.oversizedLineNeedsWarning
+            finishLine(provider: job.provider, state: &state)
+            try Task.checkCancellation()
+            let trailingRecords = Array(state.records.dropFirst(committedRecordCount))
+            state.records.removeLast(state.records.count - committedRecordCount)
+            let entry = CacheEntry(
+                provider: job.provider,
+                identity: job.identity,
+                size: job.size,
+                modificationDate: job.modificationDate,
+                committedOffset: read.committedOffset,
+                trailingLine: trailingLine,
+                trailingLineIsOversized: trailingLineIsOversized,
+                trailingLineNeedsWarning: trailingLineNeedsWarning,
+                codex: committedCodex,
+                records: state.records,
+                skippedLineCount: committedSkippedLineCount,
+                trailingRecords: trailingRecords,
+                trailingSkippedLineCount: state.skippedLineCount - committedSkippedLineCount
+            )
+            return ParseOutcome(job: job, entry: entry, parsedByteCount: read.bytesRead)
+        } catch let error as CancellationError {
+            throw error
+        } catch {
+            return ParseOutcome(job: job, entry: nil)
+        }
     }
 
     /// Streams large rollouts instead of dropping them at an arbitrary file
     /// size. Only one chunk and a bounded pending line reside in memory.
     nonisolated static func parseFile(at url: URL, provider: AgenticProvider) -> [AgenticUsageRecord]? {
-        parseFileState(at: url, provider: provider)?.records
-    }
-
-    private nonisolated static func parseFileState(at url: URL, provider: AgenticProvider) -> ParseState? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
         var state = ParseState()
         do {
-            while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
-                try Task.checkCancellation()
-                consume(chunk, provider: provider, state: &state)
-            }
+            _ = try readFile(at: url, provider: provider, state: &state)
             finishLine(provider: provider, state: &state)
-            return state
+            try Task.checkCancellation()
+            return state.records
         } catch {
             return nil
         }
     }
 
+    private nonisolated static func readFile(
+        at url: URL,
+        provider: AgenticProvider,
+        readOffset: Int = 0,
+        byteCount: Int? = nil,
+        initialCommittedOffset: Int = 0,
+        state: inout ParseState
+    ) throws -> FileReadResult {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        if readOffset > 0 { try handle.seek(toOffset: UInt64(readOffset)) }
+        var remaining = byteCount
+        var bytesRead = 0
+        var committedOffset = initialCommittedOffset
+        while remaining != 0 {
+            try Task.checkCancellation()
+            let chunkSize = min(1024 * 1024, remaining ?? 1024 * 1024)
+            guard let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
+            let chunkOffset = bytesRead
+            bytesRead += chunk.count
+            let completeByteCount = try consume(chunk, provider: provider, state: &state)
+            if completeByteCount > 0 {
+                committedOffset = initialCommittedOffset + chunkOffset + completeByteCount
+            }
+            remaining = remaining.map { $0 - chunk.count }
+        }
+        if let byteCount, bytesRead != byteCount { throw CocoaError(.fileReadUnknown) }
+        try Task.checkCancellation()
+        return FileReadResult(committedOffset: committedOffset, bytesRead: bytesRead)
+    }
+
     nonisolated static func parse(data: Data, provider: AgenticProvider) -> [AgenticUsageRecord] {
         var state = ParseState()
-        consume(data, provider: provider, state: &state)
-        finishLine(provider: provider, state: &state)
+        do {
+            _ = try consume(data, provider: provider, state: &state)
+            finishLine(provider: provider, state: &state)
+        } catch {}
         return state.records
     }
 
-    private nonisolated static func consume(_ data: Data, provider: AgenticProvider, state: inout ParseState) {
-        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+    /// Returns the number of bytes through the last newline in `data`.
+    private nonisolated static func consume(
+        _ data: Data, provider: AgenticProvider, state: inout ParseState
+    ) throws -> Int {
+        var committedByteCount = 0
+        try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            try Task.checkCancellation()
             guard let base = raw.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
             var start = 0
             var index = 0
             while index < raw.count {
+                if index.isMultiple(of: 64 * 1024) { try Task.checkCancellation() }
                 if base[index] == 0x0A {
                     appendLineBytes(data[(data.startIndex + start)..<(data.startIndex + index)], provider: provider, state: &state)
                     finishLine(provider: provider, state: &state)
                     start = index + 1
+                    committedByteCount = start
                 }
                 index += 1
             }
+            try Task.checkCancellation()
             appendLineBytes(data[(data.startIndex + start)..<data.endIndex], provider: provider, state: &state)
         }
+        return committedByteCount
     }
 
     private nonisolated static func appendLineBytes(
@@ -582,6 +748,7 @@ actor AgenticUsageLoader {
     }
 
     private nonisolated static func finishLine(provider: AgenticProvider, state: inout ParseState) {
+        guard !Task.isCancelled else { return }
         defer {
             state.line.removeAll(keepingCapacity: true)
             state.oversizedLine = false
@@ -931,7 +1098,8 @@ actor AgenticUsageLoader {
         var indexByKey = [String: Int](minimumCapacity: records.count)
         var kept: [AgenticUsageRecord] = []
         kept.reserveCapacity(records.count)
-        for record in records {
+        for (index, record) in records.enumerated() {
+            if index.isMultiple(of: 4096), Task.isCancelled { return kept }
             guard let key = record.dedupKey else {
                 kept.append(record)
                 continue
@@ -1091,7 +1259,7 @@ private struct RawCodexTokenInfo: Decodable {
     }
 }
 
-private struct RawCodexTokenUsage: Decodable, Equatable {
+private struct RawCodexTokenUsage: Codable, Equatable, Sendable {
     let inputTokens: Int?
     let cachedInputTokens: Int?
     let cacheWriteInputTokens: Int?

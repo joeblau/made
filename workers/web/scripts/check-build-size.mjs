@@ -5,13 +5,13 @@
  *   initial  - <script src>/modulepreload entries and their static imports.
  *              This is the critical path for theme, downloads, and the cockpit
  *              loader and must stay free of Three.js. Measured at 6,522 raw /
- *              3,182 gzip bytes.
+ *              3,184 gzip bytes.
  *   deferred - dynamic import() chunks: the decorative cockpit scene and
- *              optional interactions. Measured at 581,414 raw / 146,231 gzip.
+ *              optional interactions. Measured at 581,747 raw / 146,349 gzip.
  *
- * Thresholds leave roughly 10-15% headroom over the measured sizes (raw and
- * gzip -9 are both enforced). Modules no page references are reported but not
- * counted. Raise a budget only with a fresh measurement in the commit.
+ * Thresholds leave headroom for ordinary bundle churn; raw and gzip -9 are
+ * both enforced. Modules no page references are reported but not counted.
+ * Raise a budget only with a fresh measurement in the commit.
  */
 import { readdir, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';

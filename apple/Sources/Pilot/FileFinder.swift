@@ -3,14 +3,12 @@ import Foundation
 /// One indexed file in a workspace root.
 struct FileItem: Identifiable, Hashable {
     var id: String { path }
-    let path: String          // absolute
-    let relativePath: String  // path relative to root, shown in the UI
-    let name: String          // basename
+    let path: String
+    let relativePath: String
+    let name: String
     let directoryPath: String
-    /// Case-folded forms, cached once at index time. Filtering runs over the
-    /// whole index on every keystroke, so re-lowercasing up to 200k candidates
-    /// per pass dominated finder latency; these are pure functions of the
-    /// fields above and cost one extra copy of each string.
+    /// Lowercased forms cached at index time to avoid repeated case folding
+    /// while filtering.
     let foldedRelativePath: String
     let foldedName: String
     let foldedNameStem: String
@@ -28,22 +26,14 @@ struct FileItem: Identifiable, Hashable {
 
 /// In-memory file index + fuzzy search for the editor's "open file" finder.
 ///
-/// `start(root:)` recursively builds or refreshes the index off the main actor,
-/// then `setQuery(_:)` filters it off the main actor on every keystroke via
-/// `FuzzyMatcher`. Obsolete scans are cancelled and only the best 300 results
-/// are retained, keeping the 200k-file ceiling away from the MainActor. Indexing prefers
-/// `git ls-files` so `.gitignore` is honored for free (plus a pruned scan that
-/// adds back `.env*` / `.dev.vars` — gitignored, but exactly the files you open
-/// by hand), and falls back to a pruned filesystem walk outside git repos.
+/// Gitignore rules are honored except for `.env*` and `.dev.vars`. Outside git
+/// repositories, indexing falls back to a pruned filesystem walk.
 @MainActor
 @Observable
 final class FileFinder {
-    /// The current search results — already filtered, scored, sorted, and capped.
     private(set) var results: [FileItem] = []
-    /// True while the background index is being built.
     private(set) var isIndexing: Bool = false
 
-    /// The full, unfiltered index. Filtering reads from here on every keystroke.
     @ObservationIgnored private var index: [FileItem] = []
     /// The root the current `index` was (or is being) built for. Used both to
     /// make `start` idempotent and to drop results from a stale indexing task
@@ -84,9 +74,7 @@ final class FileFinder {
     nonisolated private static let pathComponentPrefixBonus = 450
     nonisolated private static let pathSubstringBonus = 250
 
-    /// Directory names skipped wholesale during the non-git filesystem walk.
-    /// Build artifacts, dependency caches, and VCS metadata — none of which the
-    /// user wants to open by hand.
+    /// Build artifacts, dependency caches, and VCS metadata excluded from filesystem walks.
     nonisolated static let skippedDirectories: Set<String> = [
         ".git", "node_modules", ".build", "build", "DerivedData", "Pods",
         ".next", "dist", "out", "target", ".venv", "venv", "__pycache__",
@@ -108,11 +96,6 @@ final class FileFinder {
         let normalized = Self.normalize(root)
         let isNewRoot = indexedRoot != normalized
 
-        // Re-index on every explicit open so files created or removed since the
-        // last scan show up — the index used to be built once per root and then
-        // cached forever, which left the finder stale (e.g. an agent writes new
-        // files in a sibling terminal and they never appear). Skip only when a
-        // scan for this exact root is already in flight.
         if !isNewRoot && isIndexing { return }
 
         if isNewRoot {
@@ -153,7 +136,6 @@ final class FileFinder {
         indexTask = nil
         index = items
         isIndexing = false
-        // Reflect whatever the user typed while indexing was in flight.
         refilter()
     }
 
@@ -274,9 +256,7 @@ final class FileFinder {
         let score: Int
     }
 
-    /// Evaluates both filename and relative path. Taking the stronger score fixes
-    /// the old early-return behavior where any weak basename subsequence hid a
-    /// much better exact directory/path match.
+    /// Uses the stronger of the filename and relative-path scores.
     private nonisolated static func score(term: SearchTerm, item: FileItem) -> Int? {
         let nameScore = smartScore(
             term: term,
@@ -435,7 +415,7 @@ final class FileFinder {
             standardOutputLimit: 32 * 1_024 * 1_024
         )
         guard let result = try? ProcessRunner.runBlocking(invocation) else {
-            return nil   // git not found / not a repository — fall back to walking.
+            return nil
         }
         if currentTaskIsCancelled() { return [] }
         let data = result.standardOutput

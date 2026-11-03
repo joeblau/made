@@ -23,12 +23,14 @@ enum EnvSecret {
         let value: String
     }
 
-    static func matches(in string: String) -> [Match] {
+    static func matches(in string: String, range: NSRange? = nil) -> [Match] {
         let ns = string as NSString
-        let full = NSRange(location: 0, length: ns.length)
+        let scanRange = range ?? NSRange(location: 0, length: ns.length)
         var result: [Match] = []
 
-        line.enumerateMatches(in: string, range: full) { match, _, _ in
+        line.enumerateMatches(
+            in: string, options: [.withTransparentBounds, .withoutAnchoringBounds], range: scanRange
+        ) { match, _, _ in
             guard let match else { return }
             let keyRange = match.range(at: 1)
             var valueRange = match.range(at: 2)
@@ -104,12 +106,11 @@ final class EnvMaskController: NSObject, @preconcurrency NSLayoutManagerDelegate
     }
 
     /// Recompute which secret values should be masked and re-lay-out if that
-    /// set changed. Cheap no-op when nothing moved.
-    func refresh() {
+    /// set changed. The editor supplies the styler's index on text changes;
+    /// standalone reveal toggles can still request a fresh parse.
+    func refresh(secretMatches: [EnvSecret.Match]? = nil) {
         guard let textView, let layoutManager = textView.layoutManager else { return }
-        let string = textView.string
-
-        let matches = EnvSecret.matches(in: string)
+        let matches = secretMatches ?? EnvSecret.matches(in: textView.string)
         secrets = matches
 
         // Locked by default: a value is only visible when the user explicitly
@@ -124,11 +125,22 @@ final class EnvMaskController: NSObject, @preconcurrency NSLayoutManagerDelegate
         textView.updateSecretAffordances()
 
         guard newMasked != maskedRanges else { return }
+        var invalidated = IndexSet()
+        let length = (textView.string as NSString).length
+        for range in maskedRanges + newMasked {
+            let start = min(range.location, length)
+            let end = min(NSMaxRange(range), length)
+            if end > start { invalidated.insert(integersIn: start..<end) }
+        }
         maskedRanges = newMasked
 
-        let full = NSRange(location: 0, length: (string as NSString).length)
-        layoutManager.invalidateGlyphs(forCharacterRange: full, changeInLength: 0, actualCharacterRange: nil)
-        layoutManager.invalidateLayout(forCharacterRange: full, actualCharacterRange: nil)
+        for range in invalidated.rangeView {
+            let characters = NSRange(location: range.lowerBound, length: range.count)
+            layoutManager.invalidateGlyphs(
+                forCharacterRange: characters, changeInLength: 0, actualCharacterRange: nil
+            )
+            layoutManager.invalidateLayout(forCharacterRange: characters, actualCharacterRange: nil)
+        }
         textView.needsDisplay = true
         textView.updateSecretAffordances()
     }

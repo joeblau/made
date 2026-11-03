@@ -2,8 +2,8 @@ import { DurableObject } from "cloudflare:workers";
 import { AlarmSchedule } from "./alarm";
 
 /**
- * Signaling / rendezvous Durable Object for UDP hole punching (issue #51,
- * Phase 1). One instance per shared pairing `token`. It records at most two
+ * Signaling / rendezvous Durable Object for UDP hole punching. One instance
+ * per shared pairing `token`. It records at most two
  * distinct peers (a pair) so two devices that present the same token can learn
  * each other's public UDP endpoint and then punch a hole directly.
  *
@@ -30,9 +30,9 @@ export interface Peer {
 type PeerMap = Record<string, Peer>;
 
 /**
- * How long a registration stays valid. Stale peers are evicted on the next
- * touch so a long-dead device can't keep occupying a pair slot. UDP hole
- * punches are short-lived, so a few minutes is plenty.
+ * How long a registration stays valid. Stale peers are evicted on access or
+ * by the expiry alarm so a long-dead device can't keep occupying a pair slot.
+ * UDP hole punches are short-lived, so a few minutes is plenty.
  */
 const PEER_TTL_MS = 5 * 60 * 1000;
 

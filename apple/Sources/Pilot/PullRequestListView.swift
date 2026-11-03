@@ -1,21 +1,19 @@
 import AppKit
 import SwiftUI
 
-/// The inspector's tab selector — SwiftUI's rounded segmented control. It fills
+/// The inspector's tab selector — AppKit's rounded segmented control. It fills
 /// the inspector width and compresses labels as the column narrows.
 struct InspectorTabSelector: View {
     @Binding var selection: InspectorTab
 
     var body: some View {
-        Picker("View", selection: $selection) {
-            ForEach(InspectorTab.allCases, id: \.self) { tab in
-                Label(tab.rawValue, systemImage: tab.systemImageName).tag(tab)
-            }
-        }
-        .legibleSegmentedPicker()
-        .buttonBorderShape(.capsule)
-        .font(.title3)
-        .labelsHidden()
+        PilotSegmentedControl(
+            "View",
+            selection: $selection,
+            options: InspectorTab.allCases,
+            title: { $0.rawValue }
+        )
+        .frame(maxWidth: .infinity)
     }
 }
 

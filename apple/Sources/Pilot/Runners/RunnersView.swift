@@ -4,6 +4,7 @@ struct RunnersView: View {
     @Bindable var store: RunnersStore
     @State private var showsAddScope = false
     @State private var editingRunner: GitHubRunner?
+    @State private var hoveredScopeID: RunnerScope.ID?
     @AppStorage("runners.layout") private var layout: RunnerLayout = .fleet
 
     var body: some View {
@@ -50,10 +51,9 @@ struct RunnersView: View {
         }
     }
 
-    /// Scope tabs are glass chips floating above the fleet; the selected tab
-    /// carries the only accent tint, as a state signal (COL-4). They stay
-    /// chips rather than a segmented control because each carries its own
-    /// context menu and the strip scrolls when there are many.
+    /// Scope tabs are compact Liquid Glass chips; the selected tab carries the
+    /// accent tint as a state signal (COL-4). They stay separate buttons rather
+    /// than a segmented control because each has a context menu and the strip scrolls.
     private var tabBar: some View {
         HStack(spacing: LiquidGlassMetrics.Spacing.small) {
             GlassChipScroller {
@@ -61,30 +61,58 @@ struct RunnersView: View {
                     ForEach(store.scopes) { scope in
                         scopeTab(scope)
                     }
+                    Button { showsAddScope = true } label: {
+                        Label("Add a runner source", systemImage: "plus")
+                    }
+                    .compatGlassIconButton(controlSize: .small)
+                    .help("Add an enterprise, organization, or repository")
                 }
                 .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
                 .animation(LiquidGlassMetrics.spring, value: store.selectedScopeID)
             }
-            Button { showsAddScope = true } label: {
-                Label("Add a runner source", systemImage: "plus")
-            }
-            .compatGlassIconButton()
-            .help("Add an enterprise, organization, or repository")
         }
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
         .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
     }
 
     private func scopeTab(_ scope: RunnerScope) -> some View {
         let isSelected = store.selectedScopeID == scope.id
+        let isHovering = hoveredScopeID == scope.id
         return Button {
             store.selectedScopeID = scope.id
             store.searchText = ""
         } label: {
             Label(scope.name, systemImage: scope.kind.symbol)
                 .font(.subheadline.weight(.medium))
+                .padding(.leading, isSelected ? 12 : 0)
         }
-        .buttonStyle(.liquidGlassChip(isSelected: isSelected))
+        .buttonStyle(.liquidGlassChip(isSelected: isSelected, compact: true))
+        .overlay(alignment: .leading) {
+            if isSelected {
+                Button { store.remove(scope) } label: {
+                    Image(systemName: "xmark")
+                        .scaledFont(size: 8, weight: .bold)
+                        .frame(width: 12, height: 12)
+                }
+                .buttonStyle(.liquidGlassPressable(cornerRadius: 6))
+                .foregroundStyle(.secondary)
+                .padding(.leading, 4)
+                .opacity(isHovering ? 1 : 0)
+                .disabled(!isHovering)
+                .allowsHitTesting(isHovering)
+                .accessibilityHidden(!isHovering)
+                .accessibilityLabel("Remove Tab")
+                .help("Remove Tab")
+            }
+        }
+        .animation(LiquidGlassMetrics.stateChange, value: isHovering)
+        .onHover { inside in
+            if inside {
+                hoveredScopeID = scope.id
+            } else if hoveredScopeID == scope.id {
+                hoveredScopeID = nil
+            }
+        }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .contextMenu {
             if let url = scope.settingsURL { Link("Open Runner Settings on GitHub", destination: url) }
@@ -106,8 +134,8 @@ struct RunnersView: View {
                 searchControls
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
     }
 
     private func summaryCounts(_ counts: [GitHubRunner.State: Int]) -> some View {
@@ -138,13 +166,14 @@ struct RunnersView: View {
                 .font(.subheadline)
                 .frame(maxWidth: 200)
 
-            Picker("Layout", selection: $layout) {
-                ForEach(RunnerLayout.allCases, id: \.self) { layout in
-                    Label(layout.title, systemImage: layout.symbol).labelStyle(.iconOnly).tag(layout)
-                }
-            }
-            .legibleSegmentedPicker()
-            .labelsHidden()
+            PilotSegmentedControl(
+                "Layout",
+                selection: $layout,
+                options: RunnerLayout.allCases,
+                title: { $0.title },
+                systemImage: { $0.symbol },
+                showsTitles: false
+            )
             .fixedSize()
             .help("Switch between the 3D fleet, compact tiles, and detailed cards")
 
@@ -219,7 +248,7 @@ struct RunnersView: View {
                 edit: { editingRunner = $0 }
             )
             .overlay(alignment: .bottomLeading) {
-                updatedFootnote.padding(16).environment(\.colorScheme, .dark)
+                updatedFootnote.padding(LiquidGlassMetrics.Spacing.xSmall).environment(\.colorScheme, .dark)
             }
         } else {
             ScrollView {
@@ -238,9 +267,9 @@ struct RunnersView: View {
                         }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 20)
-                updatedFootnote.padding(.bottom, 16)
+                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
+                .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
+                updatedFootnote.padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
             }
         }
     }
@@ -466,7 +495,7 @@ private enum RunnerLayout: String, CaseIterable {
     }
 
     var minimumWidth: CGFloat { self == .compact ? 236 : 240 }
-    var spacing: CGFloat { self == .compact ? 12 : 16 }
+    var spacing: CGFloat { LiquidGlassMetrics.Spacing.small }
 }
 
 private struct RunnerHardwareImage: View {
@@ -491,11 +520,11 @@ private struct RunnerHardwareImage: View {
 /// surface's corner, so its radius is the surface radius minus that padding
 /// (LAY-4: outer = inner + padding).
 private enum RunnerSurface {
-    static let cardPadding = LiquidGlassMetrics.Spacing.medium
+    static let cardPadding = LiquidGlassMetrics.Spacing.xSmall
     static let cardThumbnailRadius = LiquidGlassMetrics.Radius.control
     static let cardRadius = cardThumbnailRadius + cardPadding
 
-    static let tilePadding = LiquidGlassMetrics.Spacing.small
+    static let tilePadding = LiquidGlassMetrics.Spacing.xSmall
     static let tileThumbnailRadius = LiquidGlassMetrics.Radius.control
     static let tileRadius = tileThumbnailRadius + tilePadding
 }

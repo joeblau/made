@@ -194,11 +194,11 @@ struct DockerStoreRefreshTests {
         store.stop()
     }
 
-    @Test("An action failure after a reconnect is not shown against the new connection")
+    @Test("An action failure after a reconnect cannot affect the new connection")
     func staleActionFailureIsDropped() async throws {
         let harness = try Harness()
         let old = harness.nextEngine(name: "old", holdsActions: true)
-        let current = harness.nextEngine(name: "current")
+        let current = harness.nextEngine(name: "current", holdsActions: true)
         let store = harness.store
         store.start()
         #expect(await eventually { old.listCalls == 1 && !store.isRefreshing })
@@ -209,20 +209,26 @@ struct DockerStoreRefreshTests {
 
         store.reconnect()
         #expect(await eventually { current.listCalls == 1 && !store.isRefreshing })
-        // The daemon may still be acting on the container, so the row stays
-        // guarded until that request ends.
+        #expect(store.busyContainerIDs.isEmpty)
         store.perform(.restart, on: container)
-        #expect(current.performCalls == 0)
+        #expect(await eventually { current.performCalls == 1 })
+        #expect(store.busyContainerIDs == ["c1"])
 
         old.releaseActions(throwing: DockerTransportError.timedOut)
-        #expect(await eventually { store.busyContainerIDs.isEmpty })
         try await Task.sleep(for: .milliseconds(50))
+        #expect(store.busyContainerIDs == ["c1"])
+        #expect(store.actionError == nil)
+        #expect(current.listCalls == 1)
+
+        current.releaseActions()
+        #expect(await eventually { store.busyContainerIDs.isEmpty && current.listCalls == 2 })
+        #expect(await eventually { !store.isRefreshing })
         #expect(store.actionError == nil)
         store.stop()
     }
 
-    @Test("An old client's successful action refreshes once through the current client")
-    func staleActionSuccessRefreshesCurrentClient() async throws {
+    @Test("An old client's successful action does not refresh the current client")
+    func staleActionSuccessDoesNotRefreshCurrentClient() async throws {
         let harness = try Harness()
         let old = harness.nextEngine(name: "old", holdsActions: true)
         let current = harness.nextEngine(name: "current")
@@ -237,14 +243,31 @@ struct DockerStoreRefreshTests {
         #expect(await eventually { current.listCalls == 1 && !store.isRefreshing })
 
         old.releaseActions()
-        #expect(await eventually { store.busyContainerIDs.isEmpty })
-        // The daemon changed state, so the list is re-read, but only through
-        // the client the section is showing now.
-        #expect(await eventually { current.listCalls == 2 && !store.isRefreshing })
         try await Task.sleep(for: .milliseconds(100))
-        #expect(current.listCalls == 2)
+        #expect(store.busyContainerIDs.isEmpty)
+        #expect(current.listCalls == 1)
         #expect(old.listCalls == 1)
         #expect(store.actionError == nil)
+        store.stop()
+    }
+
+    @Test("Reconnect clears the previous connection's action error")
+    func reconnectClearsActionError() async throws {
+        let harness = try Harness()
+        let old = harness.nextEngine(name: "old", holdsActions: true)
+        let current = harness.nextEngine(name: "current")
+        let store = harness.store
+        store.start()
+        #expect(await eventually { old.listCalls == 1 && !store.isRefreshing })
+
+        store.perform(.stop, on: try Fixture.container(id: "c1", name: "api"))
+        #expect(await eventually { old.performCalls == 1 })
+        old.releaseActions(throwing: DockerTransportError.timedOut)
+        #expect(await eventually { store.actionError != nil })
+
+        store.reconnect()
+        #expect(store.actionError == nil)
+        #expect(await eventually { current.listCalls == 1 && !store.isRefreshing })
         store.stop()
     }
 
@@ -259,8 +282,8 @@ struct DockerStoreRefreshTests {
         store.perform(.start, on: try Fixture.container(id: "c1", name: "api"))
         #expect(await eventually { engine.performCalls == 1 })
         store.stop()
+        #expect(store.busyContainerIDs.isEmpty)
         engine.releaseActions()
-        #expect(await eventually { store.busyContainerIDs.isEmpty })
         try await Task.sleep(for: .milliseconds(100))
         #expect(engine.listCalls == 1)
         #expect(!store.isRefreshing)

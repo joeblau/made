@@ -109,24 +109,27 @@ struct SnapshotDevice: View {
 struct SnapshotRemoteDesktop: View {
     var body: some View {
         VStack(spacing: 0) {
-            // Mirrors RemoteDesktopView's glass group bar.
+            // Mirrors RemoteDesktopView's glass group tabs and standard actions.
             HStack(spacing: 12) {
                 HStack(spacing: 8) {
-                    Label("Build lab", systemImage: "square.grid.2x2")
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .compatGlassCapsule(tint: Color.accentColor.opacity(0.22))
-                    Label("Design studio", systemImage: "square.grid.2x2").foregroundStyle(.secondary)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .compatGlassCapsule()
+                    PilotSegmentedControl(
+                        "Remote Desktop Group",
+                        selection: .constant("Build lab"),
+                        options: ["Build lab", "Design studio"],
+                        title: { $0 },
+                        systemImage: { _ in "square.grid.2x2" },
+                        controlSize: .small
+                    )
+                    .fixedSize()
                     Button {} label: { Image(systemName: "plus") }
-                        .buttonBorderShape(.circle).compatGlassButtonStyle()
+                        .compatGlassIconButton(controlSize: .small)
                 }
                 Spacer()
                 Button {} label: { Image(systemName: "pencil") }
-                    .buttonBorderShape(.circle).compatGlassButtonStyle()
+                    .compatGlassIconButton(controlSize: .small)
                 Text("4/4").foregroundStyle(.secondary)
                 Button {} label: { Label("Add Computer", systemImage: "plus") }
-                    .compatGlassButtonStyle()
+                    .compatGlassButtonStyle().controlSize(.small)
             }.font(.system(size: 12)).padding(.horizontal, 12).padding(.vertical, 8)
             GeometryReader { geometry in
                 let size = NSSize(width: (geometry.size.width - 1) / 2, height: (geometry.size.height - 1) / 2)
