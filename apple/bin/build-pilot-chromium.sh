@@ -32,9 +32,11 @@ if [[ "${1:-}" == --local ]]; then
   local_settings=(
     -derivedDataPath "${BLAU_PILOT_DERIVED_DATA:-$APPLE_ROOT/.build/cockpit}"
     "ARCHS=$(uname -m)" ONLY_ACTIVE_ARCH=YES
-    # This command-line setting reaches SwiftPM dependencies too. Unoptimized
+    # These command-line settings reach SwiftPM dependencies too. Unoptimized
     # RoyalVNCKit/CryptoSwift DH authentication can exceed the VNC deadline.
-    SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=incremental
+    # Whole-module optimization matches release codegen at the cost of
+    # recompiling a changed module in full.
+    SWIFT_OPTIMIZATION_LEVEL=-O SWIFT_COMPILATION_MODE=wholemodule
     GCC_OPTIMIZATION_LEVEL=0 DEBUG_INFORMATION_FORMAT=dwarf
     BLAU_CHROMIUM_CODESIGN_TIMESTAMP=NO
   )
