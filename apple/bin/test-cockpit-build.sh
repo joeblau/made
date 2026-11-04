@@ -48,12 +48,12 @@ grep -qx -- --use-cache "$COCKPIT_TEST_LOG"
 grep -qx -- -onlyUsePackageVersionsFromResolvedFile "$COCKPIT_TEST_LOG"
 grep -qx -- -quiet "$COCKPIT_TEST_LOG"
 
-# Local compilation is incremental and host-only, with a relocatable cache.
+# Local compilation is whole-module optimized and host-only, with a relocatable cache.
 : > "$COCKPIT_TEST_LOG"
 BLAU_PILOT_DERIVED_DATA="$work/cache with spaces" "$build" --local
 assert_absent '^--local$'
 grep -qx "ARCHS=$(uname -m)" "$COCKPIT_TEST_LOG"
-grep -qx SWIFT_COMPILATION_MODE=incremental "$COCKPIT_TEST_LOG"
+grep -qx SWIFT_COMPILATION_MODE=wholemodule "$COCKPIT_TEST_LOG"
 grep -qx SWIFT_OPTIMIZATION_LEVEL=-O "$COCKPIT_TEST_LOG"
 grep -qx "$work/cache with spaces" "$COCKPIT_TEST_LOG"
 grep -qx BLAU_CHROMIUM_CODESIGN_TIMESTAMP=NO "$COCKPIT_TEST_LOG"

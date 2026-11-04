@@ -163,8 +163,9 @@ fastlane snapshotAll
 ```
 
 `bun cockpit` uses a persistent `apple/.build/cockpit` cache, builds only the
-host architecture, and uses unoptimized, incremental Swift compilation for
-fast local iteration. It verifies and reuses the pinned Chromium runtime,
+host architecture, and compiles Swift with whole-module optimization (`-O`,
+the same Swift codegen as release). Changing a file recompiles its whole
+module, so rebuilds are slower than incremental builds. It verifies and reuses the pinned Chromium runtime,
 caches Xcode project generation, and clones the installed app on APFS. The first
 build populates the cache; later builds reuse it. Set `BLAU_PILOT_DERIVED_DATA`
 to relocate it. `install-pilot-chromium.sh --skip-build` installs that local
