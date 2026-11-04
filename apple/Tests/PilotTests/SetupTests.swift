@@ -94,7 +94,7 @@ struct SetupTests {
 
     @Test("A selected project opens a new workspace without changing existing workspaces")
     func projectWorkspace() throws {
-        let schema = Schema(versionedSchema: PilotSchemaV3.self)
+        let schema = Schema(versionedSchema: PilotSchemaCurrent.self)
         let container = try ModelContainer(
             for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         )

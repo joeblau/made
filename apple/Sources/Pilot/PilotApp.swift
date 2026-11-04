@@ -69,7 +69,7 @@ struct PilotApp: App {
         )
         // Build the schema from the newest versioned schema so the store is
         // stamped with a version and `PilotMigrationPlan` governs upgrades.
-        let schema = Schema(versionedSchema: PilotSchemaV3.self)
+        let schema = Schema(versionedSchema: PilotSchemaCurrent.self)
         let container: ModelContainer
         if isRunningTests {
             // A hosted unit-test launch must never open, back up, migrate, or

@@ -23,7 +23,7 @@ final class SnapshotFixtures {
                     UsageConsent.grokKey, UsageConsent.kimiKey] {
             defaults.set(true, forKey: key)
         }
-        let schema = Schema(versionedSchema: PilotSchemaV3.self)
+        let schema = Schema(versionedSchema: PilotSchemaCurrent.self)
         container = try ModelContainer(
             for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         )

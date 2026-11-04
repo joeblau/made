@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 import SwiftData
 import Testing
@@ -16,6 +17,111 @@ struct PilotSchemaMigrationTests {
     private enum V2OnlyPlan: SchemaMigrationPlan {
         static var schemas: [any VersionedSchema.Type] { [PilotSchemaV2.self] }
         static var stages: [MigrationStage] { [] }
+    }
+
+    private enum V3OnlyPlan: SchemaMigrationPlan {
+        static var schemas: [any VersionedSchema.Type] { [PilotSchemaV3.self] }
+        static var stages: [MigrationStage] { [] }
+    }
+
+    /// Entity version hashes stamped into stores by builds that shipped V3,
+    /// read from such a store's metadata. A mismatch means the V3 snapshot no
+    /// longer matches the shipped schema, so those stores cannot migrate.
+    private static let shippedV3Hashes: [String: String] = [
+        "BrowserState": "QJR3MWb9z6uJLip/CpBPMNTxY+M/ddwS61m4UWTTqWA=",
+        "EditorState": "3m6c1htkwSdxOUpQllVIPquDfTCbvNRakSqcQwLeQyE=",
+        "ExtensionWorkspaceLink": "7fscOj59gFRdGYrE71HfDMaamc4pI/QlxeD5WSokDS8=",
+        "Note": "vjT47X8WCzkRjqlid7dP1EKudAJaB7gCRUR4F1x173U=",
+        "Pane": "Z+GpbKAScTIwJ3w6ORyk4XiULctiqY+Vlbvf1/Abgi8=",
+        "RemoteDesktopConnection": "5el2iVgh/VdzoGoxoOODs3BCn7ml1NtiZHfHNR9vOIc=",
+        "Workspace": "sKES3UtuQCUIj72lln9dM59CoTrBHh0Issvh83QYTL0=",
+    ]
+
+    /// Entity version hashes of the live models, which PilotSchemaV4 points
+    /// at. If this fails, a live `@Model` changed: freeze V4 as nested
+    /// snapshot copies, add V5 with a migration stage, then update these.
+    private static let currentV4Hashes: [String: String] = [
+        "BrowserState": "QJR3MWb9z6uJLip/CpBPMNTxY+M/ddwS61m4UWTTqWA=",
+        "EditorState": "3m6c1htkwSdxOUpQllVIPquDfTCbvNRakSqcQwLeQyE=",
+        "ExtensionWorkspaceLink": "7fscOj59gFRdGYrE71HfDMaamc4pI/QlxeD5WSokDS8=",
+        "Note": "vjT47X8WCzkRjqlid7dP1EKudAJaB7gCRUR4F1x173U=",
+        "Pane": "9vQS+3p1vzu9qk2+pR2IauX8zJsMsmGHfplYMknJbK4=",
+        "RemoteDesktopConnection": "5el2iVgh/VdzoGoxoOODs3BCn7ml1NtiZHfHNR9vOIc=",
+        "Workspace": "sKES3UtuQCUIj72lln9dM59CoTrBHh0Issvh83QYTL0=",
+    ]
+
+    private static func versionHashes(_ models: [any PersistentModel.Type]) throws -> [String: String] {
+        let model = try #require(NSManagedObjectModel.makeManagedObjectModel(for: models))
+        return model.entityVersionHashesByName.mapValues { $0.base64EncodedString() }
+    }
+
+    @Test("The V3 snapshot matches the schema shipped V3 stores carry")
+    func v3SnapshotMatchesShippedStores() throws {
+        let hashes = try Self.versionHashes(PilotSchemaV3.models)
+        #expect(hashes == Self.shippedV3Hashes, "\(hashes.sorted { $0.key < $1.key })")
+    }
+
+    @Test("Live models match V4; changing one requires a new schema version")
+    func liveModelsMatchCurrentSchemaVersion() throws {
+        let hashes = try Self.versionHashes(PilotSchemaCurrent.models)
+        #expect(hashes == Self.currentV4Hashes, "\(hashes.sorted { $0.key < $1.key })")
+    }
+
+    @Test("Shipped V3 stores migrate to the live schema as local terminals")
+    func v3StoreMigratesWithLocalTerminals() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pilot-v3-migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("Pilot.store")
+
+        let (workspaceID, terminalID) = try autoreleasepool {
+            let schema = Schema(versionedSchema: PilotSchemaV3.self)
+            let container = try ModelContainer(
+                for: schema,
+                migrationPlan: V3OnlyPlan.self,
+                configurations: ModelConfiguration(schema: schema, url: storeURL)
+            )
+            let workspace = PilotSchemaV3.Workspace()
+            workspace.name = "V3 Workspace"
+            workspace.rootPath = "/tmp/v3-repository"
+            let terminal = PilotSchemaV3.Pane()
+            terminal.kindRaw = PaneKind.terminal.rawValue
+            terminal.currentDirectory = "/tmp/v3-repository"
+            terminal.workspace = workspace
+            let browser = PilotSchemaV3.Pane()
+            browser.kindRaw = PaneKind.browser.rawValue
+            browser.sortOrder = 1
+            browser.workspace = workspace
+            let browserState = PilotSchemaV3.BrowserState()
+            browserState.urlText = "https://example.com/v3"
+            browserState.engineRaw = BrowserEngine.chromium.rawValue
+            browser.browserState = browserState
+            workspace.panes = [terminal, browser]
+            let note = PilotSchemaV3.Note()
+            note.body = "V3 note"
+            container.mainContext.insert(workspace)
+            container.mainContext.insert(note)
+            try container.mainContext.save()
+            return (workspace.id, terminal.id)
+        }
+
+        let container = try makeCurrentContainer(at: storeURL)
+        let context = container.mainContext
+        let workspace = try canonicalWorkspace(in: context, id: workspaceID)
+        #expect(workspace.name == "V3 Workspace")
+        #expect(workspace.rootPath == "/tmp/v3-repository")
+        #expect(workspace.panes.count == 2)
+        let terminal = try #require(workspace.panes.first { $0.id == terminalID })
+        #expect(terminal.currentDirectory == "/tmp/v3-repository")
+        #expect(terminal.terminalDestinationRaw == nil)
+        #expect(terminal.terminalDroneIDRaw == nil)
+        #expect(terminal.terminalRemoteSessionIDRaw == nil)
+        #expect(terminal.terminalDroneNameRaw == nil)
+        let browser = try #require(workspace.panes.first { $0.kind == .browser })
+        #expect(browser.browserState?.engine == .chromium)
+        #expect(browser.browserState?.urlText == "https://example.com/v3")
+        #expect(try context.fetch(FetchDescriptor<Note>()).map(\.body) == ["V3 note"])
     }
 
     @Test("Notes written at V1 stay readable through the live class after migration")
@@ -53,7 +159,7 @@ struct PilotSchemaMigrationTests {
         #expect(notes.first?.displayTitle == "Keeps this note")
     }
 
-    @Test("V2 browsers default to WebKit in V3 and Chromium survives reopen")
+    @Test("V2 browsers default to WebKit after migration and Chromium survives reopen")
     func v2BrowserEngineMigratesAndChromiumRoundTrips() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -90,7 +196,7 @@ struct PilotSchemaMigrationTests {
         }
 
         try autoreleasepool {
-            let schema = Schema(versionedSchema: PilotSchemaV3.self)
+            let schema = Schema(versionedSchema: PilotSchemaCurrent.self)
             let container = try ModelContainer(
                 for: schema,
                 migrationPlan: PilotMigrationPlan.self,
@@ -107,7 +213,7 @@ struct PilotSchemaMigrationTests {
         }
 
         try autoreleasepool {
-            let schema = Schema(versionedSchema: PilotSchemaV3.self)
+            let schema = Schema(versionedSchema: PilotSchemaCurrent.self)
             let container = try ModelContainer(
                 for: schema,
                 migrationPlan: PilotMigrationPlan.self,
@@ -265,7 +371,7 @@ struct PilotSchemaMigrationTests {
     }
 
     private func makeCurrentContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: PilotSchemaV3.self)
+        let schema = Schema(versionedSchema: PilotSchemaCurrent.self)
         let configuration = ModelConfiguration(schema: schema, url: storeURL)
         return try ModelContainer(
             for: schema,

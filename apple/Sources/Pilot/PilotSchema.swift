@@ -19,7 +19,7 @@ import SwiftData
 ///   2. Append `PilotSchemaV2.self` to `schemas` (newest last).
 ///   3. Add a `MigrationStage` from V1 to V2 in `stages`:
 ///      `.lightweight` for additive changes, `.custom` otherwise.
-///   4. Point `PilotApp`'s `Schema(versionedSchema:)` at the newest version.
+///   4. Point `PilotSchemaCurrent` at the newest version.
 /// Never edit a shipped version's `models` in place — that is exactly what
 /// breaks upgrades and risks data loss.
 /// V1 is a FROZEN SNAPSHOT of the shipped model shapes — nested copies, not
@@ -262,9 +262,12 @@ enum PilotSchemaV2: VersionedSchema {
     }
 }
 
-/// Adds a persisted browser-engine discriminator. The live BrowserState
-/// supplies WebKit as the property default, so V2 stores migrate without
-/// changing the behavior of existing browser panes.
+/// V3 is a frozen snapshot of the shipped schema that added the persisted
+/// browser-engine discriminator (V2 stores migrate with WebKit as the
+/// default). It once pointed at the live classes, so adding the Drone terminal
+/// fields to the live `Pane` silently changed V3's checksum: shipped V3 stores
+/// matched no known version and the corruption handler quarantined them. Keep
+/// these nested copies unchanged.
 enum PilotSchemaV3: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(3, 0, 0) }
 
@@ -279,11 +282,139 @@ enum PilotSchemaV3: VersionedSchema {
             ExtensionWorkspaceLink.self,
         ]
     }
+
+    @Model
+    final class Workspace {
+        #Unique([\Workspace.id])
+
+        var id: UUID = UUID()
+        var name: String = ""
+        var selectedPaneID: UUID?
+        var frontmostTerminalPaneID: UUID?
+        var axisRaw: String = "vertical"
+        var isInspectorPresented: Bool = false
+        var inspectorTabRaw: String = "Actions"
+        var focusedPaneID: UUID?
+        var isPinned: Bool = false
+        var workspaceSortOrder: Int = 0
+        var rootPath: String = ""
+        var rootPathSourceRaw: String? = "automatic"
+        var actionBadgeCount: Int = 0
+
+        @Relationship(deleteRule: .cascade, inverse: \Pane.workspace)
+        var panes: [Pane] = []
+
+        init() {}
+    }
+
+    @Model
+    final class Pane {
+        #Unique([\Pane.id])
+
+        var id: UUID = UUID()
+        var kindRaw: String = "terminal"
+        var sortOrder: Int = 0
+        var currentDirectory: String = ""
+        var bellCount: Int = 0
+        var sizeFraction: Double = 0
+        var isCollapsed: Bool = false
+        var restoredSizeFraction: Double = 0
+        var wasCollapsedBeforeFocus: Bool = false
+
+        @Relationship(deleteRule: .cascade)
+        var browserState: BrowserState?
+
+        @Relationship(deleteRule: .cascade)
+        var editorState: EditorState?
+
+        var workspace: Workspace?
+
+        init() {}
+    }
+
+    @Model
+    final class BrowserState {
+        var urlText: String = ""
+        var engineRaw: String = "webkit"
+        var appearanceModeRaw: String = "System"
+        var navigationRequestID: Int = 0
+        var inspectorToggleRequestID: Int = 0
+
+        init() {}
+    }
+
+    @Model
+    final class EditorState {
+        var filePath: String = ""
+
+        init() {}
+    }
+
+    @Model
+    final class Note {
+        #Unique([\Note.id])
+
+        var id: UUID = UUID()
+        var body: String = ""
+        var sortOrder: Int = 0
+        var createdAt: Date = Date()
+
+        init() {}
+    }
+
+    @Model
+    final class RemoteDesktopConnection {
+        #Unique([\RemoteDesktopConnection.id])
+
+        var id: UUID = UUID()
+        var host: String = ""
+        var port: Int = 5900
+        var nickname: String = ""
+        var username: String = ""
+        var sortOrder: Int = 0
+        var createdAt: Date = Date()
+        var lastConnectedAt: Date?
+
+        init() {}
+    }
+
+    @Model
+    final class ExtensionWorkspaceLink {
+        var sourceWorkspaceID: UUID = UUID()
+
+        @Relationship(deleteRule: .cascade)
+        var workspace: Workspace?
+
+        init() {}
+    }
 }
+
+/// Adds optional Drone terminal-destination fields to `Pane`; existing panes
+/// migrate as local terminals. This is the live schema: before changing any
+/// live `@Model`, freeze V4 as nested snapshot copies (as V1–V3 are) and add
+/// V5 here.
+enum PilotSchemaV4: VersionedSchema {
+    static var versionIdentifier: Schema.Version { Schema.Version(4, 0, 0) }
+
+    static var models: [any PersistentModel.Type] {
+        [
+            Workspace.self,
+            Pane.self,
+            BrowserState.self,
+            EditorState.self,
+            Note.self,
+            RemoteDesktopConnection.self,
+            ExtensionWorkspaceLink.self,
+        ]
+    }
+}
+
+/// The schema the app opens its store with. Point it at the newest version.
+typealias PilotSchemaCurrent = PilotSchemaV4
 
 enum PilotMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [PilotSchemaV1.self, PilotSchemaV2.self, PilotSchemaV3.self]
+        [PilotSchemaV1.self, PilotSchemaV2.self, PilotSchemaV3.self, PilotSchemaV4.self]
     }
 
     /// One stage per version-to-version upgrade; append a stage whenever a
@@ -292,6 +423,7 @@ enum PilotMigrationPlan: SchemaMigrationPlan {
         [
             .lightweight(fromVersion: PilotSchemaV1.self, toVersion: PilotSchemaV2.self),
             .lightweight(fromVersion: PilotSchemaV2.self, toVersion: PilotSchemaV3.self),
+            .lightweight(fromVersion: PilotSchemaV3.self, toVersion: PilotSchemaV4.self),
         ]
     }
 }
