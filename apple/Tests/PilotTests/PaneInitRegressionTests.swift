@@ -63,12 +63,24 @@ struct PaneInitRegressionTests {
         #expect(pane.browserState == nil)
     }
 
+    // R8: Agent chat init has no persistent per-kind state; the agent choice
+    // and ACP session live in AgentChatPaneStore, the process in
+    // AgentChatRegistry, so adding the kind needed no schema migration.
+    @Test
+    func agentChatKindInitHasNoPerKindState() {
+        let pane = Pane(kind: .agentChat)
+        #expect(pane.kind == .agentChat)
+        #expect(pane.browserState == nil)
+        #expect(pane.editorState == nil)
+        #expect(pane.displayTitle == "Agent Chat")
+    }
+
     // R5: PaneKind cases remain stable. Adding a new kind requires updating this
     // list and adding an initialization-invariant test above.
     @Test
     func paneKindCaseCount() {
-        #expect(PaneKind.allCases.count == 6)
-        #expect(Set(PaneKind.allCases) == Set([.terminal, .browser, .device, .simulator, .android, .editor]))
+        #expect(PaneKind.allCases.count == 7)
+        #expect(Set(PaneKind.allCases) == Set([.terminal, .browser, .device, .simulator, .android, .editor, .agentChat]))
     }
 
     // R6: PaneKind raw values are stable (SwiftData persistence compat)
@@ -80,6 +92,7 @@ struct PaneInitRegressionTests {
         #expect(PaneKind.simulator.rawValue == "simulator")
         #expect(PaneKind.android.rawValue == "android")
         #expect(PaneKind.editor.rawValue == "editor")
+        #expect(PaneKind.agentChat.rawValue == "agentChat")
     }
 
     @Test
