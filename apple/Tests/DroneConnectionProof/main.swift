@@ -6,7 +6,7 @@ enum DroneConnectionProof {
     @MainActor
     static func main() async throws {
         let deadline = Task {
-            try await Task.sleep(for: .seconds(10))
+            try await Task.sleep(for: .seconds(30))
             fatalError("Connection proof timed out")
         }
         defer { deadline.cancel() }
@@ -58,6 +58,7 @@ enum DroneConnectionProof {
             _ = try await retained.value
             fatalError("revoked attempt succeeded")
         } catch DroneTransportError.revoked {}
+        try await FleetProof.run()
         print("Drone connection proof passed: pending replacement, cancellation, per-attempt failure isolation, pending revoke.")
     }
 
