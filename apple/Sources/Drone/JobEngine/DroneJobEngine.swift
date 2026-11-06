@@ -12,6 +12,7 @@ final class DroneJobEngine: @unchecked Sendable {
     private let limits: DroneJobEngineLimits
     private let gitExecutablePath: String
     private let controlsLock = NSCondition()
+    private var pendingAcceptances = 0
     private var stopping = false
     private var controls: [DroneJobID: DroneProcessGroupControl] = [:]
 
@@ -45,12 +46,30 @@ final class DroneJobEngine: @unchecked Sendable {
             }
         }
         try validateWorkspaceAccess(for: create.request)
+        try beginAcceptance()
+        defer { endAcceptance() }
+        // Persistence may block. Never hold the lifecycle lock across it.
+        let created = try store.create(create)
+        if created.isNew {
+            controlsLock.lock()
+            startLocked(id: created.snapshot.id)
+            controlsLock.unlock()
+        }
+        return created.snapshot
+    }
+
+    private func beginAcceptance() throws {
         controlsLock.lock()
         defer { controlsLock.unlock() }
         guard !stopping else { throw DroneJobError.shuttingDown }
-        let created = try store.create(create)
-        if created.isNew { startLocked(id: created.snapshot.id) }
-        return created.snapshot
+        pendingAcceptances += 1
+    }
+
+    private func endAcceptance() {
+        controlsLock.lock()
+        pendingAcceptances -= 1
+        controlsLock.broadcast()
+        controlsLock.unlock()
     }
 
     func snapshot(id: DroneJobID, controllerID: UUID) throws -> DroneJobSnapshot {
@@ -83,13 +102,15 @@ final class DroneJobEngine: @unchecked Sendable {
     /// Stops accepting work immediately, then cancels and joins owned tasks.
     /// False means the bounded wait expired; durable state is never deleted.
     func shutdown(timeout: TimeInterval = 5) async -> Bool {
-        await withCheckedContinuation { continuation in
+        let boundedTimeout = timeout.isFinite ? min(10, max(0, timeout)) : 5
+        let deadline = ContinuousClock.now + .seconds(boundedTimeout)
+        return await withCheckedContinuation { continuation in
             let active = beginShutdown()
             DispatchQueue.global(qos: .utility).async { [self] in
                 // Do not wait on persistence here: a task may already be
                 // blocked in the store. It records cancellation when it exits.
                 for control in active.values { control.cancel() }
-                continuation.resume(returning: waitForShutdown(timeout: timeout))
+                continuation.resume(returning: waitForShutdown(deadline: deadline))
             }
         }
     }
@@ -101,20 +122,23 @@ final class DroneJobEngine: @unchecked Sendable {
         return controls
     }
 
-    private func waitForShutdown(timeout: TimeInterval) -> Bool {
-        let boundedTimeout = timeout.isFinite ? min(10, max(0, timeout)) : 5
-        let deadline = Date().addingTimeInterval(boundedTimeout)
+    private func waitForShutdown(deadline: ContinuousClock.Instant) -> Bool {
         controlsLock.lock()
         defer { controlsLock.unlock() }
-        while !controls.isEmpty {
-            if !controlsLock.wait(until: deadline) { return controls.isEmpty }
+        while pendingAcceptances > 0 || !controls.isEmpty {
+            let remaining = ContinuousClock.now.duration(to: deadline)
+            guard remaining > .zero else { return false }
+            let components = remaining.components
+            let seconds = Double(components.seconds) + Double(components.attoseconds) / 1e18
+            _ = controlsLock.wait(until: Date().addingTimeInterval(seconds))
         }
         return true
     }
 
-    // Caller holds controlsLock across durable acceptance and task registration.
+    // Caller holds controlsLock only for task registration, never persistence.
     private func startLocked(id: DroneJobID) {
         let control = DroneProcessGroupControl(gracePeriod: limits.cancellationGracePeriod)
+        if stopping { control.cancel() }
         controls[id] = control
         DispatchQueue.global(qos: .utility).async { [self] in
             defer {
