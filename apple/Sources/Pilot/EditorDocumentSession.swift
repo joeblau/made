@@ -89,7 +89,9 @@ enum EditorDocumentIO {
     static func load(_ url: URL, io: any EditorFileIO, maxBytes: Int = maxEditableBytes) async -> LoadResult {
         let contents: EditorFileContents
         do {
+            try Task.checkCancellation()
             contents = try await io.read(url, maxBytes: maxBytes)
+            try Task.checkCancellation()
         } catch EditorFileReadError.tooLarge {
             return .tooLarge
         } catch EditorFileReadError.notRegularFile {
@@ -214,8 +216,9 @@ enum EditorLoadOutcome: Equatable, Sendable {
 /// and the load/save work that feeds it.
 ///
 /// Ownership and ordering:
-/// - Every open takes a new generation; a read that finishes after a newer open
-///   or `close()` is discarded, so completion order never decides the selection.
+/// - Every open takes a new generation and owns its detached read. A newer
+///   open or `close()` cancels that read; generation checks also discard late
+///   results from I/O that cannot stop synchronously.
 /// - Saves are serialized through `saveTask` and hold the session strongly, so
 ///   a queued flush still runs after the pane releases it. Each snapshots
 ///   `revision`, and success marks only that revision clean, so edits made
@@ -254,6 +257,7 @@ final class EditorDocumentSession {
     @ObservationIgnored private var loadGeneration: UInt64 = 0
     @ObservationIgnored private var documentCounter: UInt64 = 0
     @ObservationIgnored private var loadTask: Task<Void, Never>?
+    @ObservationIgnored private var readTask: Task<EditorDocumentIO.LoadResult, Never>?
     @ObservationIgnored private var saveTask: Task<EditorSaveOutcome, Never>?
 
     init(io: any EditorFileIO = LiveEditorFileIO()) {
@@ -316,6 +320,8 @@ final class EditorDocumentSession {
 
     private func beginLoad() -> UInt64 {
         loadTask?.cancel()
+        readTask?.cancel()
+        readTask = nil
         loadGeneration &+= 1
         return loadGeneration
     }
@@ -341,10 +347,20 @@ final class EditorDocumentSession {
             guard generation == loadGeneration else { return .superseded }
 
             let io = io
-            let result = await Task.detached(priority: .userInitiated) {
+            let read = Task.detached(priority: .userInitiated) {
                 await EditorDocumentIO.load(url, io: io)
-            }.value
-            guard generation == loadGeneration, !Task.isCancelled else { return .superseded }
+            }
+            readTask = read
+            // Detached tasks do not inherit cancellation. Forward both session
+            // invalidation (beginLoad) and cancellation of an awaited open.
+            let result = await withTaskCancellationHandler {
+                await read.value
+            } onCancel: {
+                read.cancel()
+            }
+            guard generation == loadGeneration else { return .superseded }
+            readTask = nil
+            guard !Task.isCancelled else { return .superseded }
 
             // Edits typed during the outgoing save or the read must not be
             // replaced. Save them and read again (the read may be of the file
