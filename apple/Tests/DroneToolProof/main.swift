@@ -11,6 +11,7 @@ enum DroneToolProof {
             workspaceID: UUID(),
             expiresAt: 1_000
         )
+        try verifyReplayAuthorization(lease: lease)
         let engine = DroneFakeEngine(lease: lease, files: [
             "Sources/App.swift": Data("let value = \"before\"\n".utf8),
         ])
@@ -96,6 +97,29 @@ enum DroneToolProof {
             throw ProofError.failed("secret environment forwarded")
         } catch DroneProtocolError.unauthorized {}
         print("Drone tool proof passed: driver cycle, idempotency, resume, cancellation, leases, bounds, and adversarial inputs.")
+    }
+
+    private static func verifyReplayAuthorization(lease: DroneToolLease) throws {
+        try DroneToolWorkerAuthorization.authorizeReplay(storedLease: lease, requestingLease: lease)
+        // Change each authority component independently, including the same controller
+        // attempting to reuse another job's output or extend its original lease.
+        for field in 0..<7 {
+            let other = DroneToolLease(
+                id: field == 0 ? UUID() : lease.id,
+                controllerID: field == 1 ? UUID() : lease.controllerID,
+                droneID: field == 2 ? UUID() : lease.droneID,
+                jobID: field == 3 ? DroneJobID() : lease.jobID,
+                workspaceID: field == 4 ? UUID() : lease.workspaceID,
+                expiresAt: field == 5 ? lease.expiresAt + 1 : lease.expiresAt
+            )
+            do {
+                try DroneToolWorkerAuthorization.authorizeReplay(
+                    storedLease: field == 6 ? nil : lease,
+                    requestingLease: other
+                )
+                throw ProofError.failed("foreign or missing replay lease accepted")
+            } catch DroneProtocolError.unauthorized {}
+        }
     }
 
     private static func expectFailure(
