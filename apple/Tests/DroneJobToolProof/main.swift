@@ -67,10 +67,50 @@ struct DroneJobToolProof {
         } catch DroneProtocolError.invalidIdentifier {}
         try await bounded.cancel(context: running, operationRequestID: running.requestID)
         for try await event in events {
-            if case .completed(let body) = event { precondition(body.status == .cancelled) }
+            if case .completed(let body) = event {
+                precondition(body.status == .cancelled)
+                try DroneToolValidation.validate(completion: body)
+            }
         }
         let replacement = try await bounded.run(DroneToolProcessRequest(executable: "true"), context: context())
         for try await _ in replacement {}
+        let paged = DroneJobToolEngine(jobs: jobs, eventPageSize: 1)
+        let outputContext = context()
+        let outputRequest = DroneToolProcessRequest(
+            executable: "sh", arguments: ["-c", "printf abcdef; printf ghijkl >&2"], outputLimit: 8
+        )
+        func collect(_ stream: AsyncThrowingStream<DroneToolEvent, Error>) async throws -> [DroneToolEvent] {
+            var events: [DroneToolEvent] = []
+            for try await event in stream { events.append(event) }
+            return events
+        }
+        let firstOutput = try await collect(paged.run(outputRequest, context: outputContext))
+        // The durable job is now terminal before the first one-event page is read on replay.
+        let replay = try await collect(paged.run(outputRequest, context: outputContext))
+        precondition(firstOutput == replay)
+        var bytes = 0
+        var sequence: UInt64 = 0
+        var offsets = DroneToolStreamOffsets()
+        var sawTruncation = false
+        for event in replay {
+            switch event {
+            case .output(let body):
+                try DroneToolValidation.validate(output: body)
+                precondition(body.sequence == sequence && body.offset == offsets[body.stream])
+                sequence += 1
+                offsets[body.stream] += UInt64(body.data.count)
+                bytes += body.data.count
+                sawTruncation = sawTruncation || body.truncated
+            case .completed(let body):
+                precondition(body.finalSequence == sequence && body.status == .succeeded)
+            }
+        }
+        precondition(bytes == 8 && sawTruncation)
+        let capped = try await collect(paged.run(DroneToolProcessRequest(
+            executable: "printf", arguments: ["123456789"], outputLimit: 4
+        ), context: context()))
+        precondition(capped.contains { if case .output(let body) = $0 { return body.truncated }; return false })
+        print("Stream proof passed: terminal pagination replay, combined limit, truncation, offsets, cancellation schema")
         print("Drone job tool proof passed: edit validation, scope, conflict, concurrent retry, retention")
     }
 }
