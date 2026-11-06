@@ -58,7 +58,14 @@ final class DroneLANTransportFactory: DroneTransportFactory {
 
     func revoke(droneID: UUID) async throws {
         let peerID = DronePeerID(rawValue: droneID)
-        transport.revoke(peerID)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            transport.revoke(peerID) { result in
+                switch result {
+                case .success: continuation.resume()
+                case .failure: continuation.resume(throwing: DroneTransportError.revocationFailed)
+                }
+            }
+        }
         if let continuation = pendingPeers.removeValue(forKey: peerID) {
             continuation.resume(throwing: DroneTransportError.revoked)
         }
