@@ -10,8 +10,15 @@ ROOT="$BUILD_DIR/worker"
 LABEL="app.blau.drone.smoke.$$"
 DOMAIN="gui/$(id -u)"
 SECRET="pairing-material-that-must-never-be-printed"
+MANUAL_ROOT="$(mktemp -d /tmp/drone-stop.XXXXXX)"
+manual_pid=""
 
 cleanup() {
+  if [[ -n "$manual_pid" ]]; then
+    kill -KILL "$manual_pid" >/dev/null 2>&1 || true
+    wait "$manual_pid" 2>/dev/null || true
+  fi
+  rm -rf "$MANUAL_ROOT"
   /bin/launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
   rm -rf "$BUILD_DIR"
 }
@@ -31,6 +38,28 @@ DISABLE_SWIFTLINT=1 xcodebuild build -quiet \
   CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= \
   ENABLE_HARDENED_RUNTIME=NO
+
+# Direct shutdown must complete without launchd's eventual SIGKILL fallback.
+/usr/bin/env -u BLAU_DRONE_WORKSPACE -u BLAU_DRONE_PERMISSIONS \
+  BLAU_DRONE_ROOT="$MANUAL_ROOT" "$PRODUCTS/droned" &
+manual_pid=$!
+for _ in {1..100}; do
+  [[ -S "$MANUAL_ROOT/run/control.sock" ]] && break
+  sleep 0.02
+done
+[[ -S "$MANUAL_ROOT/run/control.sock" ]]
+kill -TERM "$manual_pid"
+for _ in {1..100}; do
+  if ! kill -0 "$manual_pid" 2>/dev/null; then break; fi
+  sleep 0.02
+done
+if kill -0 "$manual_pid" 2>/dev/null; then
+  echo "droned did not exit after graceful SIGTERM" >&2
+  exit 1
+fi
+wait "$manual_pid"
+manual_pid=""
+[[ ! -e "$MANUAL_ROOT/run/control.sock" ]]
 
 export BLAU_DRONE_ROOT="$ROOT"
 export BLAU_DRONE_LABEL="$LABEL"

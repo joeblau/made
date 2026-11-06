@@ -60,7 +60,7 @@ final class DroneDaemon {
         Task { [workerService] in await workerService?.start(bonjourInstanceID: bonjourID) }
         installSignalHandlers()
         log.record("daemon.started")
-        RunLoop.main.run()
+        CFRunLoopRun()
     }
 
     func startControlListener() throws {
@@ -202,6 +202,7 @@ final class DroneDaemon {
             RunLoop.main.perform {
                 CFRunLoopStop(CFRunLoopGetMain())
             }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
     }
 }
