@@ -18,6 +18,7 @@ enum DroneJobProof {
         try verifyOutputBackpressure(in: workspace)
         try await verifyShutdown(in: workspace, root: root)
         try await verifyShutdownTimeout(in: workspace, root: root)
+        try await verifyAcceptanceShutdownTimeout(in: workspace, root: root)
 
         let source = Data("print(\"drone-build-ok\")\n".utf8)
         let write = try engine.createJob(DroneJobCreate(
@@ -135,6 +136,63 @@ enum DroneJobProof {
         expect(recoveredSnapshot.state == .failed, "interrupted job was rerun or left ambiguous")
         expect(recoveredSnapshot.failure?.code == .workerRestarted, "restart failure was not explicit")
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
+    }
+
+    private static func verifyAcceptanceShutdownTimeout(in workspace: URL, root: URL) async throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let clock = ProofBlockingClock(blockAtCall: nil)
+        let engine = try DroneJobEngine(
+            stateURL: root.appendingPathComponent("acceptance-timeout"),
+            workspaces: registry, now: { clock.now() }
+        )
+        let controller = UUID()
+        let active = try engine.createJob(DroneJobCreate(
+            controllerID: controller, idempotencyKey: "active-during-acceptance-001",
+            request: DroneJobRequest(workspaceID: workspaceID, operation: .process(DroneProcessOperation(
+                executablePath: "/bin/sh", arguments: ["-c", "echo $$ > active.pid; exec /bin/sleep 30"]
+            )))
+        ))
+        var pid: pid_t?
+        for _ in 0..<200 {
+            if let text = try? String(contentsOf: workspace.appendingPathComponent("active.pid"), encoding: .utf8),
+               let value = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) { pid = value; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard let pid else { throw ProofError.failed("active job did not start") }
+        defer { _ = Darwin.kill(pid, SIGKILL); clock.release.signal() }
+        clock.blockNextCall()
+        let accepting = Task.detached {
+            try engine.createJob(DroneJobCreate(
+                controllerID: controller, idempotencyKey: "blocked-acceptance-0001",
+                request: DroneJobRequest(workspaceID: workspaceID, operation: .writeFile(
+                    DroneWriteFileOperation(relativePath: "acceptance-must-not-run", data: Data([1]))
+                ))
+            ))
+        }
+        let entered = await Task.detached { clock.waitUntilEntered() }.value
+        expect(entered, "acceptance did not reach persistence gate")
+        // Release the old implementation rather than hanging the test indefinitely.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) { clock.release.signal() }
+        let start = ContinuousClock.now
+        let stopped = await engine.shutdown(timeout: 0.05)
+        let elapsed = start.duration(to: .now)
+        print("Acceptance shutdown: elapsed=\(elapsed), joined=\(stopped)")
+        expect(!stopped && elapsed < .milliseconds(300), "acceptance blocked the shutdown deadline")
+        for _ in 0..<30 {
+            if Darwin.kill(pid, 0) != 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        expect(Darwin.kill(pid, 0) != 0, "pending acceptance delayed cancellation of an owned process")
+        clock.release.signal()
+        let accepted = try await accepting.value
+        let joined = await engine.shutdown()
+        expect(joined, "pending acceptance did not drain after persistence resumed")
+        let activeResult = try engine.snapshot(id: active.id, controllerID: controller)
+        let acceptedResult = try engine.snapshot(id: accepted.id, controllerID: controller)
+        expect(activeResult.state == .cancelled && acceptedResult.state == .cancelled, "shutdown lost job cancellation")
+        expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent("acceptance-must-not-run").path),
+               "accepted job executed after shutdown began")
     }
 
     private static func verifyShutdownTimeout(in workspace: URL, root: URL) async throws {
@@ -296,6 +354,15 @@ private final class ProofBlockingClock: @unchecked Sendable {
     let release = DispatchSemaphore(value: 0)
     private let lock = NSLock()
     private var calls = 0
+    private var blockAtCall: Int?
+
+    init(blockAtCall: Int? = 2) { self.blockAtCall = blockAtCall }
+
+    func blockNextCall() {
+        lock.lock()
+        blockAtCall = calls + 1
+        lock.unlock()
+    }
 
     func waitUntilEntered() -> Bool {
         entered.wait(timeout: .now() + 5) == .success
@@ -304,7 +371,7 @@ private final class ProofBlockingClock: @unchecked Sendable {
     func now() -> TimeInterval {
         lock.lock()
         calls += 1
-        let shouldBlock = calls == 2
+        let shouldBlock = calls == blockAtCall
         lock.unlock()
         if shouldBlock {
             entered.signal()
