@@ -90,6 +90,7 @@ drone_lifecycle() {
 
 drone_execution() {
   "$APPLE_ROOT/bin/test-drone-jobs.sh"
+  "$APPLE_ROOT/bin/test-drone-job-tools.sh"
   "$APPLE_ROOT/bin/test-drone-terminal.sh"
   "$APPLE_ROOT/bin/test-drone-tools.sh"
   "$APPLE_ROOT/bin/test-drone-worker.sh"
