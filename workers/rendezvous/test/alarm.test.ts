@@ -15,6 +15,7 @@ const SOCKET_LIFETIME_MS = 30 * 60 * 1000;
 const PEER_TTL_MS = 5 * 60 * 1000;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await reset();
 });
 
@@ -188,9 +189,20 @@ describe("relay expiry alarm", () => {
       expect(before).not.toBeNull();
       const operations = countAlarmOperations(state.storage);
       const [sender] = state.getWebSockets();
+      const started = Date.now();
+      const clock = vi.spyOn(Date, "now");
+      let room = instance;
       for (let index = 0; index < 50; index += 1) {
-        await instance.webSocketMessage(sender, `message ${index}`);
+        clock.mockReturnValue(started + index * 100);
+        // Drop all instance fields halfway through the bounded burst.
+        if (index === 25) room = new RendezvousRoom(state, env);
+        await room.webSocketMessage(sender, `message ${index}`);
       }
+      expect((sender.deserializeAttachment() as Attachment).messageCount).toBe(50);
+      expect((sender.deserializeAttachment() as Attachment).lastActivityAt).toBe(
+        started + 4_900,
+      );
+      clock.mockRestore();
       // The message path never touches the alarm: activity only moves the
       // idle deadline later, and alarm() re-arms when the earlier one fires.
       expect(operations.counts()).toEqual({ get: 0, set: 0, delete: 0 });
@@ -222,20 +234,28 @@ describe("relay expiry alarm", () => {
     });
   });
 
-  it("enforces the idle limit from the alarm of a reconstructed object", async () => {
-    const { clients, stub } = await openRoom(2);
-    const closes = clients.map(closeEvent);
-    await runInDurableObject(stub, async (_instance, state) => {
-      editAttachments(state, (attachment) => {
-        attachment.lastActivityAt = Date.now() - SOCKET_IDLE_MS;
+  it.each(["idle", "absolute lifetime"])(
+    "enforces the %s limit from the alarm of a reconstructed object",
+    async (limit) => {
+      const { clients, stub } = await openRoom(2);
+      const closes = clients.map(closeEvent);
+      await runInDurableObject(stub, async (_instance, state) => {
+        editAttachments(state, (attachment) => {
+          if (limit === "idle") {
+            attachment.lastActivityAt = Date.now() - SOCKET_IDLE_MS;
+          } else {
+            attachment.connectedAt = Date.now() - SOCKET_LIFETIME_MS;
+            attachment.lastActivityAt = Date.now();
+          }
+        });
+        await new RendezvousRoom(state, env).alarm();
+        expect(await state.storage.getAlarm()).toBeNull();
       });
-      await new RendezvousRoom(state, env).alarm();
-      expect(await state.storage.getAlarm()).toBeNull();
-    });
-    for (const close of closes) {
-      await expect(close).resolves.toMatchObject({ code: 1008 });
-    }
-  });
+      for (const close of closes) {
+        await expect(close).resolves.toMatchObject({ code: 1008 });
+      }
+    },
+  );
 
   it("enforces the absolute lifetime on a late message", async () => {
     const { clients, stub } = await openRoom(2);
