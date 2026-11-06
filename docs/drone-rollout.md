@@ -63,6 +63,42 @@ Cockpit. Registry and Bonjour metadata are separate from command output. Treat
 job output and file/diff results as sensitive: arbitrary executed programs can
 print secrets, and bounded output is not automatic redaction.
 
+## Owner-approved central tools
+
+On the worker, use the private local control socket through the CLI:
+
+```bash
+drone controllers
+drone grant-tools <controller-uuid> 00000000-0000-0000-0000-000000000001 files,jobs,git 300
+drone revoke <controller-uuid>
+```
+
+`controllers` lists authenticated connected controllers. `grant-tools` requires
+one of those controllers, the configured workspace ID, a nonempty subset of
+`files,jobs,git`, and a lifetime of 1–900 seconds. The requested permissions must
+also be enabled by the daemon owner. The JSON result decodes directly as
+`DroneToolLease`; supply it to `DroneToolClient` on the approved controller.
+The lease records worker identity, controller, workspace, a worker-assigned
+orchestration job ID and Unix-epoch expiry. The worker caps outstanding grants
+at 16 per controller and 128 total.
+
+Only the worker owner can issue or revoke grants through the mode-0600 Unix
+socket; the daemon also checks the connecting UID. The LAN tool protocol cannot
+issue grants. Clients that previously invented their own leases fail closed and
+must obtain an owner-issued lease. Grants expire on worker restart and must be
+approved again. Provider credentials are not part of a grant.
+
+`revoke` invalidates grants and channels immediately, requests cancellation of
+running tool processes, and reports success only after pin removal succeeds.
+Already accepted edits retain their recorded outcome. Detached user terminals
+are not terminated by revocation. A persistence failure returns failure while
+local denial remains active; repair storage and retry revocation before restart.
+
+Storage health is deliberately latched unhealthy after an observed storage
+failure or incomplete shutdown. A later successful probe does not erase that
+failure. Repair the underlying problem, preserve identity/job records, then
+restart and confirm `drone doctor` succeeds before enabling further rollout.
+
 ## Execution and recovery semantics
 
 - Remote tmux sessions survive Cockpit disconnects and application restarts.

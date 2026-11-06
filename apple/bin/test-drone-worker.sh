@@ -7,6 +7,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 
 xcrun swiftc \
   -parse-as-library \
+  -D DRONE_PROOF \
   -swift-version 6 \
   -module-name DroneWorkerProof \
   -o "$BUILD_DIR/DroneWorkerProof" \
@@ -31,6 +32,11 @@ xcrun swiftc \
   "$APPLE_ROOT/Sources/DroneSupport/"*.swift \
   "$APPLE_ROOT/Sources/Drone/JobEngine/"*.swift \
   "$APPLE_ROOT/Sources/Droned/DroneWorkerService.swift" \
+  "$APPLE_ROOT/Sources/Droned/DroneDaemon.swift" \
   "$APPLE_ROOT/Tests/DroneWorkerProof/main.swift"
 
-"$BUILD_DIR/DroneWorkerProof" "$@"
+xcrun swiftc -parse-as-library -swift-version 6 -o "$BUILD_DIR/drone" \
+  "$APPLE_ROOT/Sources/DroneSupport/"*.swift \
+  "$APPLE_ROOT/Sources/DroneCLI/DroneCLI.swift"
+
+"$BUILD_DIR/DroneWorkerProof" "$@" --proof-cli "$BUILD_DIR/drone"

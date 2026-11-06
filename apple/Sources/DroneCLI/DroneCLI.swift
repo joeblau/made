@@ -29,7 +29,11 @@ enum DroneCLIUsageError: String, Error {
 }
 
 struct DroneCLI {
-    static let usage = "usage: drone <install|uninstall|start|stop|restart|status|doctor|pairings|approve|reject|version>"
+    static let usage = """
+    usage: drone <install|uninstall|start|stop|restart|status|doctor|pairings|approve|reject|controllers|version>
+           drone grant-tools <controller-uuid> <workspace-uuid> <files,jobs,git> <seconds:1-900>
+           drone revoke <controller-uuid>
+    """
 
     private let paths: DronePaths
 
@@ -40,6 +44,10 @@ struct DroneCLI {
     func run(arguments: [String]) throws {
         guard let command = arguments.first else {
             print(Self.usage)
+            return
+        }
+        if ["controllers", "grant-tools", "revoke"].contains(command) {
+            try runOwnerCommand(arguments)
             return
         }
         guard arguments.count == 1 || (["approve", "reject"].contains(command) && arguments.count == 2) else {
@@ -92,6 +100,25 @@ struct DroneCLI {
             print(Self.usage)
         default:
             throw DroneCLIUsageError.unknownCommand
+        }
+    }
+
+    private func runOwnerCommand(_ arguments: [String]) throws {
+        let request: DroneControlRequest
+        do { request = try DroneOwnerCommand.parse(arguments) } catch {
+            throw DroneCLIUsageError.unexpectedArguments
+        }
+        let response = try DroneControlClient(paths: paths, timeout: 10).send(request)
+        switch request.command {
+        case "grant-tools":
+            guard let lease = response.toolLease, lease.controllerID == request.controllerID,
+                  lease.workspaceID == request.workspaceID, lease.expiresAt.isFinite,
+                  lease.expiresAt > Date().timeIntervalSince1970 else { throw DroneWorkerError.invalidResponse }
+            print(String(decoding: try DroneControlCodec.encode(lease), as: UTF8.self))
+        case "controllers":
+            for controller in response.controllers ?? [] { print(controller.uuidString) }
+        case "revoke": print("revoked")
+        default: throw DroneCLIUsageError.unknownCommand
         }
     }
 

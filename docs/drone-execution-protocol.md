@@ -320,7 +320,7 @@ does not authorize copying credentials to Cockpit or another worker.
 Worker-local approval issues bounded leases tied to the worker identity,
 configured workspace and authenticated controller. Grants are held in memory
 and expire on worker restart. Older clients that construct their own leases
-are rejected; a local control adapter must obtain an approved lease before
+are rejected; `drone grant-tools` on the worker must issue an approved lease before
 using the unchanged typed calls. There is no remote first-use registration.
 The lease job ID identifies the approved orchestration session; individual
 operations retain their own durable job records.
