@@ -92,6 +92,7 @@ drone_execution() {
   "$APPLE_ROOT/bin/test-drone-supervisor.sh"
   "$APPLE_ROOT/bin/test-drone-revocation.sh"
   "$APPLE_ROOT/bin/test-drone-connection.sh"
+  "$APPLE_ROOT/bin/test-drone-session.sh"
   "$APPLE_ROOT/bin/test-drone-jobs.sh"
   "$APPLE_ROOT/bin/test-drone-terminal.sh"
   "$APPLE_ROOT/bin/test-drone-tools.sh"
