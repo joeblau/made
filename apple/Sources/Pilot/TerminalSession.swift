@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let droneTerminalClientDidChange = Notification.Name("droneTerminalClientDidChange")
+}
+
 enum TerminalDestinationKind: String, Codable, Sendable {
     case local
     case drone
@@ -297,6 +301,8 @@ final class DroneTerminalResumeState: @unchecked Sendable {
     private var storedSessionID: UUID?
     private var storedCursor = DroneTerminalCursor.zero
     private var bytes = Data()
+    private var displayIdentity: TerminalSessionIdentity?
+    private var outputHandler: (@Sendable (String) -> Void)?
 
     init(sessionID: UUID?) { storedSessionID = sessionID }
 
@@ -304,6 +310,34 @@ final class DroneTerminalResumeState: @unchecked Sendable {
     var cursor: DroneTerminalCursor { lock.withLock { storedCursor } }
     var contents: String? {
         lock.withLock { bytes.isEmpty ? nil : String(decoding: bytes, as: UTF8.self) }
+    }
+
+    func activate(_ identity: TerminalSessionIdentity) {
+        lock.withLock { displayIdentity = identity }
+    }
+
+    func deactivate(_ identity: TerminalSessionIdentity) {
+        lock.withLock {
+            if displayIdentity == identity { displayIdentity = nil }
+        }
+    }
+
+    func setOutputHandler(_ handler: @escaping @Sendable (String) -> Void, identity: TerminalSessionIdentity) {
+        lock.withLock {
+            guard displayIdentity == identity else { return }
+            outputHandler = handler
+        }
+    }
+
+    func publish(identity: TerminalSessionIdentity) {
+        Task { @MainActor [weak self] in
+            let delivery = self?.lock.withLock { () -> (String, (@Sendable (String) -> Void))? in
+                guard self?.displayIdentity == identity, let handler = self?.outputHandler,
+                      let bytes = self?.bytes else { return nil }
+                return (String(decoding: bytes, as: UTF8.self), handler)
+            }
+            if let (contents, handler) = delivery { handler(contents) }
+        }
     }
 
     func adopt(_ id: UUID) throws {
@@ -334,7 +368,8 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     private let lock = NSLock()
     private var retired = false
     let resumeState: DroneTerminalResumeState
-    private var outputHandler: (@Sendable (String) -> Void)?
+    private var restoration: (id: UUID, task: Task<TerminalSessionRestoration, any Error>)?
+    private let initialWorkingDirectory: String?
     private lazy var directoryCache: TerminalRuntimeCache<String> = {
         TerminalRuntimeCache<String> { [weak self] _ in
             guard let self, let droneID = identity.ownership.droneID else { return nil }
@@ -350,11 +385,14 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
         identity: TerminalSessionIdentity,
         remoteSessionID: UUID?,
         client: any DroneTerminalClient,
-        resumeState: DroneTerminalResumeState? = nil
+        resumeState: DroneTerminalResumeState? = nil,
+        workingDirectory: String? = nil
     ) {
         self.identity = identity
         self.resumeState = resumeState ?? DroneTerminalResumeState(sessionID: remoteSessionID)
         self.client = client
+        initialWorkingDirectory = workingDirectory
+        self.resumeState.activate(identity)
     }
 
     func uses(_ candidate: (any DroneTerminalClient)?) -> Bool {
@@ -362,7 +400,12 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     }
 
     func retire() {
-        lock.withLock { retired = true }
+        lock.withLock {
+            retired = true
+            restoration?.task.cancel()
+            restoration = nil
+        }
+        resumeState.deactivate(identity)
     }
 
     var destination: TerminalDestination {
@@ -383,7 +426,31 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
         .remote
     }
 
+    func startRestoring() {
+        Task { [weak self] in _ = try? await self?.restore(workingDirectory: nil) }
+    }
+
     func restore(workingDirectory: String?) async throws -> TerminalSessionRestoration {
+        let pending = try lock.withLock { () throws -> (id: UUID, task: Task<TerminalSessionRestoration, any Error>) in
+            guard !retired else { throw TerminalSessionFailure.staleGeneration }
+            if let restoration { return restoration }
+            let pending = (id: UUID(), task: Task { [self] in
+                try await performRestore(workingDirectory: workingDirectory ?? initialWorkingDirectory)
+            })
+            restoration = pending
+            return pending
+        }
+        do {
+            return try await pending.task.value
+        } catch {
+            lock.withLock {
+                if restoration?.id == pending.id { restoration = nil }
+            }
+            throw error
+        }
+    }
+
+    private func performRestore(workingDirectory: String?) async throws -> TerminalSessionRestoration {
         guard !lock.withLock({ retired }) else { throw TerminalSessionFailure.staleGeneration }
         guard client.droneID == identity.ownership.droneID else {
             throw TerminalSessionFailure.destinationChanged
@@ -416,6 +483,7 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
             data = bytes
         }
         do {
+            _ = try await restore(workingDirectory: nil)
             try await client.sendInput(data, to: reference())
             return true
         } catch {
@@ -460,9 +528,9 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     }
 
     func setOutputHandler(_ handler: @escaping @Sendable (String) -> Void) async {
-        lock.withLock { outputHandler = handler }
-        guard let reference = try? reference() else { return }
-        await subscribe(reference)
+        guard !lock.withLock({ retired }) else { return }
+        resumeState.setOutputHandler(handler, identity: identity)
+        resumeState.publish(identity: identity)
     }
 
     private func subscribe(_ reference: DroneTerminalSessionReference) async {
@@ -472,13 +540,11 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     }
 
     private func appendOutput(_ output: DroneOutputBody) -> Bool {
-        let delivery = lock.withLock { () -> (String, (@Sendable (String) -> Void)?)? in
-            guard !retired, let contents = resumeState.append(output) else { return nil }
-            return (contents, outputHandler)
+        let accepted = lock.withLock {
+            !retired && resumeState.append(output) != nil
         }
-        guard let (contents, handler) = delivery else { return false }
-        handler?(contents)
-        return true
+        if accepted { resumeState.publish(identity: identity) }
+        return accepted
     }
 
     func close() async -> Bool {
@@ -493,6 +559,7 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
 
     func suspend() async {
         guard let reference = try? reference() else { return }
+        lock.withLock { restoration = nil }
         try? await client.detach(reference)
     }
 
@@ -558,8 +625,10 @@ final class TerminalSessionProvider: @unchecked Sendable {
     private struct Record {
         let destination: TerminalDestination
         let session: any CockpitTerminalSession
+        let workingDirectory: String?
     }
 
+    private var connectionObserver: (any NSObjectProtocol)?
     private let lock = NSLock()
     private var records: [UUID: Record] = [:]
     private var generations: [UUID: UInt64] = [:]
@@ -568,6 +637,60 @@ final class TerminalSessionProvider: @unchecked Sendable {
 
     init(droneClientResolver: @escaping DroneClientResolver = { _ in nil }) {
         self.droneClientResolver = droneClientResolver
+        connectionObserver = NotificationCenter.default.addObserver(
+            forName: .droneTerminalClientDidChange, object: nil, queue: nil
+        ) { [weak self] notification in
+            guard let id = notification.object as? UUID else { return }
+            // DroneStore publishes client changes synchronously on the main actor.
+            MainActor.assumeIsolated { self?.clientDidChange(droneID: id) }
+        }
+    }
+
+    deinit {
+        if let connectionObserver { NotificationCenter.default.removeObserver(connectionObserver) }
+    }
+
+    @MainActor
+    private func clientDidChange(droneID: UUID) {
+        let affected = lock.withLock {
+            records.filter {
+                $0.value.destination.kind == .drone && $0.value.destination.isValid
+                    && $0.value.destination.droneID == droneID
+            }
+        }
+        for (paneID, record) in affected {
+            replaceRemote(paneID: paneID, record: record)
+        }
+    }
+
+    @MainActor
+    private func replaceRemote(paneID: UUID, record: Record) {
+        let resolver = lock.withLock { droneClientResolver }
+        let client = record.destination.droneID.flatMap(resolver)
+        let generation = lock.withLock { () -> UInt64 in
+            if let remote = record.session as? DroneTerminalSession {
+                resumeStates[paneID] = remote.resumeState
+                remote.retire()
+            }
+            let next = (generations[paneID] ?? 1) + 1
+            generations[paneID] = next
+            return next
+        }
+        let identity = TerminalSessionIdentity(paneID: paneID, ownership: record.destination.ownership, generation: generation)
+        let replacement: any CockpitTerminalSession
+        if let client, client.droneID == record.destination.droneID {
+            replacement = DroneTerminalSession(identity: identity, remoteSessionID: record.destination.remoteSessionID,
+                                               client: client, resumeState: lock.withLock { resumeStates[paneID] },
+                                               workingDirectory: record.workingDirectory)
+        } else {
+            replacement = UnavailableTerminalSession(identity: identity, destination: record.destination,
+                                                     failure: .droneUnavailable(record.destination.droneID!))
+        }
+        lock.withLock {
+            records[paneID] = Record(destination: record.destination, session: replacement,
+                                     workingDirectory: record.workingDirectory)
+        }
+        (replacement as? DroneTerminalSession)?.startRestoring()
     }
 
     func configure(droneClientResolver: @escaping DroneClientResolver) {
@@ -675,7 +798,7 @@ final class TerminalSessionProvider: @unchecked Sendable {
         guard let remoteSessionID else { return }
         try pane.adoptRemoteSessionID(remoteSessionID, identity: restoration.identity)
         lock.withLock {
-            records[pane.id] = Record(destination: pane.terminalDestination, session: session)
+            records[pane.id] = Record(destination: pane.terminalDestination, session: session, workingDirectory: pane.currentDirectory)
         }
     }
 
@@ -725,7 +848,8 @@ final class TerminalSessionProvider: @unchecked Sendable {
                         identity: identity,
                         remoteSessionID: destination.remoteSessionID,
                         client: client,
-                        resumeState: lock.withLock { resumeStates[pane.id] }
+                        resumeState: lock.withLock { resumeStates[pane.id] },
+                        workingDirectory: pane.currentDirectory
                     )
                 } else {
                     session = UnavailableTerminalSession(
@@ -742,7 +866,12 @@ final class TerminalSessionProvider: @unchecked Sendable {
                 )
             }
         }
-        lock.withLock { records[pane.id] = Record(destination: destination, session: session) }
+        lock.withLock {
+            records[pane.id] = Record(destination: destination, session: session, workingDirectory: pane.currentDirectory)
+        }
+        if lock.withLock({ resumeStates[pane.id] != nil }) {
+            (session as? DroneTerminalSession)?.startRestoring()
+        }
         return session
     }
 }

@@ -255,6 +255,7 @@ final class DroneStore {
         guard let supervisor = supervisors[id] else { return }
         states[id] = supervisor.state
         diagnostics[id] = supervisor.diagnostics
+        let previousClient = terminalClients[id]
         switch supervisor.state {
         case .connected:
             if terminalClients[id] == nil, let connection = supervisor.connection {
@@ -267,6 +268,9 @@ final class DroneStore {
         case .offline, .unauthorized, .incompatible, .busy, .pairing, .connecting, .forgetting:
             let client = terminalClients.removeValue(forKey: id)
             Task { await client?.closeRequests() }
+        }
+        if previousClient.map(ObjectIdentifier.init) != terminalClients[id].map(ObjectIdentifier.init) {
+            NotificationCenter.default.post(name: .droneTerminalClientDidChange, object: id)
         }
         guard let index = records.firstIndex(where: { $0.id == id }) else { return }
         let previous = records[index]
