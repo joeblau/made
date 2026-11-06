@@ -3,11 +3,26 @@ import Foundation
 
 actor DroneJobToolEngine: DroneToolEngine {
     private let jobs: DroneJobEngine
-    private var edits: [String: DroneToolEditResult] = [:]
+    private struct EditEntry {
+        let fingerprint: String
+        let task: Task<DroneToolEditResult, Error>
+        var finished = false
+        let expiresAt: TimeInterval
+    }
+
+    private var edits: [String: EditEntry] = [:]
+    private let maximumRetainedEntries: Int
+    private let now: @Sendable () -> TimeInterval
     private var operations: [UUID: DroneJobID] = [:]
 
-    init(jobs: DroneJobEngine) {
+    init(
+        jobs: DroneJobEngine,
+        maximumRetainedEntries: Int = DroneLimits.maxIdempotencyEntries,
+        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
+    ) {
         self.jobs = jobs
+        self.maximumRetainedEntries = max(1, maximumRetainedEntries)
+        self.now = now
     }
 
     func read(
@@ -32,7 +47,28 @@ actor DroneJobToolEngine: DroneToolEngine {
         _ request: DroneToolEditRequest,
         context: DroneToolRequestContext
     ) async throws -> DroneToolEditResult {
-        if let existing = edits[context.idempotencyKey] { return existing }
+        try DroneToolValidation.validate(edit: request)
+        let key = try scopedKey(context)
+        let fingerprint = try Self.fingerprint(request)
+        edits = edits.filter { !$0.value.finished || $0.value.expiresAt > now() }
+        if let existing = edits[key] {
+            guard existing.fingerprint == fingerprint else { throw DroneProtocolError.idempotencyConflict }
+            return try await existing.task.value
+        }
+        guard edits.count < maximumRetainedEntries else { throw DroneProtocolError.resourceLimit }
+        let task = Task { try await self.performEdit(request, context: context) }
+        edits[key] = EditEntry(
+            fingerprint: fingerprint, task: task,
+            expiresAt: min(context.lease.expiresAt, now() + DroneLimits.idempotencyLifetime)
+        )
+        defer { edits[key]?.finished = true }
+        return try await task.value
+    }
+
+    private func performEdit(
+        _ request: DroneToolEditRequest,
+        context: DroneToolRequestContext
+    ) async throws -> DroneToolEditResult {
         let read = try await complete(
             operation: .readFile(DroneReadFileOperation(relativePath: request.path)),
             context: context,
@@ -54,7 +90,6 @@ actor DroneJobToolEngine: DroneToolEngine {
         )
         guard case .bytesWritten = written.result else { throw DroneJobError.storeCorrupted }
         let result = DroneToolEditResult(bytesWritten: updated.count, sha256: Self.digest(updated))
-        edits[context.idempotencyKey] = result
         return result
     }
 
@@ -107,7 +142,7 @@ actor DroneJobToolEngine: DroneToolEngine {
     ) throws -> DroneJobSnapshot {
         try jobs.createJob(DroneJobCreate(
             controllerID: context.lease.controllerID,
-            idempotencyKey: context.idempotencyKey + keySuffix,
+            idempotencyKey: try scopedKey(context) + keySuffix,
             request: DroneJobRequest(workspaceID: context.lease.workspaceID, operation: operation)
         ))
     }
@@ -198,6 +233,26 @@ actor DroneJobToolEngine: DroneToolEngine {
             if FileManager.default.isExecutableFile(atPath: path) { return path }
         }
         throw DroneProtocolError.unauthorized
+    }
+
+    private func scopedKey(_ context: DroneToolRequestContext) throws -> String {
+        guard context.lease.expiresAt.isFinite, context.lease.expiresAt > now() else {
+            throw DroneProtocolError.unauthorized
+        }
+        let key = context.idempotencyKey
+        guard (16...128).contains(key.utf8.count), key.utf8.allSatisfy({
+            (48...57).contains($0) || (65...90).contains($0)
+                || (97...122).contains($0) || $0 == 45 || $0 == 95
+        }) else { throw DroneProtocolError.invalidIdentifier }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return Self.digest(try encoder.encode(context.lease) + Data(key.utf8))
+    }
+
+    private static func fingerprint(_ value: some Encodable) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return digest(try encoder.encode(value))
     }
 
     private static func digest(_ data: Data) -> String {
