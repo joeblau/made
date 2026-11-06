@@ -126,7 +126,8 @@ final class DroneRegistryTests: XCTestCase {
 
     func testInvalidManualEndpointNeverFallsBackToLocal() {
         let store = DroneStore(
-            persistence: DroneRegistryPersistence(url: temporaryDirectory.appendingPathComponent("drones.json"))
+            persistence: DroneRegistryPersistence(url: temporaryDirectory.appendingPathComponent("drones.json")),
+            transport: RegistryFakeTransport()
         )
         XCTAssertThrowsError(try store.addManual(name: "Bad", host: "bad host", port: "0"))
         XCTAssertTrue(store.records.isEmpty)

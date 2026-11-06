@@ -32,6 +32,7 @@ trap report_failure EXIT
 # Builds Cockpit as the test host incrementally: after build-ci.sh only the test
 # bundle compiles.
 pilot() {
+  python3 "$APPLE_ROOT/bin/check-cockpit-ui-boundary.py"
   ci_xcodebuild test "$MACOS_DERIVED_DATA" \
     -scheme PilotTests \
     -destination "$MACOS_DESTINATION"

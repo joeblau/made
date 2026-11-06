@@ -262,11 +262,137 @@ enum PilotSchemaV2: VersionedSchema {
     }
 }
 
-/// Adds a persisted browser-engine discriminator. The live BrowserState
-/// supplies WebKit as the property default, so V2 stores migrate without
-/// changing the behavior of existing browser panes.
+/// Frozen snapshot of the V3 store before Android target persistence.
+/// Keep its browser-engine and Drone session fields unchanged: changing this
+/// checksum makes existing stores unknown to staged migration.
 enum PilotSchemaV3: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(3, 0, 0) }
+
+    static var models: [any PersistentModel.Type] {
+        [
+            Workspace.self,
+            Pane.self,
+            BrowserState.self,
+            EditorState.self,
+            Note.self,
+            RemoteDesktopConnection.self,
+            ExtensionWorkspaceLink.self,
+        ]
+    }
+
+    @Model
+    final class Workspace {
+        #Unique([\Workspace.id])
+
+        var id: UUID = UUID()
+        var name: String = ""
+        var selectedPaneID: UUID?
+        var frontmostTerminalPaneID: UUID?
+        var axisRaw: String = "vertical"
+        var isInspectorPresented: Bool = false
+        var inspectorTabRaw: String = "Actions"
+        var focusedPaneID: UUID?
+        var isPinned: Bool = false
+        var workspaceSortOrder: Int = 0
+        var rootPath: String = ""
+        var rootPathSourceRaw: String? = "automatic"
+        var actionBadgeCount: Int = 0
+
+        @Relationship(deleteRule: .cascade, inverse: \Pane.workspace)
+        var panes: [Pane] = []
+
+        init() {}
+    }
+
+    @Model
+    final class Pane {
+        #Unique([\Pane.id])
+
+        var id: UUID = UUID()
+        var kindRaw: String = "terminal"
+        var sortOrder: Int = 0
+        var currentDirectory: String = ""
+        var bellCount: Int = 0
+        var sizeFraction: Double = 0
+        var isCollapsed: Bool = false
+        var restoredSizeFraction: Double = 0
+        var wasCollapsedBeforeFocus: Bool = false
+        var terminalDestinationRaw: String?
+        var terminalDroneIDRaw: String?
+        var terminalRemoteSessionIDRaw: String?
+        var terminalDroneNameRaw: String?
+
+        @Relationship(deleteRule: .cascade)
+        var browserState: BrowserState?
+
+        @Relationship(deleteRule: .cascade)
+        var editorState: EditorState?
+
+        var workspace: Workspace?
+
+        init() {}
+    }
+
+    @Model
+    final class BrowserState {
+        var urlText: String = ""
+        var engineRaw: String = "webkit"
+        var appearanceModeRaw: String = "System"
+        var navigationRequestID: Int = 0
+        var inspectorToggleRequestID: Int = 0
+
+        init() {}
+    }
+
+    @Model
+    final class EditorState {
+        var filePath: String = ""
+
+        init() {}
+    }
+
+    @Model
+    final class Note {
+        #Unique([\Note.id])
+
+        var id: UUID = UUID()
+        var body: String = ""
+        var sortOrder: Int = 0
+        var createdAt: Date = Date()
+
+        init() {}
+    }
+
+    @Model
+    final class RemoteDesktopConnection {
+        #Unique([\RemoteDesktopConnection.id])
+
+        var id: UUID = UUID()
+        var host: String = ""
+        var port: Int = 5900
+        var nickname: String = ""
+        var username: String = ""
+        var sortOrder: Int = 0
+        var createdAt: Date = Date()
+        var lastConnectedAt: Date?
+
+        init() {}
+    }
+
+    @Model
+    final class ExtensionWorkspaceLink {
+        var sourceWorkspaceID: UUID = UUID()
+
+        @Relationship(deleteRule: .cascade)
+        var workspace: Workspace?
+
+        init() {}
+    }
+}
+
+/// Adds the optional Android target without changing the shipped V3 checksum.
+enum PilotSchemaV4: VersionedSchema {
+    static var versionIdentifier: Schema.Version { Schema.Version(4, 0, 0) }
 
     static var models: [any PersistentModel.Type] {
         [
@@ -283,7 +409,7 @@ enum PilotSchemaV3: VersionedSchema {
 
 enum PilotMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [PilotSchemaV1.self, PilotSchemaV2.self, PilotSchemaV3.self]
+        [PilotSchemaV1.self, PilotSchemaV2.self, PilotSchemaV3.self, PilotSchemaV4.self]
     }
 
     /// One stage per version-to-version upgrade; append a stage whenever a
@@ -292,6 +418,7 @@ enum PilotMigrationPlan: SchemaMigrationPlan {
         [
             .lightweight(fromVersion: PilotSchemaV1.self, toVersion: PilotSchemaV2.self),
             .lightweight(fromVersion: PilotSchemaV2.self, toVersion: PilotSchemaV3.self),
+            .lightweight(fromVersion: PilotSchemaV3.self, toVersion: PilotSchemaV4.self),
         ]
     }
 }

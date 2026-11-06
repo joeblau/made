@@ -1,78 +1,64 @@
-import Charts
-import SwiftUI
+import AppKit
 
-/// A chrome-free Swift Charts trend line with a tinted gradient fill
-/// underneath — the KPI cards and the Top Models table both use it.
-///
-/// Points are positional (index on x) because every caller already passes a
-/// contiguous, zero-filled bucket series; long series are binned so a 90-day
-/// or All-history line stays readable at sparkline width.
-struct AgenticUseSparkline: View {
-    let values: [Double]
-    let tint: Color
-    /// Pin the y-domain to zero (volumes) or fit it to the data (rates such as
-    /// cache hit rate, where a zero floor would flatten every change).
-    var anchorsAtZero = true
-    var lineWidth: CGFloat = 1.5
-
-    /// Most points drawn; longer series are averaged into this many bins.
-    private static let maxPoints = 45
-
-    private struct Point: Identifiable {
-        let id: Int
-        let value: Double
+/// Bounded native trend rendering. Values are binned when the model changes,
+/// so resizing or hovering neighboring controls never scans the full history.
+@MainActor
+final class AgenticUseSparkline: NSView {
+    private var points: [Double]
+    private let transition = AgenticUseDataTransition()
+    private var tint: NSColor
+    private var anchorsAtZero: Bool
+    var lineWidth: CGFloat
+    init(values: [Double], tint: NSColor, anchorsAtZero: Bool = true, lineWidth: CGFloat = 1.5) {
+        points = Self.normalized(values, anchorsAtZero: anchorsAtZero)
+        self.tint = tint
+        self.anchorsAtZero = anchorsAtZero
+        self.lineWidth = lineWidth
+        super.init(frame: .zero)
+        setAccessibilityElement(false)
     }
-
-    private var points: [Point] {
-        Self.binned(values, limit: Self.maxPoints).enumerated().map { Point(id: $0.offset, value: $0.element) }
-    }
-
-    var body: some View {
-        let points = points
-        let domain = yDomain(points)
-        Chart(points) { point in
-            AreaMark(
-                x: .value("Bucket", point.id),
-                yStart: .value("Floor", domain.lowerBound),
-                yEnd: .value("Value", point.value)
-            )
-            .interpolationMethod(.monotone)
-            .foregroundStyle(
-                LinearGradient(
-                    colors: [tint.opacity(0.32), tint.opacity(0)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            LineMark(
-                x: .value("Bucket", point.id),
-                y: .value("Value", point.value)
-            )
-            .interpolationMethod(.monotone)
-            .foregroundStyle(tint)
-            .lineStyle(StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+    required init?(coder: NSCoder) { nil }
+    func update(values: [Double], tint: NSColor, anchorsAtZero: Bool = true) {
+        let from = points
+        let to = Self.normalized(values, anchorsAtZero: anchorsAtZero)
+        transition.start(in: self, animated: from != to) { [weak self] progress in
+            self?.points = AgenticUseDataTransition.series(from, to, progress)
+            self?.needsDisplay = true
         }
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .chartLegend(.hidden)
-        .chartXScale(domain: 0...max(1, points.count - 1))
-        .chartYScale(domain: domain)
-        .accessibilityHidden(true)
-        .allowsHitTesting(false)
+        self.tint = tint
+        self.anchorsAtZero = anchorsAtZero
+        needsDisplay = true
     }
-
-    private func yDomain(_ points: [Point]) -> ClosedRange<Double> {
-        let lo = points.map(\.value).min() ?? 0
-        let hi = points.map(\.value).max() ?? 0
-        if anchorsAtZero {
-            return 0...max(hi * 1.08, .leastNonzeroMagnitude)
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        guard points.count > 1 else { return }
+        let rect = bounds.insetBy(dx: lineWidth, dy: lineWidth)
+        let path = NSBezierPath()
+        for (index, value) in points.enumerated() {
+            let point = NSPoint(x: rect.minX + CGFloat(index) / CGFloat(points.count - 1) * rect.width,
+                               y: rect.minY + CGFloat(value) * rect.height)
+            if index == 0 { path.move(to: point) } else { path.line(to: point) }
         }
-        let pad = max((hi - lo) * 0.15, abs(hi) * 0.002, .leastNonzeroMagnitude)
-        return (lo - pad)...(hi + pad)
+        let fill = path.copy() as! NSBezierPath
+        fill.line(to: NSPoint(x: rect.maxX, y: rect.minY))
+        fill.line(to: NSPoint(x: rect.minX, y: rect.minY))
+        fill.close()
+        NSGradient(starting: tint.withAlphaComponent(0.02), ending: tint.withAlphaComponent(0.28))?.draw(in: fill, angle: 90)
+        tint.setStroke()
+        path.lineWidth = lineWidth
+        path.lineJoinStyle = .round
+        path.lineCapStyle = .round
+        path.stroke()
     }
-
-    /// Average consecutive runs so at most `limit` values remain. Static so
-    /// the binning rule is unit-testable.
+    nonisolated private static func normalized(_ values: [Double], anchorsAtZero: Bool) -> [Double] {
+        let points = binned(values, limit: 45)
+        let minimum = points.min() ?? 0
+        let maximum = points.max() ?? 0
+        let padding = max((maximum - minimum) * 0.15, abs(maximum) * 0.002, 0.000001)
+        let low = anchorsAtZero ? 0 : minimum - padding
+        let high = anchorsAtZero ? max(maximum * 1.08, 0.000001) : maximum + padding
+        return points.map { ($0 - low) / (high - low) }
+    }
     nonisolated static func binned(_ values: [Double], limit: Int) -> [Double] {
         guard limit > 0, values.count > limit else { return values }
         let size = Double(values.count) / Double(limit)

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <g transform="translate(30.72 30.72) scale(0.767591707)">
+    <polygon fill="#31D9ED" points="484,432 72,802 68,844 520,512"/>
+    <polygon fill="#167FEA" points="72,802 520,512 520,681 68,844"/>
+    <polygon fill="#0E48D8" points="68,844 520,681 481,929"/>
+    <g transform="translate(1254 0) scale(-1 1)"><polygon fill="#49E9F5" points="484,432 72,802 68,844 520,512"/></g>
+    <g transform="translate(1254 0) scale(-1 1)"><polygon fill="#2264EC" points="72,802 520,512 520,681 68,844"/></g>
+    <g transform="translate(1254 0) scale(-1 1)"><polygon fill="#163BD1" points="68,844 520,681 481,929"/></g>
+    <polygon fill="#45D8ED" points="481,881 520,958 414,1141 409,1034"/>
+    <polygon fill="#2165D7" points="520,958 627,1040 414,1141"/>
+    <g transform="translate(1254 0) scale(-1 1)"><polygon fill="#F176B4" points="481,881 520,958 414,1141 409,1034"/></g>
+    <g transform="translate(1254 0) scale(-1 1)"><polygon fill="#6848D5" points="520,958 627,1040 414,1141"/></g>
+  </g>
+</svg>

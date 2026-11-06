@@ -1,0 +1,28 @@
+{
+  "binary": {
+    "UUID": "FEBCAD48-8C55-3166-A15B-4A946AF09959",
+    "arch": "arm64",
+    "id": "77",
+    "load-addr": "0x1044dc000",
+    "name": "Cockpit",
+    "path": "/private/tmp/cockpit-polish-benchmark/Build/Products/Debug/Cockpit.app/Contents/MacOS/Cockpit"
+  },
+  "limitations": [
+    "Samples are not exact CPU durations or frame times.",
+    "Final chat fixture has corrected geometry, so total/chat samples cannot be compared with the earlier zero-height chat fixture.",
+    "Action timing comparisons use separate unprofiled runs."
+  ],
+  "main_thread_sample_rows": 5002,
+  "selected_inclusive_frame_samples": {
+    "AgentChatPaneViewController.applyRows(_:)": 586,
+    "CockpitWindowBodyController.setContent(_:retainWhileHidden:)": 151,
+    "InspectorViewController.selectTab(_:)": 182,
+    "WorkspaceSidebarViewController.refresh()": 98,
+    "closure #1 in AgentChatPaneViewController.applyRows(_:)": 4,
+    "closure #2 in AgentChatPaneViewController.applyRows(_:)": 4,
+    "closure #4 in WorkspaceSidebarViewController.refresh()": 1,
+    "closure #5 in WorkspaceSidebarViewController.refresh()": 13,
+    "implicit closure #1 in WorkspaceSidebarViewController.refresh()": 3
+  },
+  "workload": "Five cycles of page/inspector switching, then 1000 messages and 120 streaming chunks in a checked 800 x 700 visible chat window; optimized isolated hosted XCTest"
+}

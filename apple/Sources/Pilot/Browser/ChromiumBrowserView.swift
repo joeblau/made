@@ -1,7 +1,6 @@
 import AppKit
 @preconcurrency import ChromiumKit
 import SwiftData
-import SwiftUI
 
 enum ChromiumBrowserRuntimeState: Equatable, Sendable {
     case starting
@@ -78,28 +77,41 @@ extension ChromiumBrowserHostView: BrowserControlling {
 }
 
 @MainActor
-struct ChromiumBrowserView: NSViewRepresentable {
-    @Environment(\.uiZoom) private var uiZoom
-
+final class ChromiumBrowserView: NSViewController {
     let state: BrowserState
-    let navigationRequestID: Int
-    let inspectorToggleRequestID: Int
-    let findRequestID: Int
-    let stopFindingRequestID: Int
-    let printRequestID: Int
-    let savePageRequestID: Int
-    let isActive: Bool
-    let isSelected: Bool
-    let onSelect: () -> Void
+    var isActive = false
+    var isSelected = false
+    var onSelect: () -> Void
+    private lazy var coordinator = Coordinator(state: state, onSelect: onSelect)
+    private var container: ChromiumBrowserContainerView?
+    private weak var nativeHost: PilotChromiumBrowserHostView?
+    private var uiZoom: Double { CockpitUIZoomController.shared.factor }
+    private var navigationRequestID: Int { state.navigationRequestID }
+    private var inspectorToggleRequestID: Int { state.inspectorToggleRequestID }
+    private var findRequestID: Int { state.findRequestID }
+    private var stopFindingRequestID: Int { state.stopFindingRequestID }
+    private var printRequestID: Int { state.printRequestID }
+    private var savePageRequestID: Int { state.savePageRequestID }
 
-    func makeNSView(context: Context) -> ChromiumBrowserContainerView {
+    init(state: BrowserState, onSelect: @escaping () -> Void) {
+        self.state = state
+        self.onSelect = onSelect
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override func loadView() {
         let container = ChromiumBrowserContainerView()
+        self.container = container
+        view = container
         container.runtimeState = .starting
         container.isHidden = !isActive
         ChromiumDiagnosticsCenter.shared.recordStarting()
-        context.coordinator.container = container
-        context.coordinator.onSelect = onSelect
-        container.onRetry = { [weak coordinator = context.coordinator] in
+        coordinator.container = container
+        coordinator.onSelect = onSelect
+        container.onRetry = { [weak coordinator = coordinator] in
             coordinator?.retry()
         }
 
@@ -107,8 +119,8 @@ struct ChromiumBrowserView: NSViewRepresentable {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first else {
-            context.coordinator.runtimeUnavailable(errorCode: nil)
-            return container
+            coordinator.runtimeUnavailable(errorCode: nil)
+            return
         }
 
         let profileLocation = ChromiumProfileLocation(
@@ -128,22 +140,23 @@ struct ChromiumBrowserView: NSViewRepresentable {
                 profileDirectory: profileURL
             )
         } catch {
-            context.coordinator.runtimeUnavailable(
+            coordinator.runtimeUnavailable(
                 errorCode: (error as NSError).code
             )
-            return container
+            return
         }
 
         guard ChromiumEngine.shared.isRunning else {
-            context.coordinator.runtimeUnavailable(errorCode: nil)
-            return container
+            coordinator.runtimeUnavailable(errorCode: nil)
+            return
         }
 
         let host = PilotChromiumBrowserHostView(frame: .zero)
+        nativeHost = host
         host.onSelect = onSelect
         host.browserState = state
         container.install(host)
-        context.coordinator.attach(
+        coordinator.attach(
             host,
             navigationRequestID: navigationRequestID,
             inspectorToggleRequestID: inspectorToggleRequestID,
@@ -156,15 +169,13 @@ struct ChromiumBrowserView: NSViewRepresentable {
             isActive: isActive,
             isSelected: isSelected
         )
-        return container
+        return
     }
 
-    func updateNSView(
-        _ nsView: ChromiumBrowserContainerView,
-        context: Context
-    ) {
-        context.coordinator.onSelect = onSelect
-        context.coordinator.update(
+    func synchronize() {
+        guard let nsView = container else { return }
+        coordinator.onSelect = onSelect
+        coordinator.update(
             navigationRequestID: navigationRequestID,
             inspectorToggleRequestID: inspectorToggleRequestID,
             findRequestID: findRequestID,
@@ -178,16 +189,14 @@ struct ChromiumBrowserView: NSViewRepresentable {
         nsView.isHidden = !isActive
     }
 
-    static func dismantleNSView(
-        _ nsView: ChromiumBrowserContainerView,
-        coordinator: Coordinator
-    ) {
+    func close() {
+        guard container != nil else { return }
         coordinator.close()
+        nativeHost = nil
+        container = nil
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(state: state, onSelect: onSelect)
-    }
+    isolated deinit { close() }
 
     private var initialURL: URL? {
         if let pendingURL = state.pendingURL, pendingURL.scheme != "blau" {
@@ -1269,7 +1278,7 @@ final class ChromiumBrowserContainerView: NSView {
             retryButton.bezelStyle = .glass
             retryButton.borderShape = .capsule
             retryButton.tintProminence = .primary
-            // The legible accent, like every SwiftUI prominent button, so the
+            // Use the shared legible accent for this prominent button so the
             // white title clears TYPE-3 (the plain accent measures under 4.5:1).
             retryButton.bezelColor = LegibleAccent.nsColor
         } else {
@@ -1412,5 +1421,17 @@ final class PilotChromiumBrowserHostView:
     override func mouseDown(with event: NSEvent) {
         onSelect?()
         super.mouseDown(with: event)
+    }
+}
+
+@MainActor
+extension ChromiumBrowserView {
+    @discardableResult
+    func focusContent() -> Bool {
+        guard isActive, isSelected, container?.runtimeState == .ready,
+              let host = nativeHost, let window = host.window,
+              !host.isHiddenOrHasHiddenAncestor else { return false }
+        host.performBrowserCommand(.focus)
+        return BrowserPaneFocus.responder(window.firstResponder, isWithin: host)
     }
 }

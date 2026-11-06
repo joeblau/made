@@ -22,6 +22,21 @@ struct WorkspaceRootTrackingTests {
     }
 
     @Test
+    func switchingToAgenticModeKeepsTheRepositoryButDoesNotReceiveRawTerminalInput() throws {
+        let workspace = Workspace(name: "Modes")
+        let pane = Pane(kind: .terminal)
+        pane.currentDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().path
+        configure(workspace, panes: [pane], selectedPaneID: pane.id, frontmostTerminalID: pane.id)
+        workspace.syncDefaultRootPathIfNeeded()
+        let root = try #require(workspace.effectiveRootPath)
+        pane.kind = .agentChat
+        workspace.syncDefaultRootPathIfNeeded()
+        #expect(workspace.effectiveRootPath == root)
+        #expect(workspace.rootTrackingTerminalPane === pane)
+        #expect(workspace.frontmostTerminalPane == nil)
+    }
+
+    @Test
     func rootTrackingFallsBackToFrontmostTerminalWhenBrowserIsSelected() {
         let workspace = Workspace(name: "Test")
         let terminal = Pane(kind: .terminal, sortOrder: 0)

@@ -1,0 +1,25 @@
+{
+  "binary": {
+    "UUID": "600C3FBF-C695-3C3B-928E-2C49284D1317",
+    "arch": "arm64",
+    "id": "85",
+    "load-addr": "0x100134000",
+    "name": "Cockpit",
+    "path": "/private/tmp/cockpit-polish-benchmark/Build/Products/Debug/Cockpit.app/Contents/MacOS/Cockpit"
+  },
+  "limitations": [
+    "Samples are not exact CPU duration or frame time.",
+    "The initial profiler handshake probe did not signal the harness; that failed run and partial trace are excluded.",
+    "Action timing comparisons use separate unprofiled runs.",
+    "The chat fixture adopted a zero-height transcript on controller attachment. Chat frames describe model projection/row measurement, not visible streaming; navigation/inspector phases used the full native window. Corrected final runs assert transcript dimensions and all visible chunks."
+  ],
+  "main_thread_sample_rows": 6406,
+  "selected_inclusive_frame_samples": {
+    "AgentChatPaneViewController.applyRows(_:)": 983,
+    "CockpitWindowBodyController.setContent(_:)": 444,
+    "InspectorViewController.selectTab(_:)": 541,
+    "WorkspaceSidebarViewController.reloadVisibleRows()": 771,
+    "closure #2 in AgentChatPaneViewController.applyRows(_:)": 1
+  },
+  "workload": "Five cycles of production page/inspector switching, followed by 1000 chat messages and 120 scripted streaming chunks; isolated hosted XCTest"
+}

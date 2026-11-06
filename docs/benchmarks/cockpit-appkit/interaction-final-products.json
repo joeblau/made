@@ -1,0 +1,11 @@
+{
+  "host": {
+    "sha256": "8a834f639849b9414a38cb5a7f41310fcc3f61cd14878dd8357f0663f15840c3",
+    "uuid": "UUID: FEBCAD48-8C55-3166-A15B-4A946AF09959 (arm64) /tmp/cockpit-polish-benchmark/Build/Products/Debug/Cockpit.app/Contents/MacOS/Cockpit"
+  },
+  "tests": {
+    "sha256": "1b0f37e1640d6171ee30d7ad85d09c8b3a30c26f737befb4d863d4739436bed6",
+    "uuid": "UUID: 6D895660-477A-3C94-AFD5-B8BAE9FD4FB8 (arm64) /tmp/cockpit-polish-benchmark/Build/Products/Debug/Cockpit.app/Contents/PlugIns/PilotTests.xctest/Contents/MacOS/PilotTests"
+  },
+  "provenance": "Optimized -O whole-module products for final interaction runs; corrected chat viewport (800 x 700) with visible-geometry and all-chunks assertions. Main window navigation workload unchanged."
+}

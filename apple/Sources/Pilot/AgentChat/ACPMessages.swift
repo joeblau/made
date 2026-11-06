@@ -15,6 +15,8 @@ enum ACP {
         static let cancel = "session/cancel"
         static let update = "session/update"
         static let requestPermission = "session/request_permission"
+        static let setConfigOption = "session/set_config_option"
+        static let setModel = "session/set_model"
     }
 
     // MARK: Requests
@@ -45,8 +47,9 @@ enum ACP {
         ["sessionId": .string(sessionID), "cwd": .string(cwd), "mcpServers": []]
     }
 
-    static func promptParams(sessionID: String, text: String) -> JSONValue {
-        ["sessionId": .string(sessionID), "prompt": [["type": "text", "text": .string(text)]]]
+    static func promptParams(sessionID: String, text: String, attachments: [JSONValue] = []) -> JSONValue {
+        let textBlocks: [JSONValue] = text.isEmpty ? [] : [["type": "text", "text": .string(text)]]
+        return ["sessionId": .string(sessionID), "prompt": .array(textBlocks + attachments)]
     }
 
     static func cancelParams(sessionID: String) -> JSONValue {
@@ -73,6 +76,7 @@ struct ACPAgentInfo: Equatable, Sendable {
     var name: String?
     var version: String?
     var canLoadSession: Bool
+    var supportsImages: Bool
     var authMethods: [AuthMethod]
     /// An auth method the agent can complete without UI, such as Grok's
     /// cached token. Nil when signing in needs a terminal or browser.
@@ -82,6 +86,7 @@ struct ACPAgentInfo: Equatable, Sendable {
         name = result["agentInfo"]?["title"]?.stringValue ?? result["agentInfo"]?["name"]?.stringValue
         version = result["agentInfo"]?["version"]?.stringValue ?? result["_meta"]?["agentVersion"]?.stringValue
         canLoadSession = result["agentCapabilities"]?["loadSession"]?.boolValue ?? false
+        supportsImages = result["agentCapabilities"]?["promptCapabilities"]?["image"]?.boolValue ?? false
         authMethods = (result["authMethods"]?.arrayValue ?? []).compactMap { method in
             guard let id = method["id"]?.stringValue else { return nil }
             return AuthMethod(
@@ -92,7 +97,10 @@ struct ACPAgentInfo: Equatable, Sendable {
         }
         let declaredDefault = result["_meta"]?["defaultAuthMethodId"]?.stringValue
         silentAuthMethodID = authMethods.first { method in
-            !method.isTerminalLogin && (method.id == declaredDefault || method.id.localizedCaseInsensitiveContains("cached"))
+            // Cursor's ACP method reads existing CLI credentials; the actual
+            // interactive login is a separate `cursor-agent login` command.
+            !method.isTerminalLogin && (method.id == declaredDefault || method.id.localizedCaseInsensitiveContains("cached")
+                || method.id == "cursor_login")
         }?.id
     }
 }
@@ -100,17 +108,71 @@ struct ACPAgentInfo: Equatable, Sendable {
 enum ACPSessionResult {
     /// Best-effort current model name; agents report it in different places.
     static func modelName(_ result: JSONValue) -> String? {
-        if let models = result["models"], let current = models["currentModelId"]?.stringValue {
-            let named = models["availableModels"]?.arrayValue?.first { $0["modelId"]?.stringValue == current }
-            return named?["name"]?.stringValue ?? current
+        ACPModelState(result)?.currentName
+    }
+}
+
+/// Prefer the current config-options API, with the older models API retained
+/// for installed adapters that still advertise it. Never invent model IDs.
+struct ACPModelState: Equatable, Sendable {
+    struct Choice: Equatable, Sendable {
+        var id: String
+        var name: String
+        var detail: String?
+        var group: String?
+    }
+
+    enum Selection: Equatable, Sendable {
+        case configuration(String)
+        case legacy
+    }
+
+    var currentID: String
+    var choices: [Choice]
+    var selection: Selection?
+    var currentName: String { choices.first { $0.id == currentID }?.name ?? currentID }
+
+    init?(_ result: JSONValue) {
+        if let model = result["configOptions"]?.arrayValue?.first(where: {
+            ($0["category"]?.stringValue == "model" || $0["id"]?.stringValue == "model")
+                && ($0["type"] == nil || $0["type"]?.stringValue == "select")
+        }), let id = model["id"]?.stringValue, let current = model["currentValue"]?.stringValue {
+            currentID = current
+            selection = .configuration(id)
+            choices = []
+            for option in model["options"]?.arrayValue ?? [] {
+                let entries = option["options"]?.arrayValue ?? [option]
+                for entry in entries.prefix(500) {
+                    guard choices.count < 500, let value = entry["value"]?.stringValue,
+                          !choices.contains(where: { $0.id == value }) else { continue }
+                    choices.append(Choice(id: value, name: entry["name"]?.stringValue ?? value,
+                                          detail: entry["description"]?.stringValue,
+                                          group: option["options"] == nil ? nil : option["name"]?.stringValue))
+                }
+            }
+        } else if let models = result["models"], let current = models["currentModelId"]?.stringValue {
+            currentID = current
+            selection = .legacy
+            choices = (models["availableModels"]?.arrayValue ?? []).prefix(500).compactMap {
+                guard let id = $0["modelId"]?.stringValue else { return nil }
+                return Choice(id: id, name: $0["name"]?.stringValue ?? id, detail: $0["description"]?.stringValue)
+            }
+        } else if let current = result["_meta"]?["modelState"]?["currentModelId"]?.stringValue {
+            currentID = current
+            choices = []
+            selection = nil
+        } else { return nil }
+    }
+
+    func request(sessionID: String, modelID: String) -> (method: String, params: JSONValue)? {
+        guard choices.contains(where: { $0.id == modelID }) else { return nil }
+        switch selection {
+        case .configuration(let id):
+            return (ACP.Method.setConfigOption, ["sessionId": .string(sessionID), "configId": .string(id), "value": .string(modelID)])
+        case .legacy:
+            return (ACP.Method.setModel, ["sessionId": .string(sessionID), "modelId": .string(modelID)])
+        case nil: return nil
         }
-        if let options = result["configOptions"]?.arrayValue,
-           let model = options.first(where: { $0["id"]?.stringValue == "model" || $0["category"]?.stringValue == "model" }),
-           let current = model["currentValue"]?.stringValue {
-            let named = model["options"]?.arrayValue?.first { $0["value"]?.stringValue == current }
-            return named?["name"]?.stringValue ?? current
-        }
-        return result["_meta"]?["modelState"]?["currentModelId"]?.stringValue
     }
 }
 
@@ -167,6 +229,8 @@ enum ACPUpdate: Equatable, Sendable {
     case toolCallUpdate(ACPToolCallFields)
     case plan([ACPPlanEntry])
     case context(ACPContextUsage)
+    case modelConfiguration(ACPModelState?)
+    case currentModel(String)
     case subagent(ACPSubagentState)
     case other(kind: String)
 }
@@ -183,6 +247,11 @@ extension ACP {
               let kind = update["sessionUpdate"]?.stringValue else { return nil }
         let parsed: ACPUpdate
         switch kind {
+        case "config_option_update":
+            parsed = .modelConfiguration(ACPModelState(update))
+        case "current_model_update":
+            guard let id = update["currentModelId"]?.stringValue else { return nil }
+            parsed = .currentModel(id)
         case "agent_message_chunk":
             parsed = .agentMessage(contentText(update["content"]) ?? "")
         case "agent_thought_chunk":

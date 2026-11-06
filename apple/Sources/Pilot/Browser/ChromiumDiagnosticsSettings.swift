@@ -1,7 +1,7 @@
 import ChromiumKit
 import Combine
 import Foundation
-import SwiftUI
+import AppKit
 
 /// Checked-in Swift constants mirrored from
 /// `apple/Packages/ChromiumKit/cef-artifacts.json`.
@@ -241,136 +241,106 @@ enum ChromiumBrowsingDataController {
 }
 
 @MainActor
-struct ChromiumDiagnosticsSettingsSection: View {
-    @ObservedObject private var diagnostics = ChromiumDiagnosticsCenter.shared
-    @State private var isConfirmingClear = false
-    @State private var isClearing = false
-    @State private var resultMessage: String?
+final class ChromiumDiagnosticsViewController: NSViewController {
+    private let diagnostics = ChromiumDiagnosticsCenter.shared
+    private var subscriptions: Set<AnyCancellable> = []
+    private var clearTask: Task<Void, Never>?
+    private let runtime = BrowserNativeUI.label("")
+    private let initialization = BrowserNativeUI.label("", secondary: true)
+    private let termination = BrowserNativeUI.label("", secondary: true)
+    private let reason = BrowserNativeUI.label("", secondary: true)
+    private let result = BrowserNativeUI.label("", secondary: true)
+    private var clearButton: BrowserNativeButton!
+    private var runtimeDetail: NSView?
+    private var clearDetail: NSView?
 
-    // Secondary text uses the legible gray: the system secondary measured
-    // 3.9:1 here in light mode, and the system green "Running" 2.1:1 (TYPE-3).
-    var body: some View {
-        Section {
-            LabeledContent("Release") {
-                diagnosticValue(ChromiumArtifactRevision.releaseID)
-            }
-            LabeledContent("CEF") {
-                diagnosticValue(ChromiumArtifactRevision.cefVersion)
-            }
-            LabeledContent("CEF commit") {
-                diagnosticValue(ChromiumArtifactRevision.cefCommit)
-            }
-            LabeledContent("Chromium") {
-                diagnosticValue(ChromiumArtifactRevision.chromiumVersion)
-            }
-            LabeledContent("Chromium commit") {
-                diagnosticValue(ChromiumArtifactRevision.chromiumCommit)
-            }
-            LabeledContent("Runtime") {
-                Text(diagnostics.runtimeStatus.displayName)
-                    .foregroundStyle(runtimeTint)
-            }
-            LabeledContent("Profile") {
-                Text(ChromiumBrowsingDataController.profileLocationCategory)
-                    .foregroundStyle(GlassLegibleText.secondaryColor)
-            }
+    init() { super.init(nibName: nil, bundle: nil) }
 
-            if let diagnostic = diagnostics.lastInitializationFailure {
-                LabeledContent("Last initialization failure") {
-                    diagnosticValue(diagnostic.description)
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override func loadView() {
+        for field in [initialization, termination, reason, result] {
+            field.font = .systemFont(ofSize: 11)
+            field.maximumNumberOfLines = 2
+        }
+        runtime.alignment = .right
+        runtime.textColor = .secondaryLabelColor
+        clearButton = BrowserNativeButton("Clear…") { [weak self] in self?.confirmClear() }
+        clearButton.toolTip = "Remove the managed Chromium profile's cookies, cache, storage, and history."
+        let runtimeTitle = NativeSettingsUI.label("Runtime")
+        let runtimeDetail = NativeSettingsUI.column([initialization, termination], spacing: 2)
+        let clearDetail = NativeSettingsUI.column([reason, result], spacing: 2)
+        let group = NativeSettingsUI.group("Chromium", [
+            NativeSettingsUI.formRow(runtimeTitle, subtitle: runtimeDetail, accessories: [runtime]),
+            NativeSettingsUI.valueRow("Release", value: ChromiumArtifactRevision.releaseID, monospaced: true),
+            NativeSettingsUI.valueRow("CEF", value: ChromiumArtifactRevision.cefVersion, monospaced: true,
+                                      help: ChromiumArtifactRevision.cefCommit),
+            NativeSettingsUI.valueRow("Chromium", value: ChromiumArtifactRevision.chromiumVersion, monospaced: true,
+                                      help: ChromiumArtifactRevision.chromiumCommit),
+            NativeSettingsUI.valueRow("Profile", value: ChromiumBrowsingDataController.profileLocationCategory),
+            NativeSettingsUI.formRow("Browsing Data", subtitle: clearDetail, accessories: [clearButton]),
+        ])
+        group.toolTip = "Chromium profiles are isolated from WebKit, workspaces, and system Chrome. Diagnostics omit credentials, URL details, headers, local paths, and page content."
+        // Failure and clear results appear only when there is something to report.
+        for detail in [runtimeDetail, clearDetail] {
+            for field in detail.arrangedSubviews { field.widthAnchor.constraint(equalTo: detail.widthAnchor).isActive = true }
+        }
+        self.runtimeDetail = runtimeDetail
+        self.clearDetail = clearDetail
+        view = group
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        diagnostics.refreshRuntimeStatus()
+        diagnostics.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.synchronize() }
+        }.store(in: &subscriptions)
+        ChromiumProfileAccessCoordinator.shared.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in self?.synchronize() }
+        }.store(in: &subscriptions)
+        synchronize()
+    }
+
+    private func synchronize() {
+        runtime.stringValue = diagnostics.runtimeStatus.displayName
+        initialization.stringValue = diagnostics.lastInitializationFailure.map { "Last initialization failure: " + $0.description } ?? ""
+        initialization.isHidden = diagnostics.lastInitializationFailure == nil
+        termination.stringValue = diagnostics.lastRendererTermination.map { "Last renderer termination: " + $0.description } ?? ""
+        termination.isHidden = diagnostics.lastRendererTermination == nil
+        let availability = ChromiumBrowsingDataController.availability
+        clearButton.isEnabled = availability == .available && clearTask == nil
+        reason.stringValue = availability.unavailableReason ?? ""
+        reason.isHidden = reason.stringValue.isEmpty
+        result.isHidden = result.stringValue.isEmpty
+        runtimeDetail?.isHidden = initialization.isHidden && termination.isHidden
+        clearDetail?.isHidden = reason.isHidden && result.isHidden
+    }
+
+    private func confirmClear() {
+        guard clearTask == nil, ChromiumBrowsingDataController.availability == .available else { return }
+        let alert = NSAlert()
+        alert.messageText = "Clear Chromium Browsing Data?"
+        alert.informativeText = "This removes the managed Chromium profile's cookies, cache, storage, and history."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Clear")
+        BrowserNativeUI.present(alert, for: view) { [weak self] response in
+            guard let self, response == .alertSecondButtonReturn else { return }
+            self.clearTask = Task { @MainActor [weak self] in
+                do {
+                    try await ChromiumBrowsingDataController.clear()
+                    self?.result.stringValue = "Chromium browsing data was cleared."
+                } catch {
+                    self?.result.stringValue = "Chromium browsing data could not be cleared."
                 }
+                self?.clearTask = nil
+                self?.diagnostics.refreshRuntimeStatus()
+                self?.synchronize()
             }
-            if let diagnostic = diagnostics.lastRendererTermination {
-                LabeledContent("Last renderer termination") {
-                    diagnosticValue(diagnostic.description)
-                }
-            }
-
-            Button("Clear Chromium Browsing Data…", role: .destructive) {
-                isConfirmingClear = true
-            }
-            // Secondary glass, not prominent: a destructive action is never
-            // the view's primary call to action (BTN-1, COL-4). The red role
-            // tint is kept for the confirmation alert (MODAL-1).
-            .compatGlassButtonStyle()
-            .buttonBorderShape(.capsule)
-            .disabled(clearAvailability != .available || isClearing)
-
-            if let reason = clearAvailability.unavailableReason {
-                Text(reason)
-                    .font(.caption)
-                    .foregroundStyle(GlassLegibleText.secondaryColor)
-            }
-        } header: {
-            Label("Chromium", systemImage: "globe")
-        } footer: {
-            Text(
-                "Chromium profiles are isolated from WebKit, workspaces, and system Chrome. "
-                    + "Diagnostics omit credentials, URL details, headers, local paths, and page content."
-            )
-            .foregroundStyle(GlassLegibleText.secondaryColor)
-        }
-        .onAppear {
-            diagnostics.refreshRuntimeStatus()
-        }
-        .alert("Clear Chromium Browsing Data?", isPresented: $isConfirmingClear) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear", role: .destructive) {
-                clearBrowsingData()
-            }
-        } message: {
-            Text("This removes the managed Chromium profile's cookies, cache, storage, and history.")
-        }
-        .alert(
-            "Chromium Browsing Data",
-            isPresented: Binding(
-                get: { resultMessage != nil },
-                set: { if !$0 { resultMessage = nil } }
-            )
-        ) {
-            Button("Done") {
-                resultMessage = nil
-            }
-        } message: {
-            Text(resultMessage ?? "")
+            self.synchronize()
         }
     }
 
-    private var clearAvailability: ChromiumBrowsingDataClearAvailability {
-        ChromiumBrowsingDataController.availability
-    }
-
-    /// The dashboards' state tints, darkened in light mode to clear 4.5:1.
-    private var runtimeTint: Color {
-        switch diagnostics.runtimeStatus {
-        case .running:
-            DashboardTone.green.adaptiveColor
-        case .unavailable, .rendererTerminated:
-            DashboardTone.red.adaptiveColor
-        case .notStarted, .starting:
-            GlassLegibleText.secondaryColor
-        }
-    }
-
-    private func diagnosticValue(_ value: String) -> some View {
-        Text(value)
-            .font(.system(.caption, design: .monospaced))
-            .foregroundStyle(GlassLegibleText.secondaryColor)
-            .textSelection(.enabled)
-            .multilineTextAlignment(.trailing)
-    }
-
-    private func clearBrowsingData() {
-        isClearing = true
-        Task {
-            do {
-                try await ChromiumBrowsingDataController.clear()
-                resultMessage = "Chromium browsing data was cleared."
-            } catch {
-                resultMessage = "Chromium browsing data could not be cleared."
-            }
-            isClearing = false
-            diagnostics.refreshRuntimeStatus()
-        }
-    }
+    isolated deinit { clearTask?.cancel() }
 }

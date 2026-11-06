@@ -251,7 +251,7 @@ struct ExtensionWindowSyncTests {
         let alphaExtension = try #require(controller.selectedWorkspace)
         alphaExtension.addPane(kind: .browser, side: .right)
         alphaExtension.setInspectorPresented(true)
-        alphaExtension.setInspectorTab(.filesystem)
+        alphaExtension.setInspectorTab(.pullRequests)
         #expect(!fixture.alpha.isInspectorPresented)
 
         controller.synchronize(with: fixture.beta)
@@ -265,7 +265,7 @@ struct ExtensionWindowSyncTests {
         #expect(controller.selectedWorkspace === alphaExtension)
         #expect(alphaExtension.sortedPanes.map(\.kind) == [.terminal, .browser])
         #expect(alphaExtension.isInspectorPresented)
-        #expect(alphaExtension.inspectorTab == .filesystem)
+        #expect(alphaExtension.inspectorTab == .pullRequests)
     }
 
     @Test("Extension companion panes persist and stay hidden from Main")
@@ -287,7 +287,7 @@ struct ExtensionWindowSyncTests {
         editor.editorState?.filePath = "/tmp/persisted.swift"
         editor.isCollapsed = true
         extensionWorkspace.setInspectorPresented(true)
-        extensionWorkspace.setInspectorTab(.filesystem)
+        extensionWorkspace.setInspectorTab(.pullRequests)
         try fixture.container.mainContext.save()
 
         let persistedWorkspaceID = extensionWorkspace.id
@@ -314,7 +314,7 @@ struct ExtensionWindowSyncTests {
             == "/tmp/persisted.swift")
         #expect(restored.sortedPanes.first(where: { $0.kind == .editor })?.isCollapsed == true)
         #expect(restored.isInspectorPresented)
-        #expect(restored.inspectorTab == .filesystem)
+        #expect(restored.inspectorTab == .pullRequests)
     }
 
     @Test("Pruning an orphaned companion invalidates Main's workspace cache")

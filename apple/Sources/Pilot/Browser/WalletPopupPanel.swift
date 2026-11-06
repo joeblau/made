@@ -1,6 +1,5 @@
 @preconcurrency import ChromiumKit
 import AppKit
-import SwiftUI
 
 /// Presents one wallet action popup at a time, anchored under its toolbar button.
 ///
@@ -240,90 +239,6 @@ extension WalletPopupController: ChromiumBrowserHostViewDelegate {
                 dismiss()
             } else if browserView === pageHostView {
                 dismissExtensionPage()
-            }
-        }
-    }
-}
-
-/// Reports its own frame in screen coordinates so a SwiftUI toolbar button can
-/// anchor an AppKit panel beneath itself.
-struct ScreenFrameReader: NSViewRepresentable {
-    let onChange: (NSRect) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        FrameReportingView(onChange: onChange)
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? FrameReportingView)?.onChange = onChange
-        (nsView as? FrameReportingView)?.report()
-    }
-
-    private final class FrameReportingView: NSView {
-        var onChange: (NSRect) -> Void
-
-        init(onChange: @escaping (NSRect) -> Void) {
-            self.onChange = onChange
-            super.init(frame: .zero)
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            report()
-        }
-
-        override func layout() {
-            super.layout()
-            report()
-        }
-
-        func report() {
-            guard let window else { return }
-            let inWindow = convert(bounds, to: nil)
-            onChange(window.convertToScreen(inWindow))
-        }
-    }
-}
-
-/// Wallet buttons, shown to the left of the back/forward arrows and only for
-/// Chromium panes — WebKit cannot host the extensions at all, so nothing renders
-/// there rather than rendering something disabled.
-///
-/// Each button opens that wallet's own action popup in a floating panel above
-/// the browser, the way Chrome does. Pilot holds no keys and signs nothing: the
-/// extension owns its secrets, and this is only the affordance that opens its UI.
-///
-/// The caller discovers `wallets`: this view is empty until some exist, and a
-/// `.task` on an empty `Group` never runs, so discovery here never happened.
-struct BrowserWalletToolbarControls: View {
-    let state: BrowserState
-    let wallets: [WalletExtension]
-
-    @State private var anchors: [String: NSRect] = [:]
-
-    var body: some View {
-        Group {
-            if state.engine == .chromium, !wallets.isEmpty {
-                ForEach(wallets) { wallet in
-                    Button {
-                        WalletPopupController.shared.toggle(
-                            wallet,
-                            anchor: anchors[wallet.id] ?? .zero
-                        )
-                    } label: {
-                        Label(wallet.name, systemImage: wallet.systemImageName)
-                    }
-                    .background(
-                        ScreenFrameReader { frame in
-                            if anchors[wallet.id] != frame { anchors[wallet.id] = frame }
-                        }
-                    )
-                    .help("Open \(wallet.name)")
-                    .accessibilityIdentifier("browser.wallet.\(wallet.id)")
-                }
             }
         }
     }

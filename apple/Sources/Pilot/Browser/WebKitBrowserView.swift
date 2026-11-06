@@ -1,6 +1,5 @@
 import AppKit
 import Security
-import SwiftUI
 @preconcurrency import WebKit
 
 @MainActor
@@ -19,29 +18,41 @@ enum BrowserWebsiteData {
     }
 }
 
-struct WebViewRepresentable: NSViewRepresentable {
-    @Environment(\.uiZoom) private var uiZoom
-
+@MainActor
+final class WebViewRepresentable: NSViewController {
     let state: BrowserState
-    let navigationRequestID: Int
-    let inspectorToggleRequestID: Int
-    let findRequestID: Int
-    let stopFindingRequestID: Int
-    let annotateMode: Bool
-    let annotateToggleRequestID: Int
-    let appearanceMode: AppearanceMode
-    let isActive: Bool
-    let isSelected: Bool
-    let onSelect: () -> Void
+    var isActive = false
+    var isSelected = false
+    var onSelect: () -> Void
     let targetTerminalPaneID: @MainActor () -> UUID?
+    private lazy var coordinator = Coordinator(state: state, targetTerminalPaneID: targetTerminalPaneID)
+    private var webView: WKWebView?
+    private var uiZoom: Double { CockpitUIZoomController.shared.factor }
+    private var navigationRequestID: Int { state.navigationRequestID }
+    private var inspectorToggleRequestID: Int { state.inspectorToggleRequestID }
+    private var findRequestID: Int { state.findRequestID }
+    private var stopFindingRequestID: Int { state.stopFindingRequestID }
+    private var annotateMode: Bool { state.annotateMode }
+    private var annotateToggleRequestID: Int { state.annotateToggleRequestID }
+    private var appearanceMode: AppearanceMode { state.appearanceMode }
 
-    func makeNSView(context: Context) -> WKWebView {
+    init(state: BrowserState, onSelect: @escaping () -> Void, targetTerminalPaneID: @escaping @MainActor () -> UUID?) {
+        self.state = state
+        self.onSelect = onSelect
+        self.targetTerminalPaneID = targetTerminalPaneID
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override func loadView() {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         // Browser Annotate: inject the in-page overlay + a message handler for
         // the single "send" round-trip.
         config.userContentController.add(
-            context.coordinator,
+            coordinator,
             contentWorld: BrowserAnnotate.contentWorld,
             name: BrowserAnnotate.messageName
         )
@@ -58,24 +69,27 @@ struct WebViewRepresentable: NSViewRepresentable {
             )
         )
         let webView = BrowserWebView(frame: .zero, configuration: config)
-        webView.navigationDelegate = context.coordinator
+        webView.navigationDelegate = coordinator
+        webView.uiDelegate = coordinator
         webView.isInspectable = true
         webView.isHidden = !isActive
         webView.isPaneSelected = isActive && isSelected
-        webView.onReload = { state.requestNavigationCommand("blau://reload") }
+        webView.onReload = { [weak state] in state?.requestNavigationCommand("blau://reload") }
         webView.onSelect = onSelect
         webView.browserState = state
         webView.performBrowserCommand(.setZoom(uiZoom))
-        context.coordinator.lastFindRequestID = findRequestID
-        context.coordinator.lastStopFindingRequestID = stopFindingRequestID
-        context.coordinator.observeURL(of: webView)
+        coordinator.lastFindRequestID = findRequestID
+        coordinator.lastStopFindingRequestID = stopFindingRequestID
+        coordinator.observeURL(of: webView)
         if let url = initialURL {
             webView.load(URLRequest(url: url))
         }
-        return webView
+        self.webView = webView
+        view = webView
     }
 
-    func updateNSView(_ nsView: WKWebView, context: Context) {
+    func synchronize() {
+        guard let nsView = webView else { return }
         _ = navigationRequestID
         _ = inspectorToggleRequestID
         _ = annotateToggleRequestID
@@ -86,7 +100,7 @@ struct WebViewRepresentable: NSViewRepresentable {
 
         if let browserView = nsView as? BrowserWebView {
             browserView.isPaneSelected = isActive && isSelected
-            browserView.onReload = { state.requestNavigationCommand("blau://reload") }
+            browserView.onReload = { [weak state] in state?.requestNavigationCommand("blau://reload") }
             browserView.onSelect = onSelect
             browserView.browserState = state
         }
@@ -107,16 +121,16 @@ struct WebViewRepresentable: NSViewRepresentable {
             )
         }
 
-        context.coordinator.consumeFindRequests(
+        coordinator.consumeFindRequests(
             findRequestID: findRequestID,
             stopFindingRequestID: stopFindingRequestID,
             in: nsView
         )
 
         // Browser Annotate: push the enabled state into the injected overlay.
-        if context.coordinator.lastAnnotateToggleID != annotateToggleRequestID {
-            context.coordinator.lastAnnotateToggleID = annotateToggleRequestID
-            context.coordinator.setAnnotateMode(annotateMode, in: nsView)
+        if coordinator.lastAnnotateToggleID != annotateToggleRequestID {
+            coordinator.lastAnnotateToggleID = annotateToggleRequestID
+            coordinator.setAnnotateMode(annotateMode, in: nsView)
         }
 
         // Always apply appearance — NSAppearance drives prefers-color-scheme in WKWebView
@@ -134,19 +148,28 @@ struct WebViewRepresentable: NSViewRepresentable {
         }
     }
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(state: state, targetTerminalPaneID: targetTerminalPaneID)
+    @discardableResult
+    func focusContent() -> Bool {
+        guard isActive, isSelected, let webView, let window = webView.window,
+              !webView.isHiddenOrHasHiddenAncestor else { return false }
+        if BrowserPaneFocus.responder(window.firstResponder, isWithin: webView) { return true }
+        return window.makeFirstResponder(webView)
     }
 
-    static func dismantleNSView(_ nsView: WKWebView, coordinator: Coordinator) {
+    func close() {
+        guard let webView else { return }
         coordinator.invalidate()
-        nsView.stopLoading()
-        nsView.navigationDelegate = nil
-        nsView.configuration.userContentController.removeScriptMessageHandler(
+        webView.stopLoading()
+        webView.navigationDelegate = nil
+        webView.uiDelegate = nil
+        webView.configuration.userContentController.removeScriptMessageHandler(
             forName: BrowserAnnotate.messageName,
             contentWorld: BrowserAnnotate.contentWorld
         )
+        self.webView = nil
     }
+
+    isolated deinit { close() }
 
     private var initialURL: URL? {
         if let pendingURL = state.pendingURL,
@@ -165,10 +188,10 @@ struct WebViewRepresentable: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate, WKScriptMessageHandler {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler {
         let state: BrowserState
         let targetTerminalPaneID: @MainActor () -> UUID?
-        /// Last annotate-toggle id pushed into the page, to dedupe updateNSView runs.
+        /// Last annotate-toggle id pushed into the page, to deduplicate native controller updates.
         var lastAnnotateToggleID = -1
         /// Edge-trigger state for Find in Page requests.
         var lastFindRequestID = 0
@@ -182,6 +205,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         private var navigationGeneration = 0
         private var certificateExceptions = BrowserCertificateExceptions()
         private var isPresentingCertificateWarning = false
+        private var dialogThrottle = BrowserJavaScriptDialogThrottle()
         private let confirmCertificate: @MainActor (BrowserCertificateIdentity) -> Bool
 
         init(
@@ -200,6 +224,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         }
 
         func invalidate() {
+            state.javaScriptDialog?.cancel()
             navigationGeneration += 1
             observedWebView = nil
             mainFrameURL = nil
@@ -209,6 +234,37 @@ struct WebViewRepresentable: NSViewRepresentable {
             urlObservation = nil
             navStateObservations.forEach { $0.invalidate() }
             navStateObservations = []
+        }
+
+        // MARK: - Page dialogs
+
+        func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor () -> Void) {
+            presentDialog(webView, kind: .alert, message: message, frame: frame) { _, _ in completionHandler() }
+        }
+
+        func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor (Bool) -> Void) {
+            presentDialog(webView, kind: .confirm, message: message, frame: frame) { accepted, _ in completionHandler(accepted) }
+        }
+
+        func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
+                     defaultText: String?, initiatedByFrame frame: WKFrameInfo,
+                     completionHandler: @escaping @MainActor (String?) -> Void) {
+            presentDialog(webView, kind: .prompt(defaultText: defaultText ?? ""), message: prompt, frame: frame) {
+                accepted, input in completionHandler(accepted ? input : nil)
+            }
+        }
+
+        private func presentDialog(_ webView: WKWebView, kind: BrowserJavaScriptDialogKind, message: String,
+                                   frame: WKFrameInfo, respond: @escaping (Bool, String?) -> Void) {
+            guard observedWebView === webView, webView.window?.isVisible == true,
+                  !webView.isHiddenOrHasHiddenAncestor, dialogThrottle.admit(at: Date()) else {
+                respond(false, nil)
+                return
+            }
+            let content = BrowserJavaScriptDialogContent(kind: kind, originURL: frame.request.url, message: message)
+            state.presentJavaScriptDialog(content, respond: respond)
         }
 
         // MARK: - Find in Page
@@ -382,7 +438,7 @@ struct WebViewRepresentable: NSViewRepresentable {
                 )
                 webView.takeSnapshot(with: WKSnapshotConfiguration()) { [weak self, weak webView] image, _ in
                     Task { @MainActor in
-                        guard let self, let webView,
+                        guard let self, let webView, self.observedWebView === webView,
                               webView.url?.absoluteString == payload.url else { return }
                         // Keep the trusted outline through capture, then clear it
                         // in the same isolated content world.
@@ -439,10 +495,8 @@ struct WebViewRepresentable: NSViewRepresentable {
             urlObservation = webView.observe(\.url, options: [.new, .initial]) { [weak self] webView, _ in
                 Task { @MainActor [weak self, weak webView] in
                     guard let self, let webView, let url = webView.url else { return }
-                    let absolute = url.absoluteString
-                    if self.state.urlText != absolute {
-                        self.state.urlText = absolute
-                    }
+                    guard self.observedWebView === webView else { return }
+                    self.state.acceptCommittedURL(url)
                     guard webView.url == url else { return }
                     self.state.commitFaviconPage(url)
                     self.refreshFavicon(in: webView)
@@ -451,13 +505,15 @@ struct WebViewRepresentable: NSViewRepresentable {
             navStateObservations.forEach { $0.invalidate() }
             navStateObservations = [
                 webView.observe(\.canGoBack, options: [.new, .initial]) { [weak self] webView, _ in
-                    Task { @MainActor in
-                        self?.state.canGoBack = webView.canGoBack
+                    Task { @MainActor [weak self, weak webView] in
+                        guard let self, let webView, self.observedWebView === webView else { return }
+                        self.state.canGoBack = webView.canGoBack
                     }
                 },
                 webView.observe(\.canGoForward, options: [.new, .initial]) { [weak self] webView, _ in
-                    Task { @MainActor in
-                        self?.state.canGoForward = webView.canGoForward
+                    Task { @MainActor [weak self, weak webView] in
+                        guard let self, let webView, self.observedWebView === webView else { return }
+                        self.state.canGoForward = webView.canGoForward
                     }
                 },
             ]
@@ -535,6 +591,8 @@ struct WebViewRepresentable: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            state.javaScriptDialog?.cancel()
+            dialogThrottle.reset()
             annotateGrant = nil
             state.isLoading = true
             updateNavState(webView)
@@ -544,7 +602,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             // Earliest reliable point — URL is now the real destination
             // (after any provisional redirects).
             if let url = webView.url {
-                state.urlText = url.absoluteString
+                state.acceptCommittedURL(url)
                 state.commitFaviconPage(url)
             }
             updateNavState(webView)
@@ -555,8 +613,7 @@ struct WebViewRepresentable: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             state.isLoading = false
             if let url = webView.url {
-                state.urlText = url.absoluteString
-                state.pendingURL = nil
+                state.acceptCommittedURL(url)
             }
             updateNavState(webView)
             refreshFavicon(in: webView)
@@ -587,7 +644,7 @@ struct WebViewRepresentable: NSViewRepresentable {
             }))()
             """
             webView.evaluateJavaScript(script, in: nil, in: .defaultClient) { [weak self, weak webView] result in
-                guard let self, let webView,
+                guard let self, let webView, self.observedWebView === webView,
                       case .success(let value) = result,
                       let metadata = value as? [String: Any],
                       let page = metadata["url"] as? String,

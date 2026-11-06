@@ -1,269 +1,213 @@
 import AppKit
-import SwiftUI
+import Synchronization
 
-/// The connected pane launcher shared by Pilot's main and extension windows.
-/// Supplying the owning workspace lets Extension reuse the exact controls while
-/// keeping independent runtime IDs for every terminal, browser, and device.
-struct WorkspacePaneLauncher: View {
-    let workspace: Workspace?
+/// Opening UI state follows pane identity, since SwiftData can recreate model
+/// instances. Only the chosen kind/engine/target belongs in the saved model.
+enum PaneOpeningChoices {
+    private static let pending = Mutex<Set<UUID>>([])
 
-    private let droneStore = DroneStore.shared
-    @ObservedObject private var chromiumDiagnostics = ChromiumDiagnosticsCenter.shared
-    @ObservedObject private var chromiumProfileAccess =
-        ChromiumProfileAccessCoordinator.shared
-
-    /// Launcher slot size; the capsule is one slot tall.
-    fileprivate static let slotSize: CGFloat = 36
-    /// Inset of the hover circle inside a slot. The capsule's end radius is
-    /// half a slot, so a circle inset by this on every side, with the same
-    /// horizontal padding, nests concentrically (LAY-4).
-    fileprivate static let highlightInset: CGFloat = 2
-
-    var body: some View {
-        HStack(spacing: 0) {
-            paneButtons
-        }
-        // Slots stay unglazed inside the one glass capsule (no glass on
-        // glass); each gets a circular hover wash and press feedback (BTN-5).
-        // Menus use the button menu style, so they pick up the same plain
-        // button style as their sibling slots (the deprecated borderless
-        // menu style would bypass it).
-        .buttonStyle(.plain)
-        .menuStyle(.button)
-        .padding(.horizontal, Self.highlightInset)
-        // Not `.interactive()`: the capsule is a container for the slots, not
-        // a control, so a click on one slot should not flex the whole cluster.
-        .compatGlassEffect(in: Capsule())
-        .disabled(workspace == nil)
-        .accessibilityIdentifier("workspace.pane-launcher")
+    static func contains(_ id: UUID) -> Bool { pending.withLock { $0.contains(id) } }
+    static func set(_ choosing: Bool, for id: UUID) {
+        pending.withLock { if choosing { $0.insert(id) } else { $0.remove(id) } }
     }
+    static func retainOnly(_ ids: Set<UUID>) { pending.withLock { $0.formIntersection(ids) } }
+}
 
-    @ViewBuilder
-    private var paneButtons: some View {
-        Menu {
-            Button {
-                workspace?.addPane(kind: .terminal, side: .right)
-            } label: {
-                Label("Local", systemImage: "macbook")
-            }
-            ForEach(droneStore.records) { record in
-                Button {
-                    workspace?.addPane(
-                        kind: .terminal,
-                        side: .right,
-                        terminalDestination: .drone(droneID: record.id, name: record.name)
-                    )
-                } label: {
-                    Label(record.name, systemImage: "server.rack")
-                }
-                .disabled(droneStore.states[record.id]?.isConnected != true)
-            }
-        } label: {
-            launcherLabel("New Terminal", systemImage: PaneKind.terminal.systemImageName)
-        }
-        .menuIndicator(.hidden)
-        .launcherSlot()
-        .help("Open a terminal locally or on a connected Drone")
-
-        // No `primaryAction`: clicking opens the engine chooser rather than
-        // silently picking WebKit, matching the Apple and Android buttons beside
-        // it. ⌘B still opens a WebKit browser directly from the main menu.
-        Menu {
-            ForEach(BrowserEngine.allCases, id: \.self) { engine in
-                Button {
-                    addBrowserPane(engine: engine)
-                } label: {
-                    Label("\(engine.displayName) Browser", systemImage: engine.systemImageName)
-                }
-                .disabled(!browserCreationEnabled(for: engine))
-            }
-
-            // A greyed-out Chromium row is otherwise unexplained, and the three
-            // causes need different answers — most often nothing is wrong at all,
-            // just a build that deliberately ships without the CEF runtime.
-            if let reason = chromiumUnavailableReason {
-                Section {
-                    Text(reason.message)
-                }
-            }
-        } label: {
-            launcherLabel("New Browser", systemImage: BrowserEngine.webKit.systemImageName)
-        }
-        .menuIndicator(.hidden)
-        .launcherSlot()
-        .help("Open a browser pane — choose WebKit or Chromium")
-        .accessibilityIdentifier("workspace.browser-pane-launcher")
-
-        Menu {
-            Button {
-                workspace?.addPane(kind: .simulator, side: .right)
-            } label: {
-                Label("Simulator", systemImage: PaneKind.simulator.systemImageName)
-            }
-            .keyboardShortcut("s", modifiers: [.command, .shift])
-
-            Button {
-                workspace?.addPane(kind: .device, side: .right)
-            } label: {
-                Label("Device Stream", systemImage: PaneKind.device.systemImageName)
-            }
-            .keyboardShortcut("i", modifiers: [.command, .shift])
-        } label: {
-            launcherLabel("Apple", systemImage: "apple.logo")
-        }
-        .menuIndicator(.hidden)
-        .launcherSlot()
-        .help("Open an Apple Simulator or QuickTime device stream")
-        .accessibilityIdentifier("workspace.apple-pane-launcher")
-
-        Menu {
-            Button {
-                addAndroidPane(target: .simulator)
-            } label: {
-                Label("Android Simulator", systemImage: "apps.iphone")
-            }
-
-            Button {
-                addAndroidPane(target: .device)
-            } label: {
-                Label("Android Device", systemImage: "smartphone")
-            }
-        } label: {
-            launcherLabel("Android") {
-                Image("AndroidRobot")
-            }
-        }
-        .menuIndicator(.hidden)
-        .launcherSlot()
-        .help("Open an Android Simulator or device stream")
-        .accessibilityIdentifier("workspace.android-pane-launcher")
-
-        Menu {
-            ForEach(ChatAgent.allCases) { agent in
-                Button(agent.displayName) {
-                    addAgentChatPane(agent: agent)
-                }
-            }
-        } label: {
-            launcherLabel("Agent Chat", systemImage: PaneKind.agentChat.systemImageName)
-        }
-        .menuIndicator(.hidden)
-        .launcherSlot()
-        .disabled(workspace?.effectiveRootPath == nil)
-        .help(
-            workspace?.effectiveRootPath == nil
-                ? "Set a workspace root path to chat with a coding agent"
-                : "Chat with Claude, Codex, Kimi, or Grok in this workspace"
-        )
-        .accessibilityIdentifier("workspace.agent-chat-launcher")
-
-        Button {
-            workspace?.addPane(kind: .editor, side: .right)
-        } label: {
-            launcherLabel("Open Editor", systemImage: PaneKind.editor.systemImageName)
-        }
-        .launcherSlot()
-        .keyboardShortcut("e", modifiers: .command)
-        .disabled(workspace?.effectiveRootPath == nil)
-        .help(
-            workspace?.effectiveRootPath == nil
-                ? "Set a workspace root path to open the editor"
-                : "Open a file editor with fuzzy file search"
-        )
-
-        Button {
-            if let rootPath = workspace?.effectiveRootPath {
-                NSWorkspace.shared.open(URL(fileURLWithPath: rootPath))
-            }
-        } label: {
-            launcherLabel("Open in Finder", systemImage: "folder")
-        }
-        .launcherSlot()
-        .disabled(workspace?.effectiveRootPath == nil)
-        .help(
-            workspace?.effectiveRootPath == nil
-                ? "Set a workspace root path to open it in Finder"
-                : "Open the workspace folder in Finder"
-        )
-    }
-
-    private func addAgentChatPane(agent: ChatAgent) {
-        guard let pane = workspace?.addPane(kind: .agentChat, side: .right) else { return }
-        AgentChatPaneStore.setAgent(agent, for: pane.id)
-    }
-
-    private func addAndroidPane(target: AndroidPaneTarget) {
-        guard let pane = workspace?.addPane(kind: .android, side: .right) else { return }
-        AndroidDeviceRegistry.shared.configure(target: target, for: pane.id)
-    }
-
-    private func addBrowserPane(engine: BrowserEngine) {
-        workspace?.addBrowserPane(engine: engine, side: .right)
-    }
-
-    private var chromiumUnavailableReason: ChromiumUnavailableReason? {
-        _ = chromiumDiagnostics.runtimeStatus
-        _ = chromiumProfileAccess.isClearing
-        return ChromiumBrowserCreationPolicy.unavailableReason
-    }
-
-    private func browserCreationEnabled(for engine: BrowserEngine) -> Bool {
-        _ = chromiumDiagnostics.runtimeStatus
-        _ = chromiumProfileAccess.isClearing
-        return BrowserPaneCreationPolicy.permitsCreation(
-            for: engine,
-            chromiumCreationEnabled:
-                ChromiumBrowserCreationPolicy.isCreationEnabled
-        )
-    }
-
-    private func launcherLabel(_ title: String, systemImage: String) -> some View {
-        launcherLabel(title) {
-            Image(systemName: systemImage)
-        }
-    }
-
-    private func launcherLabel<Icon: View>(
-        _ title: String,
-        @ViewBuilder icon: () -> Icon
-    ) -> some View {
-        Label {
-            Text(title)
-        } icon: {
-            icon()
-        }
-        .labelStyle(.iconOnly)
-        .frame(width: Self.slotSize, height: Self.slotSize)
-        .contentShape(Rectangle())
+extension Workspace {
+    @discardableResult
+    func addBrowserPane(engine: BrowserEngine = .webKit, side: Side) -> Pane {
+        addPane(kind: .browser, side: side, browserEngine: engine)
     }
 }
 
-private extension View {
-    /// Sizes one launcher slot and adds its hover wash. Applied to the
-    /// Button or Menu itself, not its label: macOS flattens menu labels to a
-    /// title and image, so a label background would never draw for menus.
-    func launcherSlot() -> some View {
-        frame(width: WorkspacePaneLauncher.slotSize, height: WorkspacePaneLauncher.slotSize)
-            .modifier(LauncherSlotHover())
+extension PaneKind {
+    var isTerminalTool: Bool { self == .terminal || self == .agentChat }
+    var isAppleTool: Bool { self == .device || self == .simulator }
+}
+
+extension Pane {
+    var isChoosingMode: Bool {
+        get { PaneOpeningChoices.contains(id) }
+        set { PaneOpeningChoices.set(newValue, for: id) }
+    }
+
+    var androidTarget: AndroidPaneTarget {
+        get { androidTargetRaw.flatMap(AndroidPaneTarget.init(rawValue:)) ?? .simulator }
+        set { androidTargetRaw = newValue.rawValue }
     }
 }
 
-/// Circular hover wash for one launcher slot. Works for both the plain
-/// buttons and the plain button-style menus, so every slot responds the
-/// same way.
-private struct LauncherSlotHover: ViewModifier {
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var isHovered = false
+/// Native pane launchers. Each category chooses its mode once when opened.
+@MainActor
+final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
+    var workspace: Workspace? { didSet { refreshToolbar() } }
+    var onCreate: (() -> Void)?
+    private weak var toolbarGroup: NSToolbarItemGroup?
 
-    func body(content: Content) -> some View {
-        content
-            .background {
-                Circle()
-                    .fill(.fill.tertiary)
-                    .padding(WorkspacePaneLauncher.highlightInset)
-                    .opacity(isHovered && isEnabled ? 1 : 0)
+    private enum Slot: String, CaseIterable {
+        case terminal, browser, apple, android, editor, finder
+
+        var title: String {
+            switch self {
+            case .terminal: "Terminal"
+            case .browser: "Browser"
+            case .apple: "Apple"
+            case .android: "Android"
+            case .editor: "Editor"
+            case .finder: "Open in Finder"
             }
-            .onHover { isHovered = $0 }
-            .animation(LiquidGlassMetrics.stateChange, value: isHovered)
+        }
+        var symbol: String {
+            switch self {
+            case .terminal: PaneKind.terminal.systemImageName
+            case .browser: PaneKind.browser.systemImageName
+            case .apple: "apple.logo"
+            case .android: PaneKind.android.systemImageName
+            case .editor: PaneKind.editor.systemImageName
+            case .finder: "folder"
+            }
+        }
+        var requiresRoot: Bool { self == .editor || self == .finder }
+    }
+
+    init(workspace: Workspace?) {
+        self.workspace = workspace
+        super.init()
+    }
+
+    /// AppKit owns the shared glass capsule, symbol sizing and overflow menu.
+    func makeToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItemGroup {
+        let group = NSToolbarItemGroup(itemIdentifier: identifier)
+        group.label = "New Pane"
+        group.controlRepresentation = .expanded
+        group.selectionMode = .momentary
+        group.isBordered = true
+        group.autovalidates = false
+        group.subitems = Slot.allCases.map { slot in
+            let itemID = NSToolbarItem.Identifier("workspace.launcher.\(slot.rawValue)")
+            let item = NSToolbarItem(itemIdentifier: itemID)
+            item.target = self
+            item.action = switch slot {
+            case .terminal: #selector(openTerminal(_:))
+            case .browser: #selector(openBrowser(_:))
+            case .apple: #selector(openApple(_:))
+            case .android: #selector(openAndroid(_:))
+            case .editor: #selector(openEditor(_:))
+            case .finder: #selector(openFinder(_:))
+            }
+            item.label = slot.title
+            item.toolTip = slot.title
+            item.image = slot == .android ? NSImage(named: "AndroidRobot") : nil
+            if item.image == nil { item.image = NSImage(systemSymbolName: slot.symbol, accessibilityDescription: slot.title) }
+            item.isBordered = true
+            item.autovalidates = false
+            return item
+        }
+        toolbarGroup = group
+        refreshToolbar()
+        return group
+    }
+
+    private func refreshToolbar() {
+        guard let toolbarGroup else { return }
+        toolbarGroup.isEnabled = workspace != nil
+        for (slot, item) in zip(Slot.allCases, toolbarGroup.subitems) {
+            item.isEnabled = workspace != nil && (!slot.requiresRoot || workspace?.effectiveRootPath != nil)
+        }
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        guard let slot = Slot.allCases.first(where: { $0.title == menu.title }), let workspace else { return }
+        for item in entries(for: slot, workspace: workspace, side: .right) { menu.addItem(item) }
+    }
+
+    private func open(_ kind: PaneKind) {
+        guard let workspace else { return }
+        workspace.addPane(kind: kind, side: .right, chooseModeOnOpen: kind != .browser)
+        onCreate?()
+    }
+
+    @objc private func openTerminal(_ sender: Any?) { open(.terminal) }
+    @objc private func openBrowser(_ sender: Any?) { open(.browser) }
+    @objc private func openApple(_ sender: Any?) { open(.simulator) }
+    @objc private func openAndroid(_ sender: Any?) { open(.android) }
+
+    @objc private func openEditor(_ sender: Any?) {
+        guard let workspace, workspace.effectiveRootPath != nil else { return }
+        workspace.addPane(kind: .editor, side: .right)
+        onCreate?()
+    }
+
+    @objc private func openFinder(_ sender: Any?) {
+        guard let path = workspace?.effectiveRootPath else { return }
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
+    }
+
+    func makeMenu(side: Workspace.Side = .right) -> NSMenu {
+        let menu = NSMenu()
+        guard let workspace else { return menu }
+        for slot in Slot.allCases {
+            let items = entries(for: slot, workspace: workspace, side: side)
+            if slot == .finder { menu.addItem(.separator()) }
+            if slot == .terminal || slot == .browser {
+                let item = NSMenuItem(title: slot.title, action: nil, keyEquivalent: "")
+                let submenu = NSMenu(title: slot.title)
+                items.forEach(submenu.addItem)
+                item.submenu = submenu
+                menu.addItem(item)
+            } else { items.forEach(menu.addItem) }
+        }
+        return menu
+    }
+
+    private func entries(for slot: Slot, workspace: Workspace, side: Workspace.Side) -> [NSMenuItem] {
+        switch slot {
+        case .terminal:
+            return [ShellMenuItem("Raw Terminal") { [weak self] in
+                workspace.addPane(kind: .terminal, side: side); self?.onCreate?()
+            }, ShellMenuItem("Agentic Terminal") { [weak self] in
+                workspace.addPane(kind: .agentChat, side: side); self?.onCreate?()
+            }] + DroneStore.shared.records.map { record in
+                ShellMenuItem(record.name, enabledWhen: { DroneStore.shared.states[record.id]?.isConnected == true }) { [weak self] in
+                    workspace.addPane(kind: .terminal, side: side, terminalDestination: .drone(droneID: record.id, name: record.name))
+                    self?.onCreate?()
+                }
+            }
+        case .browser:
+            var items: [NSMenuItem] = BrowserEngine.allCases.map { engine in
+                ShellMenuItem(engine.displayName, enabledWhen: {
+                    BrowserPaneCreationPolicy.permitsCreation(for: engine, chromiumCreationEnabled: ChromiumBrowserCreationPolicy.isCreationEnabled)
+                }) { [weak self] in workspace.addBrowserPane(engine: engine, side: side); self?.onCreate?() }
+            }
+            if let reason = ChromiumBrowserCreationPolicy.unavailableReason {
+                let item = NSMenuItem(title: reason.message, action: nil, keyEquivalent: "")
+                item.isEnabled = false; items.append(item)
+            }
+            return items
+        case .apple:
+            return [
+                ShellMenuItem("Apple Simulator") { [weak self] in workspace.addPane(kind: .simulator, side: side); self?.onCreate?() },
+                ShellMenuItem("Apple Device Stream") { [weak self] in workspace.addPane(kind: .device, side: side); self?.onCreate?() }
+            ]
+        case .android:
+            return [("Android Simulator", AndroidPaneTarget.simulator), ("Android Device", AndroidPaneTarget.device)].map { title, target in
+                ShellMenuItem(title) { [weak self] in
+                    let pane = workspace.addPane(kind: .android, side: side)
+                    pane.androidTarget = target
+                    _ = workspace.modelContext?.saveReporting()
+                    AndroidDeviceRegistry.shared.configure(target: target, for: pane.id)
+                    self?.onCreate?()
+                }
+            }
+        case .editor:
+            return [ShellMenuItem("Editor", enabledWhen: { workspace.effectiveRootPath != nil }) { [weak self] in
+                workspace.addPane(kind: .editor, side: side); self?.onCreate?()
+            }]
+        case .finder:
+            return [ShellMenuItem("Open in Finder", enabledWhen: { workspace.effectiveRootPath != nil }) {
+                if let path = workspace.effectiveRootPath { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
+            }]
+        }
     }
 }

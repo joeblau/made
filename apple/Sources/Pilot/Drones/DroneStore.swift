@@ -4,7 +4,25 @@ import Observation
 @Observable
 @MainActor
 final class DroneStore {
-    static let shared = DroneStore()
+    static let shared: DroneStore = {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["BLAU_COCKPIT_FIXTURE"] != nil || environment["XCTestConfigurationFilePath"] != nil {
+            return isolated()
+        }
+        return DroneStore()
+    }()
+
+    /// A fixture may reach the singleton from a menu or launcher before its
+    /// window supplies dependencies. Keep that path out of the user's registry,
+    /// Keychain, and Bonjour discovery as well.
+    static func isolated() -> DroneStore {
+        DroneStore(
+            persistence: DroneRegistryPersistence(url: FileManager.default.temporaryDirectory
+                .appendingPathComponent("cockpit-fixture-\(UUID().uuidString)/drones.json")),
+            transport: UnavailableDroneTransport(),
+            discovery: DroneDiscovery(allowsNetwork: false)
+        )
+    }
 
     private(set) var records: [DroneRecord]
     private(set) var states: [UUID: DroneConnectionState] = [:]

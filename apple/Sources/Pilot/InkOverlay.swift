@@ -1,23 +1,7 @@
 import AppKit
-import SwiftUI
-
-struct InkStroke {
-    var color: NSColor
-    var width: CGFloat
-    var points: [CGPoint]
-}
-
-@MainActor
-@Observable
-final class InkModel {
-    var strokes: [InkStroke] = []
-    var color: NSColor = .systemRed
-    var width: CGFloat = 3
-    var isEraser = false
-
-    func undo() { if !strokes.isEmpty { strokes.removeLast() } }
-    func clear() { strokes.removeAll() }
-}
+import Observation
+import PaperKit
+import PencilKit
 
 struct RemoteInkStroke {
     var color: NSColor
@@ -87,173 +71,272 @@ final class RemoteInkModel {
     }
 }
 
-/// Freehand annotation layer drawn over the active pane (terminal/browser/
-/// device). Used in place of PencilKit's `PKCanvasView`, which is iOS/Catalyst
-/// only and unavailable in this native macOS app. Strokes clear when dismissed.
-struct InkOverlay: View {
-    @Binding var isActive: Bool
-    @State private var model = InkModel()
+/// PaperKit owns the drawing tools, selection, and markup editing. Each overlay
+/// has its own canvas and undo manager, so Main and Extendo remain independent.
+@MainActor
+final class InkOverlayViewController: NSViewController, @MainActor PaperMarkupViewController.Delegate {
+    let markupController = PaperMarkupViewController(supportedFeatureSet: .latest)
+    let toolPicker = MarkupToolbarViewController(supportedFeatureSet: .latest)
+    private let annotationUndoManager = UndoManager()
+    private let onDismiss: () -> Void
+    private var undoButton: NSButton?
+    private var clearButton: NSButton?
+    private var keyMonitor: Any?
+    private var undoObservers: [NSObjectProtocol] = []
+    private var canvasBounds = CGRect.zero
+    private var lastMarkup: PaperMarkup?
+    private var dismissed = false
 
-    private let palette: [NSColor] = [.systemRed, .systemOrange, .systemYellow,
-                                      .systemGreen, .systemBlue, .white]
-    private let paletteNames = ["Red", "Orange", "Yellow", "Green", "Blue", "White"]
+    override var undoManager: UndoManager? { annotationUndoManager }
 
-    /// Swatch hit target; the swatch capsule wraps it at `swatchInset` on every
-    /// side, so the capsule ends and the hover circles stay concentric (LAY-4).
-    private static let swatchTarget: CGFloat = 28
-    private static let swatchDiameter: CGFloat = 20
-    private static let swatchInset = LiquidGlassMetrics.Spacing.xxSmall
+    init(onDismiss: @escaping () -> Void) {
+        self.onDismiss = onDismiss
+        super.init(nibName: nil, bundle: nil)
+    }
 
-    var body: some View {
-        // The controls float at the bottom edge. At the top they sat across
-        // the pane tab strip and covered the tab titles (LAY-5).
-        ZStack(alignment: .bottom) {
-            InkCanvas(model: model, onDismiss: { isActive = false })
-            toolbar.padding(.bottom, LiquidGlassMetrics.Spacing.large)
+    required init?(coder: NSCoder) { nil }
+
+    override func loadView() {
+        let root = InkAnnotationView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        root.annotationUndoManager = annotationUndoManager
+        root.onLayout = { [weak self] bounds in self?.updateCanvasBounds(bounds) }
+        view = root
+        markupController.delegate = self
+        markupController.isEditable = true
+        markupController.zoomRange = 1...1
+        markupController.indirectPointerTouchMode = .drawing
+        markupController.drawingTool = PKInkingTool(.pen, color: .systemRed, width: 3)
+        markupController.contentView = NSView()
+        if #available(macOS 27.0, *) {
+            markupController.scrollConfiguration.isScrollEnabled = false
+            markupController.scrollConfiguration.visibleScrollIndicators = []
+        }
+        addChild(markupController)
+        shellPin(markupController.view, to: view)
+        markupController.view.layer?.backgroundColor = NSColor.clear.cgColor
+
+        toolPicker.delegate = markupController
+        toolPicker.indirectPointerTouchModes = [.drawing, .selection]
+        toolPicker.selectedIndirectPointerTouchMode = .drawing
+        toolPicker.selectedDrawingTool = markupController.drawingTool
+        addChild(toolPicker)
+        toolPicker.view.setAccessibilityLabel("Annotation tools")
+        toolPicker.view.setAccessibilityIdentifier("annotation.native-tool-picker")
+
+        let undo = CaptureActionButton(CapturePaneAction(title: "Undo annotation", symbol: "arrow.uturn.backward", perform: { [weak self] in
+            self?.annotationUndoManager.undo()
+            self?.updateControls()
+        }), iconOnly: true)
+        undoButton = undo
+        let clear = CaptureActionButton(CapturePaneAction(title: "Clear annotations", symbol: "trash", perform: { [weak self] in
+            self?.clearAnnotations()
+        }), iconOnly: true)
+        clearButton = clear
+        let done = CaptureActionButton(CapturePaneAction(title: "Done", symbol: "checkmark", perform: { [weak self] in self?.dismissInk() }))
+        let actions = CockpitUI.hStack([undo, clear, done], spacing: 5)
+        let actionGlass = CockpitGlassView(content: actions, cornerRadius: 18)
+        let controls = CockpitUI.vStack([toolPicker.view, actionGlass], spacing: 8)
+        controls.alignment = .centerX
+        controls.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(controls)
+        NSLayoutConstraint.activate([
+            controls.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            controls.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            controls.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 4),
+            controls.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -4),
+        ])
+        for name in [Notification.Name.NSUndoManagerDidCloseUndoGroup, .NSUndoManagerDidUndoChange, .NSUndoManagerDidRedoChange] {
+            undoObservers.append(NotificationCenter.default.addObserver(forName: name, object: annotationUndoManager, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.updateControls() }
+            })
+        }
+        updateCanvasBounds(root.bounds)
+        updateControls()
+    }
+
+    private func updateCanvasBounds(_ bounds: CGRect) {
+        markupController.view.layer?.backgroundColor = NSColor.clear.cgColor
+        guard bounds.width > 0, bounds.height > 0, bounds != canvasBounds else { return }
+        canvasBounds = bounds
+        var markup = markupController.markup ?? PaperMarkup(bounds: bounds)
+        markup.bounds = bounds
+        if #available(macOS 27.0, *) { markup.backgroundColor = NSColor.clear.cgColor }
+        applyMarkup(markup)
+        markupController.contentView?.frame = bounds
+        markupController.setContentVisibleFrame(bounds, animated: false)
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(markupController)
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let window = self.view.window, event.window === window, event.keyCode == 53 else { return event }
+            self.dismissInk()
+            return nil
         }
     }
 
-    /// Three neighboring glass groups — the color picker, the tool buttons, and
-    /// the single primary action — blended by one container (BTN-1).
-    private var toolbar: some View {
-        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                swatchPicker
-
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    toolButton("eraser", help: "Eraser", active: model.isEraser) { model.isEraser.toggle() }
-                    toolButton("arrow.uturn.backward", help: "Undo last stroke", disabled: model.strokes.isEmpty) {
-                        model.undo()
-                    }
-                    toolButton(
-                        "trash",
-                        help: "Clear annotations",
-                        role: .destructive,
-                        disabled: model.strokes.isEmpty
-                    ) { model.clear() }
-                }
-
-                Button("Done") { isActive = false }
-                    .scaledFont(size: 12, weight: .semibold)
-                    .compatGlassProminentButtonStyle()
-                    .controlSize(.large)
-                    .help("Finish annotating")
-            }
-        }
-        .fixedSize()
+    override func viewWillDisappear() {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
+        annotationUndoManager.removeAllActions()
+        super.viewWillDisappear()
     }
 
-    /// The swatches are one picker on one glass capsule; each swatch is a
-    /// plain button inside it with hover/press feedback (no glass on glass).
-    private var swatchPicker: some View {
-        HStack(spacing: 0) {
-            ForEach(palette.indices, id: \.self) { index in
-                let swatch = palette[index]
-                let isSelected = !model.isEraser && model.color == swatch
-                // A real button, so keyboard and VoiceOver can pick a color.
-                Button {
-                    model.color = swatch
-                    model.isEraser = false
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(Color(nsColor: swatch))
-                            // Hairline keeps the white swatch visible on light glass.
-                            .overlay { Circle().strokeBorder(.primary.opacity(0.15), lineWidth: 0.5) }
-                            .frame(width: Self.swatchDiameter, height: Self.swatchDiameter)
-                        Circle()
-                            .strokeBorder(.primary, lineWidth: 2)
-                            .opacity(isSelected ? 0.9 : 0)
-                    }
-                    .frame(width: Self.swatchTarget, height: Self.swatchTarget)
-                    .animation(LiquidGlassMetrics.stateChange, value: isSelected)
-                }
-                .buttonStyle(.liquidGlassPressable(cornerRadius: Self.swatchTarget / 2))
-                .help("\(paletteNames[index]) ink")
-                .accessibilityLabel("\(paletteNames[index]) ink")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-            }
-        }
-        .padding(Self.swatchInset)
-        .compatFloatingGlassCapsule()
+    override func cancelOperation(_ sender: Any?) { dismissInk() }
+
+    func clearAnnotations() {
+        applyMarkup(PaperMarkup(bounds: canvasBounds))
+        annotationUndoManager.removeAllActions()
+        updateControls()
     }
 
-    private func toolButton(_ symbol: String, help: String, active: Bool = false,
-                            role: ButtonRole? = nil, disabled: Bool = false,
-                            action: @escaping () -> Void) -> some View {
-        Button(role: role, action: action) {
-            Label(help, systemImage: symbol)
-                .scaledFont(size: 13, weight: .medium)
-                .foregroundStyle(active ? Color.accentColor : .primary)
+    private func dismissInk() {
+        guard !dismissed else { return }
+        dismissed = true
+        clearAnnotations()
+        onDismiss()
+    }
+
+    func paperMarkupViewControllerDidChangeMarkup(_ paperMarkupViewController: PaperMarkupViewController) {
+        guard let markup = paperMarkupViewController.markup, markup != lastMarkup else { return }
+        if let previous = lastMarkup {
+            annotationUndoManager.registerUndo(withTarget: self) { $0.restoreMarkup(previous) }
+            annotationUndoManager.setActionName("Annotation")
         }
-        .compatGlassIconButton(controlSize: .large)
-        .disabled(disabled)
-        .help(help)
-        .accessibilityLabel(help)
-        .accessibilityAddTraits(active ? .isSelected : [])
+        lastMarkup = markup
+        updateControls()
+    }
+
+    private func restoreMarkup(_ markup: PaperMarkup) {
+        if let current = markupController.markup {
+            annotationUndoManager.registerUndo(withTarget: self) { $0.restoreMarkup(current) }
+        }
+        var restored = markup
+        restored.bounds = canvasBounds
+        applyMarkup(restored)
+    }
+
+    private func applyMarkup(_ markup: PaperMarkup) {
+        lastMarkup = markup
+        markupController.markup = markup
+        updateControls()
+    }
+
+    private func updateControls() {
+        undoButton?.isEnabled = annotationUndoManager.canUndo
+        clearButton?.isEnabled = markupController.markup.map { !$0.contentsRenderFrame.isEmpty } ?? false
+    }
+
+    isolated deinit {
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        for observer in undoObservers { NotificationCenter.default.removeObserver(observer) }
     }
 }
 
-struct RemoteInkOverlay: View {
-    var model: RemoteInkModel
-
-    var body: some View {
-        RemoteInkCanvas(model: model)
-            .allowsHitTesting(false)
+@MainActor
+private final class InkAnnotationView: NSView {
+    var annotationUndoManager: UndoManager?
+    var onLayout: ((CGRect) -> Void)?
+    override var undoManager: UndoManager? { annotationUndoManager }
+    override func layout() {
+        onLayout?(bounds)
+        super.layout()
     }
 }
 
-/// Floating undo + clear controls for the Plotter-drawn ink. Shown on Pilot
-/// while remote ink is present; actions round-trip to the iPad so both stay in
-/// sync (see ``RemoteInkModel/onLocalEdit``).
-struct RemoteInkControls: View {
-    var model: RemoteInkModel
+/// The normalized remote canvas is click-through. Only its undo/clear buttons
+/// participate in hit testing; the paired iPad remains the drawing authority.
+@MainActor
+final class RemoteInkOverlayViewController: NSViewController {
+    let model: RemoteInkModel
+    private let canvas = RemoteInkCanvasNSView()
+    private var controls: NSView?
+    private lazy var observation = CockpitObservation(owner: self) { $0.refresh() }
 
-    /// Two circular glass buttons blended by one container, matching the
-    /// local ink toolbar's tool buttons.
-    var body: some View {
-        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                button("arrow.uturn.backward", help: "Undo last Kneeboard stroke") { model.undo() }
-                button("trash", help: "Clear Kneeboard annotations", role: .destructive) { model.clear() }
-            }
-        }
+    init(model: RemoteInkModel) {
+        self.model = model
+        super.init(nibName: nil, bundle: nil)
     }
 
-    private func button(_ symbol: String, help: String, role: ButtonRole? = nil,
-                        action: @escaping () -> Void) -> some View {
-        Button(role: role, action: action) {
-            Label(help, systemImage: symbol)
-                .scaledFont(size: 13, weight: .medium)
-                // Neutral like the local toolbar: the role carries the
-                // semantics without scattering red (COL-4).
-                .foregroundStyle(.primary)
-        }
-        .compatGlassIconButton(controlSize: .large)
-        .help(help)
-        .accessibilityLabel(help)
+    required init?(coder: NSCoder) { nil }
+
+    override func loadView() {
+        view = InkPassThroughView()
+        canvas.model = model
+        canvas.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(canvas)
+        NSLayoutConstraint.activate([
+            canvas.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            canvas.topAnchor.constraint(equalTo: view.topAnchor),
+            canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        let row = NSStackView(views: [
+            CaptureActionButton(CapturePaneAction(title: "Undo last Kneeboard stroke", symbol: "arrow.uturn.backward", perform: { [weak self] in self?.model.undo() }), iconOnly: true),
+            CaptureActionButton(CapturePaneAction(title: "Clear Kneeboard annotations", symbol: "trash", perform: { [weak self] in self?.model.clear() }), iconOnly: true),
+        ])
+        row.spacing = 5
+        let backdrop = inkControlsBackdrop(row)
+        view.addSubview(backdrop)
+        NSLayoutConstraint.activate([
+            backdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            backdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+        ])
+        controls = backdrop
+        refresh()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        observation.start()
+    }
+
+    override func viewWillDisappear() {
+        observation.stop()
+        super.viewWillDisappear()
+    }
+
+    private func refresh() {
+        _ = model.changeID
+        controls?.isHidden = !model.hasInk
+        canvas.needsDisplay = true
     }
 }
 
-private struct RemoteInkCanvas: NSViewRepresentable {
-    var model: RemoteInkModel
-
-    func makeNSView(context: Context) -> RemoteInkCanvasNSView {
-        let view = RemoteInkCanvasNSView()
-        view.model = model
-        return view
+@MainActor
+private final class InkPassThroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let target = super.hitTest(point)
+        return target === self ? nil : target
     }
+}
 
-    func updateNSView(_ nsView: RemoteInkCanvasNSView, context: Context) {
-        nsView.model = model
-        nsView.needsDisplay = true
-    }
+@MainActor
+private func inkControlsBackdrop(_ controls: NSView) -> NSView {
+    let backdrop = NSVisualEffectView()
+    backdrop.material = .hudWindow
+    backdrop.blendingMode = .withinWindow
+    backdrop.state = .active
+    backdrop.wantsLayer = true
+    backdrop.layer?.cornerRadius = 16
+    backdrop.translatesAutoresizingMaskIntoConstraints = false
+    controls.translatesAutoresizingMaskIntoConstraints = false
+    backdrop.addSubview(controls)
+    NSLayoutConstraint.activate([
+        controls.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor, constant: 8),
+        controls.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor, constant: -8),
+        controls.topAnchor.constraint(equalTo: backdrop.topAnchor, constant: 8),
+        controls.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor, constant: -8),
+    ])
+    return backdrop
 }
 
 final class RemoteInkCanvasNSView: NSView {
     weak var model: RemoteInkModel?
 
     override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -277,193 +360,5 @@ final class RemoteInkCanvasNSView: NSView {
 
     private func denormalize(_ point: CGPoint) -> CGPoint {
         CGPoint(x: point.x * bounds.width, y: point.y * bounds.height)
-    }
-}
-
-/// AppKit canvas capturing freehand strokes and rendering them transparently
-/// on top of whatever pane is behind it.
-private struct InkCanvas: NSViewRepresentable {
-    var model: InkModel
-    var onDismiss: (() -> Void)?
-
-    func makeNSView(context: Context) -> InkCanvasNSView {
-        let view = InkCanvasNSView()
-        view.model = model
-        view.onDismiss = onDismiss
-        return view
-    }
-
-    func updateNSView(_ nsView: InkCanvasNSView, context: Context) {
-        nsView.model = model
-        nsView.onDismiss = onDismiss
-        nsView.needsDisplay = true
-        // Recolor the pencil/eraser cursor immediately when the tool/color changes.
-        nsView.refreshCursor()
-    }
-}
-
-final class InkCanvasNSView: NSView {
-    weak var model: InkModel?
-    /// Invoked when the user leaves drawing mode from the canvas (Escape) —
-    /// wired to the same `isActive = false` the toolbar's "Done" button uses.
-    var onDismiss: (() -> Void)?
-    private var current: InkStroke?
-    private var isMouseInside = false
-
-    override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { true }
-
-    // Capture every click so the pane underneath stays untouched while drawing.
-    override func hitTest(_ point: NSPoint) -> NSView? { self }
-
-    // Take key focus the moment the overlay appears so Escape dismisses drawing
-    // mode even before the first stroke. While drawing, keystrokes belong to the
-    // annotation layer, not the terminal/browser underneath — which is also why
-    // Escape can't be left to the pane (Ghostty would swallow it).
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let window = self.window else { return }
-            window.makeFirstResponder(self)
-        }
-    }
-
-    // Escape leaves drawing mode, exactly like tapping "Done". Other keys fall
-    // through to the default responder handling.
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { // Escape
-            onDismiss?()
-            return
-        }
-        super.keyDown(with: event)
-    }
-
-    // MARK: - Cursor
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.activeInActiveApp, .inVisibleRect, .cursorUpdate, .mouseEnteredAndExited],
-            owner: self
-        ))
-    }
-
-    override func cursorUpdate(with event: NSEvent) {
-        currentCursor().set()
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        isMouseInside = true
-        currentCursor().set()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        isMouseInside = false
-    }
-
-    /// Re-apply the cursor immediately (e.g. when the ink color changes) when
-    /// the pointer is over the canvas.
-    func refreshCursor() {
-        if isMouseInside { currentCursor().set() }
-    }
-
-    private func currentCursor() -> NSCursor {
-        guard let model else { return .crosshair }
-        return model.isEraser
-            ? Self.makeCursor(symbol: "eraser.fill", color: .white, centerHotspot: true)
-            : Self.makeCursor(symbol: "pencil", color: model.color, centerHotspot: false)
-    }
-
-    /// Builds an NSCursor from an SF Symbol, tinted to the ink color with a dark
-    /// halo so it stays visible over any pane. The pencil's hot spot is its
-    /// lower-left tip; the eraser's is its center.
-    private static func makeCursor(symbol: String, color: NSColor, centerHotspot: Bool) -> NSCursor {
-        let config = NSImage.SymbolConfiguration(pointSize: 28, weight: .medium)
-        guard let base = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-            .withSymbolConfiguration(config) else { return .crosshair }
-
-        // Tint the template symbol with the ink color.
-        let size = base.size
-        let tinted = NSImage(size: size)
-        tinted.lockFocus()
-        base.draw(in: NSRect(origin: .zero, size: size))
-        color.set()
-        NSRect(origin: .zero, size: size).fill(using: .sourceAtop)
-        tinted.unlockFocus()
-
-        // Composite with a soft dark halo for contrast.
-        let pad: CGFloat = 3
-        let canvasSize = NSSize(width: size.width + pad * 2, height: size.height + pad * 2)
-        let image = NSImage(size: canvasSize)
-        image.lockFocus()
-        let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.7)
-        shadow.shadowBlurRadius = 2
-        shadow.shadowOffset = .zero
-        shadow.set()
-        tinted.draw(in: NSRect(x: pad, y: pad, width: size.width, height: size.height))
-        image.unlockFocus()
-
-        let hotSpot = centerHotspot
-            ? NSPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-            : NSPoint(x: pad + 1, y: canvasSize.height - pad - 1)
-        return NSCursor(image: image, hotSpot: hotSpot)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard let model else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        if model.isEraser {
-            erase(near: point)
-        } else {
-            current = InkStroke(color: model.color, width: model.width, points: [point])
-        }
-        needsDisplay = true
-        currentCursor().set()
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let model else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        if model.isEraser {
-            erase(near: point)
-        } else {
-            current?.points.append(point)
-        }
-        needsDisplay = true
-        currentCursor().set()
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        if let stroke = current, stroke.points.count > 1 {
-            model?.strokes.append(stroke)
-        }
-        current = nil
-        needsDisplay = true
-    }
-
-    private func erase(near point: CGPoint) {
-        model?.strokes.removeAll { stroke in
-            stroke.points.contains { hypot($0.x - point.x, $0.y - point.y) < max(14, stroke.width * 3) }
-        }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        var all = model?.strokes ?? []
-        if let current { all.append(current) }
-        for stroke in all where stroke.points.count > 1 {
-            let path = NSBezierPath()
-            path.lineWidth = stroke.width
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            path.move(to: stroke.points[0])
-            for point in stroke.points.dropFirst() { path.line(to: point) }
-            stroke.color.setStroke()
-            path.stroke()
-        }
     }
 }

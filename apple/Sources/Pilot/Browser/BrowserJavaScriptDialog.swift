@@ -1,4 +1,4 @@
-import SwiftUI
+import AppKit
 
 // JavaScript alert, confirm, prompt, and beforeunload dialogs from a browser
 // pane, presented as a sheet on the pane's window. CEF's default dialog is a
@@ -253,114 +253,63 @@ extension BrowserState {
     }
 }
 
-/// The sheet for one page dialog. It is opaque window background, not glass
-/// over the page, so its text keeps system contrast whatever the page shows;
-/// its controls are the shared glass field and capsule buttons.
-struct BrowserJavaScriptDialogSheet: View {
+/// Native sheet ownership is separate from the page callback. Closing a pane
+/// or replacing its dialog cancels the callback exactly once.
+@MainActor
+final class BrowserJavaScriptDialogPresenter {
     let dialog: BrowserJavaScriptDialog
+    private var alert: NSAlert?
+    private weak var parent: NSWindow?
 
-    @State private var input: String
-    @FocusState private var isFieldFocused: Bool
-    @Environment(\.colorScheme) private var colorScheme
+    init(dialog: BrowserJavaScriptDialog) { self.dialog = dialog }
 
-    init(dialog: BrowserJavaScriptDialog) {
-        self.dialog = dialog
-        _input = State(initialValue: dialog.content.promptDefaultText ?? "")
-    }
-
-    private var content: BrowserJavaScriptDialogContent { dialog.content }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                Text(verbatim: content.title)
-                    .font(.headline)
-                    .lineLimit(2)
-                    .accessibilityAddTraits(.isHeader)
-                if let originLine = content.originLine {
-                    Text(verbatim: originLine)
-                        .font(.subheadline)
-                        // The parent hierarchy does not reach a child's own
-                        // `.secondary`, which measured 3.95:1 in light mode.
-                        .glassLegibleForeground(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            if !content.message.isEmpty {
-                ScrollView {
-                    Text(verbatim: content.message)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .frame(maxHeight: 240)
-                .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if content.promptDefaultText != nil {
-                TextField("Response", text: $input)
-                    .accessibilityLabel("Response")
-                    .focused($isFieldFocused)
-                    .onSubmit { dialog.accept(input: input) }
-                    .liquidGlassField(isFocused: isFieldFocused)
-            }
-
-            CompatGlassContainer(spacing: 0) {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    Spacer()
-                    buttons
-                }
-            }
-            .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
+    func present(on window: NSWindow) {
+        guard alert == nil, !dialog.isResolved else { return }
+        let content = dialog.content
+        let alert = NSAlert()
+        self.alert = alert
+        parent = window
+        alert.messageText = content.title
+        alert.informativeText = [content.originLine, content.message].compactMap { $0 }.joined(separator: "\n\n")
+        alert.alertStyle = content.confirmIsDestructive ? .warning : .informational
+        var input: NSTextField?
+        if let text = content.promptDefaultText {
+            let field = NSTextField(string: text)
+            field.frame = NSRect(x: 0, y: 0, width: 360, height: 24)
+            field.setAccessibilityLabel("Response")
+            field.setAccessibilityIdentifier("browser.javascript-dialog.response")
+            alert.accessoryView = field
+            input = field
         }
-        .padding(LiquidGlassMetrics.Spacing.xLarge)
-        .frame(width: 400)
-        .legibleSecondaryHierarchy()
-        .presentationBackground(Color(nsColor: .windowBackgroundColor))
-        .interactiveDismissDisabled()
-        .onExitCommand { dialog.cancel() }
-        .onAppear { isFieldFocused = content.promptDefaultText != nil }
-        // Any dismissal that did not answer (window closed, pane removed)
-        // answers Cancel, so the page never stays blocked.
-        .onDisappear { dialog.cancel() }
-        .accessibilityIdentifier("browser.javascript-dialog")
-    }
-
-    /// The darkened red on the light capsule (4.8:1). System red on the dark
-    /// capsule measured 3.4:1, so dark mode uses a lighter red (4.8:1).
-    private var destructiveLabelColor: Color {
-        colorScheme == .dark
-            ? Color(.sRGB, red: 1, green: 0.54, blue: 0.5)
-            : DashboardTone.red.adaptiveColor
-    }
-
-    @ViewBuilder
-    private var buttons: some View {
         if content.confirmIsDestructive, let cancelTitle = content.cancelTitle {
-            // beforeunload: staying keeps the user's work, so Stay is the
-            // default (Return) action and the single prominent button; Leave
-            // is destructive and never the default.
-            Button(content.confirmTitle, role: .destructive) { dialog.accept() }
-                .compatGlassButtonStyle()
-                .foregroundStyle(destructiveLabelColor)
-                .accessibilityIdentifier("browser.javascript-dialog.confirm")
-            Button(cancelTitle) { dialog.cancel() }
-                .keyboardShortcut(.defaultAction)
-                .compatGlassProminentButtonStyle()
-                .accessibilityIdentifier("browser.javascript-dialog.cancel")
+            alert.addButton(withTitle: cancelTitle)
+            alert.addButton(withTitle: content.confirmTitle)
+            alert.buttons[0].setAccessibilityIdentifier("browser.javascript-dialog.cancel")
+            alert.buttons[1].setAccessibilityIdentifier("browser.javascript-dialog.confirm")
+            alert.buttons[1].keyEquivalent = ""
         } else {
+            alert.addButton(withTitle: content.confirmTitle)
+            alert.buttons[0].setAccessibilityIdentifier("browser.javascript-dialog.confirm")
             if let cancelTitle = content.cancelTitle {
-                Button(cancelTitle, role: .cancel) { dialog.cancel() }
-                    .keyboardShortcut(.cancelAction)
-                    .compatGlassButtonStyle()
-                    .accessibilityIdentifier("browser.javascript-dialog.cancel")
+                alert.addButton(withTitle: cancelTitle)
+                alert.buttons[1].setAccessibilityIdentifier("browser.javascript-dialog.cancel")
             }
-            Button(content.confirmTitle) { dialog.accept(input: input) }
-                .keyboardShortcut(.defaultAction)
-                .compatGlassProminentButtonStyle()
-                .accessibilityIdentifier("browser.javascript-dialog.confirm")
         }
+        alert.window.setAccessibilityIdentifier("browser.javascript-dialog")
+        alert.beginSheetModal(for: window) { [weak self, input] result in
+            guard let self else { return }
+            self.alert = nil
+            let confirmed = content.confirmIsDestructive ? result == .alertSecondButtonReturn : result == .alertFirstButtonReturn
+            if confirmed { self.dialog.accept(input: input?.stringValue) } else { self.dialog.cancel() }
+        }
+        if let input { alert.window.makeFirstResponder(input) }
     }
+
+    func dismiss() {
+        if let alert, let parent { parent.endSheet(alert.window, returnCode: .abort) }
+        alert = nil
+        dialog.cancel()
+    }
+
+    isolated deinit { dismiss() }
 }

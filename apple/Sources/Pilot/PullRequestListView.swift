@@ -1,965 +1,781 @@
 import AppKit
-import SwiftUI
+import Observation
 
-/// The inspector's tab selector — AppKit's rounded segmented control. It fills
-/// the inspector width and compresses labels as the column narrows.
-struct InspectorTabSelector: View {
-    @Binding var selection: InspectorTab
-
-    var body: some View {
-        PilotSegmentedControl(
-            "View",
-            selection: $selection,
-            options: InspectorTab.allCases,
-            title: { $0.rawValue }
-        )
-        .frame(maxWidth: .infinity)
+@MainActor
+enum InspectorNativeUI {
+    static func font(_ size: CGFloat = 12, weight: NSFont.Weight = .regular, defaults: UserDefaults = .standard) -> NSFont {
+        .systemFont(ofSize: size * zoom(defaults: defaults), weight: weight)
+    }
+    static func zoom(defaults: UserDefaults) -> Double {
+        if defaults === UserDefaults.standard { return CockpitUIZoomController.shared.factor }
+        return UIZoomLadder.normalized(defaults.double(forKey: "ui.zoom"))
+    }
+    static func label(_ text: String, size: CGFloat = 12, weight: NSFont.Weight = .regular,
+                      color: NSColor = .labelColor, defaults: UserDefaults = .standard) -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: text)
+        field.font = font(size, weight: weight, defaults: defaults)
+        field.textColor = color
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        return field
+    }
+    static func vertical(_ children: [NSView] = [], spacing: CGFloat = 8) -> InspectorVerticalStack {
+        let stack = InspectorVerticalStack()
+        children.forEach(stack.addArrangedSubview)
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = spacing
+        return stack
+    }
+    static func horizontal(_ children: [NSView] = [], spacing: CGFloat = 8) -> NSStackView {
+        let stack = NSStackView(views: children)
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = spacing
+        return stack
+    }
+    static func pin(_ child: NSView, in parent: NSView, inset: CGFloat = 0) {
+        child.translatesAutoresizingMaskIntoConstraints = false
+        parent.addSubview(child)
+        NSLayoutConstraint.activate([
+            child.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: inset),
+            child.trailingAnchor.constraint(equalTo: parent.trailingAnchor, constant: -inset),
+            child.topAnchor.constraint(equalTo: parent.topAnchor, constant: inset),
+            child.bottomAnchor.constraint(equalTo: parent.bottomAnchor, constant: -inset),
+        ])
+    }
+    static func scrollDocument(_ document: NSView, in scroll: NSScrollView, inset: CGFloat = 12) {
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        let container = InspectorFlippedView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(document)
+        container.translatesAutoresizingMaskIntoConstraints = false
+        scroll.documentView = container
+        NSLayoutConstraint.activate([
+            container.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            document.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: inset),
+            document.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -inset),
+            document.topAnchor.constraint(equalTo: container.topAnchor, constant: inset),
+            document.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -inset),
+        ])
     }
 }
-
-/// One geometry for the metadata row directly beneath every inspector tab.
-/// Keeping this shared prevents icon, title, and refresh controls from shifting
-/// when the user switches between Actions, Tasks, PRs, Files, and Usage.
-struct InspectorSectionHeader: View {
-    let title: String
-    let systemImage: String
-    var titleDesign: Font.Design = .default
-    var isLoading = false
-    var refreshHelp: String?
-    var isRefreshDisabled = false
+/// AppKit stacks align edges; equal-width constraints make vertical content
+/// fill its available column and allow wrapping labels to measure correctly.
+@MainActor
+final class InspectorVerticalStack: NSStackView {
+    var fillsWidth = false { didSet { synchronizeWidths() } }
+    private var widthConstraints: [ObjectIdentifier: NSLayoutConstraint] = [:]
+    override func addArrangedSubview(_ view: NSView) {
+        super.addArrangedSubview(view)
+        synchronizeWidths()
+    }
+    override func removeArrangedSubview(_ view: NSView) {
+        widthConstraints.removeValue(forKey: ObjectIdentifier(view))?.isActive = false
+        super.removeArrangedSubview(view)
+    }
+    private func synchronizeWidths() {
+        if fillsWidth {
+            for child in arrangedSubviews where widthConstraints[ObjectIdentifier(child)] == nil {
+                child.translatesAutoresizingMaskIntoConstraints = false
+                let constraint = child.widthAnchor.constraint(equalTo: widthAnchor)
+                constraint.isActive = true
+                widthConstraints[ObjectIdentifier(child)] = constraint
+            }
+        } else {
+            widthConstraints.values.forEach { $0.isActive = false }
+            widthConstraints.removeAll()
+        }
+    }
+}
+final class InspectorFlippedView: NSView {
+    override var isFlipped: Bool { true }
+}
+@MainActor
+final class InspectorActionButton: NSButton {
+    var handler: (() -> Void)?
+    init(_ title: String, symbol: String? = nil, handler: @escaping () -> Void) {
+        self.handler = handler
+        super.init(frame: .zero)
+        self.title = title
+        bezelStyle = .rounded
+        controlSize = .small
+        target = self
+        action = #selector(performHandler)
+        if let symbol {
+            image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+            imagePosition = title.isEmpty ? .imageOnly : .imageLeading
+        }
+    }
+    required init?(coder: NSCoder) { nil }
+    @objc private func performHandler() { handler?() }
+}
+@MainActor
+final class InspectorSectionHeader: NSView {
+    private let titleField = InspectorNativeUI.label("", weight: .medium, color: .secondaryLabelColor)
+    private let icon = NSImageView()
+    private let spinner = NSProgressIndicator()
+    private let refreshButton = InspectorActionButton("", symbol: "arrow.clockwise", handler: {})
     var refresh: (() -> Void)?
-
-    var body: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            // `.subheadline` is 11pt on macOS and follows the inspector's
-            // `uiZoomedDynamicType` ladder like the title beside it (TYPE-4).
-            Image(systemName: systemImage)
-                .font(.subheadline.weight(.medium))
-                .frame(width: 16)
-                .accessibilityHidden(true)
-
-            Text(title)
-                .font(.system(.callout, design: titleDesign, weight: .medium))
-                .lineLimit(1)
-                .truncationMode(.middle)
-
-            if isLoading, refresh == nil {
-                ProgressView()
-                    .controlSize(.mini)
-            }
-
-            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
-
-            if let refresh {
-                refreshButton(action: refresh)
-            } else {
-                // Reserve the refresh slot so a header without one (Files)
-                // keeps the same height as every other tab's header.
-                refreshButton(action: {})
-                    .hidden()
-                    .accessibilityHidden(true)
-            }
-        }
-        // System secondary measured 3.2:1 on inspector glass in both modes
-        // (TYPE-3); the legible gray clears 4.5:1 for the title and glyph.
-        .glassLegibleForeground(.secondary)
-        // No filled box: a tinted header directly above tinted cards read as
-        // boxes inside boxes (LAY-1). 16pt lines the glyph up with the
-        // Files outline's disclosure column and the cards' leading icons.
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
-        .padding(.top, LiquidGlassMetrics.Spacing.xSmall)
-        .padding(.bottom, LiquidGlassMetrics.Spacing.xxSmall)
-        .frame(maxWidth: .infinity)
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        icon.symbolConfiguration = .init(pointSize: 12, weight: .medium)
+        icon.contentTintColor = .secondaryLabelColor
+        icon.setAccessibilityElement(false)
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        refreshButton.handler = { [weak self] in self?.refresh?() }
+        InspectorNativeUI.pin(InspectorNativeUI.horizontal([icon, titleField, NSView(), spinner, refreshButton]), in: self, inset: 8)
+        NSLayoutConstraint.activate([
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            refreshButton.widthAnchor.constraint(equalToConstant: 26),
+            spinner.widthAnchor.constraint(equalToConstant: 16),
+        ])
     }
-
-    /// Icon-only glass circle (BTN-5). While a refresh runs the spinner
-    /// replaces the glyph inside the same control, so the feedback appears
-    /// exactly where the user just clicked and nothing shifts.
-    private func refreshButton(action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Label {
-                Text(refreshHelp ?? "Refresh")
-            } icon: {
-                InspectorRefreshGlyph(isRefreshing: isLoading)
-            }
-        }
-        .compatGlassIconButton(controlSize: .small)
-        .disabled(isRefreshDisabled || isLoading)
-        .help(refreshHelp ?? "Refresh")
+    required init?(coder: NSCoder) { nil }
+    func update(title: String, symbol: String, loading: Bool = false, refreshHelp: String? = nil,
+                refreshEnabled: Bool = true, defaults: UserDefaults = .standard) {
+        titleField.stringValue = title
+        titleField.font = InspectorNativeUI.font(12, weight: .medium, defaults: defaults)
+        titleField.lineBreakMode = .byTruncatingMiddle
+        titleField.maximumNumberOfLines = 1
+        titleField.toolTip = title
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        refreshButton.isHidden = refreshHelp == nil
+        refreshButton.toolTip = refreshHelp
+        refreshButton.setAccessibilityLabel(refreshHelp ?? "Refresh")
+        refreshButton.isEnabled = refreshEnabled && !loading
+        if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
 }
-
-/// The refresh symbol, swapped in place for a spinner while a refresh runs.
-/// The symbol keeps its layout slot (only its opacity changes), so a glass
-/// button built around it never changes size mid-refresh (MOT-5).
-struct InspectorRefreshGlyph: View {
-    let isRefreshing: Bool
-
-    var body: some View {
-        Image(systemName: "arrow.clockwise")
-            .opacity(isRefreshing ? 0 : 1)
-            .overlay {
-                if isRefreshing {
-                    ProgressView()
-                        .controlSize(.mini)
-                        .transition(.opacity)
-                }
-            }
-            .animation(LiquidGlassMetrics.stateChange, value: isRefreshing)
-    }
-}
-
-/// The "•" between inspector metadata values. Values themselves sit at
-/// `.secondary`: they carry real information (number, author, age), so they
-/// must not drop to `.tertiary` on top of a card fill (TYPE-3); only the
-/// separator recedes.
-struct InspectorMetadataSeparator: View {
-    var body: some View {
-        Text("•")
-            .font(.subheadline)
-            .foregroundStyle(.tertiary)
-            .accessibilityHidden(true)
-    }
-}
-
-/// Inspector card geometry. Cards are content, not controls: a quiet
-/// semantic fill with no glass and no border (LAY-1/LAY-2), 4pt-grid padding
-/// (LAY-3), and the shared card radius token. A whole-card hover wash uses the
-/// same radius, so it lines up with the card edge exactly (LAY-4).
-enum InspectorCardMetrics {
-    static let padding = LiquidGlassMetrics.Spacing.small
-    static let cornerRadius = LiquidGlassMetrics.Radius.card
-}
-
-extension View {
-    /// A non-interactive inspector card: surface plus the insert/remove
-    /// transition. Interactive cards apply `inspectorCardSurface()` inside a
-    /// `Button` label and `inspectorCardTransition()` outside it.
-    func inspectorListCard() -> some View {
-        inspectorCardSurface()
-            .inspectorCardTransition()
-    }
-
-    func inspectorCardSurface() -> some View {
-        padding(InspectorCardMetrics.padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                .quaternary.opacity(0.4),
-                in: RoundedRectangle(cornerRadius: InspectorCardMetrics.cornerRadius, style: .continuous)
-            )
-    }
-
-    func inspectorCardTransition() -> some View {
-        transition(
-            .opacity.combined(
-                with: .scale(scale: 0.96, anchor: .top)
-            )
-        )
-    }
-
-    /// Animate identity changes in inspector card collections while leaving
-    /// content-only refreshes (elapsed time, status, usage, and so on) alone.
-    func inspectorListAnimation<Value: Equatable>(value: Value) -> some View {
-        modifier(InspectorListAnimationModifier(value: value))
-    }
-}
-
-private struct InspectorListAnimationModifier<Value: Equatable>: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    let value: Value
-
-    func body(content: Content) -> some View {
-        content.animation(
-            reduceMotion ? nil : .snappy(duration: 0.28),
-            value: value
-        )
-    }
-}
-
-/// Skeleton cards for an inspector list's first load (MOT-5): the shape of
-/// the content that is coming, gently pulsing, instead of a lone spinner.
-/// Motion stops under Reduce Motion; VoiceOver reads a single "Loading".
-struct InspectorLoadingPlaceholder: View {
-    var rowCount = 4
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var isDimmed = false
-
-    var body: some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
-            ForEach(0..<rowCount, id: \.self) { index in
-                HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    Circle()
-                        .frame(width: 12, height: 12)
-                        .padding(.top, 2)
-                    VStack(alignment: .leading, spacing: 2) {
-                        // Varied widths so the skeleton doesn't read as one
-                        // repeated row (HIER-5).
-                        Text(verbatim: index.isMultiple(of: 2)
-                             ? "Placeholder issue title text"
-                             : "Placeholder title")
-                            .font(.callout)
-                        Text(verbatim: "#0000 • someone • 1h")
-                            .font(.subheadline)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .foregroundStyle(.quaternary)
-                .redacted(reason: .placeholder)
-                .inspectorCardSurface()
-            }
-        }
-        .padding(LiquidGlassMetrics.Spacing.small)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .opacity(isDimmed ? 0.5 : 1)
-        .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
-                isDimmed = true
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Loading")
-    }
-}
-
-struct InspectorPanelView: View {
+/// The workspace owns tab selection; this controller owns only visible UI and polling.
+@MainActor
+final class InspectorViewController: NSViewController {
+    private(set) var workspace: Workspace
     let gitStore: RepositoryStore
     let tasksStore: GitHubTasksStore
     let usageStore: UsageStore
-    @Binding var selectedTab: InspectorTab
+    let defaults: UserDefaults
+    let isLive: Bool
+    var onOpenUsageSettings: (() -> Void)?
+    var onSendIssuePrompt: ((String) -> Void)?
+    private var isActive = false
+    private var observationGeneration = 0
+    private var observedRoot: String?
+    private var observedTab: InspectorTab?
+    private var preferencesObserver: NSObjectProtocol?
+    private var zoomObserver: NSObjectProtocol?
+    private var ageTimer: Timer?
+    private var displayedTab: InspectorTab?
+    private let bodyHost = NSView()
+    private let header = InspectorSectionHeader()
+    private let tabs = NSSegmentedControl(labels: InspectorTab.allCases.map(\.rawValue),
+                                          trackingMode: .selectOne, target: nil, action: nil)
+    private let list = InspectorRepositoryListView()
+    private lazy var usage = UsageViewController(store: usageStore, defaults: defaults)
 
-    var body: some View {
-        VStack(spacing: 0) {
-            InspectorTabSelector(selection: $selectedTab)
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
+    init(workspace: Workspace, usageStore: UsageStore, gitStore: RepositoryStore = RepositoryStore(),
+         tasksStore: GitHubTasksStore = GitHubTasksStore(), defaults: UserDefaults = .standard, isLive: Bool = true) {
+        self.workspace = workspace
+        self.usageStore = usageStore
+        self.gitStore = gitStore
+        self.tasksStore = tasksStore
+        self.defaults = defaults
+        self.isLive = isLive
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() {
+        view = NSView()
+        tabs.segmentStyle = .rounded
+        tabs.target = self
+        tabs.action = #selector(tabChanged)
+        tabs.setAccessibilityLabel("Inspector view")
+        tabs.identifier = .init("inspector.tabs")
+        let tabHeader = NSView()
+        tabHeader.addSubview(tabs)
+        let inset = LiquidGlassMetrics.Spacing.xSmall
+        tabs.cockpitPinToEdges(of: tabHeader, insets: NSEdgeInsets(top: 0, left: inset, bottom: 0, right: inset))
+        let layout = InspectorNativeUI.vertical([tabHeader, header, bodyHost], spacing: 0)
+        layout.fillsWidth = true
+        InspectorNativeUI.pin(layout, in: view)
+        tabs.heightAnchor.constraint(greaterThanOrEqualToConstant: 32).isActive = true
+        bodyHost.setContentHuggingPriority(.defaultLow, for: .vertical)
+        header.refresh = { [weak self] in self?.refreshSelectedTab() }
+        list.onOpen = { [weak self] row in self?.open(row) }
+        list.onImplement = { [weak self] number in self?.sendImplementationPrompt(number: number) }
+        usage.onOpenSettings = { [weak self] in self?.onOpenUsageSettings?() }
+        render()
+    }
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        setPresentationActive(true)
+    }
+    override func viewWillDisappear() {
+        setPresentationActive(false)
+        super.viewWillDisappear()
+    }
+    isolated deinit { setPresentationActive(false) }
 
-            // Expand the tab content to fill the inspector's height. Without
-            // this, an intrinsically-sized tab (e.g. an empty-state
-            // ContentUnavailableView) lets the whole VStack shrink and float
-            // to the vertical center, dragging the picker mid-pane.
-            Group {
-                switch selectedTab {
-                case .actions:
-                    ActionsListView(store: gitStore)
-                case .tasks:
-                    GitHubTasksView(store: tasksStore)
-                case .pullRequests:
-                    PullRequestListView(store: gitStore)
-                case .filesystem:
-                    FilesystemListView(store: gitStore)
-                case .usage:
-                    UsageListView(store: usageStore)
+    func update(workspace: Workspace) {
+        if self.workspace !== workspace {
+            self.workspace = workspace
+            observedRoot = nil
+            observedTab = nil
+        }
+        refresh()
+    }
+    func selectTab(_ tab: InspectorTab) {
+        guard workspace.inspectorTab != tab else { return }
+        workspace.setInspectorTab(tab)
+        refresh()
+    }
+    func setPresentationActive(_ active: Bool) {
+        guard active != isActive else { return }
+        isActive = active
+        observationGeneration += 1
+        if active {
+            _ = view
+            preferencesObserver = NotificationCenter.default.addObserver(
+                forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isActive else { return }
+                    self.render()
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .uiZoomedDynamicType()
-    }
-}
-
-// MARK: - Filesystem (workspace root project tree)
-
-struct FilesystemListView: View {
-    let store: RepositoryStore
-
-    var body: some View {
-        if store.filesystem.isEmpty && !store.isLoadingFilesystem {
-            ContentUnavailableView("No Files",
-                                   systemImage: "folder",
-                                   description: Text("Select a workspace with a git repo root path."))
-                .legibleSecondaryHierarchy()
+            zoomObserver = NotificationCenter.default.addObserver(
+                forName: .cockpitUIZoomDidChange, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isActive else { return }
+                    self.render()
+                }
+            }
+            ageTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.isActive else { return }
+                    if self.workspace.inspectorTab == .tasks { self.render() }
+                }
+            }
+            observe(generation: observationGeneration)
         } else {
-            VStack(spacing: 0) {
-                if !store.repoPath.isEmpty {
-                    rootHeader
-                }
-
-                FileSystemOutlineView(entries: store.filesystem, rootPath: store.repoPath)
+            ageTimer?.invalidate()
+            ageTimer = nil
+            if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+            preferencesObserver = nil
+            if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }
+            zoomObserver = nil
+            observedRoot = nil
+            observedTab = nil
+            usage.setPresentationActive(false)
+            if isLive {
+                // Usage has no repository polling. Suspend the native lists
+                // without discarding their cached rows when the sidebar hides.
+                gitStore.setVisibleTab(.usage)
+                tasksStore.load(directory: workspace.effectiveRootPath, isVisible: false)
             }
         }
     }
-
-    private var rootHeader: some View {
-        InspectorSectionHeader(
-            title: store.repoPath,
-            systemImage: "folder",
-            titleDesign: .monospaced
-        )
+    func refresh() {
+        if isActive {
+            observationGeneration += 1
+            observe(generation: observationGeneration)
+        } else if isViewLoaded { render() }
     }
-}
-
-private struct FileSystemOutlineView: NSViewRepresentable {
-    @Environment(\.uiZoom) private var uiZoom
-
-    let entries: [FileSystemEntry]
-    let rootPath: String
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(entries: entries, rootPath: rootPath, uiZoom: uiZoom)
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.drawsBackground = false
-
-        let outlineView = ClickableFileSystemOutlineView()
-        outlineView.headerView = nil
-        outlineView.style = .sourceList
-        outlineView.focusRingType = .none
-        outlineView.backgroundColor = .clear
-        outlineView.selectionHighlightStyle = .none
-        outlineView.rowSizeStyle = .small
-        outlineView.intercellSpacing = NSSize(width: 0, height: 2)
-        outlineView.usesAlternatingRowBackgroundColors = false
-        outlineView.floatsGroupRows = false
-        outlineView.indentationPerLevel = 14
-        outlineView.delegate = context.coordinator
-        outlineView.dataSource = context.coordinator
-
-        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("FileSystemColumn"))
-        column.resizingMask = .autoresizingMask
-        outlineView.addTableColumn(column)
-        outlineView.outlineTableColumn = column
-
-        scrollView.documentView = outlineView
-        context.coordinator.reload(
-            outlineView: outlineView,
-            entries: entries,
-            rootPath: rootPath,
-            uiZoom: uiZoom
-        )
-        return scrollView
-    }
-
-    func updateNSView(_ nsView: NSScrollView, context: Context) {
-        guard let outlineView = nsView.documentView as? NSOutlineView else { return }
-        context.coordinator.reload(
-            outlineView: outlineView,
-            entries: entries,
-            rootPath: rootPath,
-            uiZoom: uiZoom
-        )
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate {
-        private var nodes: [FileSystemNode]
-        private var expandedIDs: Set<String> = []
-        private var rootURL: URL
-        private var rowFont: NSFont
-        private var loadedEntries: [FileSystemEntry]?
-        private var loadedUIZoom: Double?
-
-        init(entries: [FileSystemEntry], rootPath: String, uiZoom: Double) {
-            self.nodes = entries.map(FileSystemNode.init(entry:))
-            self.rootURL = URL(fileURLWithPath: rootPath, isDirectory: true)
-            self.rowFont = Self.fileTreeFont(uiZoom: uiZoom)
-        }
-
-        func reload(
-            outlineView: NSOutlineView,
-            entries: [FileSystemEntry],
-            rootPath: String,
-            uiZoom: Double
-        ) {
-            let newRootURL = URL(fileURLWithPath: rootPath, isDirectory: true)
-            guard entries != loadedEntries || newRootURL.path != rootURL.path || uiZoom != loadedUIZoom else {
-                return
-            }
-            if rootURL.path == newRootURL.path {
-                captureExpandedIDs(from: outlineView)
-            } else {
-                expandedIDs.removeAll()
-            }
-            rootURL = newRootURL
-            loadedEntries = entries
-            loadedUIZoom = uiZoom
-            nodes = entries.map(FileSystemNode.init(entry:))
-            rowFont = Self.fileTreeFont(uiZoom: uiZoom)
-            outlineView.rowHeight = max(
-                20,
-                ceil(rowFont.ascender - rowFont.descender + rowFont.leading) + 4
-            )
-            outlineView.reloadData()
-            restoreExpandedNodes(in: outlineView, nodes: nodes)
-        }
-
-        func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-            children(for: item).count
-        }
-
-        func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-            children(for: item)[index]
-        }
-
-        func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-            guard let node = item as? FileSystemNode else { return false }
-            return node.isExpandable
-        }
-
-        func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool {
-            false
-        }
-
-        func outlineView(_ outlineView: NSOutlineView, shouldExpandItem item: Any) -> Bool {
-            guard let node = item as? FileSystemNode else { return false }
-            loadChildrenIfNeeded(for: node)
-            outlineView.reloadItem(node, reloadChildren: true)
-            return node.isExpandable
-        }
-
-        func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-            guard let node = item as? FileSystemNode else { return nil }
-
-            let identifier = NSUserInterfaceItemIdentifier("FileSystemCell")
-            let view = (outlineView.makeView(withIdentifier: identifier, owner: nil) as? FileSystemOutlineCellView)
-                ?? FileSystemOutlineCellView()
-            view.identifier = identifier
-            view.configure(with: node.entry, font: rowFont)
-            return view
-        }
-
-        func outlineViewItemDidExpand(_ notification: Notification) {
-            guard let node = notification.userInfo?["NSObject"] as? FileSystemNode else { return }
-            expandedIDs.insert(node.entry.id)
-        }
-
-        func outlineViewItemDidCollapse(_ notification: Notification) {
-            guard let node = notification.userInfo?["NSObject"] as? FileSystemNode else { return }
-            expandedIDs.remove(node.entry.id)
-        }
-
-        private func children(for item: Any?) -> [FileSystemNode] {
-            guard let node = item as? FileSystemNode else { return nodes }
-            return node.children
-        }
-
-        private func captureExpandedIDs(from outlineView: NSOutlineView) {
-            expandedIDs.removeAll(keepingCapacity: true)
-
-            for row in 0..<outlineView.numberOfRows {
-                guard let node = outlineView.item(atRow: row) as? FileSystemNode,
-                      outlineView.isItemExpanded(node) else { continue }
-                expandedIDs.insert(node.entry.id)
+    private func observe(generation: Int) {
+        guard isActive, generation == observationGeneration else { return }
+        withObservationTracking {
+            render()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.isActive, generation == self.observationGeneration else { return }
+                self.observe(generation: generation)
             }
         }
-
-        private func restoreExpandedNodes(in outlineView: NSOutlineView, nodes: [FileSystemNode]) {
-            for node in nodes {
-                restoreExpandedNode(node, in: outlineView)
+    }
+    @objc private func tabChanged() {
+        let index = tabs.selectedSegment
+        guard InspectorTab.allCases.indices.contains(index) else { return }
+        selectTab(InspectorTab.allCases[index])
+    }
+    private func synchronizePolling(tab: InspectorTab, root: String?) {
+        guard isLive, isActive, root != observedRoot || tab != observedTab else { return }
+        observedRoot = root
+        observedTab = tab
+        guard let root, !root.isEmpty else {
+            gitStore.stopWatching()
+            tasksStore.load(directory: nil)
+            return
+        }
+        gitStore.startWatching(directory: root, visibleTab: tab)
+        tasksStore.load(directory: root, isVisible: tab == .tasks)
+        if tab == .usage { usageStore.reload() }
+    }
+    private func render() {
+        guard isViewLoaded else { return }
+        let tab = workspace.inspectorTab
+        let changingTab = displayedTab != nil && displayedTab != tab
+        defer { if changingTab { CockpitMotion.reveal(bodyHost) } }
+        tabs.selectedSegment = InspectorTab.allCases.firstIndex(of: tab) ?? 0
+        tabs.font = InspectorNativeUI.font(11, defaults: defaults)
+        synchronizePolling(tab: tab, root: workspace.effectiveRootPath)
+        if displayedTab != tab {
+            usage.setPresentationActive(false)
+            header.isHidden = tab == .usage
+            let target: NSView
+            switch tab {
+            case .usage:
+                if usage.parent == nil { addChild(usage) }
+                target = usage.view
+            default: target = list
             }
+            // Keep visited native surfaces and their constraints attached.
+            // Inactive polling is stopped explicitly; visibility changes avoid
+            // rebuilding AppKit's layout engine and key-view loop on every tab.
+            if target.superview == nil { InspectorNativeUI.pin(target, in: bodyHost) }
+            for child in bodyHost.subviews { child.isHidden = child !== target }
+            displayedTab = tab
         }
-
-        private func restoreExpandedNode(_ node: FileSystemNode, in outlineView: NSOutlineView) {
-            guard node.entry.isDirectory else { return }
-
-            if expandedIDs.contains(node.entry.id) {
-                loadChildrenIfNeeded(for: node)
-                outlineView.expandItem(node)
-            }
-
-            for child in node.children {
-                restoreExpandedNode(child, in: outlineView)
-            }
-        }
-
-        private func loadChildrenIfNeeded(for node: FileSystemNode) {
-            guard node.entry.isDirectory, !node.hasLoadedChildren else { return }
-            let directoryURL = URL(fileURLWithPath: node.entry.path, isDirectory: true)
-            let entries = RepositoryStore.listFilesystemEntries(at: directoryURL, rootURL: rootURL)
-            node.children = entries.map(FileSystemNode.init(entry:))
-            node.hasLoadedChildren = true
-        }
-
-        private static func fileTreeFont(uiZoom: Double) -> NSFont {
-            let preferredFont = NSFont.preferredFont(forTextStyle: .callout)
-            return NSFontManager.shared.convert(
-                preferredFont,
-                toSize: preferredFont.pointSize * CGFloat(uiZoom)
-            )
-        }
-    }
-}
-
-/// `NSOutlineView` only expands a row when its small disclosure control is
-/// clicked. The filesystem deliberately disables selection, so make the rest
-/// of a folder row behave like that disclosure control as well.
-private final class ClickableFileSystemOutlineView: NSOutlineView {
-    override func mouseDown(with event: NSEvent) {
-        let location = convert(event.locationInWindow, from: nil)
-        let clickedRow = row(at: location)
-        let clickedDisclosure = clickedRow >= 0
-            && frameOfOutlineCell(atRow: clickedRow).contains(location)
-
-        // Preserve AppKit's native disclosure-button behavior and normal
-        // handling for files, blank space, and multi-click gestures.
-        super.mouseDown(with: event)
-
-        guard event.clickCount == 1,
-              clickedRow >= 0,
-              !clickedDisclosure,
-              let node = item(atRow: clickedRow) as? FileSystemNode,
-              node.entry.isDirectory else { return }
-
-        if isItemExpanded(node) {
-            collapseItem(node)
-        } else {
-            expandItem(node)
+        switch tab {
+        case .usage:
+            usage.setPresentationActive(isActive)
+            usage.refresh()
+        case .tasks:
+            header.update(title: tasksStore.tasks.isEmpty ? "Issues" : "\(tasksStore.tasks.count) open",
+                          symbol: "checkmark.square", loading: tasksStore.isLoading, refreshHelp: "Refresh GitHub issues", defaults: defaults)
+            list.update(rows: tasksStore.tasks.map(InspectorRepositoryRow.init(task:)),
+                        emptyTitle: tasksStore.isLoading ? "Loading Issues…" : (tasksStore.errorMessage == nil ? "No Open Issues" : "Couldn’t Load Issues"),
+                        detail: tasksStore.errorMessage ?? "This repository has no open GitHub issues.", loading: tasksStore.isLoading,
+                        retry: tasksStore.errorMessage == nil ? nil : { [weak self] in self?.tasksStore.refresh() }, defaults: defaults)
+        case .pullRequests:
+            let loading = gitStore.isLoading && !gitStore.hasLoadedPullRequests
+            header.update(title: gitStore.repositoryName, symbol: "arrow.triangle.pull", loading: loading,
+                          refreshHelp: "Refresh pull requests", refreshEnabled: !gitStore.repoPath.isEmpty, defaults: defaults)
+            list.update(rows: gitStore.pullRequests.map(InspectorRepositoryRow.init(pullRequest:)),
+                        emptyTitle: loading ? "Loading Pull Requests…" : (gitStore.pullRequestError == nil ? "No Pull Requests" : "Couldn’t Load Pull Requests"),
+                        detail: gitStore.pullRequestError ?? (gitStore.repoPath.isEmpty ? "Select a workspace with a GitHub repository root path." : "This repository has no open pull requests."),
+                        loading: loading, retry: gitStore.pullRequestError == nil ? nil : { [weak self] in self?.gitStore.fetchPullRequests(policy: .manual) }, defaults: defaults)
+        case .actions:
+            let loading = gitStore.workflowRunsOverlay == .loading
+            header.update(title: gitStore.repositoryName, symbol: "folder", loading: loading,
+                          refreshHelp: "Refresh actions", refreshEnabled: !gitStore.repoPath.isEmpty, defaults: defaults)
+            list.update(rows: gitStore.actions.map(InspectorRepositoryRow.init(action:)),
+                        emptyTitle: loading ? "Loading Actions…" : (gitStore.workflowError == nil ? "No Actions" : "Couldn’t Load Actions"),
+                        detail: gitStore.workflowError ?? (gitStore.repoPath.isEmpty ? "Select a workspace with a GitHub repository root path." : "No GitHub Actions workflow runs for this repository."),
+                        loading: loading, retry: gitStore.workflowError == nil ? nil : { [weak self] in self?.gitStore.fetchWorkflowRuns(policy: .manual) }, defaults: defaults)
         }
     }
-}
-
-private final class FileSystemNode: NSObject {
-    let entry: FileSystemEntry
-    var children: [FileSystemNode]
-    var hasLoadedChildren: Bool
-
-    var isExpandable: Bool {
-        entry.isDirectory && (!hasLoadedChildren || !children.isEmpty)
-    }
-
-    init(entry: FileSystemEntry) {
-        self.entry = entry
-        self.children = (entry.children ?? []).map(FileSystemNode.init(entry:))
-        self.hasLoadedChildren = entry.children != nil
-    }
-}
-
-private final class FileSystemOutlineCellView: NSTableCellView {
-    private let titleField = NSTextField(labelWithString: "")
-    private let iconView = NSImageView()
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.alignment = .centerY
-        stack.spacing = 6
-        stack.translatesAutoresizingMaskIntoConstraints = false
-
-        iconView.translatesAutoresizingMaskIntoConstraints = false
-        iconView.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .regular)
-
-        titleField.font = .preferredFont(forTextStyle: .callout)
-        titleField.lineBreakMode = .byTruncatingMiddle
-        titleField.translatesAutoresizingMaskIntoConstraints = false
-        titleField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        stack.addArrangedSubview(iconView)
-        stack.addArrangedSubview(titleField)
-
-        addSubview(stack)
-
-        NSLayoutConstraint.activate([
-            iconView.widthAnchor.constraint(equalToConstant: 16),
-            iconView.heightAnchor.constraint(equalToConstant: 16),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
-            stack.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
-        ])
-
-        imageView = iconView
-        textField = titleField
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError()
-    }
-
-    func configure(with entry: FileSystemEntry, font: NSFont) {
-        titleField.stringValue = entry.name
-        titleField.font = font
-        toolTip = entry.relativePath
-        iconView.image = fileIcon(for: entry.path)
-    }
-
-    private func fileIcon(for path: String) -> NSImage {
-        let image = NSWorkspace.shared.icon(forFile: path)
-        image.size = NSSize(width: 16, height: 16)
-        return image
-    }
-}
-
-// MARK: - Pull Requests (gh pr list)
-
-struct PullRequestListView: View {
-    let store: RepositoryStore
-
-    var body: some View {
-        VStack(spacing: 0) {
-            RepositoryTableHeader(
-                title: store.repositoryName,
-                systemImage: "arrow.triangle.pull",
-                refreshHelp: "Refresh pull requests",
-                isRefreshDisabled: store.repoPath.isEmpty
-            ) {
-                store.fetchPullRequests(policy: .manual)
-            }
-
-            ZStack {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(store.pullRequests) { pullRequest in
-                            pullRequestRow(pullRequest)
-                                .inspectorCardTransition()
-                        }
-                    }
-                    .padding(12)
-                }
-
-                if store.pullRequests.isEmpty && !store.isLoading, let error = store.pullRequestError {
-                    // A failed read is an error, not an empty repository: say so
-                    // and offer the one next step, like the Issues tab (MOT-6).
-                    ContentUnavailableView {
-                        Label("Couldn\u{2019}t Load Pull Requests", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(error)
-                    } actions: {
-                        Button("Retry") { store.fetchPullRequests(policy: .manual) }
-                            .compatGlassProminentButtonStyle()
-                    }
-                    .legibleSecondaryHierarchy()
-                    .transition(.opacity)
-                } else if store.pullRequests.isEmpty && store.isLoading && !store.hasLoadedPullRequests {
-                    // First read: skeleton cards instead of a blank panel,
-                    // like the Issues tab (MOT-5).
-                    InspectorLoadingPlaceholder()
-                        .transition(.opacity)
-                } else if store.pullRequests.isEmpty && !store.isLoading {
-                    // The hint names the missing repo only when there is none;
-                    // an empty list for a real repo says so instead.
-                    ContentUnavailableView(
-                        "No Pull Requests",
-                        systemImage: "arrow.triangle.pull",
-                        description: Text(store.repoPath.isEmpty
-                            ? "Select a workspace with a GitHub repo root path."
-                            : "This repository has no open pull requests.")
-                    )
-                    .legibleSecondaryHierarchy()
-                    .transition(.opacity)
-                }
-            }
+    private func refreshSelectedTab() {
+        switch workspace.inspectorTab {
+        case .actions: gitStore.fetchWorkflowRuns(policy: .manual)
+        case .tasks: tasksStore.refresh()
+        case .pullRequests: gitStore.fetchPullRequests(policy: .manual)
+        case .usage: usageStore.reload()
         }
-        .inspectorListAnimation(value: store.pullRequests.map(\.id))
     }
-
-    private func pullRequestRow(_ pullRequest: GitPullRequest) -> some View {
-        Button {
-            openPullRequestInBrowser(pullRequest)
-        } label: {
-            HStack(alignment: .top, spacing: 8) {
-                pullRequestStateIcon(pullRequest)
-                    .frame(width: 14)
-                    .padding(.top, 2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(pullRequest.title)
-                        .font(.callout)
-                        .lineLimit(2)
-
-                    // Number • user • time ago at .secondary with
-                    // `InspectorMetadataSeparator` — the metadata styling shared
-                    // with the Actions and Tasks tabs.
-                    HStack(spacing: 4) {
-                        Text("#\(pullRequest.id)")
-                            .font(.system(.subheadline, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                        if !pullRequest.author.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(pullRequest.author)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
-                        if !pullRequest.elapsed.isEmpty {
-                            InspectorMetadataSeparator()
-                            Text(pullRequest.elapsed)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
-            .inspectorCardSurface()
-        }
-        // The whole card is the tap target: hover wash + press feedback in
-        // the card's own shape (BTN-5), not glass — cards are content.
-        .buttonStyle(.liquidGlassPressable(cornerRadius: InspectorCardMetrics.cornerRadius))
-        .disabled(pullRequest.url.isEmpty)
-        .help(pullRequest.url.isEmpty ? "" : "Open on GitHub")
-    }
-
-    private func openPullRequestInBrowser(_ pullRequest: GitPullRequest) {
-        guard let url = URL(string: pullRequest.url) else { return }
+    private func open(_ row: InspectorRepositoryRow) {
+        guard let url = URL(string: row.url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return }
         NSWorkspace.shared.open(url)
     }
-
-    @ViewBuilder
-    private func pullRequestStateIcon(_ pullRequest: GitPullRequest) -> some View {
-        switch pullRequest.state {
-        case "MERGED":
-            CircledStateIcon(systemName: "arrow.triangle.merge", tint: .purple)
-        case "CLOSED":
-            Image(systemName: "xmark.circle.fill")
-                .scaledFont(size: 12)
-                .foregroundStyle(.red)
-        case "OPEN" where pullRequest.isDraft:
-            Image(systemName: "circle.dashed")
-                .scaledFont(size: 12)
-                .foregroundStyle(.secondary)
-        case "OPEN":
-            CircledStateIcon(systemName: "arrow.triangle.pull", tint: .green)
-        default:
-            Image(systemName: "circle")
-                .scaledFont(size: 12)
-                .foregroundStyle(.quaternary)
+    private func sendImplementationPrompt(number: Int) {
+        let prompt = "Implement GitHub issue #\(number). "
+            + "Read it first with `gh issue view \(number)`, then build and apply the fix. "
+            + "When you open the pull request, include `fixes #\(number)` in the commit "
+            + "message so merging auto-closes the issue."
+        if let onSendIssuePrompt {
+            onSendIssuePrompt(prompt)
+        } else {
+            NotificationCenter.default.post(name: .pilotSendIssuePrompt, object: nil, userInfo: ["prompt": prompt])
         }
     }
 }
 
-/// A state glyph knocked out of a filled disc, so the merged and open arrows
-/// read as solid badges like the `xmark.circle.fill` state they sit beside.
-/// SF Symbols ships no `.circle.fill` variant for `arrow.triangle.pull` or
-/// `arrow.triangle.merge`, so the disc is drawn here.
-///
-/// The glyph takes the window background rather than a fixed black or white.
-/// Against a saturated fill that reads as a hole punched through the disc in
-/// either appearance — dark grey on dark, near-white on light — where a
-/// hardcoded black would sink into the purple merged fill in dark mode.
-///
-/// Sizing reads `uiZoom` for the same reason `scaledFont` does: the glyph
-/// grows with the text-size ladder, and a fixed-point disc would drift out of
-/// register with it as soon as the ladder moves off 1.0.
-private struct CircledStateIcon: View {
-    @Environment(\.uiZoom) private var uiZoom
-
-    let systemName: String
-    let tint: Color
-
-    /// 12pt matches the disc `xmark.circle.fill` already draws in this column,
-    /// which is what keeps the states aligned. The glyph is inset to leave a
-    /// ring of fill around it, and runs bold to hold its counters at this size.
-    private var diameter: CGFloat { 12 * uiZoom }
-    private var glyphSize: CGFloat { 7.5 * uiZoom }
-
-    var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: glyphSize, weight: .bold))
-            .foregroundStyle(Color(nsColor: .windowBackgroundColor))
-            .frame(width: diameter, height: diameter)
-            .background(Circle().fill(tint))
-    }
-}
-
-// MARK: - Actions (GitHub Actions workflow runs)
-
-struct ActionsListView: View {
-    let store: RepositoryStore
-
-    var body: some View {
-        VStack(spacing: 0) {
-            RepositoryTableHeader(
-                title: store.repositoryName,
-                systemImage: "folder",
-                // Spin only for the first read; the skeleton below covers the
-                // same wait, and a silent 30s poll must not animate (MOT-5).
-                isLoading: store.isLoadingWorkflowRuns && !store.hasLoadedWorkflowRuns,
-                refreshHelp: "Refresh actions",
-                isRefreshDisabled: store.repoPath.isEmpty
-            ) {
-                store.fetchWorkflowRuns(policy: .manual)
-            }
-
-            ZStack {
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(store.actions) { action in
-                            actionRow(action)
-                                .inspectorCardTransition()
-                        }
-                    }
-                    .padding(12)
-                }
-
-                switch store.workflowRunsOverlay {
-                case .loading:
-                    // First read: skeleton cards, never "No Actions" (MOT-5).
-                    InspectorLoadingPlaceholder()
-                        .transition(.opacity)
-                case .error(let error):
-                    ContentUnavailableView {
-                        Label("Couldn\u{2019}t Load Actions", systemImage: "exclamationmark.triangle")
-                    } description: {
-                        Text(error)
-                    } actions: {
-                        Button("Retry") { store.fetchWorkflowRuns(policy: .manual) }
-                            .compatGlassProminentButtonStyle()
-                    }
-                    .legibleSecondaryHierarchy()
-                    .transition(.opacity)
-                case .empty:
-                    ContentUnavailableView(
-                        "No Actions",
-                        systemImage: "gearshape.2",
-                        description: Text(store.repoPath.isEmpty
-                            ? "Select a workspace with a GitHub repo root path."
-                            : "No GitHub Actions workflow runs for this repository.")
-                    )
-                    .legibleSecondaryHierarchy()
-                    .transition(.opacity)
-                case nil:
-                    EmptyView()
-                }
-            }
-        }
-        .inspectorListAnimation(value: store.actions.map(\.id))
-    }
-
-    private func actionRow(_ action: GitAction) -> some View {
-        Button {
-            openActionInBrowser(action)
-        } label: {
-            HStack(alignment: .top, spacing: 8) {
-                actionStatusIcon(action.conclusion, status: action.status)
-                    .frame(width: 14)
-                    .padding(.top, 2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(action.displayTitle)
-                        .font(.callout)
-                        .lineLimit(2)
-
-                    HStack(spacing: 4) {
-                        Text(action.name)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        InspectorMetadataSeparator()
-                        // One line, middle-truncated: wrapping split branch
-                        // names at hyphens in a narrow inspector.
-                        Text(action.headBranch)
-                            .font(.system(.subheadline, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-
-                    // Hash • user • duration • time ago on one line when it
-                    // fits. At the inspector's narrow width the actor drops
-                    // out rather than truncating both it and the age to
-                    // "monal…" / "2 hour…"; the age always reads in full.
-                    ViewThatFits(in: .horizontal) {
-                        actionMetadata(action, showsActor: true)
-                        actionMetadata(action, showsActor: false)
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
-            .inspectorCardSurface()
-        }
-        .buttonStyle(.liquidGlassPressable(cornerRadius: InspectorCardMetrics.cornerRadius))
-        .disabled(action.url.isEmpty)
-        .help(action.url.isEmpty ? "" : "Open on GitHub")
-    }
-
-    private func actionMetadata(_ action: GitAction, showsActor: Bool) -> some View {
-        HStack(spacing: 4) {
-            // A short hash is never wrapped or truncated.
-            Text(String(action.headSha.prefix(7)))
-                .font(.system(.subheadline, design: .monospaced))
-                .fixedSize()
-            if showsActor, !action.actor.isEmpty {
-                InspectorMetadataSeparator()
-                Text(action.actor)
-                    .font(.subheadline)
-                    .fixedSize()
-            }
-            if !action.duration.isEmpty {
-                InspectorMetadataSeparator()
-                Text(action.duration)
-                    .font(.subheadline)
-                    .fixedSize()
-            }
-            if !action.elapsed.isEmpty {
-                InspectorMetadataSeparator()
-                Text(action.elapsed)
-                    .font(.subheadline)
-                    .lineLimit(1)
-            }
-        }
-        .foregroundStyle(.secondary)
-    }
-
-    private func openActionInBrowser(_ action: GitAction) {
-        guard let url = URL(string: action.url) else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    @ViewBuilder
-    private func actionStatusIcon(_ conclusion: String, status: String) -> some View {
-        switch conclusion {
-        case "success":
-            Image(systemName: "checkmark.circle.fill")
-                .scaledFont(size: 12)
-                .foregroundStyle(.green)
-        case "failure":
-            Image(systemName: "xmark.circle.fill")
-                .scaledFont(size: 12)
-                .foregroundStyle(.red)
-        case "cancelled":
-            Image(systemName: "slash.circle.fill")
-                .scaledFont(size: 12)
-                .foregroundStyle(.secondary)
-        default:
-            switch status {
-            case "in_progress":
-                ProgressView()
-                    .progressViewStyle(.circular)
-                    .controlSize(.small)
-                    .tint(.orange)
-                    .colorMultiply(.orange)
-            case "queued", "waiting", "pending":
-                Image(systemName: "clock.circle")
-                    .scaledFont(size: 12)
-                    .foregroundStyle(.yellow)
-            default:
-                Image(systemName: "circle")
-                    .scaledFont(size: 12)
-                    .foregroundStyle(.quaternary)
-            }
-        }
-    }
-}
-
-private struct RepositoryTableHeader: View {
+private struct InspectorRepositoryRow: Equatable {
+    let id: String
     let title: String
-    let systemImage: String
-    var isLoading = false
-    let refreshHelp: String
-    let isRefreshDisabled: Bool
-    let refresh: () -> Void
+    let metadata: String
+    let detail: String
+    let url: String
+    let symbol: String
+    let color: NSColor
+    var issueNumber: Int?
+    var busy = false
+    init(task: GitHubTask) {
+        id = "issue-\(task.number)"
+        title = task.title
+        metadata = [task.assignees.map(\.login).joined(separator: ", "), task.age].filter { !$0.isEmpty }.joined(separator: " · ")
+        detail = task.assignees.map(\.fullDescription).joined(separator: ", ")
+        url = task.url
+        symbol = "checkmark.circle"
+        color = .systemGreen
+        issueNumber = task.number
+    }
+    init(pullRequest: GitPullRequest) {
+        id = "pr-\(pullRequest.id)"
+        title = pullRequest.title
+        metadata = ["#\(pullRequest.id)", pullRequest.author, pullRequest.elapsed].filter { !$0.isEmpty }.joined(separator: " · ")
+        detail = pullRequest.headBranch
+        url = pullRequest.url
+        switch pullRequest.state {
+        case "MERGED": (symbol, color) = ("arrow.triangle.merge", .systemPurple)
+        case "CLOSED": (symbol, color) = ("xmark.circle.fill", .systemRed)
+        case "OPEN" where pullRequest.isDraft: (symbol, color) = ("circle.dashed", .secondaryLabelColor)
+        case "OPEN": (symbol, color) = ("arrow.triangle.pull", .systemGreen)
+        default: (symbol, color) = ("circle", .secondaryLabelColor)
+        }
+    }
+    init(action: GitAction) {
+        id = "action-\(action.id)"
+        title = action.displayTitle
+        detail = [action.name, action.headBranch].filter { !$0.isEmpty }.joined(separator: " · ")
+        metadata = [String(action.headSha.prefix(7)), action.actor, action.duration, action.elapsed].filter { !$0.isEmpty }.joined(separator: " · ")
+        url = action.url
+        switch action.conclusion {
+        case "success": (symbol, color) = ("checkmark.circle.fill", .systemGreen)
+        case "failure": (symbol, color) = ("xmark.circle.fill", .systemRed)
+        case "cancelled": (symbol, color) = ("slash.circle.fill", .secondaryLabelColor)
+        default:
+            busy = action.status == "in_progress"
+            (symbol, color) = (busy ? "arrow.triangle.2.circlepath" : "clock.circle", busy ? .systemOrange : .secondaryLabelColor)
+        }
+    }
+}
 
-    var body: some View {
-        InspectorSectionHeader(
-            title: title,
-            systemImage: systemImage,
-            isLoading: isLoading,
-            refreshHelp: refreshHelp,
-            isRefreshDisabled: isRefreshDisabled,
-            refresh: refresh
-        )
+@MainActor
+private final class InspectorRepositoryTableView: NSTableView {
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 || event.keyCode == 76, let doubleAction {
+            NSApp.sendAction(doubleAction, to: target, from: self)
+        } else { super.keyDown(with: event) }
+    }
+    /// Row titles are link-style labels; let them receive clicks instead of
+    /// the table swallowing them for selection.
+    override func validateProposedFirstResponder(_ responder: NSResponder, for event: NSEvent?) -> Bool {
+        (responder as? InspectorLinkLabel)?.handler != nil || super.validateProposedFirstResponder(responder, for: event)
+    }
+}
+
+@MainActor
+private final class InspectorRepositoryListView: NSView, NSTableViewDataSource, NSTableViewDelegate {
+    var onOpen: ((InspectorRepositoryRow) -> Void)?
+    var onImplement: ((Int) -> Void)?
+    private let table = InspectorRepositoryTableView()
+    private let scroll = NSScrollView()
+    private let empty = InspectorNativeUI.vertical(spacing: 12)
+    private let emptyTitle = InspectorNativeUI.label("", weight: .semibold)
+    private let emptyDetail = InspectorNativeUI.label("", color: .secondaryLabelColor)
+    private let spinner = NSProgressIndicator()
+    private let retry = InspectorActionButton("Retry", handler: {})
+    private var rows: [InspectorRepositoryRow] = []
+    private var defaults = UserDefaults.standard
+    private var zoom = 1.0
+    private var measuredWidth: CGFloat = 0
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        table.headerView = nil
+        table.backgroundColor = .clear
+        table.style = .plain
+        table.rowHeight = 64
+        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.doubleAction = #selector(openSelected)
+        let column = NSTableColumn(identifier: .init("content"))
+        column.resizingMask = .autoresizingMask
+        table.addTableColumn(column)
+        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        InspectorNativeUI.pin(scroll, in: self, inset: 8)
+        empty.alignment = .centerX
+        spinner.style = .spinning
+        spinner.isDisplayedWhenStopped = false
+        [emptyTitle, emptyDetail, spinner, retry].forEach(empty.addArrangedSubview)
+        empty.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(empty)
+        NSLayoutConstraint.activate([
+            empty.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
+            empty.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -20),
+            empty.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+    }
+    required init?(coder: NSCoder) { nil }
+    func update(rows next: [InspectorRepositoryRow], emptyTitle: String, detail: String, loading: Bool,
+                retry action: (() -> Void)?, defaults: UserDefaults) {
+        self.defaults = defaults
+        let newZoom = InspectorNativeUI.zoom(defaults: defaults)
+        let oldRows = rows
+        rows = next
+        if oldRows.map(\.id) != next.map(\.id) || zoom != newZoom {
+            let selected = oldRows.indices.contains(table.selectedRow) ? oldRows[table.selectedRow].id : nil
+            let origin = scroll.contentView.bounds.origin
+            zoom = newZoom
+            table.rowHeight = 64 * newZoom
+            table.reloadData()
+            if let selected, let index = next.firstIndex(where: { $0.id == selected }) {
+                table.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            }
+            scroll.contentView.scroll(to: origin)
+        } else {
+            let changed = IndexSet(next.indices.filter { next[$0] != oldRows[$0] })
+            if !changed.isEmpty {
+                table.reloadData(forRowIndexes: changed, columnIndexes: IndexSet(integer: 0))
+                table.noteHeightOfRows(withIndexesChanged: changed)
+            }
+        }
+        empty.isHidden = !next.isEmpty
+        scroll.isHidden = next.isEmpty
+        self.emptyTitle.stringValue = emptyTitle
+        emptyDetail.stringValue = detail
+        self.emptyTitle.font = InspectorNativeUI.font(13, weight: .semibold, defaults: defaults)
+        emptyDetail.font = InspectorNativeUI.font(defaults: defaults)
+        retry.handler = action
+        retry.isHidden = action == nil
+        if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+    }
+    func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CockpitCardRowView() }
+    override func layout() {
+        super.layout()
+        let width = table.tableColumns.first?.width ?? 0
+        guard abs(width - measuredWidth) > 1 else { return }
+        measuredWidth = width
+        table.noteHeightOfRows(withIndexesChanged: IndexSet(rows.indices))
+    }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        InspectorRepositoryCell.preferredHeight(for: rows[row], width: table.tableColumns.first?.width ?? 0, defaults: defaults)
+    }
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        let id = NSUserInterfaceItemIdentifier("inspector.repository.row")
+        let cell = (tableView.makeView(withIdentifier: id, owner: self) as? InspectorRepositoryCell) ?? InspectorRepositoryCell()
+        cell.identifier = id
+        let model = rows[row]
+        cell.configure(model, defaults: defaults, open: { [weak self] in self?.onOpen?(model) }, implement: { [weak self] in
+            guard let number = model.issueNumber else { return }
+            self?.onImplement?(number)
+        })
+        return cell
+    }
+    @objc private func openSelected() {
+        guard rows.indices.contains(table.selectedRow) else { return }
+        onOpen?(rows[table.selectedRow])
+    }
+}
+/// A wrapping label that behaves like a link: it opens on click without the
+/// bezel insets of a button, so it measures exactly like it renders.
+@MainActor
+private final class InspectorLinkLabel: NSTextField {
+    var handler: (() -> Void)? { didSet { window?.invalidateCursorRects(for: self) } }
+    override func mouseDown(with event: NSEvent) {
+        if handler == nil { super.mouseDown(with: event) }
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard let handler else { return super.mouseUp(with: event) }
+        if event.clickCount == 1, bounds.contains(convert(event.locationInWindow, from: nil)) { handler() }
+    }
+    override func resetCursorRects() {
+        if handler != nil { addCursorRect(bounds, cursor: .pointingHand) }
+    }
+    override func accessibilityRole() -> NSAccessibility.Role? { handler == nil ? super.accessibilityRole() : .link }
+    override func accessibilityPerformPress() -> Bool {
+        guard let handler else { return false }
+        handler()
+        return true
+    }
+}
+
+/// Compact rounded issue-number chip; drawn by hand so its frame equals its
+/// visible bounds and it can be aligned to the title's first line.
+@MainActor
+private final class InspectorIssueChip: NSButton {
+    var handler: (() -> Void)?
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false
+        bezelStyle = .regularSquare
+        setButtonType(.momentaryPushIn)
+        alignment = .center
+        contentTintColor = .labelColor
+        target = self
+        action = #selector(performHandler)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5)
+        (isHighlighted ? NSColor.tertiaryLabelColor : NSColor.quaternaryLabelColor).setFill()
+        path.fill()
+        super.draw(dirtyRect)
+    }
+    @objc private func performHandler() { handler?() }
+}
+
+@MainActor
+private final class InspectorRepositoryCell: NSTableCellView {
+    private static let horizontalInset: CGFloat = 12
+    private static let verticalInset: CGFloat = 10
+    private static let columnSpacing: CGFloat = 8
+    private static let lineSpacing: CGFloat = 2
+    private static let measuring = InspectorRepositoryCell()
+
+    private let icon = NSImageView()
+    private let spinner = NSProgressIndicator()
+    private let number = InspectorIssueChip()
+    private let leadingColumn = NSView()
+    private let title = InspectorLinkLabel(wrappingLabelWithString: "")
+    private let detail = InspectorNativeUI.label("", color: .secondaryLabelColor)
+    private let metadata = InspectorNativeUI.label("", size: 11, color: .secondaryLabelColor)
+    private let textColumn = NSStackView()
+    private var leadingWidth: NSLayoutConstraint!
+    private var leadingFirstLineCenter: NSLayoutConstraint!
+    private var chipHeight: NSLayoutConstraint!
+    private var confirmationTask: Task<Void, Never>?
+
+    /// Exact row height for `width`, measured with the same views and fonts the
+    /// visible cell uses so wrapping and truncation never disagree.
+    static func preferredHeight(for row: InspectorRepositoryRow, width: CGFloat, defaults: UserDefaults) -> CGFloat {
+        let cell = measuring
+        cell.configure(row, defaults: defaults, open: {}, implement: {})
+        let textWidth = max(1, width - 2 * horizontalInset - cell.leadingWidth.constant - columnSpacing)
+        cell.title.preferredMaxLayoutWidth = textWidth
+        var height = cell.title.intrinsicContentSize.height
+        for field in [cell.detail, cell.metadata] where !field.isHidden {
+            height += lineSpacing + field.intrinsicContentSize.height
+        }
+        return ceil(height + 2 * verticalInset)
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        title.isSelectable = false
+        title.maximumNumberOfLines = 2
+        title.lineBreakMode = .byWordWrapping
+        title.cell?.truncatesLastVisibleLine = true
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        title.setContentCompressionResistancePriority(.required, for: .vertical)
+        detail.maximumNumberOfLines = 1
+        detail.lineBreakMode = .byTruncatingMiddle
+        metadata.maximumNumberOfLines = 1
+        metadata.lineBreakMode = .byTruncatingTail
+        for field in [detail, metadata] {
+            field.cell?.wraps = false
+            field.setContentCompressionResistancePriority(.required, for: .vertical)
+        }
+
+        textColumn.orientation = .vertical
+        textColumn.alignment = .leading
+        textColumn.distribution = .fill
+        textColumn.spacing = Self.lineSpacing
+        textColumn.detachesHiddenViews = true
+        for field in [title, detail, metadata] as [NSView] {
+            textColumn.addArrangedSubview(field)
+            field.widthAnchor.constraint(equalTo: textColumn.widthAnchor).isActive = true
+        }
+
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        icon.imageScaling = .scaleProportionallyDown
+        for view in [leadingColumn, textColumn, icon, spinner, number] as [NSView] {
+            view.translatesAutoresizingMaskIntoConstraints = false
+        }
+        addSubview(leadingColumn)
+        addSubview(textColumn)
+        [icon, spinner, number].forEach(leadingColumn.addSubview)
+
+        leadingWidth = leadingColumn.widthAnchor.constraint(equalToConstant: 16)
+        // Center leading accessories on the title's first line, not the card.
+        leadingFirstLineCenter = icon.centerYAnchor.constraint(equalTo: title.topAnchor, constant: 8)
+        chipHeight = number.heightAnchor.constraint(equalToConstant: 18)
+        NSLayoutConstraint.activate([
+            leadingColumn.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Self.horizontalInset),
+            leadingColumn.topAnchor.constraint(equalTo: topAnchor),
+            leadingColumn.bottomAnchor.constraint(equalTo: bottomAnchor),
+            leadingWidth,
+            textColumn.leadingAnchor.constraint(equalTo: leadingColumn.trailingAnchor, constant: Self.columnSpacing),
+            textColumn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -Self.horizontalInset),
+            textColumn.topAnchor.constraint(equalTo: topAnchor, constant: Self.verticalInset),
+            textColumn.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor, constant: -Self.verticalInset),
+
+            icon.centerXAnchor.constraint(equalTo: leadingColumn.centerXAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            icon.heightAnchor.constraint(equalToConstant: 16),
+            leadingFirstLineCenter,
+            spinner.centerXAnchor.constraint(equalTo: icon.centerXAnchor),
+            spinner.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+            number.leadingAnchor.constraint(equalTo: leadingColumn.leadingAnchor),
+            number.trailingAnchor.constraint(equalTo: leadingColumn.trailingAnchor),
+            number.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
+            chipHeight,
+        ])
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        // Wrap at the title's real width so the second line matches measurement.
+        let width = title.frame.width
+        if width > 0, abs(title.preferredMaxLayoutWidth - width) > 0.5 {
+            title.preferredMaxLayoutWidth = width
+            needsLayout = true
+        }
+    }
+
+    func configure(_ row: InspectorRepositoryRow, defaults: UserDefaults, open: @escaping () -> Void, implement: @escaping () -> Void) {
+        confirmationTask?.cancel()
+        confirmationTask = nil
+        let font = InspectorNativeUI.font(defaults: defaults)
+        let lineHeight = ceil(font.ascender - font.descender + font.leading)
+        leadingFirstLineCenter.constant = lineHeight / 2
+
+        title.stringValue = row.title
+        title.font = font
+        title.handler = row.url.isEmpty ? nil : open
+        title.toolTip = row.url.isEmpty ? nil : "Open on GitHub"
+        title.setAccessibilityLabel(row.title)
+        detail.stringValue = row.detail
+        detail.isHidden = row.detail.isEmpty
+        metadata.stringValue = row.metadata
+        metadata.isHidden = row.metadata.isEmpty
+        metadata.toolTip = [row.detail, row.metadata].filter { !$0.isEmpty }.joined(separator: " · ")
+        detail.font = InspectorNativeUI.font(11, defaults: defaults)
+        metadata.font = InspectorNativeUI.font(11, defaults: defaults)
+
+        icon.image = NSImage(systemSymbolName: row.symbol, accessibilityDescription: row.symbol)
+        icon.symbolConfiguration = .init(pointSize: min(16, font.pointSize + 1), weight: .medium)
+        icon.contentTintColor = row.color
+        icon.isHidden = row.issueNumber != nil || row.busy
+        if row.busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+
+        number.isHidden = row.issueNumber == nil
+        guard let issue = row.issueNumber else {
+            leadingWidth.constant = 16
+            return
+        }
+        let chipFont = NSFont.monospacedSystemFont(ofSize: font.pointSize - 1, weight: .semibold)
+        number.font = chipFont
+        number.title = "#\(issue)"
+        // Reserve room for four digits so titles line up across the list.
+        let textWidth = max(("#0000" as NSString).size(withAttributes: [.font: chipFont]).width,
+                            ("#\(issue)" as NSString).size(withAttributes: [.font: chipFont]).width)
+        leadingWidth.constant = ceil(textWidth + 12)
+        chipHeight.constant = ceil(chipFont.ascender - chipFont.descender) + 4
+        number.setAccessibilityLabel("Implement issue \(issue)")
+        number.toolTip = "Run an implement #\(issue) task in the active terminal"
+        number.handler = { [weak self] in
+            implement()
+            self?.number.title = "✓\(issue)"
+            self?.confirmationTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                self?.number.title = "#\(issue)"
+            }
+        }
     }
 }

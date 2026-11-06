@@ -64,15 +64,6 @@ struct GitRun: Identifiable {
     }
 }
 
-struct FileSystemEntry: Identifiable, Equatable {
-    let id: String
-    let name: String
-    let path: String
-    let relativePath: String
-    let isDirectory: Bool
-    let children: [FileSystemEntry]?
-}
-
 /// Which GitHub-backed lists the inspector's 30s refresh tick fetches, derived
 /// from the visible inspector tab so a hidden tab spends no `gh` spawns or API
 /// round-trips. Workflow runs stay badged for every workspace by
@@ -88,7 +79,7 @@ enum RepositoryPolledResources: Equatable {
         switch visibleTab {
         case .pullRequests: self = .pullRequests
         case .actions: self = .workflowRuns
-        case .tasks, .filesystem, .usage: self = .none
+        case .tasks, .usage: self = .none
         case nil: self = .both
         }
     }
@@ -100,7 +91,6 @@ final class RepositoryStore {
     var pullRequests: [GitPullRequest] = []
     var actions: [GitAction] = []
     var runs: [GitRun] = []
-    var filesystem: [FileSystemEntry] = []
     var repoPath: String = ""
     var isLoading = false
     /// Whether a pull-request read has finished for this repo since it was
@@ -118,7 +108,6 @@ final class RepositoryStore {
     /// opened. Only the first read shows the skeleton; later polls keep the
     /// empty or error state on screen so it can't flicker every 30s (MOT-5).
     private(set) var hasLoadedWorkflowRuns = false
-    var isLoadingFilesystem = false
     private var refreshTimer: Timer?
     private var polledResources: RepositoryPolledResources = .both
 
@@ -131,9 +120,6 @@ final class RepositoryStore {
     func startWatching(directory: String, visibleTab: InspectorTab? = nil) {
         if repoPath == directory {
             setVisibleTab(visibleTab)
-            if filesystem.isEmpty && !isLoadingFilesystem {
-                fetchFilesystem()
-            }
             return
         }
 
@@ -146,8 +132,6 @@ final class RepositoryStore {
         hasLoadedWorkflowRuns = false
         pullRequestError = nil
         workflowError = nil
-        filesystem = []
-        fetchFilesystem()
         polledResources = RepositoryPolledResources(visibleTab: visibleTab)
         fetchPolledResources()
         rearmRefreshTimer()
@@ -159,9 +143,6 @@ final class RepositoryStore {
     func setVisibleTab(_ tab: InspectorTab?) {
         polledResources = RepositoryPolledResources(visibleTab: tab)
         guard !repoPath.isEmpty else { return }
-        if tab == .filesystem, filesystem.isEmpty, !isLoadingFilesystem {
-            fetchFilesystem()
-        }
         fetchPolledResources()
         rearmRefreshTimer()
     }
@@ -199,12 +180,10 @@ final class RepositoryStore {
         runs = []
         pullRequestError = nil
         workflowError = nil
-        filesystem = []
         isLoading = false
         hasLoadedPullRequests = false
         isLoadingWorkflowRuns = false
         hasLoadedWorkflowRuns = false
-        isLoadingFilesystem = false
     }
 
     /// What the Actions tab lays over its (empty) list. A first read shows
@@ -259,19 +238,6 @@ final class RepositoryStore {
             self.workflowError = error
             self.isLoadingWorkflowRuns = false
             self.hasLoadedWorkflowRuns = true
-        }
-    }
-
-    func fetchFilesystem() {
-        guard !repoPath.isEmpty else { return }
-        isLoadingFilesystem = true
-        let dir = repoPath
-
-        Task {
-            let result = await Self.fetchFilesystemData(directory: dir)
-            guard self.repoPath == dir else { return }
-            self.filesystem = result
-            self.isLoadingFilesystem = false
         }
     }
 
@@ -374,16 +340,6 @@ final class RepositoryStore {
         return (actions, runs, nil)
     }
 
-    private nonisolated static func fetchFilesystemData(directory: String) async -> [FileSystemEntry] {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let rootURL = URL(fileURLWithPath: directory, isDirectory: true)
-                let entries = listFilesystemEntries(at: rootURL, rootURL: rootURL)
-                continuation.resume(returning: entries)
-            }
-        }
-    }
-
     private nonisolated static func relativeTime(from iso: String) -> String {
         RelativeTime.string(fromISO: iso)
     }
@@ -408,61 +364,6 @@ final class RepositoryStore {
         let root = result.standardOutputString.trimmingCharacters(in: .whitespacesAndNewlines)
         return root.isEmpty ? nil : root
     }
-
-    nonisolated static func listFilesystemEntries(at directoryURL: URL, rootURL: URL) -> [FileSystemEntry] {
-        let fileManager = FileManager.default
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey]
-
-        guard let urls = try? fileManager.contentsOfDirectory(
-            at: directoryURL,
-            includingPropertiesForKeys: Array(keys),
-            options: []
-        ) else {
-            return []
-        }
-
-        let sortedEntries = urls.compactMap { url -> (url: URL, isDirectory: Bool, isSymbolicLink: Bool)? in
-            guard url.lastPathComponent != ".git" else { return nil }
-            let values = try? url.resourceValues(forKeys: keys)
-            return (
-                url: url,
-                isDirectory: values?.isDirectory ?? false,
-                isSymbolicLink: values?.isSymbolicLink ?? false
-            )
-        }
-        .sorted { lhs, rhs in
-            if lhs.isDirectory != rhs.isDirectory {
-                return lhs.isDirectory && !rhs.isDirectory
-            }
-
-            return lhs.url.lastPathComponent.localizedStandardCompare(rhs.url.lastPathComponent) == .orderedAscending
-        }
-
-        return sortedEntries.map { entry in
-            let relativePath = relativePath(for: entry.url, rootURL: rootURL)
-            return FileSystemEntry(
-                id: relativePath,
-                name: entry.url.lastPathComponent,
-                path: entry.url.path,
-                relativePath: relativePath,
-                isDirectory: entry.isDirectory,
-                children: nil
-            )
-        }
-    }
-
-    private nonisolated static func relativePath(for fileURL: URL, rootURL: URL) -> String {
-        let rootPath = rootURL.standardizedFileURL.path
-        let filePath = fileURL.standardizedFileURL.path
-        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-
-        guard filePath.hasPrefix(prefix) else {
-            return fileURL.lastPathComponent
-        }
-
-        return String(filePath.dropFirst(prefix.count))
-    }
-
 }
 
 /// The state an inspector list shows in place of rows, or nil while it has

@@ -1,0 +1,216 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.03529,0.05098,0.20784,1.00000",
+          "srgb:0.09804,0.10980,0.60784,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.01569,0.03137,0.11765,1.00000",
+          "srgb:0.06275,0.09020,0.27451,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
+    },
+    {
+      "appearance": "tinted",
+      "value": {
+        "solid": "srgb:0.13725,0.16471,0.23137,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "04 Navigation and hardware",
+      "layers": [
+        {
+          "name": "07 Heading marker",
+          "image-name": "07 Heading marker.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "name": "06 Navigation arcs",
+          "image-name": "06 Navigation arcs.svg",
+          "fill": "none",
+          "glass": false,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.32157,0.36471,0.44706,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "name": "05 Retaining clip",
+          "image-name": "05 Retaining clip.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.94118,0.95294,0.97255,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 Harness buckles",
+          "image-name": "04 Harness buckles.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.38431,0.44314,0.54118,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.14
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.06
+      }
+    },
+    {
+      "name": "03 Navigation glass",
+      "layers": [
+        {
+          "name": "03 Chart glass",
+          "image-name": "03 Chart glass.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 0.88,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.80784,0.85490,0.90980,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.12
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.28
+      }
+    },
+    {
+      "name": "02 Frame facets",
+      "layers": [
+        {
+          "name": "02 Cobalt frame",
+          "image-name": "02 Cobalt frame.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.71765,0.77255,0.86667,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.1
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "name": "01 Kneeboard structure",
+      "layers": [
+        {
+          "name": "01 Board shell",
+          "image-name": "01 Board shell.svg",
+          "fill": "none",
+          "glass": false,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.25098,0.28627,0.36078,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": false,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.12
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared",
+    "circles": [
+      "watchOS"
+    ]
+  }
+}

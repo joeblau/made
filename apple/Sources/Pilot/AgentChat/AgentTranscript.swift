@@ -31,6 +31,7 @@ struct AgentChatItem: Identifiable, Equatable, Sendable {
 
     var id: String
     var content: Content
+    var attachments: [AgentChatAttachment] = []
 }
 
 /// The chat's transcript, built by applying ACP session updates in order.
@@ -54,8 +55,9 @@ struct AgentTranscript: Equatable, Sendable {
         self = AgentTranscript()
     }
 
-    mutating func appendUser(_ text: String) {
+    mutating func appendUser(_ text: String, attachments: [AgentChatAttachment] = []) {
         append(.user(text), to: nil)
+        if !items.isEmpty { items[items.count - 1].attachments = attachments }
     }
 
     mutating func appendNotice(_ text: String) {
@@ -108,7 +110,7 @@ struct AgentTranscript: Equatable, Sendable {
             upsertPlan(entries, in: child)
         case .subagent:
             applySubagent(notification.update, in: nil)
-        case .context, .other:
+        case .context, .modelConfiguration, .currentModel, .other:
             break
         }
     }

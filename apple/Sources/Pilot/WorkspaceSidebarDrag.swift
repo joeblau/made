@@ -1,5 +1,5 @@
 import CoreTransferable
-import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 
 extension UTType {

@@ -2,12 +2,13 @@ import Foundation
 
 /// A coding agent the chat pane can drive over the Agent Client Protocol.
 ///
-/// Grok and Kimi speak ACP natively. Claude Code and Codex speak it through the
+/// Cursor, Grok, and Kimi speak ACP natively. Claude Code and Codex speak it through the
 /// ACP project's adapters, which wrap the Claude Agent SDK and `codex
 /// app-server` and are pointed at the user's installed CLI so a chat session
 /// behaves — and caches — like that CLI's TUI.
 enum ChatAgent: String, CaseIterable, Identifiable, Sendable {
     case claude
+    case cursor
     case codex
     case kimi
     case grok
@@ -17,6 +18,7 @@ enum ChatAgent: String, CaseIterable, Identifiable, Sendable {
     var provider: AgenticProvider {
         switch self {
         case .claude: .claude
+        case .cursor: .cursor
         case .codex: .codex
         case .kimi: .kimi
         case .grok: .grok
@@ -54,6 +56,10 @@ enum ChatAgent: String, CaseIterable, Identifiable, Sendable {
                                   installCommand: "curl -fsSL https://claude.ai/install.sh | bash"),
                 installCommand: "npm install -g @agentclientprotocol/claude-agent-acp@0.101.0"
             )
+        case .cursor:
+            // The generic `agent` command may belong to another installed CLI.
+            LaunchPlan(executableName: "cursor-agent", arguments: ["acp"], wrappedCLI: nil,
+                       installCommand: "curl https://cursor.com/install -fsS | bash")
         case .codex:
             LaunchPlan(
                 executableName: "codex-acp",
@@ -76,14 +82,15 @@ enum ChatAgent: String, CaseIterable, Identifiable, Sendable {
     var loginCommand: String {
         switch self {
         case .claude: "claude /login"
+        case .cursor: "cursor-agent login"
         case .codex: "codex login"
         case .kimi: "kimi login"
         case .grok: "grok login"
         }
     }
 
-    /// Grok's `inputTokens` already includes cache reads; the others report
-    /// only uncached input (verified against each CLI on 2026-11-05).
+    /// Grok's `inputTokens` already includes cache reads. Other providers use
+    /// the ACP uncached-input convention.
     var inputTokensIncludeCacheReads: Bool { self == .grok }
 }
 

@@ -1,187 +1,152 @@
+import AppKit
 import SceneKit
-import SwiftUI
-
-/// The fleet as Mac minis wired to GitHub. Busy runners light their cable and
-/// stream packets, idle runners keep a dim connection, and offline runners go
-/// dark with their status light off. Scroll moves down the rows; pinch zooms.
-struct RunnerFleetView: View {
-    let runners: [GitHubRunner]
-    let scopeName: String
-    let name: (GitHubRunner) -> String
-    let hardware: (GitHubRunner) -> RunnerHardware
-    let edit: (GitHubRunner) -> Void
-    @State private var holder = FleetHolder()
-    @State private var hover: RunnerFleetHover?
-    @State private var showsDetails = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var fleet: RunnerFleetScene { holder.fleet }
-
-    private var items: [RunnerFleetItem] {
-        runners.map { RunnerFleetItem(id: $0.id, name: name($0), state: $0.state, hardware: hardware($0)) }
-    }
-
-    var body: some View {
-        RunnerFleetSceneView(
-            fleet: fleet,
-            items: items,
-            scopeName: scopeName,
-            animatesData: !reduceMotion,
-            hover: { hover = $0 },
-            edit: { id in
-                showsDetails = false
-                if let runner = runners.first(where: { $0.id == id }) { edit(runner) }
-            }
-        )
-        .overlay(alignment: .topLeading) { legend.padding(16) }
-        .overlay(alignment: .topTrailing) { cameraControls.padding(16) }
-        .overlay(alignment: .topLeading) { detailsAnchor }
-        .environment(\.colorScheme, .dark)
-        .task(id: hover) {
-            // Close first: a presented popover keeps its original anchor even
-            // when the anchor view moves, so it would point at the previous runner.
-            showsDetails = false
-            guard let hover else { return }
-            // Clicks open immediately; hovering waits so crossing the fleet doesn't flash popovers.
-            if !hover.isClick { try? await Task.sleep(for: .milliseconds(450)) }
-            if !Task.isCancelled { showsDetails = true }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Runner fleet connected to GitHub")
-        .accessibilityChildren {
-            ForEach(runners) { runner in
-                Text("\(name(runner)), \(runner.state.rawValue)")
-                    .accessibilityAction(named: "Edit Device") { edit(runner) }
-            }
-        }
-    }
-
-    /// A non-interactive glass caption floating over the scene. The swatch
-    /// colors mirror the SceneKit cable materials, so they stay literal.
-    private var legend: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
-            legendItem("Running a job", color: Color(red: 0.3, green: 0.75, blue: 1), opacity: 1)
-            legendItem("Idle", color: Color(white: 0.24), opacity: 1)
-            legendItem("Offline", color: Color(white: 0.12), opacity: 1)
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-        .compatGlassCapsule()
-    }
-
-    private func legendItem(_ title: String, color: Color, opacity: Double) -> some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            // The idle/offline cable grays sit within a few percent of the dark
-            // glass; a hairline rim keeps each swatch's shape legible (TYPE-3).
-            Capsule().fill(color.opacity(opacity))
-                .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 0.5))
-                .frame(width: 16, height: 4)
-            Text(title)
-        }
-    }
-
-    /// A Maps-style glass capsule floating over the scene; the hairline
-    /// dividers keep the four actions distinct inside one control, and each
-    /// action gets its own circular hover/press wash (BTN-5) whose radius is
-    /// the capsule's, so the highlight nests concentrically (LAY-4).
-    private var cameraControls: some View {
-        VStack(spacing: 0) {
-            controlButton("plus", help: "Zoom in") { fleet.zoom(by: 1.3, animated: true) }
-            Divider().frame(width: 20)
-            controlButton("minus", help: "Zoom out") { fleet.zoom(by: 1 / 1.3, animated: true) }
-            Divider().frame(width: 20)
-            controlButton("arrow.up.left.and.arrow.down.right", help: "Fit the whole fleet") { fleet.fitAll() }
-            Divider().frame(width: 20)
-            controlButton("arrow.up.to.line", help: "Back to GitHub") { fleet.frameTop() }
-        }
-        .compatGlassCapsule(interactive: true)
-    }
-
-    private static let controlDiameter: CGFloat = 32
-
-    private func controlButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                // `.callout` is 12pt on macOS; a text style instead of a
-                // one-off point size (TYPE-4).
-                .font(.callout.weight(.semibold))
-                .frame(width: Self.controlDiameter, height: Self.controlDiameter)
-        }
-        .buttonStyle(.liquidGlassPressable(cornerRadius: Self.controlDiameter / 2))
-        .foregroundStyle(.primary)
-        .help(help)
-        .accessibilityLabel(help)
-    }
-
-    /// A 1-point anchor under the pointer so the details popover points at the runner.
-    @ViewBuilder
-    private var detailsAnchor: some View {
-        if let hover, let runner = runners.first(where: { $0.id == hover.id }) {
-            // The popover attaches to the 1-point view itself, then padding moves
-            // that view into place. Attached after the padding, it anchored to the
-            // whole padded rectangle and pointed halfway between the corner and
-            // the runner. Offset wouldn't work: popovers follow the layout frame.
-            Color.clear
-                .frame(width: 1, height: 1)
-                .popover(isPresented: $showsDetails, arrowEdge: .top) {
-                    // The popover's own glass follows the presentation's
-                    // appearance, not the content environment: forcing only
-                    // the content dark left white text on light glass in the
-                    // light system appearance (TYPE-3). A preferred scheme
-                    // applies to the nearest presentation, so both match.
-                    RunnerDetailsPopover(runner: runner, name: name(runner), hardware: hardware(runner))
-                        .preferredColorScheme(.dark)
-                }
-                .padding(.leading, hover.point.x)
-                .padding(.top, hover.point.y)
-                .id(hover.id)
-        }
-    }
-}
-
-/// Keeps one scene per view identity; `@State` evaluates its initial value on
-/// every parent render, so the expensive scene is created lazily.
-@MainActor
-private final class FleetHolder {
-    lazy var fleet = RunnerFleetScene()
-}
 
 struct RunnerFleetHover: Equatable {
     let id: Int
-    /// Top-left-origin point in the view, where the popover arrow should land.
     let point: CGPoint
     let isClick: Bool
 }
 
-private struct RunnerFleetSceneView: NSViewRepresentable {
-    let fleet: RunnerFleetScene
-    let items: [RunnerFleetItem]
-    let scopeName: String
-    let animatesData: Bool
-    let hover: (RunnerFleetHover?) -> Void
-    let edit: (Int) -> Void
+@MainActor
+final class RunnerFleetViewController: NSViewController {
+    private lazy var fleet = RunnerFleetScene()
+    private var sceneView: FleetSCNView?
+    private var runners: [GitHubRunner] = []
+    private var displayNames: [Int: String] = [:]
+    private var hardware: [Int: RunnerHardware] = [:]
+    private var scopeName = ""
+    var onEdit: (GitHubRunner) -> Void = { _ in }
+    private var hoverTask: Task<Void, Never>?
+    private var popover: NSPopover?
+    private var active = false
+    private var accessibilityObserver: NSObjectProtocol?
 
-    func makeNSView(context: Context) -> FleetSCNView {
-        let view = FleetSCNView(frame: .zero, options: nil)
-        view.fleet = fleet
-        view.scene = fleet.scene
-        view.pointOfView = fleet.cameraNode
-        view.backgroundColor = RunnerFleetScene.background
-        view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 120
-        return view
+    isolated deinit {
+        hoverTask?.cancel()
+        if let accessibilityObserver { NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver) }
     }
 
-    func updateNSView(_ view: FleetSCNView, context: Context) {
-        view.onHover = hover
-        view.onEdit = edit
-        view.content = (items, scopeName, animatesData)
+    override func loadView() {
+        let container = NSView()
+        let scene = FleetSCNView(frame: .zero, options: nil)
+        scene.fleet = fleet
+        scene.scene = fleet.scene
+        scene.pointOfView = fleet.cameraNode
+        scene.backgroundColor = RunnerFleetScene.background
+        scene.antialiasingMode = .multisampling4X
+        scene.preferredFramesPerSecond = 120
+        scene.onHover = { [weak self] hover in self?.showDetails(hover) }
+        scene.onEdit = { [weak self] id in
+            guard let self, let runner = self.runners.first(where: { $0.id == id }) else { return }
+            self.hideDetails()
+            self.onEdit(runner)
+        }
+        scene.setAccessibilityLabel("Runner fleet connected to GitHub. Use arrow keys to select a runner and Return to edit.")
+        sceneView = scene
+        RRUI.pin(scene, to: container)
+        let legend = RRUI.stack([
+            RRUI.label("● Running a job", size: 11, color: GitHubRunner.State.busy.fleetColor),
+            RRUI.label("● Idle", size: 11, color: GitHubRunner.State.idle.fleetColor),
+            RRUI.label("○ Offline", size: 11, color: .lightGray),
+        ], axis: .horizontal, spacing: 14)
+        let controls = RRUI.stack([
+            RRButton("", symbol: "plus") { [weak self] in self?.fleet.zoom(by: 1.3, animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
+            RRButton("", symbol: "minus") { [weak self] in self?.fleet.zoom(by: 1 / 1.3, animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
+            RRButton("", symbol: "arrow.up.left.and.arrow.down.right") { [weak self] in self?.fleet.fitAll(animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
+            RRButton("", symbol: "arrow.up.to.line") { [weak self] in self?.fleet.frameTop(animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
+        ], spacing: 4)
+        let names = ["Zoom in", "Zoom out", "Fit the whole fleet", "Back to GitHub"]
+        for (control, name) in zip(controls.arrangedSubviews, names) { control.toolTip = name; control.setAccessibilityLabel(name) }
+        for child in [legend, controls] { child.translatesAutoresizingMaskIntoConstraints = false; container.addSubview(child) }
+        NSLayoutConstraint.activate([
+            legend.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            legend.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+            controls.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            controls.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+        ])
+        view = container
+        applyContent()
+    }
+
+    func configure(runners: [GitHubRunner], scopeName: String,
+                   name: (GitHubRunner) -> String, hardware: (GitHubRunner) -> RunnerHardware) {
+        self.runners = runners
+        self.scopeName = scopeName
+        displayNames = Dictionary(uniqueKeysWithValues: runners.map { ($0.id, name($0)) })
+        self.hardware = Dictionary(uniqueKeysWithValues: runners.map { ($0.id, hardware($0)) })
+        if isViewLoaded { applyContent() }
+    }
+
+    func setPresentationActive(_ active: Bool) {
+        self.active = active
+        sceneView?.presentationActive = active
+        if active, accessibilityObserver == nil {
+            accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+            ) { [weak self] _ in MainActor.assumeIsolated { self?.applyContent() } }
+        } else if !active {
+            hideDetails()
+            if let accessibilityObserver { NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver) }
+            accessibilityObserver = nil
+        }
+    }
+
+    override func viewDidAppear() { super.viewDidAppear(); setPresentationActive(true) }
+    override func viewDidDisappear() { super.viewDidDisappear(); setPresentationActive(false) }
+
+    private func applyContent() {
+        sceneView?.content = (runners.map {
+            RunnerFleetItem(id: $0.id, name: displayNames[$0.id] ?? $0.name, state: $0.state,
+                            hardware: hardware[$0.id] ?? .inferred(for: $0))
+        }, scopeName, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        sceneView?.presentationActive = active
+    }
+
+    private func hideDetails() {
+        hoverTask?.cancel()
+        hoverTask = nil
+        popover?.close()
+        popover = nil
+    }
+
+    private func showDetails(_ hover: RunnerFleetHover?) {
+        hideDetails()
+        guard active, let hover else { return }
+        hoverTask = Task { @MainActor [weak self] in
+            if !hover.isClick { try? await Task.sleep(for: .milliseconds(450)) }
+            guard !Task.isCancelled, let self, self.active, let scene = self.sceneView,
+                  let runner = self.runners.first(where: { $0.id == hover.id }) else { return }
+            let popover = NSPopover()
+            popover.behavior = .transient
+            popover.appearance = NSAppearance(named: .darkAqua)
+            popover.contentViewController = RunnerDetailsViewController(
+                runner: runner, name: self.displayNames[runner.id] ?? runner.name,
+                hardware: self.hardware[runner.id] ?? .inferred(for: runner))
+            self.popover = popover
+            popover.show(relativeTo: NSRect(x: hover.point.x, y: scene.bounds.height - hover.point.y, width: 1, height: 1),
+                         of: scene, preferredEdge: .maxY)
+        }
     }
 }
 
+@MainActor
+private final class FleetRunnerAccessibilityElement: NSAccessibilityElement {
+    nonisolated let perform: @MainActor @Sendable () -> Void
+    init(perform: @escaping @MainActor @Sendable () -> Void) {
+        self.perform = perform
+        super.init()
+    }
+    override nonisolated func accessibilityPerformPress() -> Bool {
+        let action = perform
+        return MainActor.assumeIsolated { action(); return true }
+    }
+}
+
+@MainActor
 private final class FleetSCNView: SCNView {
+    var presentationActive = false {
+        didSet { updatePlayback() }
+    }
     var fleet: RunnerFleetScene?
     var onHover: ((RunnerFleetHover?) -> Void)?
     var onEdit: ((Int) -> Void)?
@@ -213,7 +178,42 @@ private final class FleetSCNView: SCNView {
         guard columns > 0 else { return }
         fleet?.update(content.0, columns: columns, hubTitle: content.1, animatesData: content.2)
         // Render continuously only while packets flow; otherwise SceneKit draws on change.
-        isPlaying = content.2 && content.0.contains { $0.state == .busy }
+        updatePlayback()
+    }
+
+    private func updatePlayback() {
+        isPlaying = presentationActive && window != nil && content.2 && content.0.contains { $0.state == .busy }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updatePlayback()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        let items = content.0
+        guard !items.isEmpty else { super.keyDown(with: event); return }
+        let current = items.firstIndex { $0.id == hoveredID } ?? 0
+        switch event.keyCode {
+        case 123, 126: setHover(items[max(0, current - 1)].id, isClick: true)
+        case 124, 125: setHover(items[min(items.count - 1, current + 1)].id, isClick: true)
+        case 36: onEdit?(items[current].id)
+        case 49: setHover(items[current].id, isClick: true)
+        default: super.keyDown(with: event)
+        }
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        content.0.map { item in
+            let element = FleetRunnerAccessibilityElement { [weak self] in self?.onEdit?(item.id) }
+            element.setAccessibilityRole(.button)
+            element.setAccessibilityLabel("\(item.name), \(item.state.rawValue)")
+            element.setAccessibilityParent(self)
+            if let window {
+                element.setAccessibilityFrame(window.convertToScreen(convert(bounds, to: nil)))
+            }
+            return element
+        }
     }
 
     override func updateTrackingAreas() {
@@ -248,6 +248,7 @@ private final class FleetSCNView: SCNView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         if event.clickCount == 2, let id = runner(at: event) {
             onEdit?(id)
         } else {

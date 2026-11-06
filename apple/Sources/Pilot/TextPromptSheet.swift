@@ -1,97 +1,108 @@
-import SwiftUI
+import AppKit
 
-/// A small glass sheet that asks for one line of text, replacing a system
-/// `.alert` with an embedded `TextField` so every text input stays a Liquid
-/// Glass field.
-///
-/// The sheet owns no business logic: the caller binds the text and decides
-/// what Cancel and the confirm button do. The confirm button is the single
-/// prominent action (BTN-1) and is disabled while the trimmed text is empty;
-/// Return submits through it and Escape cancels. The sheet dismisses itself
-/// after either callback runs.
-///
-///     .sheet(isPresented: $isPresented) {
-///         TextPromptSheet(title: "Rename Group", label: "Group name",
-///                         prompt: "Frontend", confirmTitle: "Save",
-///                         text: $name) { rename(name) }
-///     }
-struct TextPromptSheet: View {
-    let title: String
-    /// The persistent visible label above the field (FORM-1). It is also the
-    /// field's VoiceOver name.
-    let label: String
-    /// A bare example value for the placeholder (FORM-2). Without one the
-    /// field would repeat the label as its placeholder.
-    var prompt: String?
-    let confirmTitle: String
-    @Binding var text: String
-    var onCancel: () -> Void = {}
-    let onConfirm: () -> Void
+@MainActor
+final class ShellActionButton: NSButton {
+    var perform: () -> Void
+    private var zoomObservation: CockpitObservation?
 
-    @Environment(\.dismiss) private var dismiss
-    @FocusState private var isFieldFocused: Bool
-    /// Return can reach both the field's submit and the default button;
-    /// finish once so a confirm never runs twice.
-    @State private var hasFinished = false
-
-    private var canConfirm: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    init(_ title: String, symbol: String? = nil, perform: @escaping () -> Void) {
+        self.perform = perform
+        super.init(frame: .zero)
+        self.title = title
+        font = CockpitTypography.font(size: 13)
+        if let symbol { image = NSImage(systemSymbolName: symbol, accessibilityDescription: title) }
+        imagePosition = symbol == nil ? .noImage : .imageLeading
+        bezelStyle = .rounded
+        target = self
+        action = #selector(invoke)
+        setAccessibilityLabel(title)
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.large) {
-            Text(title)
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
+    required init?(coder: NSCoder) { nil }
+    @objc private func invoke() { perform() }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            if zoomObservation == nil { zoomObservation = CockpitObservation(owner: self) { $0.font = CockpitTypography.font(size: 13) } }
+            zoomObservation?.start()
+        } else { zoomObservation?.stop() }
+    }
+}
 
-            // Persistent label above the field; label → field stays at 8
-            // (FORM-5).
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Text(label)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    // The field carries this name for VoiceOver; hide the
-                    // visible label so it is not read twice.
-                    .accessibilityHidden(true)
-                TextField(label, text: $text, prompt: prompt.map { Text($0) })
-                    .accessibilityLabel(label)
-                    .focused($isFieldFocused)
-                    .onSubmit(confirm)
-                    .liquidGlassField(isFocused: isFieldFocused)
-            }
+@MainActor
+final class ShellMenuItem: NSMenuItem, NSMenuItemValidation {
+    var perform: () -> Void
+    var enabledWhen: (() -> Bool)?
 
-            CompatGlassContainer(spacing: 0) {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    Spacer()
-                    Button("Cancel", role: .cancel, action: cancel)
-                        .keyboardShortcut(.cancelAction)
-                        .compatGlassButtonStyle()
-                        .buttonBorderShape(.capsule)
-                    Button(confirmTitle, action: confirm)
-                        .keyboardShortcut(.defaultAction)
-                        .compatGlassProminentButtonStyle()
-                        .buttonBorderShape(.capsule)
-                        .disabled(!canConfirm)
-                }
-            }
-            .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
+    init(_ title: String, key: String = "", modifiers: NSEvent.ModifierFlags = .command,
+         enabledWhen: (() -> Bool)? = nil, perform: @escaping () -> Void) {
+        self.perform = perform
+        self.enabledWhen = enabledWhen
+        super.init(title: title, action: #selector(invoke), keyEquivalent: key)
+        target = self
+        keyEquivalentModifierMask = modifiers
+    }
+
+    required init(coder: NSCoder) { fatalError("Use the action initializer") }
+    @objc private func invoke() { perform() }
+    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool { enabledWhen?() ?? true }
+}
+
+@MainActor
+func shellStack(_ views: [NSView], orientation: NSUserInterfaceLayoutOrientation = .vertical,
+                spacing: CGFloat = 8) -> NSStackView {
+    let stack = NSStackView(views: views)
+    stack.orientation = orientation
+    stack.spacing = spacing
+    stack.alignment = orientation == .vertical ? .leading : .centerY
+    return stack
+}
+
+@MainActor
+func shellLabel(_ string: String, secondary: Bool = false) -> NSTextField {
+    let field = NSTextField(labelWithString: string)
+    field.font = CockpitTypography.font(size: 13)
+    field.textColor = secondary ? .secondaryLabelColor : .labelColor
+    field.lineBreakMode = .byTruncatingTail
+    return field
+}
+
+@MainActor
+func shellPin(_ child: NSView, to parent: NSView, inset: CGFloat = 0) {
+    parent.addSubview(child)
+    child.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+        child.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: inset),
+        child.trailingAnchor.constraint(equalTo: parent.trailingAnchor, constant: -inset),
+        child.topAnchor.constraint(equalTo: parent.topAnchor, constant: inset),
+        child.bottomAnchor.constraint(equalTo: parent.bottomAnchor, constant: -inset)
+    ])
+}
+
+/// A sheet's completion is scoped to its parent window and delivered once.
+@MainActor
+enum TextPromptSheet {
+    static func present(on window: NSWindow?, title: String, label: String, value: String,
+                        confirmTitle: String = "Save", completion: @escaping (String) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = label
+        alert.addButton(withTitle: confirmTitle)
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(string: value)
+        field.frame = NSRect(x: 0, y: 0, width: 320, height: 24)
+        field.setAccessibilityLabel(label)
+        alert.accessoryView = field
+        let finish: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .alertFirstButtonReturn else { return }
+            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty { completion(value) }
         }
-        .padding(LiquidGlassMetrics.Spacing.xLarge)
-        .frame(width: 360)
-        .onAppear { isFieldFocused = true }
-    }
-
-    private func cancel() {
-        guard !hasFinished else { return }
-        hasFinished = true
-        onCancel()
-        dismiss()
-    }
-
-    private func confirm() {
-        guard canConfirm, !hasFinished else { return }
-        hasFinished = true
-        onConfirm()
-        dismiss()
+        if let window {
+            alert.beginSheetModal(for: window, completionHandler: finish)
+            alert.window.makeFirstResponder(field)
+        } else {
+            finish(alert.runModal())
+        }
     }
 }

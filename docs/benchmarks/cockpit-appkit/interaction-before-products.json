@@ -1,0 +1,11 @@
+{
+  "host": {
+    "sha256": "bb8479f22baee913d36b1f2b894e7771522e82af3736db1f160e22f6b4a4511f",
+    "uuid": "UUID: 600C3FBF-C695-3C3B-928E-2C49284D1317 (arm64) /tmp/cockpit-polish-benchmark/Build/Products/Debug/Cockpit.app/Contents/MacOS/Cockpit"
+  },
+  "tests": {
+    "sha256": "592ec59f9697cd08f86b518ed2594c1a51301d98a9f152f2619bbb9b7834b375",
+    "uuid": "UUID: C33C8678-C193-3AC2-84B1-44BB9416AA0C (arm64) /tmp/cockpit-polish-benchmark/Build/Products/Debug/Cockpit.app/Contents/PlugIns/PilotTests.xctest/Contents/MacOS/PilotTests"
+  },
+  "provenance": "Optimized products used by the passed interaction profile before sidebar/inspector/transcript reuse fixes; source changed after compilation."
+}

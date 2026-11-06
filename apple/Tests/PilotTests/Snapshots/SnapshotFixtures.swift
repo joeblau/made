@@ -23,7 +23,7 @@ final class SnapshotFixtures {
                     UsageConsent.grokKey, UsageConsent.kimiKey] {
             defaults.set(true, forKey: key)
         }
-        let schema = Schema(versionedSchema: PilotSchemaV3.self)
+        let schema = Schema(versionedSchema: PilotSchemaV4.self)
         container = try ModelContainer(
             for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         )
@@ -100,14 +100,6 @@ final class SnapshotFixtures {
                            state: "OPEN", isDraft: index == 2, author: ["alex", "sam", "morgan"][index % 3],
                            headBranch: ["feat/activity-timeline", "fix/project-filters", "feat/command-menu"][index % 3],
                            elapsed: "\(index + 1) hours ago")
-        }
-        repository.filesystem = ["src", "components", "public", "tests", "package.json", "README.md", "tsconfig.json"].map { name in
-            let directory = !name.contains(".")
-            return FileSystemEntry(id: name, name: name, path: "/demo/orbit-web/\(name)", relativePath: name,
-                                   isDirectory: directory, children: directory ? ["index.ts", "project.ts", "activity.ts"].map {
-                FileSystemEntry(id: "\(name)/\($0)", name: $0, path: "/demo/orbit-web/\(name)/\($0)",
-                                relativePath: "\(name)/\($0)", isDirectory: false, children: nil)
-            } : nil)
         }
     }
 

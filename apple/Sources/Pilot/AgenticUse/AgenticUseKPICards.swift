@@ -1,30 +1,49 @@
-import SwiftUI
+import AppKit
 
-/// The headline row: five metric cards, each with a delta against the
-/// equally long previous window and a sparkline of the selected range.
-///
-/// Delta color is semantic — green when the change is an improvement (lower
-/// cost, higher cache hit rate), red when it is a regression, secondary for
-/// volume figures that are neither good nor bad. Sparklines stay neutral:
-/// per-card hues collided with the provider colors used everywhere else.
-struct AgenticUseKPICards: View {
-    let snapshot: AgenticUseSnapshot
-    /// Columns to lay the cards across; the dashboard picks this from width.
-    let columns: Int
+@MainActor
+final class AgenticUseKPICards: AgenticUseFlippedView {
+    private var snapshot: AgenticUseSnapshot
+    private var cards: [AgenticUseKPICard] = []
 
-    var body: some View {
-        let metrics = metrics
-        LazyVGrid(
-            columns: Array(
-                repeating: GridItem(.flexible(), spacing: AgenticUseLayout.gap, alignment: .top),
-                count: max(1, columns)
-            ),
-            alignment: .leading,
-            spacing: AgenticUseLayout.gap
-        ) {
-            ForEach(metrics) { metric in
-                AgenticUseKPICard(metric: metric)
-            }
+    init(snapshot: AgenticUseSnapshot, columns: Int = 5) {
+        self.snapshot = snapshot
+        super.init(frame: .zero)
+        rebuild()
+    }
+    required init?(coder: NSCoder) { nil }
+    func update(snapshot: AgenticUseSnapshot) {
+        self.snapshot = snapshot
+        rebuild()
+    }
+    private func rebuild() {
+        let values = metrics
+        if cards.count != values.count {
+            cards.forEach { $0.removeFromSuperview() }
+            cards = values.map { AgenticUseKPICard(metric: $0) }
+            cards.forEach(addSubview)
+        } else {
+            for (card, metric) in zip(cards, values) { card.update(metric: metric) }
+        }
+        needsLayout = true
+    }
+    private func columns(for width: CGFloat) -> Int {
+        let minimumWidth = max(180 * AgenticUseLayout.zoom, cards.map(\.minimumWidth).max() ?? 0)
+        let count = max(1, min(cards.count, Int((max(0, width) + 8) / (minimumWidth + 8))))
+        // Avoid an isolated fifth card when a balanced three/two split fits.
+        return count == 4 && cards.count == 5 ? 3 : count
+    }
+    func preferredHeight(for width: CGFloat) -> CGFloat {
+        let rows = ceil(CGFloat(cards.count) / CGFloat(columns(for: width)))
+        return rows * 96 * AgenticUseLayout.zoom + max(0, rows - 1) * 8
+    }
+    override func layout() {
+        super.layout()
+        let count = columns(for: bounds.width)
+        let width = max(0, (bounds.width - CGFloat(count - 1) * 8) / CGFloat(count))
+        let height = 96 * AgenticUseLayout.zoom
+        for (index, card) in cards.enumerated() {
+            card.frame = NSRect(x: CGFloat(index % count) * (width + 8), y: CGFloat(index / count) * (height + 8), width: width, height: height)
+            card.needsLayout = true
         }
     }
 
@@ -46,6 +65,7 @@ struct AgenticUseKPICards: View {
                 id: "cost",
                 title: "Estimated Cost",
                 value: AgenticUseFormat.cost(snapshot.totalCostUSD) + unpricedMark,
+                number: snapshot.totalCostUSD,
                 delta: relativeDelta(snapshot.totalCostUSD, previous?.totalCostUSD, polarity: .lowerIsBetter),
                 fallbackCaption: fallbackCaption,
                 sparkline: buckets.map(\.cost),
@@ -55,6 +75,7 @@ struct AgenticUseKPICards: View {
                 id: "tokens",
                 title: "Processed Tokens",
                 value: AgenticUseFormat.tokens(snapshot.stats.processedTokens),
+                number: Double(snapshot.stats.processedTokens),
                 delta: relativeDelta(
                     Double(snapshot.stats.processedTokens),
                     previous.map { Double($0.processedTokens) },
@@ -68,6 +89,7 @@ struct AgenticUseKPICards: View {
                 id: "cache-rate",
                 title: "Cache Hit Rate",
                 value: AgenticUseFormat.percent(snapshot.stats.cachedInputShare),
+                number: snapshot.stats.cachedInputShare,
                 delta: pointsDelta(snapshot.stats.cachedInputShare, previous?.cachedInputShare),
                 fallbackCaption: fallbackCaption,
                 sparkline: buckets.compactMap(\.cachedInputShare),
@@ -78,6 +100,7 @@ struct AgenticUseKPICards: View {
                 id: "savings",
                 title: "Cache Savings",
                 value: AgenticUseFormat.cost(snapshot.stats.cacheSavingsUSD),
+                number: snapshot.stats.cacheSavingsUSD,
                 delta: relativeDelta(
                     snapshot.stats.cacheSavingsUSD, previous?.cacheSavingsUSD, polarity: .higherIsBetter
                 ),
@@ -89,6 +112,7 @@ struct AgenticUseKPICards: View {
                 id: "average",
                 title: isHourly ? "Avg Hourly Cost" : "Avg Daily Cost",
                 value: AgenticUseFormat.cost(averageCost) + unpricedMark,
+                number: averageCost,
                 delta: relativeDelta(averageCost, previousAverage, polarity: .lowerIsBetter),
                 fallbackCaption: fallbackCaption,
                 sparkline: Self.movingAverage(buckets.map(\.cost), window: isHourly ? 3 : 7),
@@ -176,6 +200,7 @@ struct AgenticUseKPIMetric: Identifiable {
     let id: String
     let title: String
     let value: String
+    let number: Double
     let delta: Delta?
     let fallbackCaption: String
     let sparkline: [Double]
@@ -183,89 +208,220 @@ struct AgenticUseKPIMetric: Identifiable {
     let help: String
 }
 
-private struct AgenticUseKPICard: View {
-    let metric: AgenticUseKPIMetric
-
-    private static let sparklineHeight: CGFloat = 32
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-            Text(metric.title)
-                .agenticUseFont(.body, weight: .medium)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Text(metric.value)
-                .agenticUseFont(.display, weight: .bold, design: .rounded)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .contentTransition(.numericText())
-            HStack(alignment: .bottom, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                deltaLabel
-                    .layoutPriority(1)
-                Spacer(minLength: LiquidGlassMetrics.Spacing.xxSmall)
-                if metric.sparkline.count > 1 {
-                    AgenticUseSparkline(
-                        values: metric.sparkline,
-                        tint: .secondary,
-                        anchorsAtZero: metric.anchorsAtZero
-                    )
-                    .frame(minWidth: 44, maxWidth: 110)
-                    .frame(height: Self.sparklineHeight)
-                }
-            }
-            // A card without a sparkline (one bucket of cache data) keeps the
-            // row height, so its caption lines up with its neighbors' captions.
-            .frame(minHeight: Self.sparklineHeight, alignment: .bottom)
-        }
-        .agenticUseCard()
-        .help(metric.help)
-        .animation(LiquidGlassMetrics.spring, value: metric.value)
+@MainActor
+final class AgenticUseKPICard: AgenticUseCardView {
+    private var metric: AgenticUseKPIMetric
+    let transition = AgenticUseDataTransition()
+    private(set) var displayedNumber: Double
+    private let valueLabel = AgenticUseNumericTextField(labelWithString: "")
+    private let deltaLabel = NSTextField(labelWithString: "")
+    private let caption = NSTextField(labelWithString: "")
+    private let sparkline = AgenticUseSparkline(values: [], tint: .secondaryLabelColor)
+    private var measuredZoom: CGFloat?
+    private var measuredValueWidth: CGFloat = 0
+    private var measuredDeltaWidth: CGFloat = 0
+    var minimumWidth: CGFloat {
+        measureTextIfNeeded()
+        return measuredValueWidth + 24 * AgenticUseLayout.zoom
     }
-
-    @ViewBuilder
-    private var deltaLabel: some View {
+    private func measureTextIfNeeded() {
+        let zoom = AgenticUseLayout.zoom
+        guard measuredZoom != zoom else { return }
+        measuredZoom = zoom
+        let valueFont = CockpitTypography.font(.metric)
+        let deltaFont = AgenticUseLayout.font(.caption, weight: .semibold)
+        measuredValueWidth = ceil(max((metric.value as NSString).size(withAttributes: [.font: valueFont]).width,
+                                     valueLabel.transitionWidth)) + 6
+        measuredDeltaWidth = ceil((deltaLabel.stringValue as NSString).size(withAttributes: [.font: deltaFont]).width) + 6
+    }
+    init(metric: AgenticUseKPIMetric) {
+        self.metric = metric
+        displayedNumber = metric.number
+        super.init(title: metric.title)
+        valueLabel.font = CockpitTypography.font(.metric)
+        for child in [valueLabel, deltaLabel, caption, sparkline] { addSubview(child) }
+        update(metric: metric)
+    }
+    required init?(coder: NSCoder) { nil }
+    func update(metric: AgenticUseKPIMetric) {
+        self.metric = metric
+        measuredZoom = nil
+        titleLabel.stringValue = metric.title
+        let from = displayedNumber
+        valueLabel.prepareTransition(to: metric.value, countsDown: metric.number < from)
+        transition.start(in: self, animated: from != metric.number) { [weak self] progress in
+            guard let self else { return }
+            self.displayedNumber = AgenticUseDataTransition.mix(from, metric.number, progress)
+            self.valueLabel.setTransitionProgress(progress)
+        }
         if let delta = metric.delta {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    deltaBadge(delta)
-                    Text(delta.caption)
-                        .agenticUseFont(.meta)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                deltaBadge(delta)
-            }
+            deltaLabel.stringValue = (delta.isFlat ? "− " : delta.change > 0 ? "↑ " : "↓ ") + delta.text
+            deltaLabel.textColor = .labelColor
+            deltaLabel.setAccessibilityLabel("\(delta.spokenDirection) \(delta.text)")
+            caption.stringValue = delta.caption
         } else {
-            Text(metric.fallbackCaption)
-                .agenticUseFont(.meta)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            deltaLabel.stringValue = ""
+            caption.stringValue = metric.fallbackCaption
         }
+        sparkline.update(values: metric.sparkline, tint: .secondaryLabelColor, anchorsAtZero: metric.anchorsAtZero)
+        toolTip = metric.help
+        setAccessibilityLabel("\(metric.title), \(metric.value), \(deltaLabel.stringValue), \(caption.stringValue)")
+        needsLayout = true
     }
-
-    private func deltaBadge(_ delta: AgenticUseKPIMetric.Delta) -> some View {
-        HStack(spacing: 2) {
-            Image(systemName: delta.symbol)
-                .agenticUseFont(.meta, weight: .bold)
-            Text(delta.text)
-                .agenticUseFont(.body, weight: .semibold)
-                .monospacedDigit()
-        }
-        .foregroundStyle(AgenticUseTone.color(delta.effectiveTone))
-        .fixedSize()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(delta.spokenDirection) \(delta.text) \(delta.caption)")
+    override func layout() {
+        super.layout()
+        let zoom = AgenticUseLayout.zoom
+        measureTextIfNeeded()
+        let inset = 12 * zoom
+        let width = max(0, bounds.width - inset * 2)
+        titleLabel.font = AgenticUseLayout.font(.body, weight: .medium)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.frame = NSRect(x: inset, y: 10 * zoom, width: width, height: 18 * zoom)
+        let valueFont = CockpitTypography.font(.metric)
+        valueLabel.font = valueFont
+        let valueWidth = min(width, measuredValueWidth)
+        valueLabel.frame = NSRect(x: inset, y: 31 * zoom, width: valueWidth, height: 28 * zoom)
+        valueLabel.lineBreakMode = .byTruncatingTail
+        let sparkWidth = max(0, width - valueWidth - 8 * zoom)
+        sparkline.isHidden = sparkWidth < 40 * zoom
+        sparkline.frame = NSRect(x: valueLabel.frame.maxX + 8 * zoom, y: 34 * zoom, width: sparkWidth, height: 26 * zoom)
+        let deltaFont = AgenticUseLayout.font(.caption, weight: .semibold)
+        deltaLabel.font = deltaFont
+        let deltaWidth = min(width, measuredDeltaWidth)
+        deltaLabel.frame = NSRect(x: inset, y: 70 * zoom, width: deltaWidth, height: 16 * zoom)
+        caption.font = AgenticUseLayout.font(.caption)
+        caption.textColor = .secondaryLabelColor
+        let captionX = metric.delta == nil ? inset : deltaLabel.frame.maxX + 4 * zoom
+        caption.frame = NSRect(x: captionX, y: 70 * zoom, width: max(0, bounds.width - inset - captionX), height: 16 * zoom)
+        caption.lineBreakMode = .byTruncatingTail
     }
 }
 
-/// Maps an insight/delta tone to its semantic color.
+/// AppKit's equivalent of a numeric-text content transition. Retain the native
+/// text field (including its accessibility value), and roll only changed digits.
+/// Coordinates use font units so zoom and resizing cannot stale the animation.
+@MainActor
+final class AgenticUseNumericTextField: NSTextField {
+    struct Glyph: Equatable {
+        let key: String
+        let text: String
+        var x: CGFloat
+        var y: CGFloat = 0
+        var opacity: Double = 1
+    }
+    private struct Movement {
+        let from: Glyph
+        let to: Glyph
+    }
+    private var movements: [Movement] = []
+    private(set) var renderedGlyphs: [Glyph] = []
+    private var targetGlyphs: [Glyph] = []
+    private var transitionWidthInFontUnits: CGFloat = 0
+    var transitionWidth: CGFloat { transitionWidthInFontUnits * (font?.pointSize ?? CockpitTypography.font(.metric).pointSize) }
+    private(set) var isTransitioning = false
+
+    func prepareTransition(to text: String, countsDown: Bool) {
+        guard text != stringValue || isTransitioning else { return }
+        let source = isTransitioning ? renderedGlyphs : glyphs(for: stringValue)
+        targetGlyphs = glyphs(for: text)
+        let font = font ?? CockpitTypography.font(.metric)
+        transitionWidthInFontUnits = (source + targetGlyphs).map {
+            $0.x + ($0.text as NSString).size(withAttributes: [.font: font]).width / font.pointSize
+        }.max() ?? 0
+        let direction: CGFloat = countsDown ? 1 : -1
+        movements = []
+        var remaining = source
+        for target in targetGlyphs {
+            if let index = remaining.firstIndex(where: { $0.key == target.key && $0.text == target.text }) {
+                movements.append(Movement(from: remaining.remove(at: index), to: target))
+            } else {
+                var incoming = target
+                incoming.x = source.first { $0.key == target.key }?.x ?? target.x
+                incoming.y = target.text.first?.isNumber == true ? -direction : 0
+                incoming.opacity = 0
+                movements.append(Movement(from: incoming, to: target))
+            }
+        }
+        for old in remaining {
+            var outgoing = old
+            outgoing.x = targetGlyphs.first { $0.key == old.key }?.x ?? old.x
+            outgoing.y += old.text.first?.isNumber == true ? direction : 0
+            outgoing.opacity = 0
+            movements.append(Movement(from: old, to: outgoing))
+        }
+        stringValue = text
+        isTransitioning = !source.isEmpty
+        if !isTransitioning { renderedGlyphs = targetGlyphs }
+        setTransitionProgress(isTransitioning ? 0 : 1)
+    }
+
+    func setTransitionProgress(_ progress: Double) {
+        guard isTransitioning else { return }
+        if progress >= 1 {
+            isTransitioning = false
+            movements.removeAll()
+            renderedGlyphs = targetGlyphs
+        } else {
+            renderedGlyphs = movements.map { move in
+                var glyph = move.to
+                glyph.x = AgenticUseDataTransition.mix(move.from.x, move.to.x, progress)
+                glyph.y = AgenticUseDataTransition.mix(move.from.y, move.to.y, progress)
+                glyph.opacity = AgenticUseDataTransition.mix(move.from.opacity, move.to.opacity, progress)
+                return glyph
+            }
+        }
+        needsDisplay = true
+    }
+
+    private func glyphs(for text: String) -> [Glyph] {
+        let characters = Array(text)
+        let decimal = characters.firstIndex { String($0) == (Locale.current.decimalSeparator ?? ".") } ?? characters.count
+        let firstDigit = characters.firstIndex(where: \.isNumber) ?? 0
+        let lastDigit = characters.lastIndex(where: \.isNumber) ?? 0
+        let font = font ?? CockpitTypography.font(.metric)
+        var x: CGFloat = 0
+        return characters.enumerated().map { index, character in
+            let key: String
+            if character.isNumber {
+                key = index < decimal
+                    ? "integer:\(characters[(index + 1)..<decimal].filter(\.isNumber).count)"
+                    : "fraction:\(characters[decimal..<index].filter(\.isNumber).count)"
+            } else if index < firstDigit {
+                key = "prefix:\(index):\(character)"
+            } else if index > lastDigit {
+                key = "suffix:\(index - lastDigit):\(character)"
+            } else {
+                key = "separator:\(characters[(index + 1)...].filter(\.isNumber).count):\(character)"
+            }
+            let glyph = Glyph(key: key, text: String(character), x: x)
+            x += (String(character) as NSString).size(withAttributes: [.font: font]).width / font.pointSize
+            return glyph
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isTransitioning, let font else { super.draw(dirtyRect); return }
+        NSGraphicsContext.saveGraphicsState()
+        bounds.clip()
+        let titleRect = cell?.titleRect(forBounds: bounds) ?? bounds
+        for glyph in renderedGlyphs where glyph.opacity > 0 {
+            // Match NSTextFieldCell's two-point horizontal text inset so the
+            // first and final animated frames align with native text drawing.
+            (glyph.text as NSString).draw(at: NSPoint(x: titleRect.minX + 2 + glyph.x * font.pointSize,
+                                                     y: titleRect.minY + glyph.y * font.pointSize),
+                                        withAttributes: [.font: font,
+                                                         .foregroundColor: (textColor ?? .labelColor).withAlphaComponent(glyph.opacity)])
+        }
+        NSGraphicsContext.restoreGraphicsState()
+    }
+}
+
 enum AgenticUseTone {
-    static func color(_ tone: AgenticUseInsight.Tone) -> Color {
+    static func color(_ tone: AgenticUseInsight.Tone) -> NSColor {
         switch tone {
-        case .positive: .green
-        case .negative: .red
-        case .neutral: .secondary
+        case .positive: .systemGreen
+        case .negative: .systemRed
+        case .neutral: .secondaryLabelColor
         }
     }
 }

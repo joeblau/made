@@ -1,400 +1,352 @@
 import AppKit
-import SwiftUI
 
-struct DroneSettingsView: View {
-    @Bindable var store: DroneStore
-    @State private var showsManualPairing = false
-    @State private var editingDrone: DroneRecord?
-    @State private var diagnosticsDrone: DroneRecord?
-    @State private var dronePendingForget: DroneRecord?
-    @State private var actionError: String?
+@MainActor
+final class DroneSettingsViewController: NSViewController {
+    private let store: DroneStore
+    private let runsDiscovery: Bool
+    private let observation = NativeSettingsObservation()
+    private let body = NativeSettingsUI.column(spacing: 20)
+    private let saved = NativeSettingsGroupView()
+    private let discovered = NativeSettingsGroupView()
+    private let approvals = NativeSettingsUI.column(spacing: 20)
+    private let errors = NativeSettingsUI.label("", color: .systemOrange)
+    private let savedHeading = NativeSettingsUI.label("", weight: .semibold)
+    private let discoveryStatus = NativeSettingsUI.label("", size: 11, color: .secondaryLabelColor)
+    private var discoveryRow: NSView?
+    private var savedRowsInstalled = false
+    private var discoveredRowsInstalled = false
+    private var rows: [UUID: NativeDroneRow] = [:]
+    private var recordOrder: [UUID] = []
+    private var candidates: [DroneDiscoveryCandidate] = []
+    private var requests: [DronePairingRequest] = []
+    private var actionError: String?
 
-    var body: some View {
-        Form {
-            PilotSettingsPageHeader(
-                title: "Drones",
-                subtitle: "Pair and supervise secure remote execution workers on your local network.",
-                systemImage: "server.rack",
-                tint: .blue
-            )
+    init(store: DroneStore, runsDiscovery: Bool = true) {
+        self.store = store
+        self.runsDiscovery = runsDiscovery
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
 
-            if let persistenceError = store.persistenceError {
-                Section {
-                    Label(persistenceError, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                }
+    override func loadView() {
+        body.addArrangedSubview(NativeSettingsUI.pageTitle("Drones"))
+        NativeSettingsUI.fillWidth(errors, in: body)
+        NativeSettingsUI.fillWidth(approvals, in: body)
+        let savedSection = NativeSettingsUI.column(spacing: 6)
+        NativeSettingsUI.fillWidth(savedHeading, in: savedSection)
+        NativeSettingsUI.fillWidth(saved, in: savedSection)
+        savedSection.toolTip = "Offline and unauthorized Drones stay listed. Cockpit never substitutes Local when a Drone is unavailable."
+        NativeSettingsUI.fillWidth(savedSection, in: body)
+        let retry = NativeSettingsButton("Retry") { [weak self] in self?.store.discovery.retry() }
+        retry.toolTip = "Retry Discovery"
+        let add = NativeSettingsButton("Add by Address…") { [weak self] in self?.addManual() }
+        discoveryRow = NativeSettingsUI.formRow("Local Network", subtitle: discoveryStatus, accessories: [retry, add])
+        let discover = NativeSettingsUI.group("Discover", box: discovered)
+        discover.toolTip = "Bonjour names, addresses, and protocol advertisements are hints only. A Drone becomes connected only after authenticated identity and capability negotiation."
+        NativeSettingsUI.fillWidth(discover, in: body)
+        view = NativeSettingsUI.scrolling(body)
+        refresh()
+    }
+
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        if runsDiscovery { store.startDiscovery() }
+        observation.start { [weak self] in self?.refresh() }
+    }
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        observation.stop()
+        if runsDiscovery { store.stopDiscovery() }
+    }
+
+    func refresh() {
+        guard isViewLoaded else { return }
+        errors.stringValue = [store.persistenceError, actionError].compactMap { $0 }.joined(separator: "\n")
+        errors.isHidden = errors.stringValue.isEmpty
+        savedHeading.stringValue = "Saved Drones (\(store.records.count)/\(DroneLimits.maxPairedWorkers))"
+        let records = store.records
+        let ids = records.map(\.id)
+        if ids != recordOrder || !savedRowsInstalled {
+            savedRowsInstalled = true
+            rows = rows.filter { ids.contains($0.key) }
+            var savedRows: [NSView] = []
+            if records.isEmpty {
+                savedRows.append(NativeSettingsUI.formRow(NativeSettingsUI.label("No saved Drones", color: .secondaryLabelColor)))
             }
-            if let actionError {
-                Section {
-                    Label(actionError, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                }
+            for record in records {
+                let row = rows[record.id] ?? NativeDroneRow(
+                    retry: { [weak self] in self?.store.retry(id: record.id) },
+                    rename: { [weak self] in self?.rename(id: record.id) },
+                    diagnostics: { [weak self] in self?.showDiagnostics(id: record.id) },
+                    forget: { [weak self] in self?.forget(id: record.id) }
+                )
+                rows[record.id] = row
+                savedRows.append(row)
             }
-
-            if !store.pairingRequests.isEmpty {
-                Section("Pairing Approval") {
-                    ForEach(Array(store.pairingRequests.values).sorted(by: {
-                        $0.peerID.rawValue.uuidString < $1.peerID.rawValue.uuidString
-                    })) { request in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(request.isKeyChange ? "This Drone’s identity changed. Verify before approving." : "Verify this code on both Macs before approving.")
-                            Text(request.verificationCode)
-                                .font(.title3.monospaced())
-                                .textSelection(.enabled)
-                            HStack {
-                                Button("Approve") { store.resolvePairing(requestID: request.id, approved: true) }
-                                Button("Reject", role: .destructive) {
-                                    store.resolvePairing(requestID: request.id, approved: false)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Section {
-                if store.records.isEmpty {
-                    Text("No saved Drones. Pair a discovered worker or add one by address.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(store.records) { record in
-                        DroneSavedRow(
-                            record: record,
-                            state: store.states[record.id] ?? .pairing,
-                            isForgetting: store.forgettingIDs.contains(record.id),
-                            retry: { store.retry(id: record.id) },
-                            rename: { editingDrone = record },
-                            diagnostics: { diagnosticsDrone = record },
-                            forget: { dronePendingForget = record }
-                        )
-                    }
-                }
-            } header: {
-                Text("Saved Drones (\(store.records.count)/\(DroneLimits.maxPairedWorkers))")
-            } footer: {
-                Text("Offline and unauthorized Drones stay listed. Cockpit never substitutes Local when a Drone is unavailable.")
-            }
-
-            Section {
-                switch store.discovery.browseState {
-                case .idle:
-                    ProgressView().controlSize(.small)
-                case .browsing:
-                    EmptyView()
-                case .needsPermission(let message), .failed(let message):
-                    Label(message, systemImage: "wifi.exclamationmark")
-                    Button("Retry Discovery") { store.discovery.retry() }
-                }
-                ForEach(store.availableCandidates) { candidate in
-                    LabeledContent {
-                        Button("Pair") {
-                            do {
-                                _ = try store.pair(candidate)
-                                actionError = nil
-                            } catch {
-                                actionError = Self.describe(error)
-                            }
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(candidate.displayName)
-                            Text(candidate.advertisedProtocolVersions.isEmpty
-                                 ? "Unverified Bonjour candidate"
-                                 : "Unverified · advertises protocol \(candidate.advertisedProtocolVersions.map(String.init).joined(separator: ", "))")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                if store.availableCandidates.isEmpty {
-                    Text("No unpaired Drone advertisements found.")
-                        .foregroundStyle(.secondary)
-                }
-                Button("Add by Address…") { showsManualPairing = true }
-            } header: {
-                Text("Discover")
-            } footer: {
-                Text("Bonjour names, addresses, and protocol advertisements are hints only. A Drone becomes connected only after authenticated identity and capability negotiation.")
-            }
+            saved.setRows(savedRows)
+            recordOrder = ids
         }
-        .formStyle(.grouped)
-        .onAppear { store.startDiscovery() }
-        .onDisappear { store.stopDiscovery() }
-        .sheet(isPresented: $showsManualPairing) {
-            DroneManualPairSheet { name, host, port in
-                do {
-                    _ = try store.addManual(name: name, host: host, port: port)
-                    actionError = nil
-                    return nil
-                } catch {
-                    return Self.describe(error)
-                }
-            }
-        }
-        .sheet(item: $editingDrone) { record in
-            DroneRenameSheet(currentName: record.name) { name in
-                do {
-                    try store.rename(id: record.id, to: name)
-                    actionError = nil
-                    return nil
-                } catch {
-                    return Self.describe(error)
-                }
-            }
-        }
-        .sheet(item: $diagnosticsDrone) { record in
-            DroneDiagnosticsView(
-                record: record,
-                state: store.states[record.id] ?? .pairing,
-                diagnostics: store.diagnostics[record.id] ?? DroneDiagnostics()
+        for record in records {
+            rows[record.id]?.update(
+                record: record, state: store.states[record.id] ?? .pairing,
+                forgetting: store.forgettingIDs.contains(record.id)
             )
         }
-        .confirmationDialog(
-            "Forget and Revoke Drone?",
-            isPresented: Binding(
-                get: { dronePendingForget != nil },
-                set: { if !$0 { dronePendingForget = nil } }
-            )
-        ) {
-            if let record = dronePendingForget {
-                Button("Forget and Revoke", role: .destructive) {
-                    Task { await store.forget(id: record.id) }
+        let pairing = store.pairingRequests.values.sorted { $0.peerID.rawValue.uuidString < $1.peerID.rawValue.uuidString }
+        if pairing != requests {
+            requests = pairing
+            NativeSettingsUI.clear(approvals)
+            for request in pairing {
+                let message = request.isKeyChange
+                    ? "This Drone’s identity changed. Verify before approving."
+                    : "Verify this code on both Macs before approving."
+                let code = NativeSettingsUI.label(request.verificationCode, size: 18, selectable: true)
+                code.usesMonospacedFont = true
+                let approve = NativeSettingsButton("Approve") { [weak self] in
+                    guard self?.store.pairingRequests[request.id] == request else { return }
+                    self?.store.resolvePairing(requestID: request.id, approved: true)
                 }
-                Button("Cancel", role: .cancel) { dronePendingForget = nil }
-            }
-        } message: {
-            if let record = dronePendingForget {
-                Text("This closes \(record.name), removes its saved metadata, and deletes its local pairing pin. Remote sessions are not terminated.")
+                let reject = NativeSettingsButton("Reject") { [weak self] in
+                    self?.store.resolvePairing(requestID: request.id, approved: false)
+                }
+                NativeSettingsUI.fillWidth(NativeSettingsUI.group("Pairing Approval", [
+                    NativeSettingsUI.formRow(message),
+                    NativeSettingsUI.formRow(code, accessories: [reject, approve]),
+                ]), in: approvals)
             }
         }
+        approvals.isHidden = pairing.isEmpty
+        switch store.discovery.browseState {
+        case .idle: discoveryStatus.stringValue = "Waiting for discovery…"
+        case .browsing: discoveryStatus.stringValue = "Browsing the local network"
+        case .needsPermission(let message), .failed(let message): discoveryStatus.stringValue = message
+        }
+        let available = store.availableCandidates
+        if available != candidates || !discoveredRowsInstalled {
+            discoveredRowsInstalled = true
+            candidates = available
+            var discoveredRows: [NSView] = discoveryRow.map { [$0] } ?? []
+            for candidate in available {
+                let version = candidate.advertisedProtocolVersions.isEmpty ? "Unverified"
+                    : "Unverified · protocol \(candidate.advertisedProtocolVersions.map(String.init).joined(separator: ", "))"
+                discoveredRows.append(NativeSettingsUI.formRow(
+                    candidate.displayName,
+                    subtitle: NativeSettingsUI.label(version, size: 11, color: .secondaryLabelColor),
+                    accessories: [NativeSettingsButton("Pair") { [weak self] in self?.pair(candidate) }]
+                ))
+            }
+            discovered.setRows(discoveredRows)
+        }
+    }
+
+    private func pair(_ candidate: DroneDiscoveryCandidate) {
+        do { _ = try store.pair(candidate); actionError = nil } catch { actionError = Self.describe(error) }
+        refresh()
+    }
+
+    private func addManual() {
+        let form = NativeSettingsFormController(
+            title: "Add Drone by Address",
+            detail: "The address is only a connection hint. Pairing and pinned identity verification are required before work can be sent.",
+            fields: [.init(title: "Display name (optional)"), .init(title: "Hostname or IP address"), .init(title: "Port")],
+            confirmTitle: "Add and Pair"
+        ) { [weak self] values in
+            guard let self else { return "This settings window is no longer available." }
+            do {
+                _ = try self.store.addManual(name: values[0], host: values[1], port: values[2])
+                self.actionError = nil
+                return nil
+            } catch { return Self.describe(error) }
+        }
+        presentAsSheet(form)
+    }
+
+    private func rename(id: UUID) {
+        guard let record = store.records.first(where: { $0.id == id }) else { return }
+        let form = NativeSettingsFormController(
+            title: "Rename Drone", fields: [.init(title: "Display name", value: record.name)], confirmTitle: "Save"
+        ) { [weak self] values in
+            guard let self else { return "This settings window is no longer available." }
+            do { try self.store.rename(id: id, to: values[0]); self.actionError = nil; return nil } catch { return Self.describe(error) }
+        }
+        presentAsSheet(form)
+    }
+
+    private func forget(id: UUID) {
+        guard let record = store.records.first(where: { $0.id == id }), let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Forget and Revoke Drone?"
+        alert.informativeText = "This closes \(record.name), removes its saved metadata, and deletes its local pairing pin. Remote sessions are not terminated."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Forget and Revoke")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            Task { await self.store.forget(id: id) }
+        }
+    }
+
+    private func showDiagnostics(id: UUID) {
+        presentAsSheet(DroneDiagnosticsViewController(store: store, id: id))
     }
 
     private static func describe(_ error: any Error) -> String {
         switch error as? DroneRegistryError {
-        case .invalidName:
-            "Enter a name between 1 and 80 UTF-8 bytes."
-        case .invalidEndpoint:
-            "Enter a valid hostname or IP address and a port from 1 to 65535."
-        case .registryFull:
-            "Cockpit supports at most \(DroneLimits.maxPairedWorkers) saved Drones."
-        case .duplicateDrone:
-            "This discovered Drone is already saved."
-        case .persistenceUnavailable:
-            "The saved registry is read-only because it could not be loaded."
-        default:
-            "Cockpit could not save the Drone registry. Check disk permissions and available space."
+        case .invalidName: "Enter a name between 1 and 80 UTF-8 bytes."
+        case .invalidEndpoint: "Enter a valid hostname or IP address and a port from 1 to 65535."
+        case .registryFull: "Cockpit supports at most \(DroneLimits.maxPairedWorkers) saved Drones."
+        case .duplicateDrone: "This discovered Drone is already saved."
+        case .persistenceUnavailable: "The saved registry is read-only because it could not be loaded."
+        default: "Cockpit could not save the Drone registry. Check disk permissions and available space."
         }
     }
 }
 
-private struct DroneSavedRow: View {
-    let record: DroneRecord
-    let state: DroneConnectionState
-    let isForgetting: Bool
-    let retry: () -> Void
-    let rename: () -> Void
-    let diagnostics: () -> Void
-    let forget: () -> Void
+@MainActor
+private final class NativeDroneRow: NSView {
+    private let name = NativeSettingsUI.label("", weight: .semibold)
+    private let summary = NativeSettingsUI.label("", size: 11, color: .secondaryLabelColor, selectable: true)
+    private let status = NativeSettingsUI.label("", weight: .medium)
+    private let detail = NativeSettingsUI.label("", size: 11, color: .secondaryLabelColor)
+    private let actionsButton = NSButton()
+    private let actions: [() -> Void]
+    private let menuItems: [NSMenuItem]
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(record.name).font(.headline)
-                    if !record.hardware.displayText.isEmpty {
-                        Text(record.hardware.displayText)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(record.endpoints.map(\.displayText).joined(separator: ", "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                Spacer()
-                Label(status.title, systemImage: status.symbol)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(status.tint)
-            }
-            Text(status.detail)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Button("Retry", action: retry)
-                    .disabled(isForgetting)
-                Button("Diagnostics", action: diagnostics)
-                Menu("Manage") {
-                    Button("Rename…", action: rename)
-                    Button("Forget and Revoke…", role: .destructive, action: forget)
-                }
-                .disabled(isForgetting)
-                if isForgetting {
-                    ProgressView().controlSize(.small)
-                }
-            }
+    init(retry: @escaping () -> Void, rename: @escaping () -> Void, diagnostics: @escaping () -> Void, forget: @escaping () -> Void) {
+        actions = [retry, diagnostics, rename, forget]
+        menuItems = ["Retry", "Diagnostics", "Rename…", "Forget and Revoke…"].map {
+            NSMenuItem(title: $0, action: #selector(NativeDroneRow.performMenuAction(_:)), keyEquivalent: "")
         }
-        .padding(.vertical, 4)
+        super.init(frame: .zero)
+        for (index, item) in menuItems.enumerated() {
+            item.tag = index
+            item.target = self
+        }
+        actionsButton.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Drone Actions")
+        actionsButton.isBordered = false
+        actionsButton.imagePosition = .imageOnly
+        actionsButton.symbolConfiguration = .init(pointSize: 15, weight: .regular)
+        actionsButton.contentTintColor = .secondaryLabelColor
+        actionsButton.toolTip = "Drone Actions"
+        actionsButton.setAccessibilityLabel("Drone Actions")
+        actionsButton.target = self
+        actionsButton.action = #selector(showActions)
+        status.alignment = .right
+        status.maximumNumberOfLines = 1
+        summary.maximumNumberOfLines = 1
+        summary.lineBreakMode = .byTruncatingMiddle
+        let subtitle = NativeSettingsUI.column([summary, detail], spacing: 2)
+        for label in [summary, detail] { label.widthAnchor.constraint(equalTo: subtitle.widthAnchor).isActive = true }
+        NativeSettingsUI.pin(NativeSettingsUI.formRow(name, subtitle: subtitle, accessories: [status, actionsButton]), to: self)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func showActions() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menuItems.forEach { $0.menu?.removeItem($0); menu.addItem($0) }
+        menu.insertItem(.separator(), at: 3)
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: actionsButton.bounds.maxY + 4), in: actionsButton)
     }
 
-    private var status: (title: String, detail: String, symbol: String, tint: Color) {
+    @objc private func performMenuAction(_ sender: NSMenuItem) {
+        guard actions.indices.contains(sender.tag) else { return }
+        actions[sender.tag]()
+    }
+
+    func update(record: DroneRecord, state: DroneConnectionState, forgetting: Bool) {
+        name.stringValue = record.name
+        summary.stringValue = ([record.hardware.displayText] + record.endpoints.map(\.displayText))
+            .filter { !$0.isEmpty }.joined(separator: " · ")
+        summary.isHidden = summary.stringValue.isEmpty
+        let presentation = Self.presentation(state)
+        status.stringValue = presentation.0
+        status.textColor = presentation.2
+        // Healthy Drones need no explanation; problems keep their recovery hint.
+        if case .connected = state {
+            detail.stringValue = ""
+            status.toolTip = presentation.1
+        } else {
+            detail.stringValue = presentation.1
+            status.toolTip = nil
+        }
+        detail.isHidden = detail.stringValue.isEmpty
+        for index in [0, 2, 3] { menuItems[index].isEnabled = !forgetting }
+    }
+    private static func presentation(_ state: DroneConnectionState) -> (String, String, NSColor) {
         switch state {
-        case .pairing:
-            return ("Pairing required", DroneConnectionIssue.pairingRequired.recoveryInstruction, "person.badge.key", Color.orange)
-        case .connecting(let attempt):
-            return ("Connecting", "Identity and protocol probe, attempt \(attempt). Nothing is sent before authentication.", "arrow.triangle.2.circlepath", Color.blue)
+        case .pairing: ("Pairing required", DroneConnectionIssue.pairingRequired.recoveryInstruction, .systemOrange)
+        case .connecting(let attempt): ("Connecting", "Identity and protocol probe, attempt \(attempt). Nothing is sent before authentication.", .systemBlue)
         case .connected(let peer):
-            let version = peer.hello.selectedVersion.map(String.init) ?? "unknown"
-            let capabilities = peer.hello.capabilities.joined(separator: ", ")
-            return ("Connected", "Protocol \(version) · \(capabilities)", "checkmark.circle.fill", Color.green)
-        case .offline(let issue, let retryAttempt):
-            let retry = retryAttempt.map { " Automatic retry \($0) is scheduled." } ?? ""
-            return (issue.title, issue.recoveryInstruction + retry, "wifi.slash", Color.orange)
-        case .unauthorized(let issue):
-            return (issue.title, issue.recoveryInstruction, "lock.shield", Color.red)
-        case .incompatible:
-            return ("Incompatible", DroneConnectionIssue.incompatible.recoveryInstruction, "exclamationmark.triangle.fill", Color.red)
-        case .busy(let attempt):
-            return ("Busy", "\(DroneConnectionIssue.busy.recoveryInstruction) Retry \(attempt) is scheduled.", "hourglass", Color.orange)
-        case .forgetting:
-            return ("Forgetting", "Closing the connection and revoking the local pin.", "minus.circle", Color.gray)
+            ("Connected", "Protocol \(peer.hello.selectedVersion.map(String.init) ?? "unknown") · \(peer.hello.capabilities.joined(separator: ", "))", .systemGreen)
+        case .offline(let issue, let attempt):
+            (issue.title, issue.recoveryInstruction + (attempt.map { " Automatic retry \($0) is scheduled." } ?? ""), .systemOrange)
+        case .unauthorized(let issue): (issue.title, issue.recoveryInstruction, .systemRed)
+        case .incompatible: ("Incompatible", DroneConnectionIssue.incompatible.recoveryInstruction, .systemRed)
+        case .busy(let attempt): ("Busy", "\(DroneConnectionIssue.busy.recoveryInstruction) Retry \(attempt) is scheduled.", .systemOrange)
+        case .forgetting: ("Forgetting", "Closing the connection and revoking the local pin.", .secondaryLabelColor)
         }
     }
 }
 
-private struct DroneManualPairSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
-    @State private var host = ""
-    @State private var port = ""
-    @State private var error: String?
-    let save: (String, String, String) -> String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Add Drone by Address").font(.title2.bold())
-            Text("The address is only a connection hint. Pairing and pinned identity verification are required before work can be sent.")
-                .foregroundStyle(.secondary)
-            TextField("Display name (optional)", text: $name)
-            TextField("Hostname or IP address", text: $host)
-            TextField("Port", text: $port)
-                .frame(width: 120)
-            if let error {
-                Text(error).foregroundStyle(.red)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                Button("Add and Pair") {
-                    if let error = save(name, host, port) {
-                        self.error = error
-                    } else {
-                        dismiss()
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || port.isEmpty)
-            }
+@MainActor
+private final class DroneDiagnosticsViewController: NSViewController {
+    private let store: DroneStore
+    private let id: UUID
+    private let text = NativeSettingsTextView()
+    private let heading = NativeSettingsUI.label("", size: 20, weight: .semibold)
+    private let observation = NativeSettingsObservation()
+    init(store: DroneStore, id: UUID) {
+        self.store = store
+        self.id = id
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() {
+        text.isEditable = false
+        text.isSelectable = true
+        text.textContainer?.widthTracksTextView = true
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.documentView = text
+        text.autoresizingMask = [.width]
+        let copy = NativeSettingsButton("Copy Diagnostics") { [weak self] in
+            guard let self else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(self.text.string, forType: .string)
         }
-        .padding(24)
-        .frame(width: 440)
+        let done = NativeSettingsButton("Done") { [weak self] in guard let self else { return }; self.dismiss(self) }
+        done.keyEquivalent = "\r"
+        let stack = NativeSettingsUI.column([heading, scroll, NativeSettingsUI.row([copy, NativeSettingsUI.spacer(), done])])
+        NativeSettingsUI.fillWidth(NSView(), in: stack)
+        view = NSView()
+        NativeSettingsUI.pin(stack, to: view, inset: 24)
+        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 360).isActive = true
+        view.widthAnchor.constraint(equalToConstant: 620).isActive = true
+        refresh()
     }
-}
-
-private struct DroneRenameSheet: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var name: String
-    @State private var error: String?
-    let save: (String) -> String?
-
-    init(currentName: String, save: @escaping (String) -> String?) {
-        _name = State(initialValue: currentName)
-        self.save = save
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Rename Drone").font(.title2.bold())
-            TextField("Display name", text: $name)
-            if let error {
-                Text(error).foregroundStyle(.red)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                Button("Save") {
-                    if let error = save(name) {
-                        self.error = error
-                    } else {
-                        dismiss()
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-            }
+    override func viewWillAppear() { super.viewWillAppear(); observation.start { [weak self] in self?.refresh() } }
+    override func viewWillDisappear() { super.viewWillDisappear(); observation.stop() }
+    private func refresh() {
+        guard let record = store.records.first(where: { $0.id == id }) else {
+            heading.stringValue = "Drone removed"
+            text.string = "This Drone is no longer saved."
+            return
         }
-        .padding(24)
-        .frame(width: 380)
-    }
-}
-
-private struct DroneDiagnosticsView: View {
-    let record: DroneRecord
-    let state: DroneConnectionState
-    let diagnostics: DroneDiagnostics
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("\(record.name) Diagnostics").font(.title2.bold())
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-                GridRow { Text("Drone ID"); Text(record.id.uuidString).textSelection(.enabled) }
-                GridRow { Text("State"); Text(String(describing: state)) }
-                GridRow { Text("Generation"); Text(String(diagnostics.generation)) }
-                GridRow { Text("Connect attempts"); Text(String(diagnostics.connectAttempts)) }
-                GridRow { Text("Successful connections"); Text(String(diagnostics.successfulConnections)) }
-                GridRow { Text("Verified identity"); Text(record.verifiedIdentityFingerprint ?? "Not paired") }
-                GridRow { Text("Endpoint"); Text(diagnostics.lastEndpoint?.displayText ?? "None") }
-                GridRow { Text("Last issue"); Text(diagnostics.lastIssue?.title ?? "None") }
-            }
-            .font(.callout)
-            Text("Recent non-secret events").font(.headline)
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 6) {
-                    ForEach(Array(diagnostics.entries.enumerated()), id: \.offset) { _, entry in
-                        Text("\(entry.timestamp.formatted(date: .omitted, time: .standard)) · \(entry.event)")
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .frame(minHeight: 160)
-            HStack {
-                Spacer()
-                Button("Copy Diagnostics") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(diagnosticText, forType: .string)
-                }
-            }
-        }
-        .padding(24)
-        .frame(width: 600, height: 500)
-    }
-
-    private var diagnosticText: String {
+        let state = store.states[id] ?? .pairing
+        let diagnostics = store.diagnostics[id] ?? DroneDiagnostics()
+        heading.stringValue = "\(record.name) Diagnostics"
         let header = [
-            "Drone: \(record.name)",
-            "Drone ID: \(record.id.uuidString)",
-            "State: \(state)",
-            "Generation: \(diagnostics.generation)",
-            "Connect attempts: \(diagnostics.connectAttempts)",
+            "Drone: \(record.name)", "Drone ID: \(record.id.uuidString)", "State: \(state)",
+            "Generation: \(diagnostics.generation)", "Connect attempts: \(diagnostics.connectAttempts)",
             "Successful connections: \(diagnostics.successfulConnections)",
             "Verified identity: \(record.verifiedIdentityFingerprint ?? "Not paired")",
             "Endpoint: \(diagnostics.lastEndpoint?.displayText ?? "None")",
-            "Last issue: \(diagnostics.lastIssue?.title ?? "None")",
+            "Last issue: \(diagnostics.lastIssue?.title ?? "None")", "", "Recent non-secret events"
         ]
-        let entries = diagnostics.entries.map {
-            "\($0.timestamp.formatted(date: .omitted, time: .standard)) · \($0.event)"
-        }
-        return (header + entries).joined(separator: "\n")
+        let events = diagnostics.entries.map { "\($0.timestamp.formatted(date: .omitted, time: .standard)) · \($0.event)" }
+        let next = (header + events).joined(separator: "\n")
+        if text.string != next { text.string = next }
     }
 }

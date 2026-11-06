@@ -86,6 +86,28 @@ Cockpit opts into ACP's subagents RFD (`clientCapabilities.subagents`):
 
 ## Persistence
 
+The composer accepts photos and videos through its paperclip picker, paste,
+or drag and drop. Removable thumbnail chips appear above the draft. Messages
+can contain media without text. Images are downsampled to at most 2,048 pixels
+and 1 MiB each before sending; up to eight attachments are allowed per message.
+Source images are limited to 20 MiB and videos to 100 MiB. Decoding and copying
+run off the UI thread, and invalid files leave the draft intact.
+
+Images use ACP image content when the agent advertises image support. Otherwise,
+images and videos use ACP resource links to pane-owned local copies; the agent's
+tools and model determine which media it can analyze. Videos are not advertised
+as native video prompt content. Copies live in Application Support under
+`app.blau.pilot/ChatAttachments/<pane UUID>` and are removed when the pane is
+deleted. Removing an unsent chip also removes its copy.
+
+The model menu displays the active agent's advertised models, including grouped
+options. It prefers `configOptions` with the `model` category and switches through
+`session/set_config_option`; older adapters advertising `models.availableModels`
+use `session/set_model`. A selection is shown only after acknowledgement or an
+agent configuration update. Rejected changes preserve the previous model and
+draft. Providers and conversation actions are separate submenus. Cockpit does
+not maintain a hard-coded catalog or modify authentication to select a model.
+
 The pane kind is stored in SwiftData as a raw string, so adding it needed no
 schema migration. The selected agent and each agent's ACP session ID live in
 UUID-keyed `UserDefaults`, like terminal fast commands, and are removed when
@@ -97,6 +119,6 @@ says so.
 
 - Agents are stopped when their pane is deleted. On quit, closing stdin is what
   ends them; adapters exit on EOF.
-- Slash commands, model switching, and session modes are not exposed yet.
+- Slash commands and session modes are not exposed yet.
 - Kimi's cache figures exist only in its local session logs and are not read.
 - Markdown rendering covers inline styles and fenced code blocks only.
