@@ -326,7 +326,9 @@ final class DroneLANTransport: @unchecked Sendable {
                 self.emit(.failed(id: id, failure: .peerRevoked))
                 return
             }
-            guard self.connections.count < DroneLimits.maxConnectionsPerWorker,
+            // The controller owns one outgoing connection per saved worker. The
+            // eight-connection preauthentication budget applies only to a worker listener.
+            guard self.connections.count < DroneLimits.maxPairedWorkers,
                   !self.connections.values.contains(where: { $0.peerID == peerID && !$0.closed })
             else {
                 self.emit(.failed(id: id, failure: .connectionLimit))
