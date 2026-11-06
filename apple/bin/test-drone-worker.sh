@@ -33,4 +33,4 @@ xcrun swiftc \
   "$APPLE_ROOT/Sources/Droned/DroneWorkerService.swift" \
   "$APPLE_ROOT/Tests/DroneWorkerProof/main.swift"
 
-"$BUILD_DIR/DroneWorkerProof"
+"$BUILD_DIR/DroneWorkerProof" "$@"

@@ -8,11 +8,14 @@ enum DroneWorkerProof {
         defer { try? FileManager.default.removeItem(at: root) }
         let workspace = root.appendingPathComponent("workspace", isDirectory: true)
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        let replayOnly = CommandLine.arguments.contains("--tool-replay-authorization")
         try Data("print(\"drone-tools-before\")\n".utf8).write(
             to: workspace.appendingPathComponent("main.swift")
         )
-        try runProcess("/usr/bin/git", ["init", "-q"], directory: workspace)
-        try runProcess("/usr/bin/git", ["add", "-N", "main.swift"], directory: workspace)
+        if !replayOnly {
+            try runProcess("/usr/bin/git", ["init", "-q"], directory: workspace)
+            try runProcess("/usr/bin/git", ["add", "-N", "main.swift"], directory: workspace)
+        }
         let workerTransport = DroneLANTransport(
             role: .worker,
             identityStore: DroneIdentityStore(role: .worker, storage: ProofPairingStorage()),
@@ -65,6 +68,20 @@ enum DroneWorkerProof {
             try await Task.sleep(for: .milliseconds(25))
         }
         guard let connectionID else { throw ProofError.failed("controller did not authenticate") }
+
+        if replayOnly {
+            try await verifyToolReplay(
+                controller: controller,
+                connectionID: connectionID,
+                controllerID: controllerID,
+                droneID: peerID.rawValue,
+                observed: observed
+            )
+            controller.stop()
+            await service.stop()
+            print("Drone worker replay authorization passed: original lease resumes; all changed authority fields denied.")
+            return
+        }
 
         let createRequest = UUID()
         controller.send(DroneEnvelope(
@@ -152,6 +169,79 @@ enum DroneWorkerProof {
         print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
     }
 
+    private static func verifyToolReplay(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        controllerID: UUID,
+        droneID: UUID,
+        observed: ProofObserved
+    ) async throws {
+        let lease = DroneToolLease(
+            id: UUID(), controllerID: controllerID, droneID: droneID,
+            jobID: DroneJobID(), workspaceID: DroneWorkspaceIDs.default,
+            expiresAt: Date().timeIntervalSince1970 + 120
+        )
+        let operationID = UUID()
+        controller.send(DroneEnvelope(
+            kind: .toolRun, requestID: operationID, lease: lease,
+            idempotencyKey: UUID().uuidString,
+            body: .toolRun(DroneToolProcessRequest(executable: "printf", arguments: ["replay-fixture"]))
+        ), on: connectionID)
+        let completed = try await waitForResponse(operationID, kind: .toolCompletion, observed: observed)
+        guard case .toolCompletion(let result) = completed.body, result.status == .succeeded else {
+            throw ProofError.failed("replay fixture process failed")
+        }
+        for field in 0..<7 {
+            let requestID = UUID()
+            let requestedLease = DroneToolLease(
+                id: field == 0 ? UUID() : lease.id,
+                controllerID: field == 1 ? UUID() : lease.controllerID,
+                droneID: field == 2 ? UUID() : lease.droneID,
+                jobID: field == 3 ? DroneJobID() : lease.jobID,
+                workspaceID: field == 4 ? UUID() : lease.workspaceID,
+                expiresAt: field == 5 ? lease.expiresAt + 60 : lease.expiresAt
+            )
+            let previousCount = observed.responses(for: operationID).count
+            controller.send(DroneEnvelope(
+                kind: .toolAttach, requestID: requestID, lease: requestedLease,
+                idempotencyKey: UUID().uuidString,
+                body: .toolAttach(DroneToolAttachBody(
+                    originalRequestID: operationID, nextSequence: 0, offsets: DroneToolStreamOffsets()
+                ))
+            ), on: connectionID)
+            if field < 6 {
+                let response = try await waitForResponse(requestID, kind: .error, observed: observed)
+                guard case .error(let error) = response.body, error.code == "unauthorized" else {
+                    throw ProofError.failed("changed replay lease was not denied as unauthorized")
+                }
+                expect(observed.responses(for: operationID).count == previousCount, "unauthorized output replayed")
+            } else {
+                _ = try await waitForResponse(requestID, kind: .toolAttached, observed: observed)
+                for _ in 0..<200 {
+                    if observed.responses(for: operationID).count >= previousCount + 2 { break }
+                    try await Task.sleep(for: .milliseconds(25))
+                }
+                let replay = Array(observed.responses(for: operationID).dropFirst(previousCount))
+                expect(replay.contains { $0.kind == .toolOutput }, "original lease did not replay output")
+                expect(replay.last?.kind == .toolCompletion, "original lease did not replay completion")
+            }
+        }
+    }
+
+    private static func waitForResponse(
+        _ requestID: UUID,
+        kind: DroneMessageKind,
+        observed: ProofObserved
+    ) async throws -> DroneEnvelope {
+        for _ in 0..<400 {
+            if let response = observed.responses(for: requestID).first(where: { $0.kind == kind }) {
+                return response
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        throw ProofError.failed("timed out waiting for \(kind)")
+    }
+
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() {
             FileHandle.standardError.write(Data("Drone worker proof failed: \(message)\n".utf8))
@@ -175,6 +265,11 @@ private final class ProofObserved: @unchecked Sendable {
     private var storedPort: UInt16?
     private var storedConnection: DroneConnectionID?
     private var created: [UUID: DroneSessionID] = [:]
+    private var received: [UUID: [DroneEnvelope]] = [:]
+
+    func responses(for requestID: UUID) -> [DroneEnvelope] {
+        lock.withLock { received[requestID] ?? [] }
+    }
     var onEnvelope: ((DroneEnvelope) -> Void)?
 
     var port: UInt16? { lock.withLock { storedPort } }
@@ -182,6 +277,9 @@ private final class ProofObserved: @unchecked Sendable {
     func set(port: UInt16) { lock.withLock { storedPort = port } }
     func set(connectionID: DroneConnectionID) { lock.withLock { storedConnection = connectionID } }
     func record(_ envelope: DroneEnvelope) {
+        if let requestID = envelope.requestID {
+            lock.withLock { received[requestID, default: []].append(envelope) }
+        }
         if envelope.kind == .created, let requestID = envelope.requestID, let sessionID = envelope.sessionID {
             lock.withLock { created[requestID] = sessionID }
         }
