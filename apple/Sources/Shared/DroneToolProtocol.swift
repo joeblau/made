@@ -263,6 +263,14 @@ enum DroneToolValidation {
 }
 
 enum DroneToolWorkerAuthorization {
+    /// A request ID is a correlation token, never authority to read retained output.
+    static func authorizeReplay(
+        storedLease: DroneToolLease?,
+        requestingLease: DroneToolLease
+    ) throws {
+        guard storedLease == requestingLease else { throw DroneProtocolError.unauthorized }
+    }
+
     static func authorize(
         _ envelope: DroneEnvelope,
         authenticatedControllerID: UUID,

@@ -295,6 +295,10 @@ actor DroneWorkerService {
                   let history = toolHistories[attach.originalRequestID],
                   attach.nextSequence <= UInt64(history.count)
             else { throw DroneProtocolError.invalidIdentifier }
+            try DroneToolWorkerAuthorization.authorizeReplay(
+                storedLease: history.first?.lease,
+                requestingLease: lease
+            )
             var offsets = DroneToolStreamOffsets()
             for event in history.prefix(Int(attach.nextSequence)) {
                 guard case .toolOutput(let output) = event.body else { throw DroneProtocolError.malformedMessage }
