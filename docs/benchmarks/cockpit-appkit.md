@@ -132,7 +132,8 @@ The small samples and uncontrolled desktop background load do not establish
 statistical significance; they identify workloads for focused profiling.
 
 The Notes mount regression and other mount/p95 changes remain follow-up work
-under [the performance task #379](https://github.com/joeblau/made/issues/379).
+in the [release checklist](../appkit-migration.md), with their history retained
+in [the performance task #379](https://github.com/joeblau/made/issues/379).
 No fixture was simplified to improve the reported numbers, and these results
 do not establish a whole-application performance win or satisfy that task's
 full profiling gate.

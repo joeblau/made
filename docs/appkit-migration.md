@@ -2,8 +2,10 @@
 
 The migration tracker is [#339](https://github.com/joeblau/made/issues/339).
 The baseline is commit `513715f6fe218f11d3cf1829d038da0588931268`.
-This document records the presentation boundary and verification contract; the
-issues remain the source of truth for individual task completion.
+This document records the presentation boundary and verification contract.
+The issues retain the implementation history; the release checklist below
+retains outstanding verification after the implementation backlog is closed.
+Closing implementation issues does not mark unverified release checks as passed.
 
 ## Presentation boundary
 
@@ -132,7 +134,7 @@ Before considering performance acceptance:
 
 ## Completion evidence
 
-The migration remains incomplete while any parity row lacks its behavioral
+Release acceptance remains incomplete while any parity row lacks its behavioral
 checks, any app-owned/third-party SwiftUI presentation remains, or required
 builds and upgrade checks fail. The tracker must be updated from observed
 results rather than from the presence of replacement files.
@@ -191,14 +193,14 @@ Three optimized native benchmark runs retain 189 mount and 3,780 resize
 samples, with matching source and product fingerprints. Resize medians are
 45.7–94.5% lower across the nine fixtures, but initial construction is mixed.
 Notes, Usage and Actions exceed the mount/layout p95 investigation threshold;
-they remain open performance concerns in #379. See the
+they remain unresolved performance concerns recorded in #379. See the
 [complete comparison](benchmarks/cockpit-appkit.md) for the measurements,
 fixture limitations and excluded contended attempts.
 
 Implementation review is tracked in
 [PR #384](https://github.com/joeblau/made/pull/384). It links all 41 child tasks;
-opening that PR does not mark their remaining release acceptance criteria as
-complete. Local result bundles and screenshots are retained under the
+merging the implementation and closing its task backlog do not mark remaining
+release acceptance criteria as complete. Local result bundles and screenshots are retained under the
 `/tmp/made-appkit-*` validation directories. The portable benchmark samples
 and reproduction instructions are committed with the report.
 
@@ -208,6 +210,9 @@ The AppKit implementation is not a release approval. The following gates keep
 the remaining work actionable. An unchecked item requires an evidence link or
 a recorded owner and follow-up issue before the migration can be called
 complete. Do not substitute fixture screenshots for the physical checks.
+After the implementation backlog closes, the release maintainer owns the
+unchecked items below; the linked historical tasks retain the original scope
+and findings. Release publication still requires these gates to be reviewed.
 
 - [x] Generate the project and pass the source boundary check against `Pilot`'s
   actual source membership. Run the full macOS suite, including native pane
