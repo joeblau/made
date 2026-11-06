@@ -29,6 +29,7 @@ final class DroneDaemon {
     private var listener: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var signalSources: [DispatchSourceSignal] = []
+    private var shuttingDown = false
     private let workerService: DroneWorkerService?
 
     init(paths: DronePaths = DronePaths()) throws {
@@ -54,7 +55,7 @@ final class DroneDaemon {
         Task { [workerService] in await workerService?.start(bonjourInstanceID: bonjourID) }
         installSignalHandlers()
         log.record("daemon.started")
-        RunLoop.main.run()
+        CFRunLoopRun()
     }
 
     private func startListener() throws {
@@ -170,15 +171,20 @@ final class DroneDaemon {
     }
 
     private func shutDown() {
+        guard !shuttingDown else { return }
+        shuttingDown = true
         log.record("daemon.stopping")
-        Task { [workerService] in await workerService?.stop() }
         acceptSource?.cancel()
         acceptSource = nil
         signalSources.forEach { $0.cancel() }
         signalSources.removeAll()
         try? FileManager.default.removeItem(at: paths.controlSocket)
-        RunLoop.main.perform {
-            CFRunLoopStop(CFRunLoopGetMain())
+        Task { [workerService] in
+            await workerService?.stop()
+            RunLoop.main.perform {
+                CFRunLoopStop(CFRunLoopGetMain())
+            }
+            CFRunLoopWakeUp(CFRunLoopGetMain())
         }
     }
 }
