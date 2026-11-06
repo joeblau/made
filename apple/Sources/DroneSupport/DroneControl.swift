@@ -13,6 +13,16 @@ struct DroneApprovalSummary: Codable, Equatable, Sendable {
     let isKeyChange: Bool
 }
 
+struct DroneWorkerHealthSnapshot: Codable, Equatable, Sendable {
+    let listenerReady: Bool
+    let paired: Bool
+    let storageHealthy: Bool
+}
+
+protocol DroneWorkerHealthReporting: Sendable {
+    func healthSnapshot() async -> DroneWorkerHealthSnapshot
+}
+
 struct DroneControlResponse: Codable, Equatable, Sendable {
     let version: Int
     let workerVersion: String
@@ -20,15 +30,17 @@ struct DroneControlResponse: Codable, Equatable, Sendable {
     let paired: Bool
     let processIdentifier: Int32
     let executionEnabled: Bool
+    let workerHealth: DroneWorkerHealthSnapshot?
     var approvals: [DroneApprovalSummary]
 
-    init(paths: DronePaths) {
+    init(paths: DronePaths, workerHealth: DroneWorkerHealthSnapshot? = nil) {
         version = DroneVersion.control
         workerVersion = DroneVersion.marketing
         protocolVersion = DroneVersion.protocolVersion
-        paired = paths.hasPairingState()
+        paired = workerHealth?.paired ?? false
         processIdentifier = getpid()
         executionEnabled = paths.workspace != nil
+        self.workerHealth = workerHealth
         approvals = []
     }
 
@@ -39,6 +51,7 @@ struct DroneControlResponse: Codable, Equatable, Sendable {
         paired: Bool,
         processIdentifier: Int32,
         executionEnabled: Bool = false,
+        workerHealth: DroneWorkerHealthSnapshot? = nil,
         approvals: [DroneApprovalSummary] = []
     ) {
         self.version = version
@@ -47,6 +60,7 @@ struct DroneControlResponse: Codable, Equatable, Sendable {
         self.paired = paired
         self.processIdentifier = processIdentifier
         self.executionEnabled = executionEnabled
+        self.workerHealth = workerHealth
         self.approvals = approvals
     }
 }
@@ -133,7 +147,11 @@ enum DroneStatusEvaluator {
             guard response.version == DroneVersion.control,
                   response.protocolVersion == DroneVersion.protocolVersion
             else { return .incompatible }
-            return response.paired ? .paired : .listening
+            guard response.executionEnabled else { return .disabled }
+            guard let health = response.workerHealth,
+                  health.listenerReady, health.storageHealthy
+            else { return .unhealthy }
+            return health.paired ? .paired : .listening
         }
         return launchdLoaded ? .unhealthy : .stopped
     }
