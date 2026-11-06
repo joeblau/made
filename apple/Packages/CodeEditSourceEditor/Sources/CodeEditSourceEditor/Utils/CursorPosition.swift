@@ -11,11 +11,11 @@ import Foundation
 ///
 /// Represents the position of a cursor in a document.
 /// Provides information about the range of the selection relative to the document, and the line-column information.
-/// 
+///
 /// Can be initialized by users without knowledge of either column and line position or range in the document.
 /// When initialized by users, certain values may be set to `NSNotFound` or `-1` until they can be filled in by the text
 /// controller.
-/// 
+///
 public struct CursorPosition: Sendable, Codable, Equatable, Hashable {
     public struct Position: Sendable, Codable, Equatable, Hashable {
         /// The line the cursor is located at. 1-indexed.

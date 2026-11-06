@@ -40,4 +40,3 @@ final class NativeCodeSuggestionLabelView: NSTableCellView {
 
     required init?(coder: NSCoder) { nil }
 }
-

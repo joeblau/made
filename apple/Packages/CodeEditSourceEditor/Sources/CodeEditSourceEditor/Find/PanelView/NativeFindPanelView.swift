@@ -234,4 +234,3 @@ final class NativeFindPanelView: NSVisualEffectView, NSSearchFieldDelegate {
         eventMonitor = nil
     }
 }
-

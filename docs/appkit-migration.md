@@ -159,8 +159,33 @@ and streaming with physical companions.
 The migration-only review checkout also passes strict Swift lint, icon
 validation, CI-script orchestration tests, documentation checks and the source
 boundary audit. It excludes concurrent icon artwork changes from a separate
-task. Final macOS, configuration, screenshot and performance results are
-recorded below as each gate completes.
+task. The universal arm64/x86_64 Release build passed. Both the standard
+Debug (`-Onone`) and optimized Debug (`-O`, whole-module) macOS suites passed
+1,041 tests (1,134 parameterized executions), with zero failures or runtime
+warnings. Their three intentional skips are the opt-in
+Chromium real-engine, screenshot-export and presentation-benchmark tests;
+those run through their dedicated gates rather than silently exercising live
+services in the default suite.
+
+All fourteen fixture scenes were exported and visually inspected in light
+and dark, along with the actual native Notes window. No blocking clipping,
+missing content or unreadable controls were found. Engine/device fixtures
+remain stand-ins and do not establish live-session parity.
+
+Three optimized native benchmark runs retain 189 mount and 3,780 resize
+samples, with matching source and product fingerprints. Resize medians are
+45.7–94.5% lower across the nine fixtures, but initial construction is mixed.
+Notes, Usage and Actions exceed the mount/layout p95 investigation threshold;
+they remain open performance concerns in #379. See the
+[complete comparison](benchmarks/cockpit-appkit.md) for the measurements,
+fixture limitations and excluded contended attempts.
+
+Implementation review is tracked in
+[PR #384](https://github.com/joeblau/made/pull/384). It links all 41 child tasks;
+opening that PR does not mark their remaining release acceptance criteria as
+complete. Local result bundles and screenshots are retained under the
+`/tmp/made-appkit-*` validation directories. The portable benchmark samples
+and reproduction instructions are committed with the report.
 
 ## Release verification and rollout
 
@@ -169,15 +194,15 @@ the remaining work actionable. An unchecked item requires an evidence link or
 a recorded owner and follow-up issue before the migration can be called
 complete. Do not substitute fixture screenshots for the physical checks.
 
-- [ ] Generate the project and pass the source boundary check against `Pilot`'s
+- [x] Generate the project and pass the source boundary check against `Pilot`'s
   actual source membership. Run the full macOS suite, including native pane
   lifetime, editor find, browser prompts, notes, pairing, capture, inspector,
   runners, and snapshot hierarchy tests. Record commands, Xcode version and
   result bundles.
-- [ ] Pass the existing iPhone/iPad simulator and Drone test lanes, and build
+- [x] Pass the existing iPhone/iPad simulator and Drone test lanes, and build
   the widget/watch targets. Shared model, settings and protocol changes must
   preserve the companion apps' SwiftUI presentation.
-- [ ] Export all fourteen scenes in light and dark at the same dimensions.
+- [x] Export all fourteen scenes in light and dark at the same dimensions.
   Inspect clipping, empty rows, chart labels, scrolling, contrast and selected
   state. Native macOS controls can use system compositing that a view bitmap
   does not capture; check affected controls in an actual fixture window and
@@ -223,4 +248,3 @@ cohort. Stop expansion for data loss, broken pairing or input routing, repeated
 crashes, or a reproducible performance regression outside the accepted budget.
 Release publication and installation on other people's machines remain a
 separate maintainer action after these gates are reviewed.
-

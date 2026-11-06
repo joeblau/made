@@ -175,4 +175,3 @@ final class BezelNotification {
         })
     }
 }
-

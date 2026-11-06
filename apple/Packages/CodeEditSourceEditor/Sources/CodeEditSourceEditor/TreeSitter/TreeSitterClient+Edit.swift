@@ -1,6 +1,6 @@
 //
 //  TreeSitterClient+Edit.swift
-//  
+//
 //
 //  Created by Khan Winter on 3/10/23.
 //

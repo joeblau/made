@@ -1,6 +1,6 @@
 # ``CodeEditSourceEditor``
 
-A code editor with syntax highlighting powered by tree-sitter. 
+A code editor with syntax highlighting powered by tree-sitter.
 
 ## Overview
 
@@ -10,7 +10,7 @@ An Xcode-inspired code editor view written in Swift powered by tree-sitter for [
 
 ![banner](preview)
 
-This package includes both `AppKit` and `SwiftUI` components. It also relies on the [`CodeEditLanguages`](https://github.com/CodeEditApp/CodeEditLanguages) for optional syntax highlighting using tree-sitter. 
+This package includes both `AppKit` and `SwiftUI` components. It also relies on the [`CodeEditLanguages`](https://github.com/CodeEditApp/CodeEditLanguages) for optional syntax highlighting using tree-sitter.
 
 > **CodeEditSourceEditor is currently in development and it is not ready for production use.** <br> Please check back later for updates on this project. Contributors are welcome as we build out the features mentioned above!
 
@@ -34,7 +34,7 @@ Licensed under the [MIT license](https://github.com/CodeEditApp/CodeEdit/blob/ma
 
 ### Text View
 
-- <doc:SourceEditorView> 
+- <doc:SourceEditorView>
 - ``SourceEditor``
 - ``SourceEditorConfiguration``
 - ``SourceEditorState``
@@ -49,7 +49,7 @@ Licensed under the [MIT license](https://github.com/CodeEditApp/CodeEdit/blob/ma
 
 - <doc:TextViewCoordinators>
 - ``TextViewCoordinator``
-- ``CombineCoordinator`` 
+- ``CombineCoordinator``
 
 ### Cursors
 

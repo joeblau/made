@@ -13,6 +13,9 @@ syntax providers, layout, indentation, find model, and undo behavior.
 
 Local changes:
 
+- Trailing whitespace in upstream comments/documentation and redundant end-of-file
+  blank lines is normalized; this does not change executable statements.
+
 - `Find/PanelView/NativeFindPanelView.swift` replaces `FindPanelHostingView`
   with native search and replacement fields, buttons, menus, keyboard handling,
   and accessible match status. `FindViewController` installs this view above

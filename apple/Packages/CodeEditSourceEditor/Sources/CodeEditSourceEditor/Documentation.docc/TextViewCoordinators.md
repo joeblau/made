@@ -16,13 +16,13 @@ To create a coordinator, first create a class that conforms to the ``TextViewCoo
 
 ```swift
 class MyCoordinator {
-    func prepareCoordinator(controller: TextViewController) { 
+    func prepareCoordinator(controller: TextViewController) {
         // Do any setup, such as keeping a (weak) reference to the controller or adding a text storage delegate.
     }
 }
 ```
 
-Add any methods required for your coordinator to work, such as receiving notifications when text is edited, or 
+Add any methods required for your coordinator to work, such as receiving notifications when text is edited, or
 
 ```swift
 class MyCoordinator {
