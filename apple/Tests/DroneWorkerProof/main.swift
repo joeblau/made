@@ -3,6 +3,7 @@ import Foundation
 @main
 enum DroneWorkerProof {
     static func main() async throws {
+        await verifyTerminalPumps()
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("drone-worker-proof-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -169,6 +170,33 @@ enum DroneWorkerProof {
         controller.stop()
         await service.stop()
         print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
+    }
+
+    private static func verifyTerminalPumps() async {
+        var pumps = DroneWorkerTerminalPumps()
+        let connection = DroneConnectionID()
+        let first = DroneWorkerTerminalPumps.Key(connectionID: connection, sessionID: DroneSessionID())
+        let second = DroneWorkerTerminalPumps.Key(connectionID: connection, sessionID: DroneSessionID())
+        let third = DroneWorkerTerminalPumps.Key(connectionID: DroneConnectionID(), sessionID: DroneSessionID())
+        let generation = UUID()
+        let tasks = (0..<4).map { _ in Task { try? await Task.sleep(for: .seconds(10)) } }
+        // Convert the optional Void sleep result to a Void task without polling.
+        let pumpTasks = tasks.map { sleeping in Task<Void, Never> { _ = await sleeping.value } }
+        defer { for task in tasks { task.cancel() } }
+        pumps.insert(pumpTasks[0], key: first, generation: generation)
+        pumps.insert(pumpTasks[1], key: second, generation: UUID())
+        pumps.insert(pumpTasks[2], key: third, generation: UUID())
+        expect(pumps.contains(first) && pumps.contains(second), "second session lost its pump")
+        pumps.cancel(connectionID: connection, sessionID: first.sessionID)
+        expect(pumpTasks[0].isCancelled && !pumpTasks[1].isCancelled, "detach cancelled sibling session")
+        pumps.insert(pumpTasks[3], key: first, generation: UUID())
+        pumps.finish(first, generation: generation)
+        expect(pumps.contains(first), "retired pump removed replacement")
+        pumps.cancel(connectionID: connection)
+        expect(pumpTasks[1].isCancelled && pumpTasks[3].isCancelled, "disconnect left owned pumps")
+        expect(!pumpTasks[2].isCancelled && pumps.contains(third), "disconnect cancelled another connection")
+        pumps.cancelAll()
+        expect(pumpTasks[2].isCancelled, "stop left pump running")
     }
 
     private static func verifyIssuedLeases(

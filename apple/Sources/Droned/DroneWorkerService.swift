@@ -9,7 +9,7 @@ actor DroneWorkerService {
     private var toolLeases: DroneToolLeaseRegistry
     private var pairings: [DroneConnectionID: UUID] = [:]
     private var approvals: [UUID: DronePairingRequest] = [:]
-    private var outputTasks: [DroneConnectionID: Task<Void, Never>] = [:]
+    private var outputPumps = DroneWorkerTerminalPumps()
     private var toolOperations: [UUID: DroneEnvelope] = [:]
     private var toolHistories: [UUID: [DroneEnvelope]] = [:]
     private var toolHistoryOrder: [UUID] = []
@@ -72,8 +72,7 @@ actor DroneWorkerService {
     }
 
     func stop() async {
-        for task in outputTasks.values { task.cancel() }
-        outputTasks.removeAll()
+        outputPumps.cancelAll()
         transport.stop()
         await terminals.shutdown()
     }
@@ -108,12 +107,12 @@ actor DroneWorkerService {
             Task { await self.handle(envelope, connectionID: id) }
         case .disconnected(let id, _):
             if let pairingID = pairings.removeValue(forKey: id) {
-                outputTasks.removeValue(forKey: id)?.cancel()
+                outputPumps.cancel(connectionID: id)
                 Task { await terminals.disconnect(pairingID: pairingID, connectionID: id.rawValue) }
             }
         case .failed(let id, _):
             if let id, let pairingID = pairings.removeValue(forKey: id) {
-                outputTasks.removeValue(forKey: id)?.cancel()
+                outputPumps.cancel(connectionID: id)
                 Task { await terminals.disconnect(pairingID: pairingID, connectionID: id.rawValue) }
             }
         }
@@ -191,12 +190,12 @@ actor DroneWorkerService {
             case .detach:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
                 try await terminals.detach(sessionID, pairingID: pairingID, connectionID: connectionID.rawValue)
-                outputTasks.removeValue(forKey: connectionID)?.cancel()
+                outputPumps.cancel(connectionID: connectionID, sessionID: sessionID)
                 try await send(DroneEnvelope(kind: .detached, requestID: envelope.requestID, sessionID: sessionID), on: connectionID)
             case .close:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
                 try await terminals.close(sessionID, pairingID: pairingID, connectionID: connectionID.rawValue)
-                outputTasks.removeValue(forKey: connectionID)?.cancel()
+                outputPumps.cancel(connectionID: connectionID, sessionID: sessionID)
                 try await send(DroneEnvelope(kind: .closed, requestID: envelope.requestID, sessionID: sessionID), on: connectionID)
             case .cancel:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
@@ -423,8 +422,11 @@ actor DroneWorkerService {
         sessionID: DroneSessionID,
         pairingID: UUID
     ) {
-        guard outputTasks[connectionID] == nil else { return }
-        outputTasks[connectionID] = Task {
+        let key = DroneWorkerTerminalPumps.Key(connectionID: connectionID, sessionID: sessionID)
+        guard !outputPumps.contains(key) else { return }
+        let generation = UUID()
+        let task = Task {
+            defer { outputPumps.finish(key, generation: generation) }
             while !Task.isCancelled {
                 do {
                     let page = try await terminals.readOutput(
@@ -433,6 +435,7 @@ actor DroneWorkerService {
                         connectionID: connectionID.rawValue,
                         maximumChunks: 32
                     )
+                    guard !Task.isCancelled else { return }
                     for output in page.chunks {
                         try await send(
                             DroneEnvelope(kind: .output, sessionID: sessionID, body: .output(output)),
@@ -446,6 +449,7 @@ actor DroneWorkerService {
                 }
             }
         }
+        outputPumps.insert(task, key: key, generation: generation)
     }
 
     private func require(_ permission: DroneControllerPermissions) throws {
@@ -463,5 +467,46 @@ actor DroneWorkerService {
     private func send(_ envelope: DroneEnvelope, on connectionID: DroneConnectionID) async throws {
         try envelope.validate()
         transport.send(envelope, on: connectionID)
+    }
+}
+
+/// Actor-owned pump bookkeeping; a connection may attach several independent sessions.
+struct DroneWorkerTerminalPumps {
+    struct Key: Hashable {
+        let connectionID: DroneConnectionID
+        let sessionID: DroneSessionID
+    }
+
+    private struct Entry {
+        let generation: UUID
+        let task: Task<Void, Never>
+    }
+
+    private var entries: [Key: Entry] = [:]
+
+    func contains(_ key: Key) -> Bool { entries[key] != nil }
+
+    mutating func insert(_ task: Task<Void, Never>, key: Key, generation: UUID) {
+        entries.removeValue(forKey: key)?.task.cancel()
+        entries[key] = Entry(generation: generation, task: task)
+    }
+
+    mutating func finish(_ key: Key, generation: UUID) {
+        guard entries[key]?.generation == generation else { return }
+        entries.removeValue(forKey: key)
+    }
+
+    mutating func cancel(connectionID: DroneConnectionID, sessionID: DroneSessionID) {
+        entries.removeValue(forKey: Key(connectionID: connectionID, sessionID: sessionID))?.task.cancel()
+    }
+
+    mutating func cancel(connectionID: DroneConnectionID) {
+        let keys = entries.keys.filter { $0.connectionID == connectionID }
+        for key in keys { entries.removeValue(forKey: key)?.task.cancel() }
+    }
+
+    mutating func cancelAll() {
+        for entry in entries.values { entry.task.cancel() }
+        entries.removeAll()
     }
 }
