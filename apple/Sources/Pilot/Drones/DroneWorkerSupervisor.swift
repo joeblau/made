@@ -234,7 +234,7 @@ final class DroneWorkerSupervisor {
     }
 
     nonisolated private static func validateIncoming(_ envelope: DroneEnvelope) throws {
-        guard envelope.kind == .error, case .error(let body) = envelope.body else { return }
+        guard envelope.requestID == nil, envelope.kind == .error, case .error(let body) = envelope.body else { return }
         switch body.code {
         case "unauthorized": throw DroneTransportError.unauthorized
         case "revoked": throw DroneTransportError.revoked

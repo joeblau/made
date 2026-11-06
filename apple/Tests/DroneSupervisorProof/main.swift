@@ -33,6 +33,12 @@ enum DroneSupervisorProof {
         await wait { forwarded == 1 }
         await wait { replacement.isReceiving }
 
+        replacement.deliver(DroneEnvelope(kind: .error, requestID: UUID(),
+                                           body: .error(DroneErrorBody(code: "outputGap", retryable: false))))
+        await wait { forwarded == 2 }
+        await wait { replacement.isReceiving }
+        expect(supervisor.state.isConnected, "request-scoped error disconnected the Drone")
+
         // Repeated flaps must leave exactly the newest generation usable.
         for _ in 0..<4 {
             let previous = transport.connections.last!
@@ -52,7 +58,7 @@ enum DroneSupervisorProof {
         await settle()
         expect(supervisor.connection == nil, "stop retained a connection")
         expect(last.closeCount > 0, "stop did not close connection")
-        expect(forwarded == 1, "unexpected envelope delivery")
+        expect(forwarded == 2, "unexpected envelope delivery")
         print("Drone supervisor proof passed: late receive, stale cleanup, replacement liveness, repeated flapping, stop.")
     }
 
