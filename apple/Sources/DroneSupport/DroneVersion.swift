@@ -7,7 +7,7 @@ enum DroneVersion {
     static let control = 1
 
     static var report: String {
-        "drone \(marketing) (\(build)); protocol \(protocolVersion); execution disabled"
+        "drone \(marketing) (\(build)); protocol \(protocolVersion); execution opt-in"
     }
 }
 
@@ -26,6 +26,7 @@ enum DroneWorkerError: Error, Equatable {
 
 enum DroneOperationalState: String, Codable, Sendable {
     case stopped
+    case disabled
     case paired
     case listening
     case unhealthy
