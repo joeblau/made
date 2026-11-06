@@ -156,13 +156,9 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
 
     private func cancelRevokedOperations(_ operations: [DroneEnvelope]) async {
         for operation in operations {
-            guard let lease = operation.lease, let id = operation.requestID,
-                  let key = operation.idempotencyKey else { continue }
+            guard let lease = operation.lease, let id = operation.requestID else { continue }
             do {
-                try await tools.cancel(
-                    context: DroneToolRequestContext(lease: lease, requestID: id, idempotencyKey: key),
-                    operationRequestID: id
-                )
+                try await tools.cancelOwnedOperation(lease: lease, operationRequestID: id)
             } catch {
                 onAudit?("revocation.cancelIncomplete")
             }

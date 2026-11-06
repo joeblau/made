@@ -10,7 +10,11 @@ enum DroneWorkerProof {
         defer { try? FileManager.default.removeItem(at: root) }
         let workspace = root.appendingPathComponent("workspace", isDirectory: true)
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
-        let replayOnly = CommandLine.arguments.contains("--tool-replay-authorization")
+        let reviewIndex = CommandLine.arguments.firstIndex(of: "--review-case")
+        let reviewCase = reviewIndex.flatMap { index in
+            CommandLine.arguments.indices.contains(index + 1) ? CommandLine.arguments[index + 1] : nil
+        }
+        let replayOnly = CommandLine.arguments.contains("--tool-replay-authorization") || reviewCase != nil
         try Data("print(\"drone-tools-before\")\n".utf8).write(
             to: workspace.appendingPathComponent("main.swift")
         )
@@ -80,6 +84,26 @@ enum DroneWorkerProof {
         }
         guard let connectionID else { throw ProofError.failed("controller did not authenticate") }
 
+        if let reviewCase {
+            do {
+                switch reviewCase {
+                case "expiry":
+                    try await verifyExpiredOwnerRevocation(
+                        controller: controller, connectionID: connectionID, controllerID: controllerID,
+                        service: service, observed: observed
+                    )
+                default: throw ProofError.failed("unknown review regression")
+                }
+            } catch {
+                controller.stop()
+                await service.stop()
+                throw error
+            }
+            controller.stop()
+            await service.stop()
+            print("Drone worker review regression passed: \(reviewCase).")
+            return
+        }
         if replayOnly {
             try await verifyIssuedLeases(
                 controller: controller, connectionID: connectionID, controllerID: controllerID,
@@ -182,6 +206,26 @@ enum DroneWorkerProof {
         controller.stop()
         await service.stop()
         print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
+    }
+
+    private static func verifyExpiredOwnerRevocation(
+        controller: DroneLANTransport, connectionID: DroneConnectionID, controllerID: UUID,
+        service: DroneWorkerService, observed: ProofObserved
+    ) async throws {
+        let lease = try await service.issueToolLease(controllerID: controllerID, permissions: .jobs, lifetime: 1)
+        let pid = try await startTrackedProcess(
+            controller: controller, connectionID: connectionID, lease: lease, observed: observed,
+            command: "echo $$; exec sleep 30", timeout: 20
+        )
+        try await Task.sleep(for: .milliseconds(1_100))
+        let remoteCancel = UUID()
+        controller.send(DroneEnvelope(
+            kind: .toolCancel, requestID: remoteCancel, lease: lease, idempotencyKey: UUID().uuidString,
+            body: .toolCancel(DroneToolCancelBody(operationRequestID: UUID()))
+        ), on: connectionID)
+        try await expectUnauthorized(remoteCancel, observed: observed)
+        try await service.revokeController(controllerID)
+        try await expectProcessStopped(pid)
     }
 
     private static func verifyOwnerControl(service: DroneWorkerService, port: UInt16, workspace: URL) async throws {
@@ -316,13 +360,15 @@ enum DroneWorkerProof {
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,
         lease: DroneToolLease,
-        observed: ProofObserved
+        observed: ProofObserved,
+        command: String = "echo $$; exec sleep 10",
+        timeout: TimeInterval = 5
     ) async throws -> Int32 {
         let id = UUID()
         controller.send(DroneEnvelope(
             kind: .toolRun, requestID: id, lease: lease, idempotencyKey: UUID().uuidString,
             body: .toolRun(DroneToolProcessRequest(
-                executable: "sh", arguments: ["-c", "echo $$; exec sleep 10"], timeout: 5
+                executable: "sh", arguments: ["-c", command], timeout: timeout
             ))
         ), on: connectionID)
         let response = try await waitForResponse(id, kind: .toolOutput, observed: observed)
