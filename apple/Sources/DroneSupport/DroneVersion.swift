@@ -18,6 +18,7 @@ enum DroneWorkerError: Error, Equatable {
     case launchdUnavailable
     case notInstalled
     case operationFailed
+    case rollbackFailed
     case processTimedOut
     case unsafeFile
     case unsupportedControlVersion

@@ -8,6 +8,11 @@ enum DroneCLIMain {
         } catch let error as DroneCLIUsageError {
             FileHandle.standardError.write(Data("drone: \(error.rawValue)\n\(DroneCLI.usage)\n".utf8))
             exit(64)
+        } catch DroneWorkerError.rollbackFailed {
+            FileHandle.standardError.write(Data(
+                "drone: install failed and rollback could not complete; releases retained; run drone doctor\n".utf8
+            ))
+            exit(1)
         } catch DroneWorkerError.notInstalled {
             FileHandle.standardError.write(Data("drone: worker is not installed\n".utf8))
             exit(1)
