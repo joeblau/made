@@ -45,6 +45,11 @@ struct DroneLaunchd: DroneLaunchdManaging {
         guard try runLaunchd(["bootout", service]) == 0 else {
             throw DroneWorkerError.operationFailed
         }
+        let deadline = Date().addingTimeInterval(commandTimeout)
+        while isLoaded {
+            guard Date() < deadline else { throw DroneWorkerError.processTimedOut }
+            usleep(50_000)
+        }
         try? FileManager.default.removeItem(at: paths.controlSocket)
     }
 
