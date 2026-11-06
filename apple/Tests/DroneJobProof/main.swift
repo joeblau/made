@@ -14,6 +14,8 @@ enum DroneJobProof {
         let stateURL = root.appendingPathComponent("jobs.json")
         let engine = try DroneJobEngine(stateURL: stateURL, workspaces: registry)
 
+        try verifyOutputBackpressure(in: workspace)
+
         let source = Data("print(\"drone-build-ok\")\n".utf8)
         let write = try engine.createJob(DroneJobCreate(
             controllerID: controllerID,
@@ -130,6 +132,31 @@ enum DroneJobProof {
         expect(recoveredSnapshot.state == .failed, "interrupted job was rerun or left ambiguous")
         expect(recoveredSnapshot.failure?.code == .workerRestarted, "restart failure was not explicit")
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
+    }
+
+    private static func verifyOutputBackpressure(in workspace: URL) throws {
+        var receivedBytes = 0
+        let outcome = try DroneProcessRunner.run(
+            operation: DroneProcessOperation(
+                executablePath: "/bin/dd",
+                arguments: ["if=/dev/zero", "bs=65536", "count=32"],
+                timeoutMilliseconds: 10_000,
+                standardOutputLimit: 2 * 1_024 * 1_024
+            ),
+            currentDirectory: workspace,
+            environment: [:],
+            control: DroneProcessGroupControl(gracePeriod: 0.1),
+            onOutput: { stream, data in
+                if stream == .standardOutput {
+                    receivedBytes += data.count
+                    // Model durable-store latency while the child fills its pipe.
+                    Thread.sleep(forTimeInterval: 0.02)
+                }
+            },
+            onTruncated: { _ in fatalError("unexpected output truncation") }
+        )
+        expect(outcome.exitCode == 0, "backpressure caused the child writer to fail")
+        expect(receivedBytes == 2 * 1_024 * 1_024, "backpressure lost child output")
     }
 
     private static func terminal(

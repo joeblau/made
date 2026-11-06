@@ -275,13 +275,14 @@ private final class NonblockingPipe {
         }
         readDescriptor = descriptors[0]
         writeDescriptor = descriptors[1]
-        for descriptor in descriptors {
-            let flags = fcntl(descriptor, F_GETFL)
-            guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
-                Darwin.close(descriptors[0])
-                Darwin.close(descriptors[1])
-                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-            }
+        // Only the worker reader is nonblocking. Child stdout/stderr must retain
+        // normal pipe backpressure instead of failing writes with EAGAIN.
+        let flags = fcntl(readDescriptor, F_GETFL)
+        guard flags >= 0, fcntl(readDescriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else {
+            let error = errno
+            Darwin.close(readDescriptor)
+            Darwin.close(writeDescriptor)
+            throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)
         }
     }
 
