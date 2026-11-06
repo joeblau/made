@@ -3,18 +3,21 @@ import SwiftUI
 struct DroneTerminalView: View {
     let pane: Pane
 
-    @State private var contents = ""
+    @State private var presentation: DroneTerminalPresentation
     @State private var input = ""
-    @State private var status = "Connecting…"
-    @State private var isConnected = false
+
+    init(pane: Pane) {
+        self.pane = pane
+        _presentation = State(initialValue: DroneTerminalPresentation(pane: pane))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Label(pane.terminalDestination.droneName ?? "Drone", systemImage: "server.rack")
                 Spacer()
-                Text(status)
-                    .foregroundStyle(isConnected ? .secondary : Color.orange)
+                Text(presentation.status)
+                    .foregroundStyle(presentation.isConnected ? .secondary : Color.orange)
             }
             .font(.caption)
             .padding(8)
@@ -23,7 +26,7 @@ struct DroneTerminalView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    Text(contents.isEmpty ? "Waiting for remote output…" : contents)
+                    Text(presentation.contents.isEmpty ? "Waiting for remote output…" : presentation.contents)
                         .font(.system(.body, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -32,7 +35,7 @@ struct DroneTerminalView: View {
                 }
                 .background(Color.black.opacity(0.92))
                 .foregroundStyle(.white)
-                .onChange(of: contents) {
+                .onChange(of: presentation.contents) {
                     proxy.scrollTo("terminal-output", anchor: .bottom)
                 }
             }
@@ -41,28 +44,15 @@ struct DroneTerminalView: View {
                 TextField("Remote command", text: $input)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
-                    .disabled(!isConnected)
+                    .disabled(!presentation.isConnected)
                     .onSubmit(send)
                 Button("Send", action: send)
-                    .disabled(!isConnected || input.isEmpty)
+                    .disabled(!presentation.isConnected || input.isEmpty)
             }
             .padding(8)
         }
-        .task(id: pane.id) {
-            do {
-                let session = pane.terminalSession
-                _ = try await pane.restoreTerminalSession()
-                contents = session.visibleContents() ?? ""
-                await session.setOutputHandler { updated in
-                    Task { @MainActor in contents = updated }
-                }
-                isConnected = true
-                status = "Connected"
-            } catch {
-                isConnected = false
-                status = "Unavailable: \(String(describing: error))"
-            }
-        }
+        .task(id: pane.id) { presentation.start() }
+        .onDisappear { presentation.stop() }
     }
 
     private func send() {
@@ -70,12 +60,7 @@ struct DroneTerminalView: View {
         let command = input
         input = ""
         Task {
-            let session = pane.terminalSession
-            guard await session.send(.literal(command)) else {
-                status = "Input failed"
-                return
-            }
-            _ = await session.send(.enter)
+            if await presentation.send(command) == false, input.isEmpty { input = command }
         }
     }
 }

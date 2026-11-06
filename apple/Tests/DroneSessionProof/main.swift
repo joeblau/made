@@ -84,7 +84,9 @@ enum DroneSessionProof {
         precondition(store.records.isEmpty, "successful revoke retained metadata")
         precondition(provider.session(for: pane) is UnavailableTerminalSession)
         store.stop()
-        print("Drone session proof passed: offline recovery, client replacement, stable ID/key/cursor, split UTF-8, output isolation/bounds, stale input, revoke retry.")
+        try await presentationRecoveryProof(initiallyOffline: true)
+        try await presentationRecoveryProof(initiallyOffline: false)
+        print("Drone session proof passed: offline recovery, client replacement, stable ID/key/cursor, split UTF-8, output isolation/bounds, stale input, revoke retry, initial-offline/interrupted presentation recovery.")
     }
 
     @MainActor
@@ -141,6 +143,54 @@ enum DroneSessionProof {
             precondition(replacement.contents == "new", "late cleanup removed same-generation replacement")
             try await client.sendInput(Data("kept".utf8), to: reference)
         }
+    }
+
+    @MainActor
+    private static func presentationRecoveryProof(initiallyOffline: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let factory = SessionTransport()
+        let store = DroneStore(persistence: DroneRegistryPersistence(url: root.appendingPathComponent("drones.json")),
+                               transport: factory)
+        defer { store.stop() }
+        let id = try store.addManual(name: "Recover", host: "fixture.invalid", port: "7400")
+        let provider = TerminalSessionProvider { id in MainActor.assumeIsolated { store.terminalClient(for: id) } }
+        let pane = Pane(droneID: id)
+        let presentation = DroneTerminalPresentation(pane: pane, provider: provider)
+        defer { presentation.stop() }
+        if !initiallyOffline {
+            factory.holdNextAttach = true
+            store.start()
+            await wait { store.states[id]?.isConnected == true }
+        }
+        presentation.start()
+        if initiallyOffline {
+            await wait { presentation.status.hasPrefix("Unavailable:") }
+            precondition(!presentation.isConnected && presentation.contents.isEmpty)
+            store.start()
+        } else {
+            await wait { factory.connections[0].sent.contains { $0.kind == .attach } }
+            precondition(!presentation.isConnected, "unconfirmed first attachment enabled input")
+            factory.holdNextAttach = false
+            store.retry(id: id)
+        }
+        // The production presentation model must recover without another start/restore/bind call.
+        await wait { presentation.isConnected }
+        let connection = factory.connections.last!
+        connection.emit(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: factory.remoteID),
+                                       body: .output(DroneOutputBody(sequence: 0, offset: 0,
+                                                                    data: Data("recovered".utf8), isFinal: false))))
+        await wait { presentation.contents == "recovered" }
+        precondition(presentation.status == "Connected")
+        let sent = await presentation.send("pwd")
+        precondition(sent, "recovered presentation still disabled input")
+        precondition(factory.connections.flatMap(\.sent).filter { $0.kind == .create }.count == 1)
+        presentation.stop()
+        connection.emit(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: factory.remoteID),
+                                       body: .output(DroneOutputBody(sequence: 1, offset: 9,
+                                                                    data: Data(" late".utf8), isFinal: false))))
+        await wait { provider.session(for: pane).visibleContents() == "recovered late" }
+        precondition(presentation.contents == "recovered" && !presentation.isConnected, "stopped presentation accepted output")
     }
 
     @MainActor
