@@ -335,7 +335,7 @@ actor AgenticUsageLoader {
         try Task.checkCancellation()
         var records = Self.deduplicate(all)
         try Task.checkCancellation()
-        records.sort { $0.timestamp < $1.timestamp }
+        try Self.sortRecords(&records)
         try Task.checkCancellation()
         cache = nextCache
         if cacheChanged || droppedDeletedFiles { cacheDirty = true }
@@ -1081,6 +1081,22 @@ actor AgenticUsageLoader {
             let seconds = number > 1e12 ? number / 1000 : number
             return Date(timeIntervalSince1970: seconds)
         }
+    }
+
+    /// Sorting can dominate a large merge. Check within the comparison loop
+    /// so cancellation does not wait for the entire corpus to be ordered.
+    nonisolated static func sortRecords(
+        _ records: inout [AgenticUsageRecord],
+        checkCancellation: () throws -> Void = { try Task.checkCancellation() }
+    ) throws {
+        try checkCancellation()
+        var comparisons = 0
+        try records.sort {
+            comparisons += 1
+            if comparisons.isMultiple(of: 4096) { try checkCancellation() }
+            return $0.timestamp < $1.timestamp
+        }
+        try checkCancellation()
     }
 
     // MARK: - Dedup

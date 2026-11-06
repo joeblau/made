@@ -183,6 +183,30 @@ struct AgenticUsageCancellationTests {
         store.stop()
     }
 
+    @Test("Corpus sorting checks cancellation before all comparisons finish")
+    func sortingCancellation() throws {
+        let records = AgenticUsageLoader.parse(
+            data: Data((0..<5_000).map { Self.claude($0) }.joined(separator: "\n").utf8),
+            provider: .claude
+        )
+        var completed = records
+        var fullChecks = 0
+        try AgenticUsageLoader.sortRecords(&completed) { fullChecks += 1 }
+        #expect(completed.map(\.timestamp) == records.map(\.timestamp).sorted())
+        #expect(fullChecks > 2)
+
+        var cancelled = records
+        var checks = 0
+        #expect(throws: CancellationError.self) {
+            try AgenticUsageLoader.sortRecords(&cancelled) {
+                checks += 1
+                if checks == 2 { throw CancellationError() }
+            }
+        }
+        #expect(checks == 2)
+        #expect(checks < fullChecks)
+    }
+
     @Test("Snapshot aggregation stops when cancelled")
     func snapshotCancellation() {
         let records = AgenticUsageLoader.parse(
