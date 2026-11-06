@@ -32,6 +32,33 @@ private actor Gate {
     }
 }
 
+/// A cooperative read that can finish only when its task is cancelled.
+private actor CancellableEditorFileIO: EditorFileIO {
+    let started = Gate()
+    private(set) var wasCancelled = false
+
+    func read(_ url: URL, maxBytes: Int) async throws -> EditorFileContents {
+        await started.open()
+        do {
+            try await Task.sleep(for: .seconds(60))
+        } catch {
+            wasCancelled = Task.isCancelled
+            throw error
+        }
+        return EditorFileContents(data: Data(), modificationDate: nil)
+    }
+
+    func modificationDate(of url: URL) async -> Date? { nil }
+    func write(_ data: Data, to url: URL) async throws -> Date? { nil }
+
+    func observedCancellation() async -> Bool {
+        for _ in 0..<200 where !wasCancelled {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        return wasCancelled
+    }
+}
+
 private struct InjectedWriteFailure: LocalizedError {
     var errorDescription: String? { "Disk full" }
 }
@@ -191,6 +218,43 @@ struct EditorDocumentSessionTests {
         #expect(session.text.isEmpty)
         #expect(log.outcomes.isEmpty)
         #expect(store.persistCount == 0)
+    }
+
+    @Test("Closing cancels the detached read, not just its publication")
+    func closeCancelsRead() async {
+        let io = CancellableEditorFileIO()
+        let session = EditorDocumentSession(io: io)
+        session.requestOpen(fileA)
+        await io.started.pass()
+        session.close()
+        #expect(await io.observedCancellation())
+        #expect(session.document == nil)
+    }
+
+    @Test("A newer awaited open cancels the previous detached read")
+    func newerOpenCancelsRead() async throws {
+        let io = CancellableEditorFileIO()
+        let session = EditorDocumentSession(io: io)
+        let first = Task { await session.open(fileA) }
+        await io.started.pass()
+        // Even a caller-owned open must have its read owned by the session.
+        session.requestOpen(fileB)
+        let cancelled = await io.observedCancellation()
+        session.close()
+        try #require(cancelled)
+        #expect(await first.value == .superseded)
+    }
+
+    @Test("Cancelling an awaited open forwards cancellation to its read")
+    func callerCancellationCancelsRead() async throws {
+        let io = CancellableEditorFileIO()
+        let session = EditorDocumentSession(io: io)
+        let open = Task { await session.open(fileA) }
+        await io.started.pass()
+        open.cancel()
+        try #require(await io.observedCancellation())
+        #expect(await open.value == .superseded)
+        #expect(session.document == nil)
     }
 
     @Test("A failed outgoing save keeps the dirty buffer and blocks the switch")
