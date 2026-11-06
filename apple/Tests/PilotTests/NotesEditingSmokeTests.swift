@@ -85,6 +85,36 @@ struct NotesEditingSmokeTests {
         #expect(harness.undo.canUndo)
     }
 
+    @Test("Task reflows preserve selected text on the moved line")
+    func taskReflowPreservesSelection() throws {
+        let original = "- [x] alpha\n- [ ] beta"
+        let harness = try Harness(original)
+        harness.textView.setSelectedRange((original as NSString).range(of: "alpha"))
+
+        harness.undo.beginUndoGrouping()
+        #expect(harness.textView.reorderCompletedTasks())
+        harness.undo.endUndoGrouping()
+
+        #expect(harness.textView.selectedRange() == (harness.textView.string as NSString).range(of: "alpha"))
+    }
+
+    @Test("Table reflows preserve every selection outside the formatted block")
+    func tableReflowPreservesSelections() throws {
+        let original = "first\n\n|a|b|\n|---|---|\n|1|2|\n\nlast"
+        let harness = try Harness(original)
+        let selections = ["first", "last"].map { (original as NSString).range(of: $0) }
+        harness.textView.selectedRanges = selections.map { NSValue(range: $0) }
+        let kept = harness.textView.selectedRanges.map(\.rangeValue)
+        #expect(kept.count == 2)
+
+        harness.undo.beginUndoGrouping()
+        #expect(harness.textView.formatMarkdownTables())
+        harness.undo.endUndoGrouping()
+
+        let expected = ["first", "last"].map { (harness.textView.string as NSString).range(of: $0) }
+        #expect(harness.textView.selectedRanges.map(\.rangeValue) == expected)
+    }
+
     @Test("Typing in a table cell leaves that table alone but aligns other tables")
     func tableCaretProtection() throws {
         let original = "| a | b |\n| - | - |\n| 1 | 2 |\n\ntext\n\n| c | d |\n| - | - |\n| 3 | 4 |"

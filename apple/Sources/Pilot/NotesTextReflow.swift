@@ -154,7 +154,18 @@ extension MultiCursorTextView {
         let ns = string as NSString
         guard ns.length > 0, let newText = transform(string) else { return false }
 
-        let anchor = NoteCaretAnchor(selection: selectedRange(), in: ns)
+        // Capture both ends of every selection before replacing the storage.
+        // A reflow can move the selected line or change text between endpoints;
+        // restoring only selectedRange() would discard secondary selections
+        // and collapse even a single selected word to an insertion point.
+        let anchors = selectedRanges.map { value in
+            let range = value.rangeValue
+            return (
+                start: NoteCaretAnchor(selection: range, in: ns),
+                end: NoteCaretAnchor(selection: NSRange(location: NSMaxRange(range), length: 0), in: ns)
+            )
+        }
+        let affinity = selectionAffinity
         let span = Self.changedSpan(from: ns, to: newText as NSString)
         let replacement = (newText as NSString).substring(with: span.new)
         isReflowing = true
@@ -166,7 +177,12 @@ extension MultiCursorTextView {
         isReflowing = false
         guard applied else { return false }
 
-        setSelectedRange(NSRange(location: anchor.location(in: newText), length: 0))
+        let selections = anchors.map { anchor in
+            let start = anchor.start.location(in: newText)
+            let end = anchor.start == anchor.end ? start : anchor.end.location(in: newText)
+            return NSRange(location: min(start, end), length: abs(end - start))
+        }.sorted { $0.location < $1.location }
+        setSelectedRanges(selections.map { NSValue(range: $0) }, affinity: affinity, stillSelecting: false)
         return true
     }
 
