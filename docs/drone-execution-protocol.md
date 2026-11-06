@@ -1,16 +1,16 @@
 # Drone execution architecture and wire protocol
 
-Status: #318 protocol baseline with #320 pairing and LAN transport implemented
+Status: protocol baseline plus #335 execution foundation; #326–#328 acceptance remains open
 
 Tracking: [#317](https://github.com/joeblau/made/issues/317),
 [#318](https://github.com/joeblau/made/issues/318), and
 [#320](https://github.com/joeblau/made/issues/320)
 
-This is the trust and transport foundation, not a production Drone launch. It
-adds versioned value types, namespaced pairing stores, a direct encrypted LAN
-transport, security/state checks, and a two-process loopback fixture. It does
-not add a Drone destination, launchd service, remote PTY, durable job executor,
-or workspace file transfer.
+The baseline below specifies the trust and transport contract. #335 added
+Drone destinations, launchd service, remote PTYs, durable jobs, and typed tools.
+These implementations do not yet establish production rollout readiness. See
+the tool contract and implementation limits below and the
+[controlled rollout guide](drone-rollout.md).
 
 ## Decision and roles
 
@@ -289,3 +289,46 @@ prior-session record rejection, and real loopback pairing/reconnect/revocation.
 Physical fleet behavior, durable recovery, pairing UI, launchd supervision, PTY
 execution, and production Drone destinations remain in their respective
 #319–#328 issues and are not claimed by this gate.
+
+## Provider-neutral tool contract and current implementation limits
+
+`DroneToolClient` accepts a `DroneToolTransport` and a `DroneToolLease` binding
+controller, Drone, job, workspace, lease ID, and expiry (Unix-epoch seconds).
+The intended trust boundary requires a worker-approved lease, validated against
+the authenticated channel and the approved job/workspace. A caller-provided
+lease is not evidence of authorization.
+
+A future Claude or other provider adapter should map tools as follows:
+
+| Provider operation | Typed operation | Adapter responsibility |
+| --- | --- | --- |
+| Read a file | `read` / `toolRead` | Relative path, bounded bytes, handle truncation |
+| Replace text | `edit` / `toolEdit` | Unique old bytes, optional SHA-256 precondition, stable retry key |
+| Build or test | `run` / `toolRun` | Executable and argument vector, timeout and output budget |
+| Inspect changes | `diff` / `toolDiff` | Relative paths, bounded diff output |
+| Resume output | `toolAttach` | Original request ID, next sequence and per-stream offsets |
+| Cancel | `cancel` / `toolCancel` | Original operation request ID, retain job outcome |
+
+`DroneAgentDriver` demonstrates read/edit/build/test/diff orchestration without
+an interactive terminal. Adapters must preserve idempotency keys across retries,
+report ambiguous outcomes instead of starting replacement work, and keep source,
+stdout, stderr, and diffs out of diagnostics. `diagnosticSummary` reports counts
+and statuses only. Provider authentication remains with the agent's host;
+remote terminal agents use credentials already on their Drone. This interface
+does not authorize copying credentials to Cockpit or another worker.
+
+The production path still has acceptance gaps: `DroneWorkerService` currently
+passes the incoming lease itself as the approved lease and takes its Drone ID
+from that lease. Issuance and durable validation against worker-owned job
+metadata are outstanding. Replay now checks the full stored lease, but history
+is retained only after streaming ends and is lost on service restart. The tool
+engine's edit-result cache is keyed only by idempotency string; edits are a
+separate read and write rather than an atomic conditional replacement. Process
+execution has user-level file/network authority, not workspace confinement.
+These are #326/#327 gates, not properties proved by the fake tool transport.
+
+Run `apple/bin/test-drone-tools.sh` for the typed client/fake-engine proof and
+`apple/bin/test-drone-worker.sh --tool-replay-authorization` for the encrypted
+production attach-route ownership proof without creating a terminal. The full
+worker proof exercises a real terminal and agent cycle. None substitutes for
+the physical matrix or adverse recovery checks in the rollout guide.
