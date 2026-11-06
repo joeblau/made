@@ -92,6 +92,11 @@ enum DroneWorkerProof {
                         controller: controller, connectionID: connectionID, controllerID: controllerID,
                         service: service, observed: observed
                     )
+                case "disconnect":
+                    try await verifyDisconnectedOwnerRevocation(
+                        controller: controller, connectionID: connectionID, controllerID: controllerID,
+                        service: service, observed: observed, port: port
+                    )
                 default: throw ProofError.failed("unknown review regression")
                 }
             } catch {
@@ -226,6 +231,53 @@ enum DroneWorkerProof {
         try await expectUnauthorized(remoteCancel, observed: observed)
         try await service.revokeController(controllerID)
         try await expectProcessStopped(pid)
+    }
+
+    private static func verifyDisconnectedOwnerRevocation(
+        controller: DroneLANTransport, connectionID: DroneConnectionID, controllerID: UUID,
+        service: DroneWorkerService, observed: ProofObserved, port: UInt16
+    ) async throws {
+        let lease = try await service.issueToolLease(controllerID: controllerID, permissions: .jobs)
+        let pid = try await startTrackedProcess(
+            controller: controller, connectionID: connectionID, lease: lease, observed: observed,
+            command: "echo $$; sleep 0.3; echo tick; exec sleep 30", timeout: 20
+        )
+        controller.disconnect(connectionID)
+        for _ in 0..<100 {
+            if !(await service.connectedControllerIDs()).contains(controllerID) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        // The second output arrives after the observer has disconnected.
+        try await Task.sleep(for: .milliseconds(600))
+        try await service.revokeController(controllerID)
+        try await expectProcessStopped(pid)
+        // Exceed the worker's 128 retained operation slots with disconnected
+        // completions. Finished observers must become evictable, not leak slots.
+        let next = try await connectController(service: service, port: port)
+        defer { next.transport.stop() }
+        let nextLease = try await service.issueToolLease(controllerID: next.controllerID, permissions: .jobs)
+        var connection = next.connectionID
+        for _ in 0..<130 {
+            let requestID = UUID()
+            next.transport.send(DroneEnvelope(
+                kind: .toolRun, requestID: requestID, lease: nextLease, idempotencyKey: UUID().uuidString,
+                body: .toolRun(DroneToolProcessRequest(
+                    executable: "sh", arguments: ["-c", "sleep 0.05; printf done"], timeout: 2
+                ))
+            ), on: connection)
+            _ = try await waitForResponse(requestID, kind: .toolAccepted, observed: next.observed)
+            next.transport.disconnect(connection)
+            next.observed.clearConnection()
+            try await Task.sleep(for: .milliseconds(200))
+            next.transport.connect(peerID: next.peerID, host: "127.0.0.1", port: port)
+            var replacement: DroneConnectionID?
+            for _ in 0..<200 {
+                if let id = next.observed.connectionID, id != connection { replacement = id; break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            guard let replacement else { throw ProofError.failed("fixture reconnect failed") }
+            connection = replacement
+        }
     }
 
     private static func verifyOwnerControl(service: DroneWorkerService, port: UInt16, workspace: URL) async throws {
@@ -402,14 +454,16 @@ enum DroneWorkerProof {
             default: break
             }
         }
-        transport.pair(peerID: DronePeerID(), host: "127.0.0.1", port: port)
+        let peerID = DronePeerID()
+        transport.pair(peerID: peerID, host: "127.0.0.1", port: port)
         for _ in 0..<400 {
             for approval in await service.approvalSummaries() {
                 await service.resolvePairing(requestID: approval.requestID, approved: true)
             }
             if let connectionID = observed.connectionID {
                 return ProofController(
-                    transport: transport, connectionID: connectionID, controllerID: controllerID, observed: observed
+                    transport: transport, connectionID: connectionID, controllerID: controllerID,
+                    peerID: peerID, observed: observed
                 )
             }
             try await Task.sleep(for: .milliseconds(25))
@@ -611,6 +665,7 @@ private struct ProofController {
     let transport: DroneLANTransport
     let connectionID: DroneConnectionID
     let controllerID: UUID
+    let peerID: DronePeerID
     let observed: ProofObserved
 }
 
@@ -628,6 +683,7 @@ private final class ProofObserved: @unchecked Sendable {
 
     var port: UInt16? { lock.withLock { storedPort } }
     var connectionID: DroneConnectionID? { lock.withLock { storedConnection } }
+    func clearConnection() { lock.withLock { storedConnection = nil } }
     func set(port: UInt16) { lock.withLock { storedPort = port } }
     func set(connectionID: DroneConnectionID) { lock.withLock { storedConnection = connectionID } }
     func record(_ envelope: DroneEnvelope) {

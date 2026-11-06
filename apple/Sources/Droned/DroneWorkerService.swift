@@ -424,23 +424,27 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         case .toolRun:
             guard case .toolRun(let request) = envelope.body else { throw DroneProtocolError.malformedMessage }
             try registerToolOperation(envelope)
+            let stream: AsyncThrowingStream<DroneToolEvent, Error>
             do {
-                let stream = try await tools.run(request, context: context)
-                try await streamTool(stream, envelope: envelope, connectionID: connectionID)
+                stream = try await tools.run(request, context: context)
             } catch {
                 toolOperations.removeValue(forKey: requestID)
                 throw error
             }
+            // Execution ownership outlives delivery to this connection.
+            try await streamTool(stream, envelope: envelope, connectionID: connectionID)
         case .toolDiff:
             guard case .toolDiff(let request) = envelope.body else { throw DroneProtocolError.malformedMessage }
             try registerToolOperation(envelope)
+            let stream: AsyncThrowingStream<DroneToolEvent, Error>
             do {
-                let stream = try await tools.diff(request, context: context)
-                try await streamTool(stream, envelope: envelope, connectionID: connectionID)
+                stream = try await tools.diff(request, context: context)
             } catch {
                 toolOperations.removeValue(forKey: requestID)
                 throw error
             }
+            // Execution ownership outlives delivery to this connection.
+            try await streamTool(stream, envelope: envelope, connectionID: connectionID)
         case .toolAttach:
             guard case .toolAttach(let attach) = envelope.body,
                   let history = toolHistories[attach.originalRequestID],
@@ -508,7 +512,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
               let key = envelope.idempotencyKey
         else { throw DroneProtocolError.malformedMessage }
         onAudit?("job.accepted")
-        try await send(DroneEnvelope(
+        try await deliverTool(DroneEnvelope(
             kind: .toolAccepted,
             requestID: requestID,
             lease: lease,
@@ -537,7 +541,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
                 )
             }
             history.append(response)
-            try await send(response, on: connectionID)
+            try await deliverTool(response, on: connectionID)
         }
         guard !revokedControllers.contains(lease.controllerID) else {
             toolOperations.removeValue(forKey: requestID)
@@ -549,6 +553,15 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
             toolHistoryOrder.removeFirst()
             toolHistories.removeValue(forKey: expired)
             toolOperations.removeValue(forKey: expired)
+        }
+    }
+
+    private func deliverTool(_ envelope: DroneEnvelope, on connectionID: DroneConnectionID) async throws {
+        do {
+            try await send(envelope, on: connectionID)
+        } catch DroneProtocolError.disconnected {
+            // Keep draining the bounded observer to terminal state and retaining
+            // owner cancellation authority, even when its subscriber goes away.
         }
     }
 
