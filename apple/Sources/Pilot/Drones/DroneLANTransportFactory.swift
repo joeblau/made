@@ -7,8 +7,11 @@ final class DroneLANTransportFactory: DroneTransportFactory {
     private let transport: DroneLANTransport
     private let identityStore: DroneIdentityStore
     private let pairingStore: DronePairingStore
-    private var pendingPeers: [DronePeerID: CheckedContinuation<any DroneConnection, any Error>] = [:]
-    private var pendingConnections: [DroneConnectionID: CheckedContinuation<any DroneConnection, any Error>] = [:]
+    private struct PendingConnection {
+        let peerID: DronePeerID
+        let continuation: CheckedContinuation<any DroneConnection, any Error>
+    }
+    private var pendingConnections: [DroneConnectionID: PendingConnection] = [:]
     private var connections: [DroneConnectionID: DroneLANConnection] = [:]
 
     init(
@@ -35,29 +38,55 @@ final class DroneLANTransportFactory: DroneTransportFactory {
     }
 
     func connect(_ request: DroneTransportRequest) async throws -> any DroneConnection {
+        try Task.checkCancellation()
         let peerID = DronePeerID(rawValue: request.droneID)
         let existingPin = try pairingStore.pinnedKey(for: peerID)
-        return try await withCheckedThrowingContinuation { continuation in
-            pendingPeers[peerID] = continuation
-            switch request.endpoint {
-            case .hostPort(let host, let port):
-                if existingPin == nil {
-                    transport.pair(peerID: peerID, host: host, port: port)
-                } else {
-                    transport.connect(peerID: peerID, host: host, port: port)
+        // Retire the old pending attempt before enqueueing its replacement.
+        for (id, pending) in pendingConnections where pending.peerID == peerID {
+            cancel(id, error: CancellationError())
+        }
+        let id = DroneConnectionID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
                 }
-            case .bonjour(let name, let type, let domain):
-                if existingPin == nil {
-                    transport.pair(peerID: peerID, serviceName: name, type: type, domain: domain)
-                } else {
-                    transport.connect(peerID: peerID, serviceName: name, type: type, domain: domain)
+                pendingConnections[id] = PendingConnection(peerID: peerID, continuation: continuation)
+                switch request.endpoint {
+                case .hostPort(let host, let port):
+                    if existingPin == nil {
+                        transport.pair(peerID: peerID, host: host, port: port, connectionID: id)
+                    } else {
+                        transport.connect(peerID: peerID, host: host, port: port, connectionID: id)
+                    }
+                case .bonjour(let name, let type, let domain):
+                    if existingPin == nil {
+                        transport.pair(peerID: peerID, serviceName: name, type: type, domain: domain, connectionID: id)
+                    } else {
+                        transport.connect(peerID: peerID, serviceName: name, type: type, domain: domain, connectionID: id)
+                    }
                 }
             }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancel(id, error: CancellationError()) }
         }
+    }
+
+    private func cancel(_ id: DroneConnectionID, error: any Error) {
+        guard let pending = pendingConnections.removeValue(forKey: id) else { return }
+        transport.disconnect(id)
+        pending.continuation.resume(throwing: error)
     }
 
     func revoke(droneID: UUID) async throws {
         let peerID = DronePeerID(rawValue: droneID)
+        for (id, pending) in pendingConnections where pending.peerID == peerID {
+            cancel(id, error: DroneTransportError.revoked)
+        }
+        for connection in Array(connections.values) where connection.peerID == peerID {
+            connection.close()
+        }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             transport.revoke(peerID) { result in
                 switch result {
@@ -65,9 +94,6 @@ final class DroneLANTransportFactory: DroneTransportFactory {
                 case .failure: continuation.resume(throwing: DroneTransportError.revocationFailed)
                 }
             }
-        }
-        if let continuation = pendingPeers.removeValue(forKey: peerID) {
-            continuation.resume(throwing: DroneTransportError.revoked)
         }
     }
 
@@ -79,10 +105,13 @@ final class DroneLANTransportFactory: DroneTransportFactory {
         switch event {
         case .listening:
             break
-        case .connecting(let id, let peerID):
-            guard let continuation = pendingPeers.removeValue(forKey: peerID) else { return }
-            pendingConnections[id] = continuation
+        case .connecting:
+            break
         case .connected(let id, let peerID, let hello):
+            guard let pending = pendingConnections.removeValue(forKey: id), pending.peerID == peerID else {
+                transport.disconnect(id)
+                return
+            }
             do {
                 guard let key = try pairingStore.pinnedKey(for: peerID) else {
                     throw DroneTransportError.unauthorized
@@ -97,13 +126,16 @@ final class DroneLANTransportFactory: DroneTransportFactory {
                     transport: transport,
                     id: id,
                     peer: peer,
-                    onClose: { [weak self] in self?.connections.removeValue(forKey: id) }
+                    peerID: peerID,
+                    onClose: { [weak self] in
+                        Task { @MainActor in self?.connections.removeValue(forKey: id) }
+                    }
                 )
                 connections[id] = connection
-                pendingConnections.removeValue(forKey: id)?.resume(returning: connection)
+                pending.continuation.resume(returning: connection)
             } catch {
                 transport.disconnect(id)
-                pendingConnections.removeValue(forKey: id)?.resume(throwing: error)
+                pending.continuation.resume(throwing: error)
             }
         case .envelope(let id, _, let envelope):
             connections[id]?.receive(envelope)
@@ -111,16 +143,12 @@ final class DroneLANTransportFactory: DroneTransportFactory {
             onPairingRequest?(request)
         case .disconnected(let id, _):
             connections[id]?.close()
-            pendingConnections.removeValue(forKey: id)?.resume(throwing: DroneTransportError.disconnected)
+            pendingConnections.removeValue(forKey: id)?.continuation.resume(throwing: DroneTransportError.disconnected)
         case .failed(let id, let failure):
-            let error = Self.error(for: failure)
-            if let id, let continuation = pendingConnections.removeValue(forKey: id) {
-                continuation.resume(throwing: error)
-            } else {
-                let continuations = pendingPeers.values
-                pendingPeers.removeAll()
-                for continuation in continuations { continuation.resume(throwing: error) }
-            }
+            // Listener/global events must not terminate unrelated controller attempts.
+            guard let id else { return }
+            connections[id]?.close()
+            cancel(id, error: Self.error(for: failure))
         }
     }
 
@@ -139,10 +167,11 @@ final class DroneLANTransportFactory: DroneTransportFactory {
 
 private final class DroneLANConnection: DroneConnection, @unchecked Sendable {
     let peer: DroneAuthenticatedPeer
+    let peerID: DronePeerID
 
     private let transport: DroneLANTransport
     private let id: DroneConnectionID
-    private let onClose: () -> Void
+    private let onClose: @Sendable () -> Void
     private let lock = NSLock()
     private var continuation: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation?
     private var stream: AsyncThrowingStream<DroneEnvelope, any Error>?
@@ -152,11 +181,13 @@ private final class DroneLANConnection: DroneConnection, @unchecked Sendable {
         transport: DroneLANTransport,
         id: DroneConnectionID,
         peer: DroneAuthenticatedPeer,
-        onClose: @escaping () -> Void
+        peerID: DronePeerID,
+        onClose: @escaping @Sendable () -> Void
     ) {
         self.transport = transport
         self.id = id
         self.peer = peer
+        self.peerID = peerID
         self.onClose = onClose
     }
 
