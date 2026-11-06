@@ -25,6 +25,84 @@ struct DroneToolLease: Codable, Equatable, Sendable {
     }
 }
 
+/// Worker-owned grants. Remote envelopes can use these leases but cannot issue them.
+/// Grants intentionally expire on worker restart; the local owner must approve again.
+struct DroneToolLeaseRegistry: Sendable {
+    static let maximumLeases = 128
+    static let maximumLeasesPerController = 16
+    static let maximumLifetime: TimeInterval = 900
+
+    private struct Grant: Sendable {
+        let lease: DroneToolLease
+        let permissions: DroneControllerPermissions
+    }
+
+    let droneID: UUID
+    private var grants: [UUID: Grant] = [:]
+
+    init(droneID: UUID) {
+        self.droneID = droneID
+    }
+
+    mutating func issue(
+        controllerID: UUID,
+        workspaceID: UUID,
+        permissions: DroneControllerPermissions,
+        lifetime: TimeInterval,
+        now: TimeInterval
+    ) throws -> DroneToolLease {
+        let toolPermissions: DroneControllerPermissions = [.files, .jobs, .git]
+        guard !permissions.isEmpty, permissions.isSubset(of: toolPermissions),
+              now.isFinite, lifetime.isFinite, lifetime > 0,
+              lifetime <= Self.maximumLifetime, (now + lifetime).isFinite
+        else { throw DroneProtocolError.unauthorized }
+        grants = grants.filter { $0.value.lease.expiresAt > now }
+        guard grants.count < Self.maximumLeases,
+              grants.values.filter({ $0.lease.controllerID == controllerID }).count
+                < Self.maximumLeasesPerController
+        else { throw DroneProtocolError.resourceLimit }
+        let lease = DroneToolLease(
+            id: UUID(), controllerID: controllerID, droneID: droneID,
+            jobID: DroneJobID(), workspaceID: workspaceID, expiresAt: now + lifetime
+        )
+        grants[lease.id] = Grant(lease: lease, permissions: permissions)
+        return lease
+    }
+
+    func authorize(
+        _ envelope: DroneEnvelope,
+        controllerID: UUID,
+        now: TimeInterval
+    ) throws {
+        guard let leaseID = envelope.lease?.id, let grant = grants[leaseID] else {
+            throw DroneProtocolError.unauthorized
+        }
+        try DroneToolWorkerAuthorization.authorize(
+            envelope,
+            authenticatedControllerID: controllerID,
+            authenticatedDroneID: droneID,
+            approvedLease: grant.lease,
+            now: now
+        )
+        let permission: DroneControllerPermissions
+        switch envelope.kind {
+        case .toolRead, .toolEdit: permission = .files
+        case .toolRun: permission = .jobs
+        case .toolDiff: permission = .git
+        // Replay/cancel additionally require the original operation's full lease.
+        case .toolAttach, .toolCancel: permission = []
+        default: throw DroneProtocolError.unauthorized
+        }
+        guard grant.permissions.isSuperset(of: permission) else {
+            throw DroneProtocolError.unauthorized
+        }
+    }
+
+    mutating func revoke(controllerID: UUID) {
+        grants = grants.filter { $0.value.lease.controllerID != controllerID }
+    }
+}
+
 struct DroneToolReadRequest: Codable, Equatable, Sendable {
     let path: String
     let maxBytes: Int

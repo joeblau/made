@@ -11,6 +11,7 @@ enum DroneToolProof {
             workspaceID: UUID(),
             expiresAt: 1_000
         )
+        try verifyWorkerLeaseRegistry()
         try verifyExpiredClientLease(lease: lease)
         try verifyReplayAuthorization(lease: lease)
         let engine = DroneFakeEngine(lease: lease, files: [
@@ -98,6 +99,69 @@ enum DroneToolProof {
             throw ProofError.failed("secret environment forwarded")
         } catch DroneProtocolError.unauthorized {}
         print("Drone tool proof passed: driver cycle, idempotency, resume, cancellation, leases, bounds, and adversarial inputs.")
+    }
+
+    private static func verifyWorkerLeaseRegistry() throws {
+        let droneID = UUID()
+        let controllerID = UUID()
+        let workspaceID = UUID()
+        var registry = DroneToolLeaseRegistry(droneID: droneID)
+        let lease = try registry.issue(
+            controllerID: controllerID, workspaceID: workspaceID,
+            permissions: .files, lifetime: 30, now: 100
+        )
+        let request = DroneEnvelope(
+            kind: .toolRead, requestID: UUID(), lease: lease,
+            idempotencyKey: UUID().uuidString,
+            body: .toolRead(DroneToolReadRequest(path: "fixture", maxBytes: 1))
+        )
+        try registry.authorize(request, controllerID: controllerID, now: 100)
+        do {
+            try registry.authorize(request, controllerID: UUID(), now: 100)
+            throw ProofError.failed("different authenticated controller accepted")
+        } catch DroneProtocolError.unauthorized {}
+        for lifetime in [0.0, -1.0, .infinity, 901.0] {
+            do {
+                _ = try registry.issue(
+                    controllerID: controllerID, workspaceID: workspaceID,
+                    permissions: .files, lifetime: lifetime, now: 100
+                )
+                throw ProofError.failed("invalid lease lifetime accepted")
+            } catch DroneProtocolError.unauthorized {}
+        }
+        for timestamp in [130.0, 131.0] {
+            do {
+                try registry.authorize(request, controllerID: controllerID, now: timestamp)
+                throw ProofError.failed("expired lease accepted")
+            } catch DroneProtocolError.unauthorized {}
+        }
+        do {
+            try DroneToolLeaseRegistry(droneID: droneID).authorize(request, controllerID: controllerID, now: 100)
+            throw ProofError.failed("lease survived loss of worker registration")
+        } catch DroneProtocolError.unauthorized {}
+        for _ in 1..<DroneToolLeaseRegistry.maximumLeasesPerController {
+            _ = try registry.issue(
+                controllerID: controllerID, workspaceID: workspaceID,
+                permissions: .files, lifetime: 30, now: 100
+            )
+        }
+        do {
+            _ = try registry.issue(
+                controllerID: controllerID, workspaceID: workspaceID,
+                permissions: .files, lifetime: 30, now: 100
+            )
+            throw ProofError.failed("per-controller lease ceiling bypassed")
+        } catch DroneProtocolError.resourceLimit {}
+        // A saturated controller cannot consume another controller's entire budget.
+        _ = try registry.issue(
+            controllerID: UUID(), workspaceID: workspaceID,
+            permissions: .files, lifetime: 30, now: 100
+        )
+        registry.revoke(controllerID: controllerID)
+        do {
+            try registry.authorize(request, controllerID: controllerID, now: 100)
+            throw ProofError.failed("revoked lease accepted")
+        } catch DroneProtocolError.unauthorized {}
     }
 
     private static func verifyExpiredClientLease(lease: DroneToolLease) throws {
