@@ -133,7 +133,8 @@ final class DroneDaemon {
                         approved: request.command == "approve"
                     )
                 }
-                var status = DroneControlResponse(paths: paths)
+                let health = await (workerService as? any DroneWorkerHealthReporting)?.healthSnapshot()
+                var status = DroneControlResponse(paths: paths, workerHealth: health)
                 if let workerService {
                     status.approvals = await workerService.approvalSummaries()
                 }

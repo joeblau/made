@@ -16,22 +16,20 @@ final class DroneLifecycleTests: XCTestCase {
         if let temporaryRoot { try? FileManager.default.removeItem(at: temporaryRoot) }
     }
 
-    func testWorkerDirectoriesArePrivateAndPairingMarkersStayOpaque() throws {
+    func testWorkerDirectoriesArePrivateAndMarkersCannotClaimPairing() throws {
         let paths = makePaths()
         try paths.prepareWorkerDirectories()
         for directory in [paths.root, paths.configuration, paths.state, paths.identity,
                           paths.pairings, paths.runtime, paths.logs] {
             XCTAssertTrue(DroneFileSystem.hasMode(directory, mode: 0o700))
         }
-        XCTAssertFalse(paths.hasPairingState())
 
         let marker = paths.pairings.appendingPathComponent("stable-peer-id")
         let secret = Data("private-pairing-material-that-must-not-be-read".utf8)
         try secret.write(to: marker)
         try DroneFileSystem.setMode(0o600, for: marker)
-        XCTAssertTrue(paths.hasPairingState())
         let response = DroneControlResponse(paths: paths)
-        XCTAssertTrue(response.paired)
+        XCTAssertFalse(response.paired)
         let encoded = try DroneControlCodec.encode(response)
         XCTAssertFalse(encoded.contains(secret))
     }
@@ -102,6 +100,40 @@ final class DroneLifecycleTests: XCTestCase {
         )
     }
 
+    func testEnabledWorkerRequiresLiveListenerAndHealthyStorage() throws {
+        let paths = DronePaths(environment: [
+            "BLAU_DRONE_ROOT": temporaryRoot.path,
+            "BLAU_DRONE_WORKSPACE": temporaryRoot.path,
+        ])
+        let unavailable = DroneControlResponse(paths: paths)
+        XCTAssertEqual(DroneStatusEvaluator.state(response: unavailable, launchdLoaded: true), .unhealthy)
+        for health in [
+            DroneWorkerHealthSnapshot(listenerReady: false, paired: true, storageHealthy: true),
+            DroneWorkerHealthSnapshot(listenerReady: true, paired: true, storageHealthy: false),
+        ] {
+            let response = DroneControlResponse(paths: paths, workerHealth: health)
+            XCTAssertEqual(DroneStatusEvaluator.state(response: response, launchdLoaded: true), .unhealthy)
+        }
+        let ready = DroneControlResponse(paths: paths, workerHealth: DroneWorkerHealthSnapshot(
+            listenerReady: true, paired: true, storageHealthy: true
+        ))
+        XCTAssertTrue(ready.paired)
+        XCTAssertEqual(DroneStatusEvaluator.state(response: ready, launchdLoaded: true), .paired)
+        XCTAssertEqual(try DroneControlCodec.decodeResponse(DroneControlCodec.encode(ready)), ready)
+    }
+
+    func testDisabledWorkerDoesNotClaimLANListenerAndLegacyHealthFailsClosed() throws {
+        let disabled = DroneControlResponse(paths: makePaths())
+        XCTAssertEqual(DroneStatusEvaluator.state(response: disabled, launchdLoaded: true), .disabled)
+        let legacy = Data("""
+        {"version":1,"workerVersion":"1.0.0","protocolVersion":1,"paired":true,
+         "processIdentifier":42,"executionEnabled":true,"approvals":[]}
+        """.utf8)
+        let decoded = try DroneControlCodec.decodeResponse(legacy)
+        XCTAssertNil(decoded.workerHealth)
+        XCTAssertEqual(DroneStatusEvaluator.state(response: decoded, launchdLoaded: true), .unhealthy)
+    }
+
     func testControlRepliesContainNoStatePathsOrPairingIdentifiers() throws {
         let paths = makePaths()
         let response = DroneControlResponse(paths: paths)
@@ -123,7 +155,7 @@ final class DroneLifecycleTests: XCTestCase {
         let decoded = try PropertyListSerialization.propertyList(from: first, format: nil) as? NSDictionary
         XCTAssertEqual(decoded, DroneLaunchAgent.dictionary(paths: paths) as NSDictionary)
         XCTAssertTrue(DroneVersion.report.contains("protocol 1"))
-        XCTAssertTrue(DroneVersion.report.contains("execution disabled"))
+        XCTAssertTrue(DroneVersion.report.contains("execution opt-in"))
     }
 
     func testUnixSocketPathsAreBoundedBeforeAllocation() {
@@ -154,7 +186,9 @@ final class DroneLifecycleTests: XCTestCase {
             workerVersion: DroneVersion.marketing,
             protocolVersion: protocolVersion,
             paired: paired,
-            processIdentifier: 42
+            processIdentifier: 42,
+            executionEnabled: true,
+            workerHealth: DroneWorkerHealthSnapshot(listenerReady: true, paired: paired, storageHealthy: true)
         )
     }
 }
