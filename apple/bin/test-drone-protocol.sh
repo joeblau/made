@@ -28,3 +28,5 @@ xcrun swiftc \
   "$APPLE_ROOT/Tests/DroneProtocolProof/main.swift"
 
 "$BUILD_DIR/DroneProtocolProof" server
+
+"$APPLE_ROOT/bin/test-drone-reapproval.sh"

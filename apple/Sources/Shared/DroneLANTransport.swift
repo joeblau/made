@@ -214,6 +214,7 @@ final class DroneLANTransport: @unchecked Sendable {
                         for: request.peerID,
                         replacing: nil
                     )
+                    self.revokedPeerIDs.remove(request.peerID)
                     state.peerID = request.peerID
                     if let pendingNoise {
                         try self.acceptWorkerNoise(
