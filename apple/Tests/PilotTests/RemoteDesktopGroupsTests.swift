@@ -1,14 +1,13 @@
 import Foundation
 import AppKit
 import SwiftData
-import SwiftUI
 import Testing
 @testable import Pilot
 
 @Suite("Remote desktop groups")
 @MainActor
 struct RemoteDesktopGroupsTests {
-    @Test("Restoring groups never writes preferences during a SwiftUI render")
+    @Test("Restoring groups never writes preferences during presentation")
     func restoringLayoutDoesNotSave() throws {
         try withGroups { groups, defaults in
             groups.reconcile(connectionIDs: [UUID(), UUID()])
@@ -256,9 +255,8 @@ struct RemoteDesktopGroupLayoutTests {
         let sessions = RemoteDesktopSessionManager()
         defer { sessions.endAllSessions() }
         let store = WorkspaceStore(modelContext: container.mainContext)
-        let view = NSHostingView(rootView: AnyView(
-            RemoteDesktopView(store: store, sessions: sessions, groups: groups).modelContainer(container)
-        ))
+        let controller = RemoteDesktopViewController(store: store, sessions: sessions, groups: groups, isLive: false)
+        let view = controller.view
         let window = NSWindow(contentRect: CGRect(origin: .zero, size: size),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -277,9 +275,7 @@ struct RemoteDesktopGroupLayoutTests {
         if let png = bitmap.representation(using: .png, properties: [:]) {
             try png.write(to: FileManager.default.temporaryDirectory.appendingPathComponent("remote-desktop-grid-\(Int(size.width)).png"))
         }
-        // Tear down SwiftUI before releasing its in-memory SwiftData store;
-        // AppKit can otherwise retain a pending render into the next test.
-        view.rootView = AnyView(EmptyView())
+        controller.updatePresentation(isActive: false, isSelected: false)
         window.contentView = nil
         window.close()
         try await Task.sleep(for: .milliseconds(100))

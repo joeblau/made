@@ -1,7 +1,6 @@
-import SwiftUI
+import AppKit
+import Observation
 
-/// Shared key for the Settings window's selected section, so a "Set Up" button
-/// can deep-link straight to the Usage settings section.
 enum SettingsTab {
     static let storageKey = "settings.selectedTab"
     static let general = "general"
@@ -9,126 +8,7 @@ enum SettingsTab {
     static let drones = "drones"
 }
 
-/// Inspector "Usage" tab. Provider cards show plan usage windows (utilization + reset
-/// countdown) and credits, read from local `claude`, `codex`, `grok`, and `kimi`
-/// CLI sessions and the Cursor editor's session.
-/// A not-signed-in card links to the Usage settings section for setup help.
-struct UsageListView: View {
-    let store: UsageStore
-
-    @Environment(\.openSettings) private var openSettings
-    @AppStorage(SettingsTab.storageKey) private var selectedSettingsTab = SettingsTab.general
-    @AppStorage(UsageConsent.claudeKey) private var claudeEnabled = false
-    @AppStorage(UsageConsent.codexKey) private var codexEnabled = false
-    @AppStorage(UsageConsent.cursorKey) private var cursorEnabled = false
-    @AppStorage(UsageConsent.grokKey) private var grokEnabled = false
-    @AppStorage(UsageConsent.kimiKey) private var kimiEnabled = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            header
-            ScrollView {
-                VStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                    ProviderCard(
-                        title: "Claude",
-                        symbol: "BrandAnthropic",
-                        tint: AgenticUseModelPalette.providerColor(for: .claude),
-                        cli: "claude",
-                        state: store.anthropic,
-                        enable: enableClaude,
-                        openSetup: openSetup
-                    )
-                    ProviderCard(
-                        title: "Codex",
-                        symbol: "BrandOpenAI",
-                        tint: AgenticUseModelPalette.providerColor(for: .codex),
-                        cli: "codex",
-                        state: store.openAI,
-                        enable: enableCodex,
-                        openSetup: openSetup
-                    )
-                    ProviderCard(
-                        title: "Kimi",
-                        symbol: "BrandMoonshot",
-                        tint: AgenticUseModelPalette.providerColor(for: .kimi),
-                        cli: "kimi login",
-                        state: store.moonshot,
-                        enable: enableKimi,
-                        openSetup: openSetup
-                    )
-                    ProviderCard(
-                        title: "Grok",
-                        symbol: "BrandGrok",
-                        tint: AgenticUseModelPalette.providerColor(for: .grok),
-                        cli: "grok",
-                        state: store.xAI,
-                        enable: enableGrok,
-                        openSetup: openSetup
-                    )
-                    ProviderCard(
-                        title: "Cursor",
-                        symbol: "BrandCursor",
-                        tint: AgenticUseModelPalette.providerColor(for: .cursor),
-                        cli: "cursor",
-                        signInMessage: "Not signed in. Sign in to the Cursor app, then refresh.",
-                        state: store.anysphere,
-                        enable: enableCursor,
-                        openSetup: openSetup
-                    )
-                }
-                .padding(LiquidGlassMetrics.Spacing.small)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    private var header: some View {
-        InspectorSectionHeader(
-            title: "Plan Usage",
-            systemImage: "chart.bar.xaxis",
-            isLoading: store.isLoading,
-            refreshHelp: "Refresh usage",
-            refresh: store.reload
-        )
-    }
-
-    private func openSetup() {
-        selectedSettingsTab = SettingsTab.usage
-        openSettings()
-    }
-
-    private func enableClaude() {
-        claudeEnabled = true
-        usageConsentChanged()
-    }
-
-    private func enableCodex() {
-        codexEnabled = true
-        usageConsentChanged()
-    }
-
-    private func enableCursor() {
-        cursorEnabled = true
-        usageConsentChanged()
-    }
-
-    private func enableGrok() {
-        grokEnabled = true
-        usageConsentChanged()
-    }
-
-    private func enableKimi() {
-        kimiEnabled = true
-        usageConsentChanged()
-    }
-
-    private func usageConsentChanged() {
-        NotificationCenter.default.post(name: UsageConsent.changedNotification, object: nil)
-    }
-}
-
 enum UsageResetCountdown {
-    /// Live countdown text: "resets in 2d 4h" / "3h 12m" / "12m 05s".
     static func text(until date: Date, now: Date) -> String {
         let remaining = Int(date.timeIntervalSince(now))
         guard remaining > 0 else { return "resetting…" }
@@ -141,7 +21,6 @@ enum UsageResetCountdown {
         return String(format: "resets in %dm %02ds", minutes, seconds)
     }
 }
-
 enum UsageRetryCountdown {
     static func text(until date: Date, now: Date) -> String {
         let remaining = Int(ceil(date.timeIntervalSince(now)))
@@ -154,294 +33,328 @@ enum UsageRetryCountdown {
     }
 }
 
-/// One provider's plan usage card. Renders per `ProviderState`.
-///
-/// The card is content, so it keeps a quiet fill in the shared card radius
-/// (no glass, no border); only its actions are glass controls.
-private struct ProviderCard: View {
-    let title: String
-    /// Asset-catalog symbol name for the provider's brand mark.
-    let symbol: String
-    let tint: Color
-    let cli: String
-    /// Overrides the terminal-flavored default for providers whose sign-in
-    /// lives in an app rather than a CLI.
-    var signInMessage: String?
-    let state: ProviderState
-    let enable: () -> Void
-    let openSetup: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            header
-            content
-        }
-        .padding(LiquidGlassMetrics.Spacing.small)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            .quaternary.opacity(0.4),
-            in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.card, style: .continuous)
-        )
-        .liquidGlassContainerShape()
-        .animation(LiquidGlassMetrics.spring, value: stateKind)
-    }
-
-    /// Coarse state identity, so switching between loading, sign-in, and
-    /// usage content animates instead of snapping (MOT-4). Usage values
-    /// themselves animate through their own numeric transitions.
-    private var stateKind: Int {
-        switch state {
-        case .disabled: 0
-        case .loading: 1
-        case .notSignedIn: 2
-        case .error: 3
-        case .rateLimited: 4
-        case .usage: 5
+/// Shared UI metadata, never credential contents.
+enum UsageAccount: Int, CaseIterable, Sendable {
+    case claude, codex, kimi, grok, cursor
+    var title: String {
+        switch self {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        case .kimi: "Kimi"
+        case .grok: "Grok"
+        case .cursor: "Cursor"
         }
     }
+    var displayName: String { self == .claude || self == .kimi ? title + " Code" : title }
+    var consentKey: String {
+        switch self {
+        case .claude: UsageConsent.claudeKey
+        case .codex: UsageConsent.codexKey
+        case .kimi: UsageConsent.kimiKey
+        case .grok: UsageConsent.grokKey
+        case .cursor: UsageConsent.cursorKey
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .claude: "BrandAnthropic"
+        case .codex: "BrandOpenAI"
+        case .kimi: "BrandMoonshot"
+        case .grok: "BrandGrok"
+        case .cursor: "BrandCursor"
+        }
+    }
+    var tint: NSColor {
+        switch self {
+        case .claude: .systemOrange
+        case .codex: .systemGreen
+        case .kimi: .systemPurple
+        case .grok: .systemRed
+        case .cursor: .systemBlue
+        }
+    }
+    var signInMessage: String {
+        switch self {
+        case .cursor: "Not signed in. Sign in to the Cursor app, then refresh."
+        case .kimi: "Not signed in. Run kimi login in a terminal to log in, then refresh."
+        default: "Not signed in. Run \(title.lowercased()) in a terminal to log in, then refresh."
+        }
+    }
+    var documentationURL: URL {
+        let string: String
+        switch self {
+        case .claude: string = "https://code.claude.com/docs/en/overview"
+        case .codex: string = "https://developers.openai.com/codex/cli"
+        case .kimi: string = "https://www.kimi.ai/help/kimi-code/cli-getting-started"
+        case .grok: string = "https://docs.x.ai/build/overview"
+        case .cursor: string = "https://cursor.com/docs"
+        }
+        return URL(string: string)!
+    }
+    var disclosure: String {
+        switch self {
+        case .claude:
+            "When enabled, Cockpit reads Claude Code's credential file or Keychain item and sends its bearer token only to Anthropic's usage endpoint. Keychain access may prompt once."
+        case .codex:
+            "When enabled, Cockpit reads ~/.codex/auth.json and sends its bearer token only to ChatGPT's Codex usage endpoint."
+        case .kimi:
+            "When enabled, Cockpit reads Kimi Code's credential file under $KIMI_CODE_HOME (or ~/.kimi-code), with legacy ~/.kimi fallback, and sends its bearer token only to Kimi's usage and sign-in endpoints. Kimi's fifteen-minute tokens rotate on refresh, so when the stored token has expired Cockpit refreshes it and saves the rotated token back to Kimi Code's own credential file — keeping both Cockpit and the kimi CLI signed in."
+        case .grok:
+            "When enabled, Cockpit reads $GROK_HOME/auth.json (or ~/.grok/auth.json) and sends its bearer token only to xAI's usage and sign-in endpoints. Grok's six-hour tokens rotate on refresh, so when the stored token has expired Cockpit refreshes it and saves the rotated token back to auth.json — keeping both Cockpit and the grok CLI signed in."
+        case .cursor:
+            "When enabled, Cockpit reads the Cursor app's local state database (~/Library/Application Support/Cursor) and sends its session token only to cursor.com's usage endpoints."
+        }
+    }
+    @MainActor func state(in store: UsageStore) -> ProviderState {
+        switch self {
+        case .claude: store.anthropic
+        case .codex: store.openAI
+        case .kimi: store.moonshot
+        case .grok: store.xAI
+        case .cursor: store.anysphere
+        }
+    }
+}
 
-    private var header: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            // Brand marks are custom symbol assets, tinted like SF Symbols.
-            Image(symbol)
-                .font(.body)
-                .foregroundStyle(tint)
-                .accessibilityHidden(true)
-            Text(title)
-                .font(.body.weight(.semibold))
-            if let plan = state.displayedUsage?.planLabel {
-                // Brand-colored text on its own 15% wash measured about 2.2:1 in
-                // light mode; the wash keeps the brand cue (TYPE-3).
-                Text(plan)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-                    .padding(.vertical, 2)
-                    .background(tint.opacity(0.15), in: Capsule())
+@MainActor
+final class UsageViewController: NSViewController {
+    let store: UsageStore
+    let defaults: UserDefaults
+    var onOpenSettings: (() -> Void)?
+    private let header = InspectorSectionHeader()
+    private let stack = InspectorNativeUI.vertical()
+    private var cards: [UsageAccount: NativeProviderUsageCard] = [:]
+    private var isActive = false
+    private var generation = 0
+    private var timer: Timer?
+    private var preferencesObserver: NSObjectProtocol?
+    private var zoomObserver: NSObjectProtocol?
+    init(store: UsageStore, defaults: UserDefaults = .standard) {
+        self.store = store
+        self.defaults = defaults
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() {
+        view = NSView()
+        let scroll = NSScrollView()
+        stack.fillsWidth = true
+        for account in UsageAccount.allCases {
+            let card = NativeProviderUsageCard(account: account, defaults: defaults)
+            card.enable = { [weak self] in
+                guard let self else { return }
+                self.defaults.set(true, forKey: account.consentKey)
+                NotificationCenter.default.post(name: UsageConsent.changedNotification, object: nil)
             }
-            Spacer()
+            card.openSettings = { [weak self] in
+                guard let self else { return }
+                self.defaults.set(SettingsTab.usage, forKey: SettingsTab.storageKey)
+                self.onOpenSettings?()
+            }
+            cards[account] = card
+            stack.addArrangedSubview(card)
         }
+        InspectorNativeUI.scrollDocument(stack, in: scroll, inset: 8)
+        let layout = InspectorNativeUI.vertical([header, scroll], spacing: 0)
+        layout.fillsWidth = true
+        InspectorNativeUI.pin(layout, in: view)
+        scroll.setContentHuggingPriority(.defaultLow, for: .vertical)
+        header.refresh = { [weak self] in self?.store.reload() }
+        render()
     }
+    override func viewDidAppear() { super.viewDidAppear(); setPresentationActive(true) }
+    override func viewWillDisappear() { setPresentationActive(false); super.viewWillDisappear() }
+    isolated deinit { setPresentationActive(false) }
 
-    @ViewBuilder
-    private var content: some View {
-        switch state {
-        case .disabled:
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Text("Allow Cockpit to read this CLI's credentials and request plan usage.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                // Secondary glass, not prominent: several cards can show this
-                // at once, and the inspector has no single primary (BTN-1).
-                Button(action: enable) {
-                    Label("Enable Usage", systemImage: "checkmark.circle")
+    func setPresentationActive(_ active: Bool) {
+        guard active != isActive else { return }
+        isActive = active
+        generation += 1
+        if active {
+            _ = view
+            preferencesObserver = NotificationCenter.default.addObserver(
+                forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.render(force: true) }
+            }
+            zoomObserver = NotificationCenter.default.addObserver(
+                forName: .cockpitUIZoomDidChange, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isActive else { return }
+                    self.render(force: true)
                 }
-                .compatGlassButtonStyle()
-                .buttonBorderShape(.capsule)
-                .controlSize(.small)
             }
-
-        case .loading:
-            loadingPlaceholder
-
-        case .notSignedIn:
-            setupPrompt(
-                message: signInMessage
-                    ?? "Not signed in. Run `\(cli)` in a terminal to log in, then refresh."
-            )
-
-        case .error(let message):
-            setupPrompt(message: message)
-
-        case .rateLimited(let deadline, let usage):
-            if let usage { usageContent(usage) }
-            Text(usage == nil
-                 ? "Usage updates temporarily rate limited."
-                 : "Usage updates temporarily rate limited. Showing last available usage.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(UsageRetryCountdown.text(until: deadline, now: context.date))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-
-        case .usage(let usage):
-            usageContent(usage)
-        }
-    }
-
-    @ViewBuilder
-    private func usageContent(_ usage: ProviderUsage) -> some View {
-        if usage.windows.isEmpty && usage.credits == nil {
-            Text("No usage reported for this window.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            observe(generation: generation)
         } else {
-            VStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                ForEach(usage.windowsInDisplayOrder) { window in
-                    windowRow(window)
+            timer?.invalidate()
+            timer = nil
+            if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+            preferencesObserver = nil
+            if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }
+            zoomObserver = nil
+        }
+    }
+    func refresh() { if isViewLoaded { render() } }
+    private func observe(generation: Int) {
+        guard isActive, generation == self.generation else { return }
+        withObservationTracking { render() } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.isActive, generation == self.generation else { return }
+                self.observe(generation: generation)
+            }
+        }
+    }
+    private func render(force: Bool = false) {
+        guard isViewLoaded else { return }
+        header.update(title: "Plan Usage", symbol: "chart.bar.xaxis", loading: store.isLoading,
+                      refreshHelp: "Refresh usage", defaults: defaults)
+        for account in UsageAccount.allCases { cards[account]?.update(state: account.state(in: store), force: force) }
+        let needsTimer = isActive && cards.values.contains { $0.hasCountdown }
+        if needsTimer, timer == nil {
+            timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.isActive else { return }
+                    self.cards.values.forEach { $0.updateCountdowns(now: Date()) }
                 }
             }
-            if let credits = usage.credits, !credits.isEmpty {
-                creditsRow(credits)
-                    .padding(.top, 4)
-            }
+        } else if !needsTimer { timer?.invalidate(); timer = nil }
+    }
+}
+
+@MainActor
+private final class NativeProviderUsageCard: NSView {
+    let account: UsageAccount
+    let defaults: UserDefaults
+    var enable: (() -> Void)?
+    var openSettings: (() -> Void)?
+    private let stack = InspectorNativeUI.vertical()
+    private var state: ProviderState?
+    private var countdowns: [(field: NSTextField, deadline: Date, retry: Bool)] = []
+    var hasCountdown: Bool { !countdowns.isEmpty }
+    init(account: UsageAccount, defaults: UserDefaults) {
+        self.account = account
+        self.defaults = defaults
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = InspectorCardMetrics.cornerRadius
+        stack.fillsWidth = true
+        InspectorNativeUI.pin(stack, in: self, inset: 10)
+        setAccessibilityElement(false)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.08).cgColor
+    }
+    func update(state newState: ProviderState, force: Bool) {
+        guard force || state != newState else { return }
+        state = newState
+        stack.arrangedSubviews.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() }
+        countdowns.removeAll()
+        let icon = NSImageView(image: NSImage(named: account.symbol) ?? NSImage())
+        icon.contentTintColor = account.tint
+        icon.symbolConfiguration = .init(pointSize: 14, weight: .medium)
+        icon.setAccessibilityElement(false)
+        icon.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        let heading = InspectorNativeUI.horizontal([icon, label(account.title, weight: .semibold)])
+        if let plan = newState.displayedUsage?.planLabel {
+            heading.addArrangedSubview(label(plan, size: 10, color: .secondaryLabelColor))
+        }
+        stack.addArrangedSubview(heading)
+        switch newState {
+        case .disabled:
+            stack.addArrangedSubview(label("Allow Cockpit to read this CLI's credentials and request plan usage.", color: .secondaryLabelColor))
+            stack.addArrangedSubview(InspectorActionButton("Enable Usage", symbol: "checkmark.circle") { [weak self] in self?.enable?() })
+        case .loading:
+            let spinner = NSProgressIndicator()
+            spinner.style = .spinning
+            spinner.controlSize = .small
+            spinner.startAnimation(nil)
+            spinner.setAccessibilityLabel("Loading usage")
+            stack.addArrangedSubview(InspectorNativeUI.horizontal([spinner, label("Loading usage…", color: .secondaryLabelColor)]))
+        case .notSignedIn: setup(account.signInMessage)
+        case .error(let message): setup(message)
+        case .usage(let usage): appendUsage(usage)
+        case .rateLimited(let deadline, let usage):
+            if let usage { appendUsage(usage) }
+            stack.addArrangedSubview(label(usage == nil ? "Usage updates temporarily rate limited." :
+                "Usage updates temporarily rate limited. Showing last available usage.", color: .secondaryLabelColor))
+            appendCountdown(deadline, retry: true)
+        }
+        updateCountdowns(now: Date())
+        layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.08).cgColor
+    }
+    func updateCountdowns(now: Date) {
+        for item in countdowns {
+            item.field.stringValue = item.retry ? UsageRetryCountdown.text(until: item.deadline, now: now)
+                : UsageResetCountdown.text(until: item.deadline, now: now)
         }
     }
-
-    private func windowRow(_ window: UsageWindow) -> some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-            HStack {
-                Text(window.name)
-                    .font(.callout.weight(.medium))
-                Spacer()
-                // Primary text, not the bar's brand tint: orange, green, and
-                // yellow figures on the light card measured 1.6–2.5:1
-                // (TYPE-3). Only the critical red, at semibold, keeps color.
-                Text("\(Int((window.utilization * 100).rounded()))%")
-                    .font(.system(.callout, design: .rounded, weight: .semibold))
-                    .foregroundStyle(isCritical(window.utilization) ? AnyShapeStyle(Color.red) : AnyShapeStyle(.primary))
-            }
-            ProgressView(value: min(max(window.utilization, 0), 1))
-                .progressViewStyle(.linear)
-                .tint(barColor(window.utilization))
-            if let resetsAt = window.resetsAt {
-                // Live countdown — reticks every second.
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    let countdown = UsageResetCountdown.text(until: resetsAt, now: context.date)
-                    Text(countdown)
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .contentTransition(.numericText(countsDown: true))
-                        .animation(LiquidGlassMetrics.spring, value: countdown)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-            }
+    private func label(_ text: String, size: CGFloat = 12, weight: NSFont.Weight = .regular,
+                       color: NSColor = .labelColor) -> NSTextField {
+        InspectorNativeUI.label(text, size: size, weight: weight, color: color, defaults: defaults)
+    }
+    private func setup(_ message: String) {
+        stack.addArrangedSubview(label(message, color: .secondaryLabelColor))
+        stack.addArrangedSubview(InspectorActionButton("Set Up", symbol: "arrow.up.forward") { [weak self] in self?.openSettings?() })
+    }
+    private func appendUsage(_ usage: ProviderUsage) {
+        if usage.windows.isEmpty && usage.credits == nil {
+            stack.addArrangedSubview(label("No usage reported for this window.", color: .secondaryLabelColor))
+        }
+        for window in usage.windowsInDisplayOrder {
+            let value = label("\(Int((window.utilization * 100).rounded()))%", weight: .semibold,
+                              color: window.utilization >= 0.9 ? .systemRed : .labelColor)
+            value.setContentHuggingPriority(.required, for: .horizontal)
+            stack.addArrangedSubview(InspectorNativeUI.horizontal([label(window.name, weight: .medium), NSView(), value]))
+            let level = NSLevelIndicator()
+            level.levelIndicatorStyle = .continuousCapacity
+            level.minValue = 0
+            level.maxValue = 1
+            level.warningValue = 0.9
+            level.criticalValue = 0.9
+            level.doubleValue = min(max(window.utilization, 0), 1)
+            level.fillColor = account.tint
+            level.warningFillColor = .systemRed
+            level.criticalFillColor = .systemRed
+            level.setAccessibilityLabel(window.name)
+            level.setAccessibilityValue(value.stringValue)
+            stack.addArrangedSubview(level)
+            if let reset = window.resetsAt { appendCountdown(reset, retry: false) }
+        }
+        if let credits = usage.credits, !credits.isEmpty { appendCredits(credits) }
+    }
+    private func appendCountdown(_ deadline: Date, retry: Bool) {
+        let field = label("", color: .secondaryLabelColor)
+        field.font = .monospacedDigitSystemFont(ofSize: InspectorNativeUI.font(defaults: defaults).pointSize, weight: .regular)
+        countdowns.append((field, deadline, retry))
+        stack.addArrangedSubview(field)
+    }
+    private func appendCredits(_ credits: CreditInfo) {
+        let hasMonthly = credits.unlimited || credits.used != nil || credits.limit != nil || credits.utilization != nil
+        if let balance = credits.balance { creditLine(hasMonthly ? "Balance" : "Credits", amount(balance, unit: credits.unit)) }
+        if credits.unlimited {
+            if let used = credits.used { creditLine("Used this month", amount(used, unit: credits.unit)) }
+            creditLine(credits.balance == nil && credits.used == nil ? "Credits" : "Monthly limit", "Unlimited")
+        } else if let used = credits.used, let limit = credits.limit {
+            creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(amount(used, unit: credits.unit)) / \(amount(limit, unit: credits.unit)) used")
+        } else if let utilization = credits.utilization {
+            creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(Int((utilization * 100).rounded()))% used")
+        } else if let used = credits.used {
+            creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(amount(used, unit: credits.unit)) used")
+        } else if let limit = credits.limit {
+            creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(amount(limit, unit: credits.unit)) limit")
         }
     }
-
-    private func creditsRow(_ credits: CreditInfo) -> some View {
-        let hasMonthlyAllowance = credits.unlimited || credits.used != nil
-            || credits.limit != nil || credits.utilization != nil
-        return VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-            if let balance = credits.balance {
-                creditLine(
-                    label: hasMonthlyAllowance ? "Balance" : "Credits",
-                    value: creditAmount(balance, unit: credits.unit)
-                )
-            }
-            if credits.unlimited {
-                if let used = credits.used {
-                    creditLine(
-                        label: "Used this month",
-                        value: creditAmount(used, unit: credits.unit)
-                    )
-                }
-                creditLine(
-                    label: credits.balance == nil && credits.used == nil
-                        ? "Credits"
-                        : "Monthly limit",
-                    value: "Unlimited"
-                )
-            } else if let used = credits.used, let limit = credits.limit {
-                let usedText = creditAmount(used, unit: credits.unit)
-                let limitText = creditAmount(limit, unit: credits.unit)
-                creditLine(
-                    label: credits.balance == nil ? "Credits" : "Monthly",
-                    value: "\(usedText) / \(limitText) used"
-                )
-            } else if let utilization = credits.utilization {
-                creditLine(
-                    label: credits.balance == nil ? "Credits" : "Monthly",
-                    value: "\(Int((utilization * 100).rounded()))% used"
-                )
-            } else if let used = credits.used {
-                creditLine(
-                    label: credits.balance == nil ? "Credits" : "Monthly",
-                    value: "\(creditAmount(used, unit: credits.unit)) used"
-                )
-            } else if let limit = credits.limit {
-                creditLine(
-                    label: credits.balance == nil ? "Credits" : "Monthly",
-                    value: "\(creditAmount(limit, unit: credits.unit)) limit"
-                )
-            }
-        }
+    private func creditLine(_ title: String, _ value: String) {
+        stack.addArrangedSubview(InspectorNativeUI.horizontal([label(title, weight: .medium, color: .secondaryLabelColor), NSView(), label(value)]))
     }
-
-    private func creditLine(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.callout.weight(.medium))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .font(.system(.callout, design: .monospaced))
-        }
-    }
-
-    private func creditAmount(_ value: Double, unit: CreditUnit) -> String {
+    private func amount(_ value: Double, unit: CreditUnit) -> String {
         switch unit {
-        case .credits:
-            let number = value.formatted(
-                .number.grouping(.automatic).precision(.fractionLength(0...2))
-            )
-            return "\(number) credits"
-        case .currency(let code):
-            return value.formatted(.currency(code: code).precision(.fractionLength(2)))
+        case .credits: "\(value.formatted(.number.grouping(.automatic).precision(.fractionLength(0...2)))) credits"
+        case .currency(let code): value.formatted(.currency(code: code).precision(.fractionLength(2)))
         }
     }
-
-    private func setupPrompt(message: String) -> some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Text(message)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(action: openSetup) {
-                Label("Set Up", systemImage: "arrow.up.forward")
-            }
-            .compatGlassButtonStyle()
-            .buttonBorderShape(.capsule)
-            .controlSize(.small)
-        }
-    }
-
-    /// Skeleton of two usage windows while the first request is in flight,
-    /// so the card keeps its loaded shape (MOT-5) instead of a lone spinner.
-    private var loadingPlaceholder: some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.small) {
-            ForEach(0..<2, id: \.self) { _ in
-                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    HStack {
-                        Text("Usage window")
-                            .font(.callout.weight(.medium))
-                        Spacer()
-                        Text("00%")
-                            .font(.system(.callout, design: .rounded, weight: .semibold))
-                    }
-                    Capsule()
-                        .fill(.fill.tertiary)
-                        .frame(height: 6)
-                }
-            }
-        }
-        .redacted(reason: .placeholder)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Loading usage")
-    }
-
-    /// The bar keeps the provider's color until the window is nearly spent.
-    /// A yellow middle tier read as calmer than Claude's orange brand (a 78%
-    /// window looked safer than a 62% one), so there are two states only.
-    private func barColor(_ utilization: Double) -> Color {
-        isCritical(utilization) ? .red : tint
-    }
-
-    private func isCritical(_ utilization: Double) -> Bool { utilization >= 0.9 }
 }

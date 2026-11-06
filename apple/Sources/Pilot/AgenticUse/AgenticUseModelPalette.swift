@@ -1,4 +1,4 @@
-import SwiftUI
+import AppKit
 
 /// Fixed model-to-color mapping shared by the chart color scale, legend,
 /// hero list, and breakdown table.
@@ -11,7 +11,7 @@ import SwiftUI
 /// reserved for unknown models and always travels with the "unpriced" badge,
 /// never color alone.
 enum AgenticUseModelPalette {
-    static func color(for canonicalModel: String) -> Color {
+    static func color(for canonicalModel: String) -> NSColor {
         guard let provider = provider(for: canonicalModel) else { return .gray }
         let family = familyOrder(for: provider)
         // Newly discovered priced models also get a stable provider color.
@@ -22,13 +22,13 @@ enum AgenticUseModelPalette {
     }
 
     /// Standard system accent, shared by brand marks and Plan Usage cards.
-    static func providerColor(for provider: AgenticProvider) -> Color {
+    static func providerColor(for provider: AgenticProvider) -> NSColor {
         switch provider {
-        case .claude: .orange
-        case .codex: .green
-        case .kimi: .purple
-        case .grok: .red
-        case .cursor: .blue
+        case .claude: .systemOrange
+        case .codex: .systemGreen
+        case .kimi: .systemPurple
+        case .grok: .systemRed
+        case .cursor: .systemBlue
         }
     }
 
@@ -57,7 +57,7 @@ enum AgenticUseModelPalette {
     /// Alternate high-contrast shades instead of spreading tiny increments
     /// across the entire catalog. The busiest adjacent models must remain
     /// distinguishable even when a provider has many older models.
-    private static func shade(provider: AgenticProvider, step: Int) -> Color {
+    private static func shade(provider: AgenticProvider, step: Int) -> NSColor {
         let color = providerColor(for: provider)
         let cycle = Double(step / 4) * 0.035
         let white: Double
@@ -68,6 +68,6 @@ enum AgenticUseModelPalette {
         case 2: (white, black) = (min(0.34, 0.18 + cycle), 0)
         default: (white, black) = (0, min(0.45, 0.25 + cycle))
         }
-        return color.mix(with: white > 0 ? .white : .black, by: max(white, black))
+        return color.blended(withFraction: max(white, black), of: white > 0 ? .white : .black) ?? color
     }
 }

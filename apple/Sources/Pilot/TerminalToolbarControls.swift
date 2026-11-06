@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 
 enum TerminalToolbarSelection {
     static func pane(for pane: Pane?) -> Pane? {
@@ -10,145 +9,166 @@ enum TerminalToolbarSelection {
     }
 }
 
-/// Per-terminal address-style command field. Actions are installed as separate
-/// toolbar items so Play and Stop do not sit inside the field's capsule.
-struct TerminalFastCommandToolbarField: View {
+/// Native field keeps its editing buffer stable while status/actions update.
+@MainActor
+final class TerminalFastCommandToolbarField: NSView, NSTextFieldDelegate {
     let pane: Pane
-
-    @State private var command: String
-    /// Read from AppKit: `@FocusState` never updates in a toolbar item.
-    @State private var isEditing = false
+    let field = NSTextField(string: "")
 
     init(pane: Pane) {
         self.pane = pane
-        // Local state is the editing source of truth. Backing the field with
-        // @AppStorage looped every keystroke's UserDefaults write back into a
-        // re-render of the toolbar-hosted field — the visible flash while
-        // typing. Persist through the store instead; observers of the key
-        // (Play button, collapsed-pane slit) still update live.
-        _command = State(
-            wrappedValue: TerminalFastCommandStore.command(for: pane.id)
-        )
+        super.init(frame: NSRect(x: 0, y: 0, width: 360, height: 28))
+        field.stringValue = TerminalFastCommandStore.command(for: pane.id)
+        field.placeholderString = "Fast Command"
+        field.font = CockpitTypography.font(size: 13, weight: .medium, monospaced: true)
+        field.delegate = self
+        field.target = self
+        field.action = #selector(run)
+        field.toolTip = "Fast Command"
+        field.setAccessibilityIdentifier("terminal.fast-command")
+        field.setAccessibilityLabel("Fast Command")
+        field.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(field)
+        NSLayoutConstraint.activate([
+            field.leadingAnchor.constraint(equalTo: leadingAnchor),
+            field.trailingAnchor.constraint(equalTo: trailingAnchor),
+            field.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(greaterThanOrEqualTo: field.heightAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 220),
+        ])
+        NotificationCenter.default.addObserver(self, selector: #selector(updateFont), name: .cockpitUIZoomDidChange, object: nil)
     }
 
-    var body: some View {
-        // The field is its own Liquid Glass capsule. Both hosting windows
-        // hide the toolbar item's shared capsule
-        // (`compatSharedBackgroundHidden`), so there is exactly one glass
-        // layer. The leading bolt keeps the field identifiable once the
-        // placeholder is replaced by a command (FORM-1). The capsule takes
-        // the toolbar's control height so it lines up with Play/Stop.
-        TextField("Fast Command", text: $command)
-            .scaledFont(size: 13, weight: .medium, design: .monospaced)
-            .onSubmit(run)
-            .onChange(of: command) { _, newValue in
-                TerminalFastCommandStore.setCommand(newValue, for: pane.id)
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 360, height: 28) }
+
+    func controlTextDidChange(_ obj: Notification) {
+        TerminalFastCommandStore.setCommand(field.stringValue, for: pane.id)
+    }
+
+    @objc private func updateFont() {
+        field.font = CockpitTypography.font(size: 13, weight: .medium, monospaced: true)
+    }
+
+    @objc private func run() {
+        guard let command = TerminalFastCommandStore.executableCommand(from: field.stringValue) else { return }
+        Task { [pane] in _ = await pane.terminalSession.runFastCommand(command) }
+    }
+
+    isolated deinit { NotificationCenter.default.removeObserver(self) }
+}
+
+@MainActor
+final class TerminalFastCommandToolbarActions: NSView {
+    let pane: Pane
+    private let play = NSButton(image: NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Run Fast Command")!, target: nil, action: nil)
+    private let stopButton = NSButton(image: NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Stop Terminal Process")!, target: nil, action: nil)
+    private let spinner = NSProgressIndicator()
+    private var activity: TerminalProcessActivity = .idle
+    private var pollingTask: Task<Void, Never>?
+    private var actionTask: Task<Void, Never>?
+    private var isRunningAction = false
+    private var generation = 0
+
+    init(pane: Pane) {
+        self.pane = pane
+        super.init(frame: NSRect(x: 0, y: 0, width: 78, height: 28))
+        play.target = self
+        play.action = #selector(run)
+        play.toolTip = "Stop the active process and run this command"
+        play.setAccessibilityIdentifier("terminal.fast-command.play")
+        stopButton.target = self
+        stopButton.action = #selector(stop)
+        stopButton.toolTip = "Stop the active terminal process"
+        stopButton.setAccessibilityIdentifier("terminal.fast-command.stop")
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        let stack = NSStackView(views: [play, stopButton, spinner])
+        stack.spacing = 4
+        stack.orientation = .horizontal
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            heightAnchor.constraint(greaterThanOrEqualTo: stack.heightAnchor),
+        ])
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshControls), name: UserDefaults.didChangeNotification, object: nil)
+        refreshControls()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 78, height: 28) }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        generation += 1
+        pollingTask?.cancel()
+        pollingTask = nil
+        guard window != nil else { return }
+        let request = generation
+        let session = pane.terminalSession
+        pollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                let activity = await session.foregroundActivity(unavailableActivity: .idle)
+                guard let self, generation == request, window != nil else { return }
+                self.activity = activity
+                refreshControls()
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
-            .accessibilityIdentifier("terminal.fast-command")
-            .toolbarFieldEditing($isEditing)
-            .liquidGlassField(
-                systemImage: "bolt",
-                isFocused: isEditing,
-                minHeight: LiquidGlassMetrics.toolbarControlHeight
-            )
-            .frame(minWidth: 220, idealWidth: 360, maxWidth: 480)
-            .layoutPriority(1)
-            .help("Fast Command")
+        }
     }
 
-    private func run() {
-        guard let command = TerminalFastCommandStore.executableCommand(from: command) else {
-            return
+    @objc private func refreshControls() {
+        play.isEnabled = !isRunningAction && TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: pane.id)) != nil
+        stopButton.isEnabled = !isRunningAction && activity == .running
+        if isRunningAction { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+    }
+
+    @objc private func run() {
+        guard !isRunningAction,
+              let command = TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: pane.id)) else { return }
+        perform { [pane] in _ = await pane.terminalSession.runFastCommand(command) }
+    }
+
+    @objc private func stop() {
+        guard !isRunningAction else { return }
+        perform { [pane] in _ = await pane.terminalSession.interrupt() }
+    }
+
+    private func perform(_ operation: @escaping @MainActor () async -> Void) {
+        isRunningAction = true
+        refreshControls()
+        actionTask = Task { [weak self] in
+            await operation()
+            guard let self else { return }
+            isRunningAction = false
+            refreshControls()
+            actionTask = nil
         }
-        Task {
-            _ = await pane.terminalSession.runFastCommand(command)
-        }
+    }
+
+    isolated deinit {
+        pollingTask?.cancel()
+        NotificationCenter.default.removeObserver(self)
     }
 }
 
-struct TerminalFastCommandToolbarActions: View {
-    let pane: Pane
-
-    @AppStorage private var command: String
-    @State private var activeAction: Action?
-    @State private var activity: TerminalProcessActivity = .idle
-
-    private enum Action {
-        case play
-        case stop
-    }
-
+@MainActor
+final class TerminalFastCommandToolbarView: NSStackView {
     init(pane: Pane) {
-        self.pane = pane
-        _command = AppStorage(
-            wrappedValue: "",
-            TerminalFastCommandStore.preferenceKey(for: pane.id)
-        )
+        super.init(frame: .zero)
+        orientation = .horizontal
+        spacing = 8
+        addArrangedSubview(TerminalFastCommandToolbarField(pane: pane))
+        addArrangedSubview(TerminalFastCommandToolbarActions(pane: pane))
     }
 
-    var body: some View {
-        ControlGroup {
-            Button(action: run) {
-                actionLabel(for: .play, systemImage: "play.fill")
-            }
-            .disabled(activeAction != nil || executableCommand == nil)
-            .help("Stop the active process and run this command")
-            // Icon-only (and a spinner while busy), so name it explicitly.
-            .accessibilityLabel("Run Fast Command")
-            .accessibilityIdentifier("terminal.fast-command.play")
-
-            Button(action: stop) {
-                actionLabel(for: .stop, systemImage: "stop.fill")
-            }
-            // Nothing to stop when the terminal sits at a shell prompt.
-            .disabled(activeAction != nil || activity != .running)
-            .help("Stop the active terminal process")
-            .accessibilityLabel("Stop Terminal Process")
-            .accessibilityIdentifier("terminal.fast-command.stop")
-        }
-        .controlGroupStyle(.navigation)
-        .task(id: pane.id) {
-            let session = pane.terminalSession
-            while !Task.isCancelled {
-                activity = await session.foregroundActivity(unavailableActivity: .idle)
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func actionLabel(for action: Action, systemImage: String) -> some View {
-        if activeAction == action {
-            ProgressView()
-                .controlSize(.small)
-                .frame(width: 14, height: 14)
-        } else {
-            Image(systemName: systemImage)
-                .frame(width: 14, height: 14)
-        }
-    }
-
-    private var executableCommand: String? {
-        TerminalFastCommandStore.executableCommand(from: command)
-    }
-
-    private func run() {
-        guard activeAction == nil, let executableCommand else { return }
-        activeAction = .play
-        Task {
-            _ = await pane.terminalSession.runFastCommand(executableCommand)
-            activeAction = nil
-        }
-    }
-
-    private func stop() {
-        guard activeAction == nil else { return }
-        activeAction = .stop
-        Task {
-            _ = await pane.terminalSession.interrupt()
-            activeAction = nil
-        }
-    }
+    required init?(coder: NSCoder) { nil }
 }
 
 /// All destructive terminal UI actions pass through this gate. Check live
@@ -207,14 +227,15 @@ enum TerminalCloseConfirmation {
 
 extension Workspace {
     @MainActor
-    func requestRemovePane(_ pane: Pane) {
-        guard panes.count > 1, panes.contains(where: { $0 === pane }) else { return }
+    func requestRemovePane(_ pane: Pane, allowEmpty: Bool = false,
+                           canRemove: @escaping @MainActor () -> Bool = { true }) {
+        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }) else { return }
         Task {
             await TerminalCloseConfirmation.perform(panes: [pane]) {
                 // The user can change workspaces or move panes while the
                 // activity check or confirmation sheet is pending.
-                guard self.panes.contains(where: { $0 === pane }) else { return }
-                self.removePane(pane)
+                guard self.panes.contains(where: { $0 === pane }), canRemove() else { return }
+                self.removePane(pane, allowEmpty: allowEmpty)
             }
         }
     }

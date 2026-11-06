@@ -1,5 +1,6 @@
 import CoreTransferable
-import SwiftUI
+import AppKit
+import Observation
 import UniformTypeIdentifiers
 
 extension UTType {
@@ -99,796 +100,410 @@ enum PaneSizing {
     }
 }
 
-struct WorkspaceView: View {
-    @Bindable var workspace: Workspace
-    let isActive: Bool
+/// Owns one presentation controller per live pane. A transfer or workspace
+/// switch detaches views; only deletion evicts and explicitly closes a pane.
+@MainActor
+final class CockpitPaneControllerCache {
+    static let shared = CockpitPaneControllerCache()
+    private var controllers: [UUID: NSViewController] = [:]
+    var onCloseValidationFailure: ((UUID) -> Void)?
+    var allControllers: [NSViewController] { Array(controllers.values) }
+
+    func controller(for pane: Pane, rootPath: String?, factory: (Pane, String?) -> NSViewController) -> NSViewController {
+        if let controller = controllers[pane.id] {
+            (controller as? CockpitPaneContextUpdating)?.updateContext(rootPath: rootPath)
+            return controller
+        }
+        let controller = factory(pane, rootPath)
+        controllers[pane.id] = controller
+        (controller as? CockpitPaneContextUpdating)?.updateContext(rootPath: rootPath)
+        return controller
+    }
+
+    func existingController(for id: UUID) -> NSViewController? { controllers[id] }
+
+    func retainOnly(_ ids: Set<UUID>) {
+        for id in controllers.keys.filter({ !ids.contains($0) }) {
+            guard let controller = controllers.removeValue(forKey: id) else { continue }
+            (controller as? CockpitPanePresenting)?.updatePresentation(isActive: false, isSelected: false)
+            (controller as? CockpitPaneClosing)?.closePane()
+            controller.view.removeFromSuperview()
+            controller.removeFromParent()
+        }
+    }
+
+    func prepareToClose(ids: Set<UUID>? = nil, completion: @escaping @MainActor (Bool) -> Void) {
+        let values = controllers.filter { ids == nil || ids!.contains($0.key) }.map(\.value)
+        Self.validate(values, onFailure: { [weak self] controller in
+            self?.revealCloseFailure(controller)
+        }, completion: completion)
+    }
+
+    /// A user can edit an already-saved pane while another pane or Chromium
+    /// shutdown is still awaiting completion. Approval must not outlive edits.
+    func validateCloseReadiness(ids: Set<UUID>? = nil) -> Bool {
+        let values = controllers.filter { ids == nil || ids!.contains($0.key) }.map(\.value)
+        guard let changed = Self.closeReadinessFailure(in: values) else { return true }
+        revealCloseFailure(changed)
+        return false
+    }
+
+    private func revealCloseFailure(_ controller: NSViewController) {
+        guard let id = controllers.first(where: { $0.value === controller })?.key else { return }
+        onCloseValidationFailure?(id)
+    }
+
+    private static func closeReadinessFailure(in controllers: [NSViewController]) -> NSViewController? {
+        controllers.first { ($0 as? CockpitPaneCloseValidating)?.isReadyToClose == false }
+    }
+
+    static func validate(_ controllers: [NSViewController], onFailure: ((NSViewController) -> Void)? = nil,
+                         completion: @escaping @MainActor (Bool) -> Void) {
+        validateNext(controllers, onFailure: onFailure) { allowed in
+            guard allowed else { completion(false); return }
+            if let changed = closeReadinessFailure(in: controllers) {
+                onFailure?(changed)
+                completion(false)
+            } else { completion(true) }
+        }
+    }
+
+    private static func validateNext(_ controllers: [NSViewController], onFailure: ((NSViewController) -> Void)?,
+                                     completion: @escaping @MainActor (Bool) -> Void) {
+        guard let controller = controllers.first else { completion(true); return }
+        let remaining = Array(controllers.dropFirst())
+        guard let validating = controller as? CockpitPaneCloseValidating else {
+            validateNext(remaining, onFailure: onFailure, completion: completion); return
+        }
+        validating.prepareToClose { allowed in
+            if allowed { validateNext(remaining, onFailure: onFailure, completion: completion) } else {
+                onFailure?(controller)
+                completion(false)
+            }
+        }
+    }
+
+    func closeAll() { retainOnly([]) }
+}
+
+@MainActor
+final class CockpitWorkspaceViewController: NSViewController {
+    let workspace: Workspace
     let projectID: UUID
     let surface: WorkspacePaneSurface
-    let onPaneDrop: (WorkspacePaneDragPayload, Pane) -> Bool
-    @State private var hoveredPaneID: UUID?
-    @State private var dropTargetPaneID: UUID?
+    private let cache: CockpitPaneControllerCache
+    private let factory: (Pane, String?) -> NSViewController
+    private let onDrop: (WorkspacePaneDragPayload, Pane) -> Bool
+    var onSelectionChange: (() -> Void)?
+    var onClosePane: ((Pane) -> Void)?
+    private var panes: [UUID: CockpitPaneSlot] = [:]
+    private var active = false
+    private let layoutView = CockpitPaneLayoutView()
 
-    var body: some View {
-        VStack(spacing: 0) {
-            tabBar
-            panesContent
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-                .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
-        }
-        .background(.bar)
-        .onAppear {
-            syncFocusForSelectedPane()
-        }
-        .onChange(of: isActive) {
-            syncFocusForSelectedPane()
-        }
-        .onChange(of: workspace.selectedPaneID) {
-            workspace.syncDefaultRootPathIfNeeded()
-            syncFocusForSelectedPane()
-        }
+    init(workspace: Workspace, projectID: UUID, surface: WorkspacePaneSurface,
+         cache: CockpitPaneControllerCache, factory: @escaping (Pane, String?) -> NSViewController,
+         onDrop: @escaping (WorkspacePaneDragPayload, Pane) -> Bool) {
+        self.workspace = workspace
+        self.projectID = projectID
+        self.surface = surface
+        self.cache = cache
+        self.factory = factory
+        self.onDrop = onDrop
+        super.init(nibName: nil, bundle: nil)
     }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() { view = layoutView; layoutView.workspace = workspace }
 
-    // MARK: - Tab Bar
-
-    private var tabBar: some View {
-        Group {
-            if workspace.axis == .vertical {
-                resizableTabBar
-                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-                    .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-            } else {
-                let sorted = workspace.sortedPanes
-                // Tabs are neighboring glass capsules rendered in one
-                // container (shared sampling, no glass on glass); spacing 0
-                // keeps each tab a distinct capsule.
-                CompatGlassContainer(spacing: 0) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                        ForEach(sorted) { pane in
-                            tabItem(pane, paneCount: sorted.count)
-                                .frame(width: pane.isCollapsed ? PaneLayoutMetrics.collapsedPaneThickness : nil)
-                                .frame(maxWidth: pane.isCollapsed ? nil : .infinity)
-                        }
-
-                        Spacer()
-                    }
-                }
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-            }
-        }
-        .background(.bar)
-    }
-
-    private func tabItem(_ pane: Pane, paneCount: Int) -> some View {
-        let isSelected = workspace.selectedPaneID == pane.id && !pane.isCollapsed
-        let isDropTarget = dropTargetPaneID == pane.id
-        let glassTint: Color? = if isDropTarget {
-            Color.accentColor.opacity(0.24)
-        } else if isSelected {
-            Color.accentColor.opacity(0.12)
-        } else {
-            nil
-        }
-
-        return TabItemContent(
-            pane: pane,
-            isSelected: isSelected,
-            isHovering: hoveredPaneID == pane.id,
-            isWorkspaceActive: isActive,
-            // The extension surface may close its last pane (its empty state
-            // invites re-adding); the main window always keeps one.
-            canClose: paneCount > 1 || surface == .extension,
-            onSelect: { workspace.selectedPaneID = pane.id },
-            onClose: { workspace.requestRemovePane(pane) },
-            onHide: { workspace.collapsePane(pane) },
-            onUnhide: { workspace.expandPane(pane) }
-        )
-        // Capsule tabs (no squared-off control corners); the 8pt inset keeps
-        // the round close/hide buttons close to concentric with the capsule
-        // ends (LAY-4).
-        .padding(.horizontal, pane.isCollapsed ? 0 : LiquidGlassMetrics.Spacing.xSmall)
-        .frame(maxWidth: .infinity)
-        .frame(height: PaneLayoutMetrics.tabHeight)
-        .compatGlassEffect(
-            tint: glassTint,
-            interactive: true,
-            in: Capsule()
-        )
-        .overlay {
-            if isDropTarget {
-                Capsule()
-                    .fill(Color.accentColor.opacity(0.18))
-                    .allowsHitTesting(false)
-            }
-        }
-        .contentShape(Capsule())
-        .animation(LiquidGlassMetrics.stateChange, value: isSelected)
-        .animation(LiquidGlassMetrics.stateChange, value: isDropTarget)
-        .onHover { isHovering in
-            if isHovering {
-                hoveredPaneID = pane.id
-            } else if hoveredPaneID == pane.id {
-                hoveredPaneID = nil
-            }
-        }
-        .onTapGesture {
-            if pane.isCollapsed {
-                workspace.expandPane(pane)
-            } else {
-                workspace.selectedPaneID = pane.id
-            }
-        }
-        .draggable(
-            WorkspacePaneDragPayload(
-                paneID: pane.id,
-                sourceWorkspaceID: workspace.id,
-                projectID: projectID,
-                sourceSurface: surface
-            )
-        ) {
-            // Drag previews are snapshotted without a backdrop, so they keep
-            // a material fill rather than glass — in the same capsule shape.
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Image(systemName: pane.kind.systemImageName)
-                    .scaledFont(size: 11)
-                Text(pane.displayTitle)
-                    .scaledFont(size: 12)
-            }
-            .padding(.horizontal, LiquidGlassMetrics.Spacing.medium)
-            .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-            .background(.regularMaterial, in: Capsule())
-        }
-        .dropDestination(for: WorkspacePaneDragPayload.self) { payloads, _ in
-            guard let payload = payloads.first else { return false }
-            defer { dropTargetPaneID = nil }
-            return onPaneDrop(payload, pane)
-        } isTargeted: { isTargeted in
-            dropTargetPaneID = isTargeted ? pane.id : nil
-        }
-        .contextMenu {
-            if pane.isCollapsed {
-                Button("Unhide") {
-                    workspace.expandPane(pane)
-                }
-            } else {
-                Button("Hide") {
-                    workspace.collapsePane(pane)
-                }
-            }
-
-            Divider()
-
-            Button("Close", role: .destructive) {
-                workspace.requestRemovePane(pane)
-            }
-            .disabled(paneCount <= 1 && surface != .extension)
-
-            if paneCount > 1 {
-                Divider()
-                Button("Reset Pane Sizes") {
-                    workspace.resetPaneSizes()
-                }
-            }
-        }
-    }
-
-    // MARK: - Pane Content
-
-    @ViewBuilder
-    private var panesContent: some View {
-        let isVertical = workspace.axis == .vertical
+    func refresh(isActive: Bool) {
+        loadViewIfNeeded()
+        active = isActive
         let sorted = workspace.sortedPanes
-
-        if sorted.isEmpty {
-            emptyPanesView
-        } else {
-            filledPanesContent(isVertical: isVertical, sorted: sorted)
+        let ids = Set(sorted.map(\.id))
+        for id in panes.keys.filter({ !ids.contains($0) }) {
+            panes.removeValue(forKey: id)?.detach()
         }
-    }
-
-    /// An explicit invitation to add panes, mirroring the toolbar launcher's
-    /// options. The pane model keeps every workspace's last pane, so this is
-    /// a defensive state for a workspace restored with no panes.
-    private var emptyPanesView: some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.medium) {
-            ContentUnavailableView(
-                "No Panes",
-                systemImage: "rectangle.dashed",
-                description: Text("Add a pane to get started.")
-            )
-            .legibleSecondaryHierarchy()
-            .frame(maxHeight: 220)
-
-            // One row when the pane is wide enough; two rows of three in a
-            // narrow (e.g. Extendo) window so the capsules never clip (LAY-6).
-            CompatGlassContainer(spacing: 0) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        addPaneButtons(Self.emptyPaneKinds)
-                    }
-                    VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                            addPaneButtons(Array(Self.emptyPaneKinds.prefix(3)))
-                        }
-                        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                            addPaneButtons(Array(Self.emptyPaneKinds.dropFirst(3)))
-                        }
-                    }
-                }
-            }
-        }
-        .padding(LiquidGlassMetrics.Spacing.xLarge)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private static let emptyPaneKinds: [PaneKind] = [.terminal, .browser, .device, .simulator, .android, .editor, .agentChat]
-
-    private func addPaneButtons(_ kinds: [PaneKind]) -> some View {
-        ForEach(kinds, id: \.self) { kind in
-            if kind == .editor {
-                addPaneButton(kind)
-                    .disabled(workspace.effectiveRootPath == nil)
-                    .help(workspace.effectiveRootPath == nil
-                        ? "Set a workspace root path to open the editor"
-                        : "Open a file editor with fuzzy file search")
-            } else if kind == .agentChat {
-                addPaneButton(kind)
-                    .disabled(workspace.effectiveRootPath == nil)
-                    .help(workspace.effectiveRootPath == nil
-                        ? "Set a workspace root path to chat with a coding agent"
-                        : "Chat with Claude, Codex, Kimi, or Grok in this workspace")
-            } else {
-                addPaneButton(kind)
-            }
-        }
-    }
-
-    private func addPaneButton(_ kind: PaneKind) -> some View {
-        Button {
-            workspace.addPane(kind: kind, side: .right)
-        } label: {
-            Label(kind.displayName, systemImage: kind.systemImageName)
-        }
-        // Peer choices with no single primary (BTN-1), so all secondary glass.
-        .compatGlassButtonStyle()
-        .buttonBorderShape(.capsule)
-    }
-
-    @ViewBuilder
-    private func filledPanesContent(isVertical: Bool, sorted: [Pane]) -> some View {
-        GeometryReader { geometry in
-            let totalSize = isVertical ? geometry.size.width : geometry.size.height
-            let dividerThickness = PaneLayoutMetrics.dividerHitThickness
-            let dividerCount = CGFloat(max(sorted.count - 1, 0))
-            let availableSize = max(0, totalSize - dividerCount * dividerThickness)
-            let layout = paneLayoutPlan(totalSize: availableSize, sorted: sorted)
-
-            let stack = isVertical ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
-            stack {
-                ForEach(Array(sorted.enumerated()), id: \.element.id) { index, pane in
-                    let paneSize = layout.sizes[pane.id] ?? 0
-
-                    ZStack {
-                        PaneView(
-                            pane: pane,
-                            isSelected: workspace.selectedPaneID == pane.id && !pane.isCollapsed,
-                            isWorkspaceActive: isActive
-                        )
-                        .opacity(pane.isCollapsed ? 0 : 1)
-                        .allowsHitTesting(!pane.isCollapsed)
-
-                        if pane.isCollapsed {
-                            CollapsedPaneSlit(
-                                pane: pane,
-                                isVertical: isVertical,
-                                isWorkspaceActive: isActive,
-                                onUnhide: { workspace.expandPane(pane) }
-                            )
-                        }
-                    }
-                        .frame(
-                            width: isVertical ? max(0, paneSize) : nil,
-                            height: isVertical ? nil : max(0, paneSize)
-                        )
-                        // AppKit-backed panes can retain a document width larger
-                        // than their SwiftUI allocation while a divider moves.
-                        // Keep every surface inside the pane it was assigned.
-                        .clipped()
-                        .simultaneousGesture(
-                            TapGesture().onEnded {
-                                guard !pane.isCollapsed else { return }
-                                workspace.selectedPaneID = pane.id
-                            }
-                        )
-
-                    if index < sorted.count - 1 {
-                        let trailingPane = sorted[index + 1]
-                        PaneResizeHandle(
-                            isVertical: isVertical,
-                            totalSize: layout.expandedSize,
-                            leadingID: pane.id,
-                            trailingID: trailingPane.id,
-                            workspace: workspace,
-                            isEnabled: workspace.canResizePanes(
-                                leadingID: pane.id,
-                                trailingID: trailingPane.id
-                            )
-                        )
-                    }
-                }
-            }
-            // Pane geometry must never ride an ambient animation: while an
-            // animation transaction is alive (e.g. a new browser pane's start
-            // page re-rendering), interpolated slot frames can stick, leaving
-            // dead space above AppKit surfaces until the next window resize.
-            .transaction { $0.animation = nil }
-        }
-    }
-
-}
-
-private extension WorkspaceView {
-    var resizableTabBar: some View {
-        let sorted = workspace.sortedPanes
-
-        return GeometryReader { geometry in
-            let dividerCount = CGFloat(max(sorted.count - 1, 0))
-            let availableWidth = max(0, geometry.size.width - dividerCount * PaneLayoutMetrics.dividerHitThickness)
-            let layout = paneLayoutPlan(totalSize: availableWidth, sorted: sorted)
-
-            // Spacing 0: tabs stay distinct across the resize handles.
-            CompatGlassContainer(spacing: 0) {
-                HStack(spacing: 0) {
-                    ForEach(Array(sorted.enumerated()), id: \.element.id) { index, pane in
-                        let tabWidth = layout.sizes[pane.id] ?? 0
-
-                        tabItem(pane, paneCount: sorted.count)
-                            .frame(width: max(0, tabWidth))
-
-                        if index < sorted.count - 1 {
-                            let trailingPane = sorted[index + 1]
-                            PaneResizeHandle(
-                                isVertical: true,
-                                totalSize: layout.expandedSize,
-                                leadingID: pane.id,
-                                trailingID: trailingPane.id,
-                                workspace: workspace,
-                                isEnabled: workspace.canResizePanes(
-                                    leadingID: pane.id,
-                                    trailingID: trailingPane.id
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        .frame(height: PaneLayoutMetrics.tabHeight)
-    }
-
-    func syncFocusForSelectedPane() {
-        guard isActive else { return }
-        guard workspace.selectedPane?.isCollapsed != true else { return }
-
-        if let pane = workspace.selectedPane, pane.kind == .browser {
-            let state = pane.browserState
-            DispatchQueue.main.async {
-                // Take keys away from a terminal or another pane's page, but
-                // keep focus a click already gave to this pane's page (see
-                // `BrowserPaneFocus`).
-                guard let window = NSApp.keyWindow,
-                      !BrowserPaneFocus.isInWebContent(window.firstResponder, ownedBy: state) else { return }
-                window.makeFirstResponder(nil)
-            }
-            return
-        }
-
-        guard let pane = workspace.selectedPane ?? workspace.frontmostTerminalPane,
-              pane.kind == .terminal else { return }
-        workspace.setFrontmostTerminalPaneID(pane.id)
-        DispatchQueue.main.async {
-            _ = GhosttyMetalView.focus(paneID: pane.id)
-        }
-    }
-
-    func paneLayoutPlan(totalSize: CGFloat, sorted: [Pane]) -> PaneLayoutPlan {
-        guard !sorted.isEmpty else { return PaneLayoutPlan(sizes: [:], expandedSize: 0) }
-
-        let collapsedPanes = sorted.filter(\.isCollapsed)
-        let expandedPanes = sorted.filter { !$0.isCollapsed }
-        let maxCollapsedThickness = totalSize / CGFloat(max(sorted.count, 1))
-        let collapsedThickness = min(PaneLayoutMetrics.collapsedPaneThickness, max(0, maxCollapsedThickness))
-        let collapsedTotal = CGFloat(collapsedPanes.count) * collapsedThickness
-        let expandedSize = expandedPanes.isEmpty ? 0 : max(0, totalSize - collapsedTotal)
-        let fractions = PaneSizing.flooredFractions(
-            workspace.normalizedExpandedSizeFractions,
-            expandedSize: Double(expandedSize)
-        )
-
-        var sizes: [UUID: CGFloat] = [:]
+        var slots: [CockpitPaneSlot] = []
         for pane in sorted {
+            let slot: CockpitPaneSlot
+            if let existing = panes[pane.id] { slot = existing } else {
+                let payload = WorkspacePaneDragPayload(paneID: pane.id, sourceWorkspaceID: workspace.id,
+                                                       projectID: projectID, sourceSurface: surface)
+                slot = CockpitPaneSlot(pane: pane, payload: payload)
+                slot.onSelect = { [weak self, weak pane] in
+                    guard let self, let pane else { return }
+                    if pane.isCollapsed { self.workspace.expandPane(pane) }
+                    self.workspace.selectedPaneID = pane.id
+                    if pane.kind == .terminal { self.workspace.setFrontmostTerminalPaneID(pane.id) }
+                    self.workspace.syncDefaultRootPathIfNeeded()
+                    self.onSelectionChange?()
+                    self.refresh(isActive: self.active)
+                }
+                slot.onFocus = { [weak self] in self?.focusSelectedPane() }
+                slot.tab.onClose = { [weak self, weak pane] in if let pane { self?.onClosePane?(pane) } }
+                slot.tab.onHide = { [weak self, weak pane] in
+                    guard let self, let pane else { return }
+                    if pane.isCollapsed { self.workspace.expandPane(pane) } else { self.workspace.collapsePane(pane) }
+                    self.refresh(isActive: self.active)
+                }
+                slot.tab.onDrop = { [weak self, weak pane] payload in
+                    guard let self, let pane else { return false }
+                    let result = self.onDrop(payload, pane)
+                    self.refresh(isActive: self.active)
+                    return result
+                }
+                slot.tab.contextMenuProvider = { [weak self, weak pane] in
+                    guard let self, let pane else { return NSMenu() }
+                    return self.contextMenu(for: pane)
+                }
+                panes[pane.id] = slot
+            }
+            slot.tab.canClose = sorted.count > 1 || surface == .extension
+            slot.tab.isSelected = workspace.selectedPaneID == pane.id && !pane.isCollapsed
+            slot.tab.refresh()
+            slot.tab.setActive(isActive && !pane.isCollapsed)
             if pane.isCollapsed {
-                sizes[pane.id] = collapsedThickness
+                slot.detach()
+                slot.showCollapsed()
             } else {
-                let fraction = fractions[pane.id] ?? (1.0 / Double(max(expandedPanes.count, 1)))
-                sizes[pane.id] = expandedSize * CGFloat(fraction)
+                let controller = cache.controller(for: pane, rootPath: workspace.effectiveRootPath, factory: factory)
+                if controller.parent !== self {
+                    controller.view.removeFromSuperview()
+                    controller.removeFromParent()
+                    addChild(controller)
+                }
+                slot.attach(controller)
+                (controller as? CockpitPanePresenting)?.updatePresentation(isActive: isActive, isSelected: isActive && workspace.selectedPaneID == pane.id)
             }
+            slots.append(slot)
         }
+        layoutView.setSlots(slots)
+    }
 
-        return PaneLayoutPlan(sizes: sizes, expandedSize: expandedSize)
+    func deactivate() {
+        active = false
+        for slot in panes.values { slot.tab.setActive(false); slot.detach() }
+    }
+
+    func focusSelectedPane() {
+        guard let pane = workspace.selectedPane, !pane.isCollapsed else { return }
+        guard let controller = cache.existingController(for: pane.id) else { return }
+        if let focusing = controller as? CockpitPaneInputFocusing { focusing.focusPaneInput(); return }
+        func responder(in view: NSView) -> NSView? {
+            guard !view.isHiddenOrHasHiddenAncestor else { return nil }
+            if let control = view as? NSControl, !control.isEnabled { return nil }
+            for child in view.subviews { if let found = responder(in: child) { return found } }
+            return view.acceptsFirstResponder ? view : nil
+        }
+        if let target = responder(in: controller.view) { view.window?.makeFirstResponder(target) }
+    }
+
+    private func contextMenu(for pane: Pane) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(ShellMenuItem(pane.isCollapsed ? "Show Pane" : "Hide Pane") { [weak self] in
+            if pane.isCollapsed { self?.workspace.expandPane(pane) } else { self?.workspace.collapsePane(pane) }
+        })
+        menu.addItem(ShellMenuItem(workspace.focusedPaneID == pane.id ? "Restore Pane Layout" : "Focus Pane") { [weak self] in self?.workspace.focusPane(pane) })
+        menu.addItem(ShellMenuItem("Close Pane", enabledWhen: { [weak self] in (self?.workspace.panes.count ?? 0) > 1 || self?.surface == .extension }) { [weak self] in self?.onClosePane?(pane) })
+        menu.addItem(.separator())
+        let launcher = WorkspacePaneLauncher(workspace: workspace)
+        for (title, side) in [("Add Pane on Left", Workspace.Side.left), ("Add Pane on Right", Workspace.Side.right)] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            item.submenu = launcher.makeMenu(side: side)
+            menu.addItem(item)
+        }
+        menu.addItem(ShellMenuItem(workspace.axis == .vertical ? "Stack Panes Vertically" : "Arrange Panes Horizontally") { [weak self] in
+            guard let self else { return }
+            self.workspace.axis = self.workspace.axis == .vertical ? .horizontal : .vertical
+            _ = self.workspace.modelContext?.saveReporting()
+        })
+        menu.addItem(ShellMenuItem("Reset Pane Sizes") { [weak self] in self?.workspace.resetPaneSizes() })
+        return menu
     }
 }
 
-private struct PaneResizeHandle: View {
-    let isVertical: Bool
-    let totalSize: CGFloat
-    let leadingID: UUID
-    let trailingID: UUID
-    let workspace: Workspace
-    let isEnabled: Bool
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var isDragging = false
-    @State private var isHovering = false
-    @State private var lastDragLocation: CGFloat = 0
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(separatorColor.opacity(isHovering || isDragging ? 0.18 : 0.08))
-
-            Rectangle()
-                .fill(isDragging || isHovering ? Color.accentColor : separatorColor)
-                .frame(
-                    width: isVertical ? PaneLayoutMetrics.dividerLineThickness : nil,
-                    height: isVertical ? nil : PaneLayoutMetrics.dividerLineThickness
-                )
-        }
-        .frame(
-            width: isVertical ? PaneLayoutMetrics.dividerHitThickness : nil,
-            height: isVertical ? nil : PaneLayoutMetrics.dividerHitThickness
-        )
-        .contentShape(Rectangle())
-        .zIndex(1)
-        .onDisappear {
-            isHovering = false
-            NSCursor.arrow.set()
-        }
-        .onContinuousHover { phase in
-            guard isEnabled else {
-                isHovering = false
-                NSCursor.arrow.set()
-                return
-            }
-
-            switch phase {
-            case .active:
-                isHovering = true
-                resizeCursor.set()
-            case .ended:
-                isHovering = false
-                NSCursor.arrow.set()
-            }
-        }
-        .onTapGesture(count: 2) {
-            guard isEnabled else { return }
-            workspace.resetPaneSizes()
-        }
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                .onChanged { value in
-                    guard isEnabled else { return }
-                    guard totalSize > 0 else { return }
-                    let current = isVertical ? value.location.x : value.location.y
-                    if !isDragging {
-                        isDragging = true
-                        lastDragLocation = current
-                        return
-                    }
-                    let moved = current - lastDragLocation
-                    lastDragLocation = current
-                    let delta = Double(moved / totalSize)
-                    workspace.resizePanes(
-                        leadingID: leadingID,
-                        trailingID: trailingID,
-                        delta: delta,
-                        expandedSize: Double(totalSize)
-                    )
-                }
-                .onEnded { _ in
-                    guard isEnabled else { return }
-                    isDragging = false
-                    workspace.persistPaneSizes()
-                }
-        )
-    }
-
-    private var separatorColor: Color {
-        Color(
-            .sRGB,
-            white: colorScheme == .dark ? 0.2 : 0.78,
-            opacity: 1
-        )
-    }
-
-    private var resizeCursor: NSCursor {
-        isVertical ? .resizeLeftRight : .resizeUpDown
-    }
-}
-
-private struct CollapsedPaneSlit: View {
+@MainActor
+private final class CockpitPaneSlot: NSView {
     let pane: Pane
-    let isVertical: Bool
-    let isWorkspaceActive: Bool
-    let onUnhide: () -> Void
+    let tab: CockpitPaneTab
+    var onSelect: (() -> Void)?
+    var onFocus: (() -> Void)?
+    private let content = NSView()
+    private weak var controller: NSViewController?
+    private let reveal = ShellActionButton("Show Pane", symbol: "eye", perform: {})
+    override var isFlipped: Bool { true }
 
-    var body: some View {
-        ZStack {
-            // The whole slit is the tap target: unglazed, but with a hover
-            // wash and press feedback so it reads as clickable (BTN-5). The
-            // slit is a pane edge, not a control, so the wash stays square.
-            Button(action: onUnhide) {
-                Color.clear
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.liquidGlassPressable(cornerRadius: 0))
-            .accessibilityLabel("Unhide \(pane.kind.displayName)")
-
-            Group {
-                if isVertical {
-                    VStack(spacing: 0) {
-                        unhideButton
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
-                } else {
-                    HStack(spacing: 0) {
-                        unhideButton
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.leading, LiquidGlassMetrics.Spacing.xxSmall)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.85))
-        .clipShape(RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous))
-    }
-
-    @ViewBuilder
-    private var unhideButton: some View {
-        if pane.kind == .terminal {
-            HiddenTerminalIndicator(
-                pane: pane,
-                compact: false,
-                isWorkspaceActive: isWorkspaceActive
-            )
-        } else {
-            // Icon-only control floating over the collapsed slit: a circular
-            // glass button sized to fit the 28pt slit.
-            Button(action: onUnhide) {
-                Label {
-                    Text("Unhide \(pane.kind.displayName)")
-                } icon: {
-                    Image(systemName: "eye")
-                        .scaledFont(size: 10, weight: .semibold)
-                        .frame(width: 12, height: 12)
-                }
-            }
-            .compatGlassIconButton(controlSize: .mini)
-            .help("Unhide \(pane.kind.displayName)")
-        }
-    }
-}
-
-private struct HiddenTerminalIndicator: View {
-    let pane: Pane
-    let compact: Bool
-    let isWorkspaceActive: Bool
-    @AppStorage private var fastCommand: String
-    @State private var activity: TerminalProcessActivity = .idle
-    @State private var isPulsing = false
-    @State private var activeAction: FastCommandAction?
-
-    private enum FastCommandAction {
-        case play
-        case stop
-    }
-
-    init(pane: Pane, compact: Bool, isWorkspaceActive: Bool) {
+    init(pane: Pane, payload: WorkspacePaneDragPayload) {
         self.pane = pane
-        self.compact = compact
-        self.isWorkspaceActive = isWorkspaceActive
-        _fastCommand = AppStorage(
-            wrappedValue: "",
-            TerminalFastCommandStore.preferenceKey(for: pane.id)
-        )
+        tab = CockpitPaneTab(pane: pane, payload: payload)
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = true
+        addSubview(tab); addSubview(content)
+        tab.onSelect = { [weak self] in self?.onSelect?(); self?.onFocus?() }
+        reveal.perform = { [weak self] in self?.onSelect?(); self?.onFocus?() }
+        reveal.setAccessibilityLabel("Show \(pane.displayTitle)")
     }
+    required init?(coder: NSCoder) { nil }
 
-    var body: some View {
-        CompatGlassContainer(spacing: 0) {
-            indicatorStack
+    func attach(_ controller: NSViewController) {
+        self.controller = controller
+        reveal.removeFromSuperview()
+        if controller.view.superview !== content {
+            controller.view.removeFromSuperview()
+            content.addSubview(controller.view)
         }
-        .animation(LiquidGlassMetrics.spring, value: activity)
-        .animation(LiquidGlassMetrics.spring, value: executableCommand != nil)
-        .task(id: isWorkspaceActive) {
-            guard isWorkspaceActive else { return }
-            let session = pane.terminalSession
-            while !Task.isCancelled {
-                activity = await session.foregroundActivity(unavailableActivity: .idle)
-                try? await Task.sleep(for: .seconds(1))
-            }
-        }
+        controller.view.frame = content.bounds
+        controller.view.autoresizingMask = [.width, .height]
     }
-
-    private var indicatorStack: some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-            if activity == .running {
-                runningIndicator
-                    .help("This hidden terminal is running")
-                    .accessibilityLabel("Hidden terminal is running")
-            }
-
-            if executableCommand != nil {
-                fastCommandButton(
-                    action: .play,
-                    systemName: "play.fill",
-                    help: "Stop the active process and run the Fast Command"
-                )
-                fastCommandButton(
-                    action: .stop,
-                    systemName: "stop.fill",
-                    help: "Stop the active terminal process"
-                )
-            }
+    func detach() {
+        tab.setActive(false)
+        guard let controller else { return }
+        // The destination window may already have reparented this retained
+        // controller. A late source refresh must not deactivate its new host.
+        if controller.view.superview === content {
+            (controller as? CockpitPanePresenting)?.updatePresentation(isActive: false, isSelected: false)
+            controller.view.removeFromSuperview()
+            controller.removeFromParent()
         }
+        self.controller = nil
     }
-
-    private func fastCommandButton(
-        action: FastCommandAction,
-        systemName: String,
-        help: String
-    ) -> some View {
-        Button {
-            perform(action)
-        } label: {
-            // A fixed glyph frame keeps the circle the same size while the
-            // spinner swaps in.
-            Group {
-                if activeAction == action {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else {
-                    Image(systemName: systemName)
-                        .scaledFont(size: compact ? 8 : 10, weight: .semibold)
-                }
-            }
-            .foregroundStyle(action == .play ? Color.primary : Color.secondary)
-            .frame(width: 14, height: 14)
-        }
-        // Icon-only circular glass, one control size for the whole column.
-        .compatGlassIconButton(controlSize: .small)
-        .disabled(activeAction != nil)
-        .help(help)
-        .accessibilityLabel(help)
+    func showCollapsed() {
+        if reveal.superview !== content { content.addSubview(reveal) }
+        reveal.frame = content.bounds
+        reveal.autoresizingMask = [.width, .height]
     }
-
-    private var runningIndicator: some View {
-        ZStack {
-            Circle()
-                .fill(Color.accentColor.opacity(compact ? 0.12 : 0.16))
-                .frame(width: compact ? 18 : 20, height: compact ? 18 : 20)
-
-            Circle()
-                .fill(Color.accentColor.opacity(isPulsing ? 0.95 : 0.45))
-                .frame(width: compact ? 5 : 6, height: compact ? 5 : 6)
-                .scaleEffect(isPulsing ? 1.0 : 0.72)
-        }
-        .frame(width: compact ? 18 : 20, height: compact ? 18 : 20)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
-                isPulsing = true
-            }
-        }
+    override func layout() {
+        super.layout()
+        let height: CGFloat = pane.isCollapsed && bounds.width <= 32 ? 0 : min(36 * CGFloat(CockpitUIZoomController.shared.factor), bounds.height)
+        tab.frame = NSRect(x: 0, y: 0, width: bounds.width, height: height)
+        tab.isHidden = height == 0
+        content.frame = NSRect(x: 0, y: height, width: bounds.width, height: max(0, bounds.height - height))
+        controller?.view.frame = content.bounds
+        reveal.frame = content.bounds
     }
-
-    private var executableCommand: String? {
-        TerminalFastCommandStore.executableCommand(from: fastCommand)
-    }
-
-    private func perform(_ action: FastCommandAction) {
-        guard activeAction == nil else { return }
-        if action == .play, executableCommand == nil { return }
-        activeAction = action
-        Task {
-            switch action {
-            case .play:
-                if let executableCommand {
-                    _ = await pane.terminalSession.runFastCommand(executableCommand)
-                }
-            case .stop:
-                _ = await pane.terminalSession.interrupt()
-            }
-            activity = await pane.terminalSession.foregroundActivity(unavailableActivity: .idle)
-            activeAction = nil
-        }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let result = super.hitTest(point)
+        if result != nil, NSApp.currentEvent?.type == .leftMouseDown, pane.workspace?.selectedPaneID != pane.id { onSelect?() }
+        return result
     }
 }
 
-struct PaneView: View {
-    let pane: Pane
-    let isSelected: Bool
-    let isWorkspaceActive: Bool
+@MainActor
+private final class CockpitPaneLayoutView: NSView {
+    weak var workspace: Workspace?
+    private var slots: [CockpitPaneSlot] = []
+    private var dividers: [CockpitPaneDivider] = []
+    private let empty = NSTextField(labelWithString: "Add a pane using the toolbar.")
+    override var isFlipped: Bool { true }
 
-    var body: some View {
-        switch pane.kind {
-        case .terminal:
-            if pane.terminalDestination.kind == .drone {
-                DroneTerminalView(pane: pane)
-            } else {
-                TerminalViewRepresentable(
-                    pane: pane,
-                    isActive: isWorkspaceActive,
-                    isCollapsed: pane.isCollapsed
-                )
+    func setSlots(_ next: [CockpitPaneSlot]) {
+        let changed = slots.map(ObjectIdentifier.init) != next.map(ObjectIdentifier.init)
+        if changed {
+            for slot in slots { slot.removeFromSuperview() }
+            for divider in dividers { divider.removeFromSuperview() }
+            slots = next
+            dividers = []
+            for slot in slots { addSubview(slot) }
+            if slots.count > 1 {
+                for index in 0..<(slots.count - 1) {
+                    let divider = CockpitPaneDivider(frame: .zero)
+                    divider.onResize = { [weak self] delta in
+                        guard let self, let workspace = self.workspace else { return }
+                        let expanded = self.expandedLength
+                        guard expanded > 0 else { return }
+                        workspace.resizePanes(leadingID: self.slots[index].pane.id, trailingID: self.slots[index + 1].pane.id,
+                                              delta: Double(delta / expanded), expandedSize: Double(expanded))
+                        self.needsLayout = true
+                        self.layoutSubtreeIfNeeded()
+                    }
+                    divider.onEnd = { [weak workspace] in workspace?.persistPaneSizes() }
+                    dividers.append(divider); addSubview(divider)
+                }
             }
-        case .browser:
-            if let state = pane.browserState {
-                BrowserPaneView(
-                    state: state,
-                    rootPath: pane.workspace?.effectiveRootPath,
-                    isActive: isWorkspaceActive,
-                    isSelected: isSelected,
-                    onSelect: { pane.workspace?.selectedPaneID = pane.id },
-                    targetTerminalPaneID: { pane.workspace?.frontmostTerminalPane?.id }
-                )
-                .clipShape(RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous))
-            }
-        case .device:
-            DevicePaneView(
-                paneID: pane.id,
-                isActive: isWorkspaceActive,
-                isSelected: isSelected,
-                isCollapsed: pane.isCollapsed
-            )
-        case .simulator:
-            SimulatorPaneView(paneID: pane.id, isActive: isWorkspaceActive, isSelected: isSelected)
-        case .android:
-            AndroidPaneView(
-                paneID: pane.id,
-                isActive: isWorkspaceActive,
-                isSelected: isSelected,
-                isCollapsed: pane.isCollapsed
-            )
-        case .editor:
-            if let editorState = pane.editorState {
-                EditorPaneView(state: editorState,
-                               rootPath: pane.workspace?.effectiveRootPath,
-                               isActive: isWorkspaceActive,
-                               isSelected: isSelected,
-                               onSelect: { pane.workspace?.selectedPaneID = pane.id })
-            }
-        case .agentChat:
-            AgentChatPaneView(
-                paneID: pane.id,
-                workingDirectory: pane.workspace?.effectiveRootPath,
-                isActive: isWorkspaceActive,
-                isSelected: isSelected,
-                onSelect: { pane.workspace?.selectedPaneID = pane.id }
-            )
         }
+        if slots.isEmpty { if empty.superview == nil { addSubview(empty) } } else { empty.removeFromSuperview() }
+        needsLayout = true
+    }
+
+    private var expandedLength: CGFloat {
+        let isVertical = workspace?.axis == .vertical
+        let total = isVertical ? bounds.width : bounds.height
+        let collapsed = slots.filter { $0.pane.isCollapsed }.count
+        return max(0, total - CGFloat(max(0, slots.count - 1)) * 6 - CGFloat(collapsed) * 28)
+    }
+
+    override func layout() {
+        super.layout()
+        guard let workspace else { return }
+        let isVertical = workspace.axis == .vertical
+        let total = isVertical ? bounds.width : bounds.height
+        let fractions = PaneSizing.flooredFractions(workspace.normalizedExpandedSizeFractions, expandedSize: Double(expandedLength))
+        let collapsedCount = slots.filter { $0.pane.isCollapsed }.count
+        let available = max(0, total - CGFloat(max(0, slots.count - 1)) * 6)
+        let collapsedSize = collapsedCount > 0 ? min(28, available / CGFloat(max(1, slots.count))) : 0
+        let expanded = max(0, available - CGFloat(collapsedCount) * collapsedSize)
+        var position: CGFloat = 0
+        for (index, slot) in slots.enumerated() {
+            let length = slot.pane.isCollapsed ? collapsedSize : expanded * CGFloat(fractions[slot.pane.id] ?? 0)
+            slot.frame = isVertical ? NSRect(x: position, y: 0, width: length, height: bounds.height)
+                                   : NSRect(x: 0, y: position, width: bounds.width, height: length)
+            position += length
+            if dividers.indices.contains(index) {
+                let divider = dividers[index]
+                divider.isVertical = isVertical
+                divider.isEnabled = workspace.canResizePanes(leadingID: slots[index].pane.id, trailingID: slots[index + 1].pane.id)
+                divider.frame = isVertical ? NSRect(x: position, y: 0, width: 6, height: bounds.height)
+                                          : NSRect(x: 0, y: position, width: bounds.width, height: 6)
+                position += 6
+            }
+        }
+        empty.sizeToFit()
+        empty.frame.origin = NSPoint(x: max(12, (bounds.width - empty.frame.width) / 2), y: max(12, bounds.height / 2))
     }
 }
 
-// MARK: - Terminal (Ghostty)
-
-struct TerminalViewRepresentable: View {
-    let pane: Pane
-    let isActive: Bool
-    let isCollapsed: Bool
-
-    var body: some View {
-        GhosttyTerminalView(pane: pane, isActive: isActive, isCollapsed: isCollapsed)
-            .clipShape(RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous))
+@MainActor
+private final class CockpitPaneDivider: NSView {
+    var isVertical = true { didSet { setAccessibilityLabel(isVertical ? "Resize panels horizontally" : "Resize panels vertically") } }
+    var isEnabled = true { didSet { setAccessibilityEnabled(isEnabled) } }
+    var onResize: ((CGFloat) -> Void)?
+    var onEnd: (() -> Void)?
+    private var previous: NSPoint?
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { isEnabled }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.splitter)
+        setAccessibilityLabel("Resize panels")
     }
+    required init?(coder: NSCoder) { nil }
+    override func accessibilityPerformIncrement() -> Bool { resizeByKeyboard(12) }
+    override func accessibilityPerformDecrement() -> Bool { resizeByKeyboard(-12) }
+    private func resizeByKeyboard(_ delta: CGFloat) -> Bool {
+        guard isEnabled else { return false }
+        onResize?(delta); onEnd?(); return true
+    }
+    override func keyDown(with event: NSEvent) {
+        switch event.keyCode {
+        case 123, 126: _ = resizeByKeyboard(-12)
+        case 124, 125: _ = resizeByKeyboard(12)
+        default: super.keyDown(with: event)
+        }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.separatorColor.setFill()
+        let line = isVertical ? NSRect(x: bounds.midX - 0.5, y: 0, width: 1, height: bounds.height)
+                              : NSRect(x: 0, y: bounds.midY - 0.5, width: bounds.width, height: 1)
+        line.fill()
+    }
+    override func resetCursorRects() { if isEnabled { addCursorRect(bounds, cursor: isVertical ? .resizeLeftRight : .resizeUpDown) } }
+    override func mouseDown(with event: NSEvent) { if isEnabled { previous = event.locationInWindow } }
+    override func mouseDragged(with event: NSEvent) {
+        guard let previous else { return }
+        let current = event.locationInWindow
+        self.previous = current
+        onResize?(isVertical ? current.x - previous.x : previous.y - current.y)
+    }
+    override func mouseUp(with event: NSEvent) { previous = nil; onEnd?() }
 }

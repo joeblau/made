@@ -1,146 +1,256 @@
+import AppKit
 import Sparkle
-import SwiftUI
 
-/// Pilot's Settings window contents (⌘,). A source-list shell — sections on the
-/// left, detail on the right — matching the modern macOS/Xcode settings layout.
-/// "General" reuses the shared `SettingsSections` (Identity & Keys + About);
-/// "Usage" connects the AI usage APIs. The selected section is backed by
-/// `AppStorage` so the inspector's Usage empty-state can deep-link straight here.
-struct PilotSettingsView: View {
-    @AppStorage(SettingsTab.storageKey) private var selectedTab = SettingsTab.general
-    @State private var searchText = ""
+@MainActor
+final class PilotSettingsViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate {
+    private struct Section {
+        let id: String
+        let title: String
+        let searchTerms: String
+    }
+    private let sections = [
+        Section(id: SettingsTab.general, title: "General", searchTerms: "General identity keys about version updates setup permissions tools Chromium"),
+        Section(id: SettingsTab.drones, title: "Drones", searchTerms: "Drones remote workers pairing Bonjour"),
+        Section(id: SettingsTab.usage, title: "Usage", searchTerms: "Usage Claude Codex Kimi Grok")
+    ]
+    private let updater: SPUUpdater
+    private let droneStore: DroneStore
+    private let identity: SecureIdentity
+    private let onOpenSetup: () -> Void
+    private let onOpenMessaging: () -> Void
+    private let defaults: UserDefaults
+    private let runsLiveChecks: Bool
+    private let search = NSSearchField()
+    private let table = NSTableView()
+    private let detail = NSView()
+    private let noResults = NativeSettingsUI.label("No settings match your search.", color: .secondaryLabelColor)
+    private var filtered: [Section] = []
+    private var currentSection: String?
+    private var currentController: NSViewController?
+    private var controllers: [String: NSViewController] = [:]
+    private var defaultsObserver: NSObjectProtocol?
 
-    let updater: SPUUpdater
-    let droneStore: DroneStore
+    init(updater: SPUUpdater, droneStore: DroneStore, identity: SecureIdentity,
+         onOpenSetup: @escaping () -> Void, onOpenMessaging: @escaping () -> Void,
+         defaults: UserDefaults = .standard, runsLiveChecks: Bool = true) {
+        self.updater = updater
+        self.droneStore = droneStore
+        self.identity = identity
+        self.onOpenSetup = onOpenSetup
+        self.onOpenMessaging = onOpenMessaging
+        self.defaults = defaults
+        self.runsLiveChecks = runsLiveChecks
+        super.init(nibName: nil, bundle: nil)
+        preferredContentSize = NSSize(width: 920, height: 680)
+    }
+    required init?(coder: NSCoder) { nil }
 
-    var body: some View {
-        NavigationSplitView {
-            // The system sidebar search field (HIER-6) replaces a hand-drawn
-            // capsule; it adopts Liquid Glass on macOS 26 automatically.
-            let showsGeneral = matchesSearch("General identity keys about version updates setup permissions tools Chromium")
-            let showsUsage = matchesSearch("Usage Claude Codex Kimi Grok")
-            let showsDrones = matchesSearch("Drones remote workers pairing Bonjour")
-            List(selection: sidebarSelection) {
-                if showsGeneral {
-                    Label("General", systemImage: "gearshape")
-                        .tag(SettingsTab.general)
-                }
-                if showsDrones {
-                    Label("Drones", systemImage: "server.rack")
-                        .tag(SettingsTab.drones)
-                }
-                if showsUsage {
-                    Label("Usage", systemImage: "chart.bar.xaxis")
-                        .tag(SettingsTab.usage)
-                }
-            }
-            .listStyle(.sidebar)
-            // A designed no-results state instead of a blank sidebar (MOT-6).
-            .overlay {
-                if !showsGeneral && !showsDrones && !showsUsage {
-                    ContentUnavailableView.search(text: searchText)
-                    .legibleSecondaryHierarchy()
-                }
-            }
-            .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
-            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
-            .toolbar(removing: .sidebarToggle)
-        } detail: {
-            detail
-                .frame(maxWidth: 980)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+    override func loadView() {
+        view = NSView(frame: NSRect(origin: .zero, size: preferredContentSize))
+        search.placeholderString = "Search Settings"
+        search.setAccessibilityLabel("Search Settings")
+        search.delegate = self
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("section"))
+        table.addTableColumn(column)
+        table.headerView = nil
+        table.style = .sourceList
+        table.rowHeight = 32
+        table.delegate = self
+        table.dataSource = self
+        table.allowsEmptySelection = true
+        table.setAccessibilityLabel("Settings sections")
+        refreshTypography()
+        NotificationCenter.default.addObserver(self, selector: #selector(refreshTypography), name: .cockpitUIZoomDidChange, object: nil)
+        let scroll = NSScrollView()
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        let sidebar = NSView()
+        [search, scroll, noResults].forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            sidebar.addSubview($0)
         }
-        .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 760, idealWidth: 920, minHeight: 520, idealHeight: 680)
+        NSLayoutConstraint.activate([
+            sidebar.widthAnchor.constraint(equalToConstant: 220),
+            search.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 12),
+            search.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -12),
+            search.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 16),
+            scroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            scroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 12),
+            scroll.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+            noResults.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 16),
+            noResults.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -16),
+            noResults.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 24)
+        ])
+        let split = NativeSettingsUI.row([sidebar, detail], spacing: 0)
+        split.alignment = .top
+        NativeSettingsUI.pin(split, to: view)
+        sidebar.heightAnchor.constraint(equalTo: split.heightAnchor).isActive = true
+        detail.heightAnchor.constraint(equalTo: split.heightAnchor).isActive = true
+        updateFilter()
+        select(section: defaults.string(forKey: SettingsTab.storageKey) ?? SettingsTab.general)
     }
 
-    /// Bridges the non-optional `AppStorage` string to `List`'s optional selection.
-    private var sidebarSelection: Binding<String?> {
-        Binding(get: { selectedTab }, set: { selectedTab = $0 ?? SettingsTab.general })
-    }
-
-    private func matchesSearch(_ terms: String) -> Bool {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return query.isEmpty || terms.localizedCaseInsensitiveContains(query)
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        switch selectedTab {
-        case SettingsTab.usage:
-            UsageSettingsView(showsPageHeader: true)
-                .formStyle(.grouped)
-        case SettingsTab.drones:
-            DroneSettingsView(store: droneStore)
-        default:
-            Form {
-                PilotSettingsPageHeader(
-                    title: "General",
-                    subtitle: "Manage Cockpit identity, pairing, and app information.",
-                    systemImage: "gearshape.fill",
-                    tint: .blue
-                )
-                // Secondary glass actions (BTN-1: the page has no single
-                // primary action, so none is prominent).
-                Section("Updates") {
-                    Button("Check for Updates…") {
-                        updater.checkForUpdates()
-                    }
-                    .compatGlassButtonStyle()
-                }
-                Section("Setup") {
-                    // The description sits beside its action (LAY-5) in the
-                    // standard settings-row layout.
-                    LabeledContent {
-                        OpenSetupButton()
-                            .compatGlassButtonStyle()
-                    } label: {
-                        Text("Review permissions, companion connections, and developer tools.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                SettingsSections()
-                ChromiumDiagnosticsSettingsSection()
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        select(section: defaults.string(forKey: SettingsTab.storageKey) ?? SettingsTab.general)
+        defaultsObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.select(section: self.defaults.string(forKey: SettingsTab.storageKey) ?? SettingsTab.general)
             }
-            .formStyle(.grouped)
+        }
+    }
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        if let defaultsObserver { NotificationCenter.default.removeObserver(defaultsObserver) }
+        defaultsObserver = nil
+    }
+
+    func select(section id: String) {
+        guard isViewLoaded else { defaults.set(id, forKey: SettingsTab.storageKey); return }
+        let selected = sections.contains(where: { $0.id == id }) ? id : SettingsTab.general
+        if defaults.string(forKey: SettingsTab.storageKey) != selected { defaults.set(selected, forKey: SettingsTab.storageKey) }
+        if let row = filtered.firstIndex(where: { $0.id == selected }), table.selectedRow != row {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        }
+        guard currentSection != selected else { return }
+        currentSection = selected
+        currentController?.view.removeFromSuperview()
+        currentController?.removeFromParent()
+        let controller: NSViewController
+        if let cached = controllers[selected] { controller = cached } else {
+            switch selected {
+            case SettingsTab.drones:
+                controller = DroneSettingsViewController(store: droneStore, runsDiscovery: runsLiveChecks)
+            case SettingsTab.usage:
+                if runsLiveChecks {
+                    controller = UsageSettingsViewController(defaults: defaults, showsPageHeader: true)
+                } else {
+                    controller = UsageSettingsViewController(defaults: defaults, showsPageHeader: true, detector: { _ in false })
+                }
+            default:
+                controller = GeneralSettingsViewController(
+                    updater: updater, identity: identity, onOpenSetup: onOpenSetup,
+                    onOpenMessaging: onOpenMessaging, allowsIdentityChanges: runsLiveChecks
+                )
+            }
+            controllers[selected] = controller
+        }
+        currentController = controller
+        addChild(controller)
+        NativeSettingsUI.pin(controller.view, to: detail)
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { filtered.count }
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard filtered.indices.contains(row) else { return nil }
+        let cell = NSTableCellView()
+        let field = NativeSettingsUI.label(filtered[row].title)
+        cell.textField = field
+        NativeSettingsUI.pin(field, to: cell, inset: 8)
+        return cell
+    }
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        guard filtered.indices.contains(table.selectedRow) else { return }
+        select(section: filtered[table.selectedRow].id)
+    }
+    func controlTextDidChange(_ notification: Notification) { updateFilter() }
+
+    @objc private func refreshTypography() {
+        search.font = CockpitTypography.font(size: NSFont.systemFontSize)
+        search.currentEditor()?.font = search.font
+        search.invalidateIntrinsicContentSize()
+        table.rowHeight = max(32, CockpitTypography.font(size: 13).ascender - CockpitTypography.font(size: 13).descender + 16)
+    }
+
+    private func updateFilter() {
+        let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        filtered = sections.filter { query.isEmpty || $0.searchTerms.localizedCaseInsensitiveContains(query) }
+        table.reloadData()
+        noResults.isHidden = !filtered.isEmpty
+        if let currentSection, let row = filtered.firstIndex(where: { $0.id == currentSection }) {
+            table.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
     }
 }
 
-struct PilotSettingsPageHeader: View {
-    let title: String
-    let subtitle: String
-    let systemImage: String
-    let tint: Color
+@MainActor
+private final class GeneralSettingsViewController: NSViewController {
+    private let identity: SecureIdentity
+    private let updateAction: SoftwareUpdateAction
+    private let onOpenSetup: () -> Void
+    private let onOpenMessaging: () -> Void
+    private let allowsIdentityChanges: Bool
+    private let localKey = NativeSettingsUI.label("", size: 11, selectable: true)
+    private let peerKey = NativeSettingsUI.label("", size: 11, selectable: true)
+    private let syncStatus = NativeSettingsUI.label("", size: 11)
+    private let observation = NativeSettingsObservation()
 
-    var body: some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            // A text style scaled up instead of a fixed point size (TYPE-4).
-            // The tile is content, not a control, so it stays a tinted fill
-            // rather than glass; continuous corners on the card token.
-            Image(systemName: systemImage)
-                .font(.largeTitle.weight(.medium))
-                .imageScale(.large)
-                .symbolRenderingMode(.hierarchical)
-                .foregroundStyle(tint)
-                .frame(width: 64, height: 64)
-                .background(
-                    tint.opacity(0.14),
-                    in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.card, style: .continuous)
-                )
-                .accessibilityHidden(true)
+    init(updater: SPUUpdater, identity: SecureIdentity, onOpenSetup: @escaping () -> Void,
+         onOpenMessaging: @escaping () -> Void, allowsIdentityChanges: Bool) {
+        self.identity = identity
+        updateAction = SoftwareUpdateAction(updater: updater)
+        self.onOpenSetup = onOpenSetup
+        self.onOpenMessaging = onOpenMessaging
+        self.allowsIdentityChanges = allowsIdentityChanges
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
 
-            // `.largeTitle` is 26pt on macOS: same size, but a named style.
-            Text(title)
-                .font(.largeTitle.bold())
-
-            Text(subtitle)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
+    override func loadView() {
+        let stack = NativeSettingsUI.column(spacing: 18)
+        stack.addArrangedSubview(NativeSettingsUI.label("General", size: 26, weight: .bold))
+        NativeSettingsUI.fillWidth(NativeSettingsUI.label(
+            "Manage Cockpit identity, pairing, and app information.", color: .secondaryLabelColor
+        ), in: stack)
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("Updates", [updateAction.makeButton()]), in: stack)
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("Setup", [
+            NativeSettingsUI.label("Review permissions, companion connections, and developer tools.", color: .secondaryLabelColor),
+            NativeSettingsButton("Set Up Cockpit…", action: onOpenSetup)
+        ]), in: stack)
+        localKey.usesMonospacedFont = true
+        peerKey.usesMonospacedFont = true
+        let regenerate = NativeSettingsButton("Regenerate & re-sync") { [weak self] in
+            guard let self, self.allowsIdentityChanges, !self.identity.isIsolated else { return }
+            self.identity.regenerate()
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xLarge)
+        regenerate.isEnabled = allowsIdentityChanges && !identity.isIsolated
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("Identity & Keys", [
+            syncStatus, NativeSettingsUI.label("This device", weight: .medium), localKey,
+            NativeSettingsUI.label("Paired device", weight: .medium), peerKey,
+            regenerate,
+            NativeSettingsButton("Secure Messaging…", action: onOpenMessaging),
+            NativeSettingsUI.label(
+                "Your device key is generated automatically and exchanged with your paired device over the encrypted connection — no setup required.",
+                size: 11, color: .secondaryLabelColor
+            )
+        ]), in: stack)
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("About", [
+            NativeSettingsUI.label("App: \(AppInfo.name)"), NativeSettingsUI.label("Version: \(AppInfo.version)"),
+            NativeSettingsUI.label("Build: \(AppInfo.build)")
+        ]), in: stack)
+        let diagnostics = ChromiumDiagnosticsViewController()
+        addChild(diagnostics)
+        NativeSettingsUI.fillWidth(diagnostics.view, in: stack)
+        view = NativeSettingsUI.scrolling(stack)
+        refreshIdentity()
+    }
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        observation.start { [weak self] in self?.refreshIdentity() }
+    }
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        observation.stop()
+    }
+    private func refreshIdentity() {
+        localKey.stringValue = identity.localPublicKey ?? "Generating…"
+        peerKey.stringValue = identity.peerPublicKey ?? "Waiting to sync…"
+        syncStatus.stringValue = identity.isSynced ? "Synced" : "Waiting for paired device"
+        syncStatus.textColor = identity.isSynced ? .systemGreen : .secondaryLabelColor
     }
 }

@@ -1,5 +1,6 @@
 import SwiftData
-import SwiftUI
+import Foundation
+import Observation
 
 @Observable
 @MainActor
@@ -685,7 +686,7 @@ final class WorkspaceStore {
         selectWorkspace(workspace.id)
     }
 
-    func requestDeleteWorkspace(_ workspace: Workspace) {
+    func requestDeleteWorkspace(_ workspace: Workspace, canDelete: @escaping @MainActor () -> Bool = { true }) {
         let linkedPanes = extensionWorkspaceLinks
             .filter { $0.sourceWorkspaceID == workspace.id }
             .compactMap(\.workspace).flatMap(\.panes)
@@ -698,7 +699,7 @@ final class WorkspaceStore {
                     .filter { $0.sourceWorkspaceID == workspace.id }
                     .compactMap(\.workspace).flatMap(\.panes) + workspace.panes
                 // Do not destroy a newly added terminal that was never checked.
-                guard Set(currentPanes.map(\.id)).isSubset(of: originalIDs) else { return }
+                guard Set(currentPanes.map(\.id)).isSubset(of: originalIDs), canDelete() else { return }
                 self.deleteWorkspace(workspace)
             }
         }
@@ -955,17 +956,4 @@ enum DemoReviewFixture {
     }
 }
 
-/// Opens the review-only Secure Messaging window once for
-/// `-demoSecureMessaging YES`.
-struct DemoSecureMessagingOpener: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Color.clear
-            .task {
-                guard DemoReviewFixture.flag("demoSecureMessaging") else { return }
-                openWindow(id: DemoReviewFixture.secureMessagingWindowID)
-            }
-    }
-}
 #endif

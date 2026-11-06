@@ -1,210 +1,129 @@
-import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
-struct TabItemContent: View {
+@MainActor
+final class CockpitPaneTab: NSView, NSDraggingSource {
     let pane: Pane
-    let isSelected: Bool
-    let isHovering: Bool
-    let isWorkspaceActive: Bool
-    let canClose: Bool
-    /// Selects the pane. The capsule's tap does this for the pointer; the
-    /// title group exposes it to VoiceOver as the tab's button action.
-    let onSelect: () -> Void
-    let onClose: () -> Void
-    let onHide: () -> Void
-    let onUnhide: () -> Void
+    var canClose = true { didSet { closeButton.isEnabled = canClose } }
+    var isSelected = false { didSet { updateAppearance() } }
+    var payload: WorkspacePaneDragPayload
+    var onSelect: (() -> Void)?
+    var onClose: (() -> Void)?
+    var onHide: (() -> Void)?
+    var onDrop: ((WorkspacePaneDragPayload) -> Bool)?
+    var contextMenuProvider: (() -> NSMenu)?
+    private let title = NSTextField(labelWithString: "")
+    private let status = NSTextField(labelWithString: "")
+    private let closeButton: ShellActionButton
+    private let hideButton: ShellActionButton
+    private var downPoint: NSPoint?
+    private var statusTask: Task<Void, Never>?
 
-    var body: some View {
-        if pane.isCollapsed {
-            collapsedContent
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            expandedContent
+    init(pane: Pane, payload: WorkspacePaneDragPayload) {
+        self.pane = pane
+        self.payload = payload
+        closeButton = ShellActionButton("", symbol: "xmark", perform: {})
+        hideButton = ShellActionButton("", symbol: "eye.slash", perform: {})
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 8
+        title.lineBreakMode = .byTruncatingTail
+        title.font = .systemFont(ofSize: 12)
+        status.font = .systemFont(ofSize: 10)
+        status.textColor = .secondaryLabelColor
+        closeButton.perform = { [weak self] in self?.onClose?() }
+        closeButton.toolTip = "Close pane"
+        closeButton.setAccessibilityLabel("Close pane")
+        hideButton.perform = { [weak self] in self?.onHide?() }
+        hideButton.toolTip = "Hide or show pane"
+        hideButton.setAccessibilityLabel("Hide or show pane")
+        for button in [closeButton, hideButton] {
+            button.isBordered = false
+            button.widthAnchor.constraint(equalToConstant: 22).isActive = true
         }
+        let icon: NSView
+        if let state = pane.browserState, pane.kind == .browser { icon = BrowserFaviconView(state: state) } else { icon = NSImageView(image: NSImage(systemSymbolName: pane.kind.systemImageName, accessibilityDescription: nil) ?? NSImage()) }
+        icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        icon.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        let labels = shellStack([title, status], spacing: 0)
+        var items: [NSView] = [closeButton, icon, labels]
+        if pane.kind == .agentChat { items.append(AgentChatTabBadge(paneID: pane.id)) }
+        items.append(hideButton)
+        let row = shellStack(items, orientation: .horizontal, spacing: 4)
+        row.distribution = .fill
+        shellPin(row, to: self, inset: 4)
+        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        registerForDraggedTypes([NSPasteboard.PasteboardType(UTType.pilotPane.identifier)])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+        refresh()
+    }
+    required init?(coder: NSCoder) { nil }
+    isolated deinit { statusTask?.cancel() }
+    override var isFlipped: Bool { true }
+
+    func refresh() {
+        title.font = CockpitTypography.font(size: 12)
+        status.font = CockpitTypography.font(size: 10)
+        title.stringValue = pane.displayTitle
+        if pane.terminalDestination.kind == .drone { title.stringValue += " · " + (pane.terminalDroneNameRaw ?? "Drone") }
+        hideButton.image = NSImage(systemSymbolName: pane.isCollapsed ? "eye" : "eye.slash", accessibilityDescription: nil)
+        setAccessibilityLabel(pane.displayTitle)
+        setAccessibilityValue(pane.isCollapsed ? "Collapsed" : (isSelected ? "Selected" : ""))
+        updateAppearance()
     }
 
-    @ViewBuilder
-    private var collapsedContent: some View {
-        if pane.kind == .terminal {
-            headerButton(systemName: "eye", help: "Show Terminal. Hidden terminals keep running.", action: onUnhide)
-        } else if pane.kind == .browser, let state = pane.browserState {
-            Button(action: onUnhide) {
-                BrowserFaviconView(state: state)
-                    .frame(width: 18, height: 18)
-            }
-            // Sits inside the tab's glass capsule, so it stays unglazed (no
-            // glass on glass) but gets hover and press feedback (BTN-5).
-            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.headerButtonSize / 2))
-            .help("Unhide \(pane.displayTitle)")
-            .accessibilityLabel("Unhide \(pane.displayTitle)")
-        } else {
-            headerButton(systemName: "eye", help: "Unhide \(paneTitle)", action: onUnhide)
-        }
-    }
-
-    private var expandedContent: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            if isHovering && canClose {
-                headerButton(systemName: "xmark", help: "Close \(paneTitle)", action: onClose)
-                    // Semantic fill so the hit circle reads in both modes.
-                    .background(.fill.tertiary, in: Circle())
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
-            }
-
-            // One button for assistive tech: the capsule selects on a plain
-            // tap (no Button, so the close and hide buttons stay separate
-            // targets), and that tap had no button trait or action.
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Image(systemName: pane.kind.systemImageName)
-                    .scaledFont(size: 11)
-                    .foregroundStyle(isSelected ? .primary : .secondary)
-                    .accessibilityHidden(true)
-
-                Text(pane.displayTitle)
-                    .scaledFont(size: 12)
-                    .lineLimit(1)
-                    .foregroundStyle(isSelected ? .primary : .secondary)
-
-                if pane.terminalDestination.kind == .drone {
-                    Text(pane.terminalDroneNameRaw ?? "Drone")
-                        .scaledFont(size: 10, weight: .medium)
-                        .foregroundStyle(.secondary)
-                }
-
-                if pane.kind == .agentChat {
-                    AgentChatTabBadge(paneID: pane.id)
-                }
-
-                if pane.kind == .terminal {
-                    TerminalAgentBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
-                    TerminalDirtyBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
-                }
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
-            .accessibilityAction { onSelect() }
-
-            Spacer(minLength: 0)
-
-            if isHovering {
-                headerButton(systemName: "eye.slash", help: "Hide \(paneTitle)", action: onHide)
-                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
-            }
-        }
-        .animation(LiquidGlassMetrics.stateChange, value: isHovering)
-    }
-
-    private var paneTitle: String {
-        pane.kind.displayName
-    }
-
-    private static let headerButtonSize: CGFloat = 18
-
-    /// Icon buttons inside the tab's glass capsule. Glass here would stack
-    /// glass on glass, so they stay unglazed with a circular hover wash and
-    /// press feedback instead (BTN-5).
-    private func headerButton(systemName: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .scaledFont(size: 9, weight: .bold)
-                .foregroundStyle(.secondary)
-                .frame(width: Self.headerButtonSize, height: Self.headerButtonSize)
-        }
-        .buttonStyle(.liquidGlassPressable(cornerRadius: Self.headerButtonSize / 2))
-        .help(help)
-        .accessibilityLabel(help)
-    }
-}
-
-/// Accent capsule naming the coding agent (Claude, Codex, …) currently open in
-/// a terminal pane, shown right after "Terminal". Polls the shell's process tree
-/// every couple of seconds while its workspace is active and the app is
-/// frontmost; renders nothing when no supported agent is open.
-private struct TerminalAgentBadge: View {
-    let pane: Pane
-    let isWorkspaceActive: Bool
-    @State private var isApplicationActive = true
-    @State private var agent: TerminalAgent?
-
-    var body: some View {
-        Group {
-            if let agent {
-                Text(agent.displayName)
-                    .scaledFont(size: 10, weight: .semibold)
-                    // The wash carries the accent; the word stays primary,
-                    // because accent text on its own 15% wash measures about
-                    // 2:1 (TYPE-3), like the runner status badges.
-                    .foregroundStyle(.primary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.15), in: Capsule())
-                    .help("\(agent.displayName) is open in this terminal")
-            }
-        }
-        .animation(LiquidGlassMetrics.spring, value: agent)
-        .observingApplicationActivity($isApplicationActive)
-        // Restart polling when activation flips; only the visible workspace of
-        // the frontmost app polls.
-        .task(id: isWorkspaceActive && isApplicationActive) {
-            guard isWorkspaceActive, isApplicationActive else { return }
+    private var isMonitoring = false
+    func setActive(_ active: Bool) {
+        guard active != isMonitoring else { return }
+        isMonitoring = active
+        statusTask?.cancel(); statusTask = nil
+        guard active, pane.kind == .terminal else { return }
+        statusTask = Task { [weak self] in
             while !Task.isCancelled {
-                agent = pane.liveShellAgent()
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
-    }
-}
-
-/// "Clean" / "Dirty" word shown after "Terminal" in a terminal tab header,
-/// reflecting whether the shell's current directory sits in a git work tree with
-/// uncommitted changes. Polls `git status` every few seconds while its workspace
-/// is active and the app is frontmost (it reads the shell's live cwd, so it
-/// tracks `cd` and file edits); panes sharing a cwd share one subprocess via
-/// GitDirtyStateCache. Renders nothing when the directory isn't a git repo.
-private struct TerminalDirtyBadge: View {
-    let pane: Pane
-    let isWorkspaceActive: Bool
-    @State private var isApplicationActive = true
-    @State private var isDirty: Bool?
-
-    var body: some View {
-        Group {
-            if let isDirty {
-                Text(isDirty ? "Dirty" : "Clean")
-                    .scaledFont(size: 11, weight: .medium)
-                    .foregroundStyle(isDirty ? Color.orange : Color.green)
-            }
-        }
-        .observingApplicationActivity($isApplicationActive)
-        // Restart polling when activation flips; only the visible workspace of
-        // the frontmost app polls.
-        .task(id: isWorkspaceActive && isApplicationActive) {
-            guard isWorkspaceActive, isApplicationActive else { return }
-            while !Task.isCancelled {
-                let directory = pane.liveShellCurrentDirectory() ?? pane.currentDirectory
-                let status: Bool? = directory.isEmpty
-                    ? nil
-                    : await GitDirtyStateCache.shared.isDirty(directory: directory)
-                if Task.isCancelled { break }
-                isDirty = status
+                guard let self else { return }
+                if NSApp.isActive {
+                    let agent = self.pane.liveShellAgent()?.displayName
+                    let directory = self.pane.liveShellCurrentDirectory() ?? self.pane.currentDirectory
+                    let dirty = directory.isEmpty ? nil : await GitDirtyStateCache.shared.isDirty(directory: directory)
+                    guard !Task.isCancelled else { return }
+                    self.status.stringValue = [agent, dirty.map { $0 ? "Dirty" : "Clean" }].compactMap { $0 }.joined(separator: " · ")
+                }
                 try? await Task.sleep(for: .seconds(3))
             }
         }
     }
-}
 
-/// Mirrors NSApplication's active state into `isActive` so polling badges stop
-/// forking subprocesses while the app is backgrounded — the same activation
-/// signal RepositoryPollingEnvironmentMonitor feeds the gh polling scheduler.
-private extension View {
-    @MainActor
-    func observingApplicationActivity(_ isActive: Binding<Bool>) -> some View {
-        self
-            .onAppear { isActive.wrappedValue = NSApplication.shared.isActive }
-            .onReceive(NotificationCenter.default.publisher(
-                for: NSApplication.didBecomeActiveNotification
-            )) { _ in isActive.wrappedValue = true }
-            .onReceive(NotificationCenter.default.publisher(
-                for: NSApplication.didResignActiveNotification
-            )) { _ in isActive.wrappedValue = false }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateAppearance() }
+    private func updateAppearance() {
+        layer?.backgroundColor = (isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.17) : NSColor.quaternaryLabelColor.withAlphaComponent(0.08)).cgColor
     }
+    override func mouseDown(with event: NSEvent) { downPoint = convert(event.locationInWindow, from: nil); onSelect?() }
+    override func mouseUp(with event: NSEvent) { downPoint = nil }
+    override func mouseDragged(with event: NSEvent) {
+        guard let downPoint else { return }
+        let location = convert(event.locationInWindow, from: nil)
+        guard hypot(location.x - downPoint.x, location.y - downPoint.y) >= 4,
+              let data = try? JSONEncoder().encode(payload) else { return }
+        self.downPoint = nil
+        let item = NSPasteboardItem()
+        item.setData(data, forType: NSPasteboard.PasteboardType(UTType.pilotPane.identifier))
+        let dragging = NSDraggingItem(pasteboardWriter: item)
+        let image = NSImage(size: bounds.size)
+        if let rep = bitmapImageRepForCachingDisplay(in: bounds) { cacheDisplay(in: bounds, to: rep); image.addRepresentation(rep) }
+        dragging.setDraggingFrame(bounds, contents: image)
+        beginDraggingSession(with: [dragging], event: event, source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { context == .withinApplication ? .move : [] }
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenuProvider?() }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { decode(sender) == nil ? [] : .move }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let payload = decode(sender) else { return false }
+        return onDrop?(payload) ?? false
+    }
+    private func decode(_ sender: NSDraggingInfo) -> WorkspacePaneDragPayload? {
+        guard let data = sender.draggingPasteboard.data(forType: NSPasteboard.PasteboardType(UTType.pilotPane.identifier)), data.count <= 16_384 else { return nil }
+        return try? JSONDecoder().decode(WorkspacePaneDragPayload.self, from: data)
+    }
+    override func accessibilityPerformPress() -> Bool { onSelect?(); return true }
 }

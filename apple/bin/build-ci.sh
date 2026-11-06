@@ -4,6 +4,7 @@ set -euo pipefail
 # shellcheck source-path=SCRIPTDIR source=lib/xcodebuild-ci.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/xcodebuild-ci.sh"
 
+python3 "$APPLE_ROOT/bin/check-cockpit-ui-boundary.py"
 "$APPLE_ROOT/bin/app-icon-tool.swift" validate
 "$APPLE_ROOT/bin/fetch-runner-model.sh" verify
 

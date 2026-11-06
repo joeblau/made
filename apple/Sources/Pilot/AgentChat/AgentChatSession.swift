@@ -451,6 +451,7 @@ enum AgentChatPaneStore {
 /// Owns each agent chat pane's session for the life of the pane, so switching
 /// workspaces or tabs never restarts an agent mid-turn.
 @MainActor
+@Observable
 final class AgentChatRegistry {
     static let shared = AgentChatRegistry()
 

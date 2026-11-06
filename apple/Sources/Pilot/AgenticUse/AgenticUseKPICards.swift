@@ -1,30 +1,47 @@
-import SwiftUI
+import AppKit
 
-/// The headline row: five metric cards, each with a delta against the
-/// equally long previous window and a sparkline of the selected range.
-///
-/// Delta color is semantic — green when the change is an improvement (lower
-/// cost, higher cache hit rate), red when it is a regression, secondary for
-/// volume figures that are neither good nor bad. Sparklines stay neutral:
-/// per-card hues collided with the provider colors used everywhere else.
-struct AgenticUseKPICards: View {
-    let snapshot: AgenticUseSnapshot
-    /// Columns to lay the cards across; the dashboard picks this from width.
-    let columns: Int
+@MainActor
+final class AgenticUseKPICards: AgenticUseFlippedView {
+    private var snapshot: AgenticUseSnapshot
+    private var cards: [AgenticUseKPICard] = []
 
-    var body: some View {
-        let metrics = metrics
-        LazyVGrid(
-            columns: Array(
-                repeating: GridItem(.flexible(), spacing: AgenticUseLayout.gap, alignment: .top),
-                count: max(1, columns)
-            ),
-            alignment: .leading,
-            spacing: AgenticUseLayout.gap
-        ) {
-            ForEach(metrics) { metric in
-                AgenticUseKPICard(metric: metric)
-            }
+    init(snapshot: AgenticUseSnapshot, columns: Int = 5) {
+        self.snapshot = snapshot
+        super.init(frame: .zero)
+        rebuild()
+    }
+    required init?(coder: NSCoder) { nil }
+    func update(snapshot: AgenticUseSnapshot) {
+        self.snapshot = snapshot
+        rebuild()
+    }
+    private func rebuild() {
+        let values = metrics
+        if cards.count != values.count {
+            cards.forEach { $0.removeFromSuperview() }
+            cards = values.map { AgenticUseKPICard(metric: $0) }
+            cards.forEach(addSubview)
+        } else {
+            for (card, metric) in zip(cards, values) { card.update(metric: metric) }
+        }
+        needsLayout = true
+    }
+    private func columns(for width: CGFloat) -> Int {
+        let scaled = width / AgenticUseLayout.zoom
+        return scaled >= 1000 ? 5 : (scaled >= 640 ? 3 : (scaled >= 350 ? 2 : 1))
+    }
+    func preferredHeight(for width: CGFloat) -> CGFloat {
+        let rows = ceil(CGFloat(cards.count) / CGFloat(columns(for: width)))
+        return rows * 140 * AgenticUseLayout.zoom + max(0, rows - 1) * 8
+    }
+    override func layout() {
+        super.layout()
+        let count = columns(for: bounds.width)
+        let width = max(0, (bounds.width - CGFloat(count - 1) * 8) / CGFloat(count))
+        let height = 140 * AgenticUseLayout.zoom
+        for (index, card) in cards.enumerated() {
+            card.frame = NSRect(x: CGFloat(index % count) * (width + 8), y: CGFloat(index / count) * (height + 8), width: width, height: height)
+            card.needsLayout = true
         }
     }
 
@@ -183,89 +200,62 @@ struct AgenticUseKPIMetric: Identifiable {
     let help: String
 }
 
-private struct AgenticUseKPICard: View {
-    let metric: AgenticUseKPIMetric
-
-    private static let sparklineHeight: CGFloat = 32
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-            Text(metric.title)
-                .agenticUseFont(.body, weight: .medium)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-            Text(metric.value)
-                .agenticUseFont(.display, weight: .bold, design: .rounded)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .contentTransition(.numericText())
-            HStack(alignment: .bottom, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                deltaLabel
-                    .layoutPriority(1)
-                Spacer(minLength: LiquidGlassMetrics.Spacing.xxSmall)
-                if metric.sparkline.count > 1 {
-                    AgenticUseSparkline(
-                        values: metric.sparkline,
-                        tint: .secondary,
-                        anchorsAtZero: metric.anchorsAtZero
-                    )
-                    .frame(minWidth: 44, maxWidth: 110)
-                    .frame(height: Self.sparklineHeight)
-                }
-            }
-            // A card without a sparkline (one bucket of cache data) keeps the
-            // row height, so its caption lines up with its neighbors' captions.
-            .frame(minHeight: Self.sparklineHeight, alignment: .bottom)
-        }
-        .agenticUseCard()
-        .help(metric.help)
-        .animation(LiquidGlassMetrics.spring, value: metric.value)
+@MainActor
+private final class AgenticUseKPICard: AgenticUseCardView {
+    private var metric: AgenticUseKPIMetric
+    private let valueLabel = NSTextField(labelWithString: "")
+    private let deltaLabel = NSTextField(labelWithString: "")
+    private let caption = NSTextField(labelWithString: "")
+    private let sparkline = AgenticUseSparkline(values: [], tint: .secondaryLabelColor)
+    init(metric: AgenticUseKPIMetric) {
+        self.metric = metric
+        super.init(title: metric.title)
+        for child in [valueLabel, deltaLabel, caption, sparkline] { addSubview(child) }
+        update(metric: metric)
     }
-
-    @ViewBuilder
-    private var deltaLabel: some View {
+    required init?(coder: NSCoder) { nil }
+    func update(metric: AgenticUseKPIMetric) {
+        self.metric = metric
+        titleLabel.stringValue = metric.title
+        valueLabel.stringValue = metric.value
         if let delta = metric.delta {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    deltaBadge(delta)
-                    Text(delta.caption)
-                        .agenticUseFont(.meta)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                deltaBadge(delta)
-            }
+            deltaLabel.stringValue = (delta.isFlat ? "− " : delta.change > 0 ? "↑ " : "↓ ") + delta.text
+            deltaLabel.textColor = AgenticUseTone.color(delta.effectiveTone)
+            deltaLabel.setAccessibilityLabel("\(delta.spokenDirection) \(delta.text)")
+            caption.stringValue = delta.caption
         } else {
-            Text(metric.fallbackCaption)
-                .agenticUseFont(.meta)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            deltaLabel.stringValue = ""
+            caption.stringValue = metric.fallbackCaption
         }
+        sparkline.update(values: metric.sparkline, tint: .secondaryLabelColor, anchorsAtZero: metric.anchorsAtZero)
+        toolTip = metric.help
+        setAccessibilityLabel("\(metric.title), \(metric.value), \(deltaLabel.stringValue), \(caption.stringValue)")
+        needsLayout = true
     }
-
-    private func deltaBadge(_ delta: AgenticUseKPIMetric.Delta) -> some View {
-        HStack(spacing: 2) {
-            Image(systemName: delta.symbol)
-                .agenticUseFont(.meta, weight: .bold)
-            Text(delta.text)
-                .agenticUseFont(.body, weight: .semibold)
-                .monospacedDigit()
-        }
-        .foregroundStyle(AgenticUseTone.color(delta.effectiveTone))
-        .fixedSize()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(delta.spokenDirection) \(delta.text) \(delta.caption)")
+    override func layout() {
+        super.layout()
+        let zoom = AgenticUseLayout.zoom
+        titleLabel.font = AgenticUseLayout.font(.body, weight: .medium)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.frame = NSRect(x: 14, y: 12, width: max(0, bounds.width - 28), height: 22 * zoom)
+        valueLabel.font = AgenticUseLayout.font(.display, weight: .bold, monospaced: true)
+        valueLabel.frame = NSRect(x: 14, y: 38 * zoom, width: max(0, bounds.width - 28), height: 36 * zoom)
+        valueLabel.lineBreakMode = .byTruncatingTail
+        deltaLabel.font = AgenticUseLayout.font(.body, weight: .semibold)
+        deltaLabel.frame = NSRect(x: 14, y: 80 * zoom, width: max(0, bounds.width * 0.5 - 14), height: 22 * zoom)
+        sparkline.frame = NSRect(x: bounds.width * 0.5, y: 80 * zoom, width: max(0, bounds.width * 0.5 - 14), height: 30 * zoom)
+        caption.font = AgenticUseLayout.font(.caption)
+        caption.textColor = .secondaryLabelColor
+        caption.frame = NSRect(x: 14, y: 112 * zoom, width: max(0, bounds.width - 28), height: 18 * zoom)
     }
 }
 
-/// Maps an insight/delta tone to its semantic color.
 enum AgenticUseTone {
-    static func color(_ tone: AgenticUseInsight.Tone) -> Color {
+    static func color(_ tone: AgenticUseInsight.Tone) -> NSColor {
         switch tone {
-        case .positive: .green
-        case .negative: .red
-        case .neutral: .secondary
+        case .positive: .systemGreen
+        case .negative: .systemRed
+        case .neutral: .secondaryLabelColor
         }
     }
 }

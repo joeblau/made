@@ -1,30 +1,20 @@
 import AppKit
 import CodeEditSourceEditor
-import SwiftUI
+import Observation
 
 enum EditorViewportPolicy {
     static let findPanelHeight: CGFloat = 28
 
-    /// Soft-wrapped text has no horizontal scrollable extent. Preserve the
-    /// vertical position while removing any elastic/restored X displacement.
     static func normalizedWrappedScrollPosition(_ position: CGPoint?) -> CGPoint? {
         guard var position else { return nil }
         position.x = 0
         return position
     }
 
-    /// CodeEdit adds a content inset when its find panel changes visibility,
-    /// but AppKit leaves the clip-view origin where it was. Offset that origin
-    /// by the same amount so the first visible line moves below the panel
-    /// instead of remaining underneath it.
     static func adjustedScrollPosition(
-        _ position: CGPoint?,
-        findPanelWasVisible: Bool,
-        findPanelIsVisible: Bool
+        _ position: CGPoint?, findPanelWasVisible: Bool, findPanelIsVisible: Bool
     ) -> CGPoint? {
-        guard findPanelWasVisible != findPanelIsVisible else {
-            return position
-        }
+        guard findPanelWasVisible != findPanelIsVisible else { return position }
         var position = position ?? .zero
         position.y += findPanelIsVisible ? -findPanelHeight : findPanelHeight
         return position
@@ -33,629 +23,689 @@ enum EditorViewportPolicy {
 
 @MainActor
 enum EditorFindPanelHitTestingPolicy {
-    /// CodeEditSourceEditor 0.15.2 adds its text surface after its find panel.
-    /// The panel's layer is visually raised, but AppKit hit-testing still follows
-    /// subview order, so clicks fall through to the editor. Move the panel to the
-    /// front of that order as well.
     @discardableResult
     static func bringFindPanelsToFront(in rootView: NSView) -> Int {
-        bringFindPanelsToFront(in: rootView, matching: isCodeEditFindPanel)
+        bringFindPanelsToFront(in: rootView) {
+            NSStringFromClass(type(of: $0)).hasSuffix(".NativeFindPanelView")
+        }
     }
 
     @discardableResult
     static func bringFindPanelsToFront(
-        in rootView: NSView,
-        matching isFindPanel: (NSView) -> Bool
+        in rootView: NSView, matching isFindPanel: (NSView) -> Bool
     ) -> Int {
         var pending = [rootView]
         var repairCount = 0
-
         while let container = pending.popLast() {
-            let children = container.subviews
-            pending.append(contentsOf: children)
-
-            for child in children where isFindPanel(child) && container.subviews.last !== child {
+            pending.append(contentsOf: container.subviews)
+            for child in container.subviews where isFindPanel(child) && container.subviews.last !== child {
                 container.addSubview(child, positioned: .above, relativeTo: nil)
                 repairCount += 1
             }
         }
-
         return repairCount
     }
-
-    private static func isCodeEditFindPanel(_ view: NSView) -> Bool {
-        NSStringFromClass(type(of: view)).hasSuffix(".FindPanelHostingView")
-    }
 }
 
-/// A lightweight code editor pane: a fuzzy file finder overlaid on top of a
-/// CodeEditSourceEditor buffer.
-///
-/// Editing model:
-/// - `EditorDocumentSession` owns the buffer and all file I/O. The buffer is
-///   read from disk on appear (or when the finder opens a file) and written
-///   back on ⌘S, before switching files, and when the pane closes.
-/// - `state.filePath` is the only thing persisted; the text always reflects the
-///   on-disk file, never a stale restored copy.
-struct EditorPaneView: View {
+/// Owns the native editor and its document independently of attachment to a workspace window.
+@MainActor
+final class EditorPaneViewController: NSViewController, CockpitPanePresenting, CockpitPaneClosing, CockpitPaneContextUpdating, CockpitPaneInputFocusing,
+    CockpitPaneCloseValidating, NSTableViewDataSource, NSTableViewDelegate, NSSearchFieldDelegate,
+    NSUserInterfaceValidations {
+    let session: EditorDocumentSession
     let state: EditorState
-    let rootPath: String?
-    let isActive: Bool
-    let isSelected: Bool
-    let onSelect: () -> Void
+    var onSelect: (() -> Void)?
 
-    @State private var session = EditorDocumentSession()
-    @State private var editorState = SourceEditorState()
+    private weak var pane: Pane?
+    private var rootPath: String?
+    private let finder: FileFinder
+    private var editor: TextViewController?
+    private var textCoordinator: NativeEditorTextCoordinator?
+    private var loadedDocumentID: UInt64?
+    private var selected = false
+    private var active = false
+    private var started = false
+    private var closed = false
+    private var finding = false
+    private var conflictAlert: NSAlert?
+    private var eventMonitor: Any?
+    private var observers: [NSObjectProtocol] = []
+    private var scrollObserver: NSObjectProtocol?
+    private var displayedFiles: [FileItem] = []
+    private var displayedQuery = ""
+    private var lastRoot: String?
+    private var loadingURL: URL?
+    private var requestedStateURL: URL?
 
-    @State private var showFinder = false
-    @State private var finder = FileFinder()
-    @State private var searchQuery = ""
-    @State private var selectedIndex = 0
-    /// The results list's natural height, so the results card hugs a short
-    /// list instead of stretching to its cap (see `resultsList`).
-    @State private var finderListHeight: CGFloat?
-    @FocusState private var searchFocused: Bool
+    private let editorHost = NSView()
+    private let emptyView = NSStackView()
+    private let errorRow = NSStackView()
+    private let errorLabel = CockpitUI.label("")
+    private let palette = NSVisualEffectView()
+    private let searchField = NSSearchField()
+    private let results = NSTableView()
+    private let resultsScroll = NSScrollView()
+    private let finderStatus = CockpitUI.label("", color: .secondaryLabelColor)
+    private var paletteHeight: NSLayoutConstraint!
 
-    @State private var keyMonitor: Any?
-
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// Quick open floats like Spotlight, so the results card uses the panel
-    /// radius; result highlights nest concentrically inside it (LAY-4).
-    private static let finderCornerRadius = LiquidGlassMetrics.Radius.panel
-    /// The gap between the search capsule and the results card. The glass
-    /// container's blend spacing stays below it, so the two shapes read as
-    /// separate pieces at rest, Spotlight-style.
-    private static let finderSectionSpacing = LiquidGlassMetrics.Spacing.small
-    private static let finderGlassBlendSpacing = LiquidGlassMetrics.Spacing.xSmall
-    private static let finderRowInset = LiquidGlassMetrics.Spacing.xSmall
-    /// Results up to this count render in an eager stack (see `resultsList`);
-    /// it is above what the 360pt palette shows without scrolling.
-    private static let finderEagerRowLimit = 24
-    private static let finderRowCornerRadius = LiquidGlassMetrics.Radius.inner(
-        outer: finderCornerRadius,
-        padding: finderRowInset
-    )
-
-    /// The banner's dismiss target is a circle; the banner corner wraps it at
-    /// the same inset so the two stay concentric (LAY-4).
-    private static let bannerDismissSize: CGFloat = 24
-    private static let bannerInset = LiquidGlassMetrics.Spacing.xSmall
-    private static let bannerCornerRadius = bannerDismissSize / 2 + bannerInset
-    private static let editorFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-
-    var body: some View {
-        ZStack {
-            editorLayer
-
-            // Each overlay animates inside its own wrapper so the spring never
-            // leaks into the editor layer (a reloaded document must not fade).
-            ZStack {
-                // Save failures must stay visible while editing, not only in the finder.
-                if session.document != nil, let errorMessage = session.errorMessage {
-                    errorBanner(errorMessage)
-                        .transition(overlayTransition(edge: .top))
-                }
-            }
-            .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: session.errorMessage)
-
-            ZStack {
-                if showFinder {
-                    finderOverlay
-                        .transition(overlayTransition(scale: 0.98))
-                }
-            }
-            .animation(reduceMotion ? nil : LiquidGlassMetrics.spring, value: showFinder)
-
-            keyboardShortcuts
-        }
-        .background(Color(nsColor: .textBackgroundColor))
-        .alert(
-            "“\(session.url?.lastPathComponent ?? "File")” changed on disk",
-            isPresented: $session.conflictPending
-        ) {
-            Button("Overwrite", role: .destructive) {
-                session.requestSave(.overwrite)
-            }
-            Button("Reload") {
-                session.requestReload(completion: handleLoadOutcome)
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This file was modified by another program since you opened it.")
-        }
-        .onAppear { activate() }
-        .onDisappear {
-            removeKeyMonitor()
-            // Drop pending loads and flush unsaved edits (e.g. the pane closed).
-            session.close()
-        }
-        .onChange(of: isActive) {
-            if isActive {
-                if showFinder { focusSearchAndInstallMonitor() }
-            } else {
-                // Relinquish focus + global key handling the moment another
-                // workspace or pane takes over.
-                searchFocused = false
-                removeKeyMonitor()
-            }
-        }
-        .onChange(of: isSelected) {
-            // Two panes in the same active workspace both have isActive == true, so
-            // selection is what arbitrates which one owns the arrow-key monitor.
-            if isSelected {
-                if showFinder && isActive { focusSearchAndInstallMonitor() }
-            } else {
-                searchFocused = false
-                removeKeyMonitor()
-            }
-        }
-        .onChange(of: searchQuery) {
-            finder.setQuery(searchQuery)
-            selectedIndex = 0
-        }
-        .onChange(of: rootPath) {
-            // Keep quick-open attached to the active workspace even when its
-            // inferred/manual root changes while the finder is already open.
-            // FileFinder invalidates old-root indexing and filtering work.
-            selectedIndex = 0
-            if let rootPath {
-                finder.start(root: rootPath)
-            } else {
-                finder.reset()
-            }
-        }
-        .onChange(of: finder.isIndexing) {
-            // Populate the initial list once the background index finishes.
-            finder.setQuery(searchQuery)
-        }
-        .onChange(of: showFinder) {
-            if showFinder {
-                focusSearchAndInstallMonitor()
-            } else {
-                searchFocused = false
-                removeKeyMonitor()
-            }
-        }
+    convenience init(pane: Pane, rootPath: String?) {
+        let state = pane.editorState ?? EditorState()
+        if pane.editorState == nil { pane.editorState = state }
+        self.init(state: state, rootPath: rootPath)
+        self.pane = pane
     }
 
-    // MARK: - Editor layer
-
-    @ViewBuilder
-    private var editorLayer: some View {
-        if let document = session.document {
-            SourceEditor(
-                editorText,
-                language: session.language,
-                configuration: SourceEditorConfiguration(
-                    appearance: .init(
-                        theme: PilotEditorTheme.theme(for: colorScheme),
-                        font: Self.editorFont,
-                        wrapLines: true
-                    ),
-                    behavior: .init(indentOption: .spaces(count: 4)),
-                    layout: .init(contentInsets: NSEdgeInsets())
-                ),
-                state: $editorState
-            )
-            // SourceEditor 0.15.2 reads its binding only when the controller is
-            // created, so each loaded document (including reloads) needs a fresh one.
-            .id(document.id)
-            .background(EditorFindPanelHitTestingRepair())
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
-            .onChange(of: editorState.scrollPosition) {
-                normalizeWrappedEditorScrollPosition()
-            }
-            .onChange(of: editorState.findPanelVisible) { oldValue, newValue in
-                adjustEditorForFindPanelTransition(from: oldValue, to: newValue)
-            }
-        } else if !showFinder {
-            emptyState
-        } else {
-            Color.clear
-        }
-    }
-
-    /// A genuine edit also selects this pane so the ⌘S/⌘P/⌘O shortcuts (gated on
-    /// `isSelected`) target it.
-    private var editorText: Binding<String> {
-        Binding(
-            get: { session.text },
-            set: { newText in
-                if session.updateText(newText) { onSelect() }
-            }
-        )
-    }
-
-    private var emptyState: some View {
-        ContentUnavailableView {
-            Label("No File Open", systemImage: "curlybraces")
-        } description: {
-            Text("⌘P to find a file")
-        } actions: {
-            Button("Find File…", action: openFinder)
-                .compatGlassProminentButtonStyle()
-        }
-        .legibleSecondaryHierarchy()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    /// Overlays slide in from their anchored edge, or scale-fade in place, and
-    /// fall back to a plain fade under Reduce Motion (MOT-4).
-    private func overlayTransition(edge: Edge? = nil, scale: CGFloat = 1) -> AnyTransition {
-        guard !reduceMotion else { return .opacity }
-        if let edge {
-            return .move(edge: edge).combined(with: .opacity)
-        }
-        return .opacity.combined(with: .scale(scale: scale, anchor: .top))
-    }
-
-    // MARK: - Finder overlay
-
-    private var finderOverlay: some View {
-        CompatGlassContainer(spacing: Self.finderGlassBlendSpacing) {
-            VStack(spacing: Self.finderSectionSpacing) {
-                TextField("Search files…", text: $searchQuery)
-                    .scaledFont(size: 14)
-                    .focused($searchFocused)
-                    .onKeyPress(.return) { openSelected(); return .handled }
-                    .onKeyPress(.escape) { dismissFinder(); return .handled }
-                    .onKeyPress(.downArrow) { moveSelection(by: 1); return .handled }
-                    .onKeyPress(.upArrow) { moveSelection(by: -1); return .handled }
-                    .liquidGlassField(systemImage: "magnifyingglass", isFocused: searchFocused)
-
-                // No height frame here: a `maxHeight` frame takes all the
-                // height offered, so the card would stretch past short
-                // results. The list caps itself and the palette caps the
-                // total below.
-                resultsBody
-                    .clipShape(RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous))
-                    .compatFloatingGlass(
-                        in: RoundedRectangle(cornerRadius: Self.finderCornerRadius, style: .continuous)
-                    )
-            }
-        }
-        .frame(maxWidth: 520)
-        .frame(maxHeight: 360, alignment: .top)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-        .padding(.top, 60)
-        .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    /// CodeEdit can restore a horizontal clip-view offset even though wrapped
-    /// text has no horizontal scrollable extent.
-    private func normalizeWrappedEditorScrollPosition() {
-        let current = editorState.scrollPosition
-        let normalized = EditorViewportPolicy.normalizedWrappedScrollPosition(current)
-        guard current != normalized else { return }
-        editorState.scrollPosition = normalized
-    }
-
-    private func adjustEditorForFindPanelTransition(from oldValue: Bool?, to newValue: Bool?) {
-        guard let newValue else { return }
-        let current = editorState.scrollPosition
-        let adjusted = EditorViewportPolicy.adjustedScrollPosition(
-            current,
-            findPanelWasVisible: oldValue ?? false,
-            findPanelIsVisible: newValue
-        )
-        guard current != adjusted else { return }
-        editorState.scrollPosition = adjusted
-    }
-
-    @ViewBuilder
-    private var resultsBody: some View {
-        if rootPath == nil {
-            finderMessage("Set a workspace root path to browse files.", systemImage: "folder.badge.questionmark")
-        } else if let errorMessage = session.errorMessage {
-            finderMessage(errorMessage, systemImage: "exclamationmark.triangle")
-        } else if finder.isIndexing && finder.results.isEmpty {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                ProgressView().controlSize(.small)
-                Text("Indexing…")
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(LiquidGlassMetrics.Spacing.medium)
-        } else if finder.results.isEmpty {
-            finderMessage("No matches", systemImage: "magnifyingglass")
-        } else {
-            resultsList
-        }
-    }
-
-    private var resultsList: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                // Measure short lists eagerly for an exact height; keep long lists lazy.
-                Group {
-                    if finder.results.count <= Self.finderEagerRowLimit {
-                        VStack(spacing: 0) { resultRows }
-                    } else {
-                        LazyVStack(spacing: 0) { resultRows }
-                    }
-                }
-                // The results card stands alone, so the top and bottom insets
-                // match the side inset and the first and last rows' highlights
-                // stay concentric with the card corners (LAY-4).
-                .padding(.vertical, Self.finderRowInset)
-                .onGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.size.height
-                } action: { height in
-                    finderListHeight = height
-                }
-            }
-            // Cap the scroll view at the measured list height so short result
-            // lists do not stretch to the palette's 360pt limit.
-            .frame(maxHeight: finderListHeight)
-            // Keep the scroller on the card's straight edge: a full-height
-            // legacy scroller otherwise runs into the rounded corners.
-            .contentMargins(.vertical, Self.finderCornerRadius, for: .scrollIndicators)
-            .onChange(of: selectedIndex) {
-                withAnimation(.easeOut(duration: 0.12)) {
-                    proxy.scrollTo(selectedIndex, anchor: .center)
-                }
-            }
-        }
-    }
-
-    private var resultRows: some View {
-        ForEach(Array(finder.results.enumerated()), id: \.element.id) { index, item in
-            Button {
-                selectedIndex = index
-                openSelected()
-            } label: {
-                resultRow(item, isHighlighted: index == selectedIndex)
-            }
-            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.finderRowCornerRadius))
-            .padding(.horizontal, Self.finderRowInset)
-            .id(index)
-        }
-    }
-
-    private func resultRow(_ item: FileItem, isHighlighted: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(item.name)
-                .scaledFont(size: 13)
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-            if !item.directoryPath.isEmpty {
-                Text(item.directoryPath)
-                    .scaledFont(size: 11)
-                    .glassLegibleForeground(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-        .background(
-            isHighlighted
-                ? Color.accentColor.opacity(0.22)
-                : Color.clear,
-            in: RoundedRectangle(cornerRadius: Self.finderRowCornerRadius, style: .continuous)
-        )
-        .animation(LiquidGlassMetrics.stateChange, value: isHighlighted)
-        .accessibilityAddTraits(isHighlighted ? .isSelected : [])
-    }
-
-    private func finderMessage(_ message: String, systemImage: String) -> some View {
-        VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Image(systemName: systemImage)
-                .scaledFont(size: 20, weight: .light)
-                .foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
-            Text(message)
-                .foregroundStyle(.secondary)
-        }
-        // Width only: the card hugs the message, like a short results list.
-        .frame(maxWidth: .infinity)
-        .padding(LiquidGlassMetrics.Spacing.medium)
-    }
-
-    // MARK: - Error banner
-
-    /// Displays save and load failures without replacing the editor buffer.
-    private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
-                .accessibilityHidden(true)
-            Text(message)
-                .scaledFont(size: 12)
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-            Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
-            Button {
-                session.errorMessage = nil
-            } label: {
-                Image(systemName: "xmark")
-                    .scaledFont(size: 11, weight: .semibold)
-                    .foregroundStyle(.secondary)
-                    .frame(width: Self.bannerDismissSize, height: Self.bannerDismissSize)
-            }
-            .buttonStyle(.liquidGlassPressable(cornerRadius: Self.bannerDismissSize / 2))
-            .help("Dismiss")
-            .accessibilityLabel("Dismiss error")
-        }
-        .padding(.leading, LiquidGlassMetrics.Spacing.small)
-        .padding(.trailing, Self.bannerInset)
-        .padding(.vertical, Self.bannerInset)
-        .compatFloatingGlass(in: RoundedRectangle(cornerRadius: Self.bannerCornerRadius, style: .continuous))
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-        .padding(.top, LiquidGlassMetrics.Spacing.small)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-    }
-
-    // MARK: - Hidden keyboard shortcuts
-
-    /// ⌘S (save), ⌘P / ⌘O (open finder). All gated on `isActive` so they never
-    /// hijack the global shortcuts while another pane or workspace is frontmost.
-    /// Hidden zero-size buttons rather than `.keyboardShortcut` modifiers on real
-    /// controls, matching `ContentView`'s background-button idiom.
-    private var keyboardShortcuts: some View {
-        Group {
-            Button("") { session.requestSave(.interactive) }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!(isActive && isSelected && session.document != nil))
-
-            Button("", action: openFinder)
-                .keyboardShortcut("p", modifiers: .command)
-                .disabled(!(isActive && isSelected))
-
-            Button("", action: openFinder)
-                .keyboardShortcut("o", modifiers: .command)
-                .disabled(!(isActive && isSelected))
-        }
-        .opacity(0)
-        .frame(width: 0, height: 0)
-        .accessibilityHidden(true)
-    }
-
-    // MARK: - Lifecycle
-
-    private func activate() {
+    init(state: EditorState, rootPath: String?, session: EditorDocumentSession = EditorDocumentSession(), finder: FileFinder = FileFinder()) {
+        self.state = state
+        self.rootPath = rootPath
+        self.session = session
+        self.finder = finder
+        super.init(nibName: nil, bundle: nil)
         session.attach(store: state)
-        if let url = state.fileURL {
-            load(url)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    isolated deinit {
+        if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        observers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    override func loadView() {
+        let root = NativeEditorRootView()
+        root.onAppearanceChange = { [weak self] in self?.updateAppearance() }
+        view = root
+        view.setAccessibilityIdentifier("editor.pane")
+        editorHost.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(editorHost)
+        NSLayoutConstraint.activate([
+            editorHost.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            editorHost.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            editorHost.topAnchor.constraint(equalTo: view.topAnchor),
+            editorHost.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        ])
+        buildEmptyView()
+        buildErrorRow()
+        buildFinder()
+        observers.append(NotificationCenter.default.addObserver(
+            forName: .cockpitUIZoomDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateAppearance() }
+        })
+        updateAppearance()
+        observe()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        startIfNeeded()
+        refresh()
+        if active && selected { focusCurrentSurface() }
+    }
+
+    func updatePresentation(isActive: Bool, isSelected: Bool) {
+        let becameSelected = isActive && isSelected && (!active || !selected)
+        active = isActive
+        selected = isSelected
+        guard !closed else { return }
+        _ = view
+        updateRootPath(pane?.workspace?.effectiveRootPath ?? rootPath)
+        if active {
+            startIfNeeded()
+            installEventMonitor()
+            if becameSelected { focusCurrentSurface() }
         } else {
-            openFinder()
+            removeEventMonitor()
         }
     }
 
-    private func openFinder() {
-        guard isActive else { return }
-        onSelect()
-        searchQuery = ""
-        selectedIndex = 0
-        if rootPath != nil {
-            finder.start(root: rootPath!)
-        }
-        showFinder = true
-    }
-
-    /// Escape only dismisses the finder when there's already a file to fall back
-    /// to — otherwise the pane would be left blank with no way back.
-    private func dismissFinder() {
-        guard session.document != nil else { return }
-        showFinder = false
-    }
-
-    private func focusSearchAndInstallMonitor() {
-        guard isActive && isSelected else { return }
-        searchFocused = true
-        installKeyMonitor()
-    }
-
-    // MARK: - Selection / navigation
-
-    private func moveSelection(by delta: Int) {
-        guard !finder.results.isEmpty else { return }
-        let next = selectedIndex + delta
-        selectedIndex = max(0, min(finder.results.count - 1, next))
-    }
-
-    private func openSelected() {
-        guard showFinder,
-              finder.results.indices.contains(selectedIndex) else { return }
-        let item = finder.results[selectedIndex]
-        load(URL(fileURLWithPath: item.path))
-    }
-
-    // MARK: - Document loading
-
-    private func load(_ url: URL) {
-        session.requestOpen(url, completion: handleLoadOutcome)
-    }
-
-    private func handleLoadOutcome(_ outcome: EditorLoadOutcome) {
-        switch outcome {
-        case .loaded:
-            editorState = SourceEditorState()
-            showFinder = false
-            onSelect()
-        case .blockedBySave, .blockedByEdits:
-            showFinder = false
-        case .tooLarge, .binary, .failed:
-            presentFinder()
-        case .superseded:
-            break
+    func updateRootPath(_ root: String?) {
+        rootPath = root
+        guard lastRoot != root else { return }
+        lastRoot = root
+        if finding {
+            if let root { finder.start(root: root) } else { finder.reset() }
         }
     }
 
-    /// Fall back to the finder after a load error, making sure the index is being
-    /// built (the initial load on appear bypasses `openFinder`).
-    private func presentFinder() {
-        if let rootPath { finder.start(root: rootPath) }
-        showFinder = true
+    func updateContext(rootPath: String?) { updateRootPath(rootPath) }
+
+    func focusPaneInput() { focusCurrentSurface() }
+
+    var isReadyToClose: Bool { !session.isDirty }
+
+    func prepareToClose(_ completion: @escaping @MainActor (Bool) -> Void) {
+        // A close is not an explicit Save command. Untouched documents can
+        // be read-only or have changed on disk without needing an overwrite.
+        // The editor coordinator publishes marked-text edits synchronously,
+        // so an in-progress composition still enters the dirty save path.
+        guard session.isDirty else { completion(true); return }
+        Task { [weak self] in
+            guard let self else { completion(true); return }
+            let outcome = await self.session.save(.interactive)
+            switch outcome {
+            case .saved, .clean, .noDocument:
+                // Edits made while the write was in flight remain dirty.
+                completion(!self.session.isDirty)
+            case .conflict, .failed:
+                self.refresh()
+                completion(false)
+            }
+        }
     }
 
-    // MARK: - Key monitor (arrow nav fallback)
+    func closePane() {
+        guard !closed else { return }
+        closed = true
+        removeEventMonitor()
+        finder.reset()
+        session.close()
+        if let alert = conflictAlert, let window = alert.window.sheetParent {
+            window.endSheet(alert.window, returnCode: .abort)
+        }
+        conflictAlert = nil
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        scrollObserver = nil
+        observers.forEach(NotificationCenter.default.removeObserver)
+        observers.removeAll()
+    }
 
-    /// A focused `TextField` consumes up/down arrows before `.onKeyPress` sees
-    /// them, so the finder intercepts them with a local monitor while it is open
-    /// in the active, selected pane. Return and Escape still use `.onKeyPress`.
-    ///
-    /// The `isActive`/`isSelected` values captured here are install-time
-    /// snapshots of a value-type view, so the monitor's lifetime is owned by the
-    /// `onChange` handlers that remove it. `showFinder` reads through to current
-    /// `@State` and is the only live guard.
-    private func installKeyMonitor() {
-        guard keyMonitor == nil else { return }
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard self.showFinder else { return event }
-            switch event.keyCode {
-            case 125: // down arrow
-                self.moveSelection(by: 1)
-                return nil
-            case 126: // up arrow
-                self.moveSelection(by: -1)
-                return nil
-            default:
+    private func startIfNeeded() {
+        guard !started, !closed else { return }
+        started = true
+        if let url = state.fileURL { openFile(url) } else { presentFinder(resetQuery: true) }
+    }
+
+    private func observe() {
+        guard !closed else { return }
+        withObservationTracking {
+            _ = session.document
+            _ = session.errorMessage
+            _ = session.conflictPending
+            _ = session.isDirty
+            _ = finder.results
+            _ = finder.resultsQuery
+            _ = finder.isIndexing
+            _ = state.filePath
+            _ = pane?.workspace?.effectiveRootPath
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, !self.closed else { return }
+                self.refresh()
+                self.observe()
+            }
+        }
+    }
+
+    private func refresh() {
+        guard isViewLoaded, !closed else { return }
+        updateRootPath(pane?.workspace?.effectiveRootPath ?? rootPath)
+        if let url = state.fileURL, url != session.url, url != loadingURL,
+           url != requestedStateURL, started {
+            openFile(url)
+        }
+        if let document = session.document, document.id != loadedDocumentID {
+            installDocument()
+        }
+        emptyView.isHidden = session.document != nil || finding
+        errorRow.isHidden = session.errorMessage == nil
+        errorLabel.stringValue = session.errorMessage ?? ""
+        refreshFinder()
+        if session.conflictPending { presentConflict() }
+    }
+
+    private func installDocument() {
+        guard let document = session.document, document.id != loadedDocumentID else { return }
+        if let scrollObserver { NotificationCenter.default.removeObserver(scrollObserver) }
+        scrollObserver = nil
+        editor?.view.removeFromSuperview()
+        editor?.removeFromParent()
+        let coordinator = NativeEditorTextCoordinator { [weak self] controller in
+            guard let self else { return }
+            if self.session.updateText(controller.text) { self.selectPane() }
+        }
+        let controller = TextViewController(
+            string: session.text,
+            language: session.language,
+            configuration: configuration(),
+            // The native text engine does not create a selection on focus.
+            // Establish an insertion point for keyboard-first typing and IME.
+            cursorPositions: [CursorPosition(range: NSRange(location: 0, length: 0))],
+            coordinators: [coordinator]
+        )
+        textCoordinator = coordinator
+        editor = controller
+        loadedDocumentID = document.id
+        addChild(controller)
+        controller.view.translatesAutoresizingMaskIntoConstraints = false
+        editorHost.addSubview(controller.view)
+        NSLayoutConstraint.activate([
+            controller.view.leadingAnchor.constraint(equalTo: editorHost.leadingAnchor),
+            controller.view.trailingAnchor.constraint(equalTo: editorHost.trailingAnchor),
+            controller.view.topAnchor.constraint(equalTo: editorHost.topAnchor),
+            controller.view.bottomAnchor.constraint(equalTo: editorHost.bottomAnchor)
+        ])
+        controller.textView.setAccessibilityLabel("Source editor")
+        scrollObserver = NotificationCenter.default.addObserver(
+            forName: TextViewController.scrollPositionDidUpdateNotification, object: controller, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.normalizeWrappedScroll() }
+        }
+        emptyView.isHidden = true
+        if active && selected && !finding { focusCurrentSurface() }
+    }
+
+    private func configuration() -> SourceEditorConfiguration {
+        let zoom = CockpitUIZoomController.shared.factor
+        return SourceEditorConfiguration(
+            appearance: .init(
+                theme: PilotEditorTheme.theme(for: view.effectiveAppearance),
+                font: .monospacedSystemFont(ofSize: 12 * zoom, weight: .regular),
+                wrapLines: true
+            ),
+            behavior: .init(indentOption: .spaces(count: 4)),
+            layout: .init(contentInsets: NSEdgeInsets())
+        )
+    }
+
+    private func updateAppearance() {
+        guard isViewLoaded else { return }
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            view.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
+            errorRow.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        }
+        searchField.font = CockpitTypography.font(size: NSFont.systemFontSize)
+        results.rowHeight = 42 * CockpitUIZoomController.shared.factor
+        refreshFinder()
+        guard let editor else { return }
+        let newConfiguration = configuration()
+        if editor.configuration != newConfiguration { editor.configuration = newConfiguration }
+        normalizeWrappedScroll()
+    }
+
+    private func normalizeWrappedScroll() {
+        guard let scroll = editor?.scrollView else { return }
+        let point = scroll.contentView.bounds.origin
+        guard point.x != 0 else { return }
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: point.y))
+        scroll.reflectScrolledClipView(scroll.contentView)
+    }
+
+    func openFile(_ url: URL) {
+        requestedStateURL = url
+        loadingURL = url
+        session.requestOpen(url) { [weak self] outcome in
+            guard let self else { return }
+            self.loadingURL = nil
+            switch outcome {
+            case .loaded:
+                self.installDocument()
+                self.dismissFinder()
+                self.selectPane()
+                self.focusCurrentSurface()
+            case .blockedBySave, .blockedByEdits:
+                self.dismissFinder()
+            case .tooLarge, .binary, .failed:
+                self.presentFinder(resetQuery: false)
+            case .superseded:
+                break
+            }
+            self.refresh()
+        }
+    }
+
+    @objc func saveDocument(_ sender: Any?) { session.requestSave(.interactive) }
+    @objc func openDocument(_ sender: Any?) {
+        guard active else { return }
+        selectPane()
+        presentFinder(resetQuery: true)
+    }
+    @objc func showFindPanel(_ sender: Any?) { editor?.showNativeFindPanel() }
+    @objc func findNext(_ sender: Any?) { editor?.findNextNativeMatch() }
+    @objc func findPrevious(_ sender: Any?) { editor?.findPreviousNativeMatch() }
+    @objc func useSelectionForFind(_ sender: Any?) { editor?.useSelectionForNativeFind() }
+
+    @objc func performFindPanelAction(_ sender: Any?) {
+        let tag = (sender as? NSMenuItem)?.tag ?? NSTextFinder.Action.showFindInterface.rawValue
+        switch tag {
+        case NSTextFinder.Action.nextMatch.rawValue: findNext(sender)
+        case NSTextFinder.Action.previousMatch.rawValue: findPrevious(sender)
+        case NSTextFinder.Action.setSearchString.rawValue: useSelectionForFind(sender)
+        case NSTextFinder.Action.showReplaceInterface.rawValue: editor?.showNativeFindPanel(replacing: true)
+        case NSTextFinder.Action.hideFindInterface.rawValue: editor?.hideNativeFindPanel()
+        default: showFindPanel(sender)
+        }
+    }
+
+    override func performTextFinderAction(_ sender: Any?) { performFindPanelAction(sender) }
+
+    func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        guard active && selected else { return false }
+        switch item.action {
+        case #selector(openDocument(_:)): return true
+        case #selector(saveDocument(_:)), #selector(showFindPanel(_:)), #selector(performFindPanelAction(_:)),
+             #selector(findNext(_:)), #selector(findPrevious(_:)), #selector(useSelectionForFind(_:)):
+            return session.document != nil
+        default: return false
+        }
+    }
+
+    private func selectPane() {
+        if let pane { pane.workspace?.selectedPaneID = pane.id }
+        onSelect?()
+    }
+
+    private func focusCurrentSurface() {
+        guard active && selected, view.window?.isKeyWindow == true else { return }
+        if finding {
+            view.window?.makeFirstResponder(searchField)
+        } else if let editor {
+            view.window?.makeFirstResponder(editor.textView)
+        }
+    }
+
+    private func installEventMonitor() {
+        guard eventMonitor == nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
+            guard let self, self.active, event.window === self.view.window,
+                  self.view.window?.isKeyWindow == true else { return event }
+            if event.type == .leftMouseDown {
+                if self.view.bounds.contains(self.view.convert(event.locationInWindow, from: nil)) { self.selectPane() }
                 return event
             }
+            guard self.selected else { return event }
+            guard let responder = self.view.window?.firstResponder as? NSView,
+                  responder === self.view || responder.isDescendant(of: self.view) ||
+                    responder === self.searchField.currentEditor() else { return event }
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if modifiers == .command {
+                switch event.charactersIgnoringModifiers {
+                case "s": self.saveDocument(nil); return nil
+                case "p", "o": self.openDocument(nil); return nil
+                case "f": self.showFindPanel(nil); return nil
+                case "g": self.findNext(nil); return nil
+                case "e": self.useSelectionForFind(nil); return nil
+                default: break
+                }
+            } else if modifiers == [.command, .shift], event.charactersIgnoringModifiers == "g" {
+                self.findPrevious(nil)
+                return nil
+            }
+            return event
         }
     }
 
-    private func removeKeyMonitor() {
-        if let keyMonitor {
-            NSEvent.removeMonitor(keyMonitor)
-            self.keyMonitor = nil
+    private func removeEventMonitor() {
+        if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
+        eventMonitor = nil
+    }
+
+    private func buildEmptyView() {
+        let title = CockpitUI.label("No File Open", size: 20, weight: .semibold)
+        let hint = CockpitUI.label("⌘P to find a file", color: .secondaryLabelColor)
+        let button = CockpitActionButton(title: "Find File…") { [weak self] in self?.openDocument(nil) }
+        emptyView.orientation = .vertical
+        emptyView.spacing = 10
+        [title, hint, button].forEach(emptyView.addArrangedSubview)
+        emptyView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(emptyView)
+        NSLayoutConstraint.activate([
+            emptyView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            emptyView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            emptyView.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -20)
+        ])
+    }
+
+    private func buildErrorRow() {
+        errorRow.orientation = .horizontal
+        errorRow.spacing = 8
+        errorRow.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+        errorRow.wantsLayer = true
+        errorRow.layer?.cornerRadius = 8
+        errorRow.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        errorLabel.maximumNumberOfLines = 3
+        errorLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let dismiss = NSButton(image: NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss error")!,
+                               target: self, action: #selector(dismissError))
+        dismiss.isBordered = false
+        [errorLabel, dismiss].forEach(errorRow.addArrangedSubview)
+        errorRow.translatesAutoresizingMaskIntoConstraints = false
+        errorRow.isHidden = true
+        view.addSubview(errorRow)
+        NSLayoutConstraint.activate([
+            errorRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 8),
+            errorRow.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -8),
+            errorRow.topAnchor.constraint(equalTo: view.topAnchor, constant: 8)
+        ])
+    }
+
+    @objc private func dismissError() { session.errorMessage = nil }
+
+    private func buildFinder() {
+        palette.material = .popover
+        palette.blendingMode = .withinWindow
+        palette.state = .active
+        palette.wantsLayer = true
+        palette.layer?.cornerRadius = 12
+        palette.layer?.masksToBounds = true
+        palette.translatesAutoresizingMaskIntoConstraints = false
+        palette.isHidden = true
+        view.addSubview(palette)
+        searchField.placeholderString = "Search files…"
+        searchField.setAccessibilityLabel("Find a file")
+        searchField.setAccessibilityIdentifier("editor.quick-open.search")
+        searchField.sendsSearchStringImmediately = true
+        searchField.delegate = self
+        searchField.translatesAutoresizingMaskIntoConstraints = false
+        palette.addSubview(searchField)
+        results.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file")))
+        results.headerView = nil
+        results.rowHeight = 42
+        results.intercellSpacing = .zero
+        results.allowsEmptySelection = false
+        results.dataSource = self
+        results.delegate = self
+        results.target = self
+        results.action = #selector(openSelected)
+        results.setAccessibilityLabel("Matching files")
+        results.setAccessibilityIdentifier("editor.quick-open.results")
+        resultsScroll.documentView = results
+        resultsScroll.hasVerticalScroller = true
+        resultsScroll.drawsBackground = false
+        resultsScroll.translatesAutoresizingMaskIntoConstraints = false
+        palette.addSubview(resultsScroll)
+        finderStatus.textColor = .secondaryLabelColor
+        finderStatus.translatesAutoresizingMaskIntoConstraints = false
+        palette.addSubview(finderStatus)
+        paletteHeight = palette.heightAnchor.constraint(equalToConstant: 120)
+        let width = palette.widthAnchor.constraint(equalToConstant: 520)
+        width.priority = .defaultHigh
+        NSLayoutConstraint.activate([
+            width, paletteHeight,
+            palette.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, constant: -16),
+            palette.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            palette.topAnchor.constraint(equalTo: view.topAnchor, constant: 48),
+            searchField.topAnchor.constraint(equalTo: palette.topAnchor, constant: 10),
+            searchField.leadingAnchor.constraint(equalTo: palette.leadingAnchor, constant: 10),
+            searchField.trailingAnchor.constraint(equalTo: palette.trailingAnchor, constant: -10),
+            resultsScroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
+            resultsScroll.leadingAnchor.constraint(equalTo: palette.leadingAnchor, constant: 6),
+            resultsScroll.trailingAnchor.constraint(equalTo: palette.trailingAnchor, constant: -6),
+            resultsScroll.bottomAnchor.constraint(equalTo: palette.bottomAnchor, constant: -6),
+            finderStatus.centerXAnchor.constraint(equalTo: resultsScroll.centerXAnchor),
+            finderStatus.centerYAnchor.constraint(equalTo: resultsScroll.centerYAnchor),
+            finderStatus.widthAnchor.constraint(lessThanOrEqualTo: palette.widthAnchor, constant: -24)
+        ])
+    }
+
+    private func presentFinder(resetQuery: Bool) {
+        finding = true
+        palette.isHidden = false
+        emptyView.isHidden = true
+        if resetQuery {
+            searchField.stringValue = ""
+            selectFirstFinderResult()
+            finder.setQuery("")
+        }
+        if let rootPath { finder.start(root: rootPath) } else { finder.reset() }
+        refreshFinder()
+        focusCurrentSurface()
+    }
+
+    private func dismissFinder() {
+        guard session.document != nil else { return }
+        finding = false
+        palette.isHidden = true
+        focusCurrentSurface()
+    }
+
+    private func refreshFinder() {
+        guard finding else { return }
+        let queryChanged = displayedQuery != finder.resultsQuery
+        let oldPath = !queryChanged && displayedFiles.indices.contains(results.selectedRow)
+            ? displayedFiles[results.selectedRow].path : nil
+        if displayedFiles != finder.results || queryChanged {
+            displayedFiles = finder.results
+            displayedQuery = finder.resultsQuery
+            results.reloadData()
+            if !displayedFiles.isEmpty {
+                let index = oldPath.flatMap { path in displayedFiles.firstIndex { $0.path == path } } ?? 0
+                results.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+            }
+        }
+        let message: String?
+        if rootPath == nil {
+            message = "Set a workspace root path to browse files."
+        } else if let error = session.errorMessage {
+            message = error
+        } else if finder.isIndexing && displayedFiles.isEmpty {
+            message = "Indexing…"
+        } else if displayedFiles.isEmpty {
+            message = "No matches"
+        } else {
+            message = nil
+        }
+        finderStatus.stringValue = message ?? ""
+        finderStatus.isHidden = message == nil
+        resultsScroll.isHidden = message != nil
+        paletteHeight.constant = message == nil ? min(360, 46 + CGFloat(displayedFiles.count) * results.rowHeight) : 120
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { displayedFiles.count }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard displayedFiles.indices.contains(row) else { return nil }
+        let item = displayedFiles[row]
+        let cell = NativeEditorFileCell()
+        cell.name.stringValue = item.name
+        cell.directory.stringValue = item.directoryPath
+        cell.setAccessibilityLabel(item.relativePath)
+        return cell
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        guard notification.object as AnyObject? === searchField else { return }
+        selectFirstFinderResult()
+        finder.setQuery(searchField.stringValue)
+    }
+
+    private func selectFirstFinderResult() {
+        guard !displayedFiles.isEmpty else { return }
+        results.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        results.scrollRowToVisible(0)
+    }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy command: Selector) -> Bool {
+        guard control === searchField else { return false }
+        switch command {
+        case #selector(NSResponder.moveDown(_:)): moveSelection(1); return true
+        case #selector(NSResponder.moveUp(_:)): moveSelection(-1); return true
+        case #selector(NSResponder.insertNewline(_:)): openSelected(nil); return true
+        case #selector(NSResponder.cancelOperation(_:)): dismissFinder(); return true
+        default: return false
+        }
+    }
+
+    private func moveSelection(_ delta: Int) {
+        guard !displayedFiles.isEmpty else { return }
+        let index = min(max(0, results.selectedRow + delta), displayedFiles.count - 1)
+        results.selectRowIndexes(IndexSet(integer: index), byExtendingSelection: false)
+        results.scrollRowToVisible(index)
+    }
+
+    @objc private func openSelected(_ sender: Any?) {
+        guard finding, displayedFiles.indices.contains(results.selectedRow) else { return }
+        openFile(URL(fileURLWithPath: displayedFiles[results.selectedRow].path))
+    }
+
+    private func presentConflict() {
+        guard conflictAlert == nil, let window = view.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "“\(session.url?.lastPathComponent ?? "File")” changed on disk"
+        alert.informativeText = "This file was modified by another program since you opened it."
+        alert.addButton(withTitle: "Overwrite")
+        alert.addButton(withTitle: "Reload")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        conflictAlert = alert
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.conflictAlert = nil
+            self.session.conflictPending = false
+            switch response {
+            case .alertFirstButtonReturn: self.session.requestSave(.overwrite)
+            case .alertSecondButtonReturn:
+                self.session.requestReload { [weak self] outcome in
+                    if case .loaded = outcome { self?.installDocument() }
+                    self?.refresh()
+                }
+            default: break
+            }
         }
     }
 }
 
-private struct EditorFindPanelHitTestingRepair: NSViewRepresentable {
-    func makeNSView(context: Context) -> RepairObserverView {
-        RepairObserverView()
+@MainActor
+private final class NativeEditorRootView: NSView {
+    var onAppearanceChange: (() -> Void)?
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.masksToBounds = true
     }
+    required init?(coder: NSCoder) { nil }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); onAppearanceChange?() }
+}
 
-    func updateNSView(_ nsView: RepairObserverView, context: Context) {
-        nsView.scheduleRepair()
+@MainActor
+private final class NativeEditorTextCoordinator: NSObject, @preconcurrency TextViewCoordinator {
+    let changed: (TextViewController) -> Void
+    init(changed: @escaping (TextViewController) -> Void) { self.changed = changed }
+    func prepareCoordinator(controller: TextViewController) {}
+    func textViewDidChangeText(controller: TextViewController) { changed(controller) }
+}
+
+@MainActor
+private final class NativeEditorFileCell: NSTableCellView {
+    let name = CockpitUI.label("", size: 13)
+    let directory = CockpitUI.label("", size: 11, color: .secondaryLabelColor)
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        name.maximumNumberOfLines = 1
+        directory.maximumNumberOfLines = 1
+        directory.lineBreakMode = .byTruncatingHead
+        let stack = NSStackView(views: [name, directory])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 2
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor)
+        ])
     }
-
-    final class RepairObserverView: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            scheduleRepair()
-        }
-
-        func scheduleRepair() {
-            NSObject.cancelPreviousPerformRequests(
-                withTarget: self,
-                selector: #selector(repairFindPanelHitTesting),
-                object: nil
-            )
-            perform(#selector(repairFindPanelHitTesting), with: nil, afterDelay: 0)
-        }
-
-        @objc private func repairFindPanelHitTesting() {
-            guard let contentView = window?.contentView else { return }
-            EditorFindPanelHitTestingPolicy.bringFindPanelsToFront(in: contentView)
-        }
-    }
+    required init?(coder: NSCoder) { nil }
 }

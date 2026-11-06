@@ -1,11 +1,7 @@
 import AVFoundation
 import AppKit
-import SwiftUI
+import Observation
 
-/// Reference-counted presentation state used during Main/Extension handoffs.
-/// SwiftUI may mount the destination before unmounting the source, so one
-/// departing presentation must not suspend a pane that is already live in the
-/// other window.
 struct AndroidPaneActivityState {
     private(set) var presentationIDs: Set<UUID> = []
 
@@ -65,331 +61,155 @@ private final class AndroidPanePresentationCoordinator {
     }
 }
 
-/// The Android device pane. Switches on session status: a native device
-/// picker, adb-install guidance, a connecting/failed overlay, or the live,
-/// interactive mirror (just the device screen, gestures/keyboard replayed over
-/// adb). Structural twin of `SimulatorPaneView`.
-struct AndroidPaneView: View {
-    let paneID: UUID
-    let isActive: Bool
-    let isSelected: Bool
-    var isCollapsed: Bool = false
+@MainActor
+final class AndroidPaneViewController: CapturePaneController {
+    private let session: AndroidDeviceSession
+    private let presentationID = UUID()
+    private var copiedCount: Int
+    private var droppedCount: Int
+    private var polling: Task<Void, Never>?
+    private var captureHost: AndroidCaptureHostView?
 
-    @State private var showsCopiedToast = false
-    @State private var showsDroppedTextToast = false
-    @State private var copiedDismissWorkItem: DispatchWorkItem?
-    @State private var droppedDismissWorkItem: DispatchWorkItem?
-    @State private var presentationID = UUID()
+    override init(pane: Pane) {
+        session = AndroidDeviceRegistry.shared.session(for: pane.id)
+        copiedCount = session.clipboardCopyCount
+        droppedCount = session.droppedTextNoticeCount
+        super.init(pane: pane)
+    }
 
-    var body: some View {
-        let session = AndroidDeviceRegistry.shared.session(for: paneID)
-        ZStack {
-            PreviewCanvasBackground()
-            switch session.status {
-            case .streaming:
-                AndroidCaptureContainerView(session: session)
-            case .picking:
-                AndroidPickerView(session: session, isPolling: isActive && !isCollapsed)
-            case .adbMissing:
-                AndroidToolingMissingView(session: session)
-            case .booting, .connecting, .failed:
-                AndroidStatusOverlay(session: session)
-            }
+    required init?(coder: NSCoder) { nil }
 
-            if showsCopiedToast {
-                toast(label: "Screenshot Copied", systemImage: "checkmark.circle.fill")
-            }
-            if showsDroppedTextToast {
-                toast(label: "Some characters can\u{2019}t be typed over adb", systemImage: "keyboard.badge.ellipsis")
-            }
-        }
-        .onChange(of: session.clipboardCopyCount) { _, _ in
-            flash($showsCopiedToast, workItem: $copiedDismissWorkItem)
-        }
-        .onChange(of: session.droppedTextNoticeCount) { _, _ in
-            flash($showsDroppedTextToast, workItem: $droppedDismissWorkItem, seconds: 2.5)
-        }
-        .onAppear {
-            updatePresentation(isActive: isPresentationActive)
-            if isPresentationActive, session.status == .picking, session.devices.isEmpty {
-                session.refreshDevices()
-            }
-        }
-        .onChange(of: isPresentationActive) { _, isPresented in
-            updatePresentation(isActive: isPresented)
-        }
-        .onDisappear {
-            AndroidPanePresentationCoordinator.shared.deactivate(
-                paneID: paneID,
-                presentationID: presentationID
-            )
-            copiedDismissWorkItem?.cancel()
-            droppedDismissWorkItem?.cancel()
+    isolated deinit {
+        polling?.cancel()
+        if isPresentationActive {
+            AndroidPanePresentationCoordinator.shared.deactivate(paneID: paneID, presentationID: presentationID)
         }
     }
 
-    private var isPresentationActive: Bool {
-        isActive && !isCollapsed
-    }
-
-    private func updatePresentation(isActive: Bool) {
+    override func presentationDidChange(isActive: Bool) {
+        polling?.cancel()
+        polling = nil
+        captureHost?.isHidden = !isActive
         if isActive {
-            AndroidPanePresentationCoordinator.shared.activate(
-                paneID: paneID,
-                presentationID: presentationID
-            )
-        } else {
-            AndroidPanePresentationCoordinator.shared.deactivate(
-                paneID: paneID,
-                presentationID: presentationID
-            )
-        }
-    }
-
-    private func toast(label: String, systemImage: String) -> some View {
-        DevicePaneToast(text: label, systemImage: systemImage)
-            .transition(.opacity.combined(with: .scale(scale: 0.85)))
-            .allowsHitTesting(false)
-            .zIndex(20)
-    }
-
-    private func flash(
-        _ flag: Binding<Bool>,
-        workItem: Binding<DispatchWorkItem?>,
-        seconds: TimeInterval = 1
-    ) {
-        workItem.wrappedValue?.cancel()
-        withAnimation(.snappy(duration: 0.18)) {
-            flag.wrappedValue = true
-        }
-        let work = DispatchWorkItem {
-            withAnimation(.snappy(duration: 0.3)) {
-                flag.wrappedValue = false
-            }
-        }
-        workItem.wrappedValue = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
-    }
-}
-
-// MARK: - Picker
-
-private struct AndroidPickerView: View {
-    let session: AndroidDeviceSession
-    /// Collapsed/background panes stay mounted (opacity 0), so the poll must
-    /// be gated explicitly — `.task` alone would keep spawning `adb devices`
-    /// forever behind an invisible pane.
-    let isPolling: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            DevicePickerHeader(
-                // A restored pane has no target (it isn't persisted) and lists
-                // emulators and devices together, so the title stays neutral
-                // instead of claiming "Android Device" over an emulator row.
-                title: session.target?.pickerTitle ?? "Android",
-                systemImage: pickerSystemImage,
-                isRefreshing: session.isRefreshing,
-                refreshHelp: "Re-scan connected Android devices",
-                refresh: { session.refreshDevices() }
-            )
-
-            if session.devices.isEmpty && session.bootableAVDs.isEmpty {
-                emptyState
-            } else {
-                List {
-                    if !session.devices.isEmpty {
-                        Section {
-                            ForEach(session.devices) { device in
-                                Button {
-                                    session.connect(device)
-                                } label: {
-                                    deviceRow(device)
-                                }
-                                .buttonStyle(.liquidGlassPressable)
-                                .disabled(!device.isConnectable)
-                            }
-                        } header: {
-                            if showsBootableSection { Text("Running") }
-                        }
-                    }
-
-                    // Installed-but-stopped AVDs the picker can boot (Simulator
-                    // target only), mirroring the iOS pane's shut-down sims.
-                    if showsBootableSection {
-                        Section("Available") {
-                            ForEach(session.bootableAVDs, id: \.self) { avd in
-                                Button {
-                                    session.bootAVD(avd)
-                                } label: {
-                                    avdRow(avd)
-                                }
-                                .buttonStyle(.liquidGlassPressable)
-                            }
-                        }
-                    }
-                }
-                .listStyle(.inset)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .task(id: isPolling) {
-            // Devices come and go on the USB cable; keep the list fresh while
-            // the picker is actually visible.
-            guard isPolling else { return }
-            // Scans were paused while the picker was hidden or inactive; a
-            // reused emulator serial may now belong to a different AVD, so
-            // drop the serial→AVD cache before the next scan trusts it.
+            AndroidPanePresentationCoordinator.shared.activate(paneID: paneID, presentationID: presentationID)
             session.invalidateAVDSerialCache()
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                guard session.status == .picking, !session.isRefreshing else { continue }
-                session.refreshDevices()
+            if session.status == .picking, session.devices.isEmpty { session.refreshDevices() }
+            polling = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    guard let self, self.isPresentationActive else { return }
+                    if self.session.status == .picking, !self.session.isRefreshing { self.session.refreshDevices() }
+                }
             }
-        }
-    }
-
-    private func deviceRow(_ device: AndroidDevice) -> some View {
-        DevicePickerRow(
-            systemImage: device.isEmulator ? "apps.iphone" : "smartphone",
-            // Every Google emulator image reports the same model string; the
-            // AVD name is what the user created and recognizes (HIER-5).
-            title: session.displayName(for: device),
-            detail: stateHint(device),
-            trailingSystemImage: device.isConnectable ? "chevron.right" : "exclamationmark.triangle"
-        )
-    }
-
-    /// Only the Simulator target lists bootable AVDs; the header text only earns
-    /// its keep when running devices are also shown alongside them.
-    private var showsBootableSection: Bool {
-        session.target == .simulator && !session.bootableAVDs.isEmpty
-    }
-
-    private func avdRow(_ avd: String) -> some View {
-        DevicePickerRow(
-            systemImage: "play.circle",
-            title: EmulatorBridge.displayName(for: avd),
-            detail: "Not running — tap to boot",
-            trailingSystemImage: "power"
-        )
-    }
-
-    private func stateHint(_ device: AndroidDevice) -> String? {
-        switch device.state {
-        case .device: nil
-        case .unauthorized: "Unauthorized — accept the USB-debugging prompt on the phone"
-        case .offline: "Offline — reconnect the cable or re-enable debugging"
-        case .other: "Not ready"
-        }
-    }
-
-    @ViewBuilder
-    private var emptyState: some View {
-        if session.isRefreshing {
-            DevicePaneMessage("Looking for devices…", systemImage: pickerSystemImage, isLoading: true)
-        } else if let error = session.lastError {
-            DevicePaneMessage("Couldn't List Devices", systemImage: "exclamationmark.triangle", detail: error)
         } else {
-            DevicePaneMessage(emptyTitle, systemImage: "smartphone", detail: emptyGuidance)
+            AndroidPanePresentationCoordinator.shared.deactivate(paneID: paneID, presentationID: presentationID)
         }
     }
 
-    private var pickerSystemImage: String {
-        session.target == .simulator ? "apps.iphone" : "smartphone"
-    }
-
-    private var emptyTitle: String {
-        switch session.target {
-        case .simulator: "No Android Simulators Found"
-        case .device: "No Android Devices Found"
-        case nil: "No Android Sources Found"
+    override func renderPresentation() {
+        if copiedCount != session.clipboardCopyCount {
+            copiedCount = session.clipboardCopyCount
+            showToast("Screenshot Copied")
         }
-    }
-
-    private var emptyGuidance: String {
-        switch session.target {
-        case .simulator: "Create an emulator in Android Studio's Device Manager, then Refresh."
-        case .device: "Connect a device over USB with USB debugging enabled (Settings → Developer options)."
-        case nil: "Connect a device over USB with USB debugging enabled, or start an emulator."
+        if droppedCount != session.droppedTextNoticeCount {
+            droppedCount = session.droppedTextNoticeCount
+            showToast("Some characters can’t be typed over adb", symbol: "keyboard.badge.ellipsis", duration: .milliseconds(2500))
         }
-    }
-}
-
-// MARK: - Tooling missing
-
-private struct AndroidToolingMissingView: View {
-    let session: AndroidDeviceSession
-
-    var body: some View {
-        DevicePaneMessage(
-            "adb Required",
-            systemImage: "wrench.and.screwdriver",
-            detail: "Mirroring an Android device needs the adb tool from Android platform-tools.\n\nInstall it with:\nbrew install --cask android-platform-tools\n\nor install Android Studio, then Refresh.",
-            onCanvas: true
-        ) {
-            Button("Refresh") { session.refreshDevices() }
-                .compatGlassProminentButtonStyle()
-        }
-    }
-}
-
-// MARK: - Status overlay (connecting / failed)
-
-private struct AndroidStatusOverlay: View {
-    let session: AndroidDeviceSession
-
-    var body: some View {
         switch session.status {
+        case .streaming:
+            present(key: "streaming") {
+                let host = captureHost ?? AndroidCaptureHostView(session: session)
+                captureHost = host
+                return host
+            }
+        case .picking:
+            renderPicker()
+        case .adbMissing:
+            present(key: "adb") {
+                CapturePaneMessage("adb Required", symbol: "wrench.and.screwdriver",
+                    detail: "Mirroring needs Android platform-tools. Install with:\nbrew install --cask android-platform-tools\n\nor install Android Studio, then Refresh.", dark: true,
+                    actions: [CapturePaneAction(title: "Refresh", symbol: "arrow.clockwise", perform: { [weak self] in self?.session.refreshDevices() })])
+            }
         case .booting(let name):
-            DevicePaneMessage(
-                "Starting \(name)…",
-                systemImage: "apps.iphone",
-                detail: "The emulator can take a minute to boot.",
-                isLoading: true,
-                onCanvas: true
-            ) {
-                Button("Back to Devices") { session.chooseAnotherDevice() }
-                    .compatGlassButtonStyle()
+            present(key: "booting-\(name)") {
+                CapturePaneMessage("Starting \(name)…", symbol: "apps.iphone", detail: "The emulator can take a minute to boot.", loading: true, dark: true,
+                    actions: [CapturePaneAction(title: "Back to Devices", symbol: "list.bullet", perform: { [weak self] in self?.session.chooseAnotherDevice() })])
             }
         case .connecting(let name):
-            DevicePaneMessage("Connecting to \(name)…", systemImage: "smartphone", isLoading: true, onCanvas: true)
+            present(key: "connecting-\(name)") { CapturePaneMessage("Connecting to \(name)…", symbol: "smartphone", loading: true, dark: true) }
         case .failed(let message):
-            DevicePaneMessage(
-                "Device Unavailable",
-                systemImage: "exclamationmark.triangle",
-                detail: message,
-                onCanvas: true
-            ) {
-                Button("Retry") { session.retry() }
-                    .compatGlassProminentButtonStyle()
-                Button("Back to Devices") { session.chooseAnotherDevice() }
-                    .compatGlassButtonStyle()
+            present(key: "failed-\(message)") {
+                CapturePaneMessage("Device Unavailable", symbol: "exclamationmark.triangle", detail: message, dark: true, actions: [
+                    CapturePaneAction(title: "Retry", symbol: "arrow.clockwise", perform: { [weak self] in self?.session.retry() }),
+                    CapturePaneAction(title: "Back to Devices", symbol: "list.bullet", perform: { [weak self] in self?.session.chooseAnotherDevice() }),
+                ])
             }
-        default:
-            PreviewCanvasBackground()
         }
     }
-}
 
-// MARK: - Live capture host (interactive)
-
-private struct AndroidCaptureContainerView: NSViewRepresentable {
-    let session: AndroidDeviceSession
-
-    func makeNSView(context: Context) -> AndroidCaptureHostView {
-        AndroidCaptureHostView(session: session)
+    private func renderPicker() {
+        let hasBootable = session.target == .simulator && !session.bootableAVDs.isEmpty
+        var items: [CapturePickerItem] = []
+        if hasBootable && !session.devices.isEmpty { items.append(CapturePickerItem(id: "running", title: "Running", group: true)) }
+        for device in session.devices {
+            let detail: String?
+            switch device.state {
+            case .device: detail = nil
+            case .unauthorized: detail = "Unauthorized — accept the USB-debugging prompt on the phone"
+            case .offline: detail = "Offline — reconnect the cable or re-enable debugging"
+            case .other: detail = "Not ready"
+            }
+            items.append(CapturePickerItem(id: device.serial, title: session.displayName(for: device), detail: detail,
+                symbol: device.isEmulator ? "apps.iphone" : "smartphone", enabled: device.isConnectable,
+                select: { [weak self] in self?.session.connect(device) }))
+        }
+        if hasBootable {
+            items.append(CapturePickerItem(id: "available", title: "Available", group: true))
+            for avd in session.bootableAVDs {
+                items.append(CapturePickerItem(id: "avd-\(avd)", title: EmulatorBridge.displayName(for: avd), detail: "Not running — select to boot", symbol: "play.circle", select: { [weak self] in self?.session.bootAVD(avd) }))
+            }
+        }
+        let message: NSView?
+        if !items.isEmpty {
+            message = nil
+        } else if session.isRefreshing {
+            message = CapturePaneMessage("Looking for devices…", symbol: "smartphone", loading: true)
+        } else if let error = session.lastError {
+            message = CapturePaneMessage("Couldn't List Devices", symbol: "exclamationmark.triangle", detail: error)
+        } else {
+            let title: String
+            let guidance: String
+            switch session.target {
+            case .simulator:
+                title = "No Android Simulators Found"
+                guidance = "Create an emulator in Android Studio's Device Manager, then Refresh."
+            case .device:
+                title = "No Android Devices Found"
+                guidance = "Connect a device over USB with USB debugging enabled (Settings → Developer options)."
+            case nil:
+                title = "No Android Sources Found"
+                guidance = "Connect a device with USB debugging enabled, or start an emulator."
+            }
+            message = CapturePaneMessage(title, symbol: "smartphone", detail: guidance)
+        }
+        presentPicker(title: session.target?.pickerTitle ?? "Android", refreshing: session.isRefreshing,
+            refresh: { [weak self] in self?.session.refreshDevices() }, items: items, message: message)
     }
 
-    func updateNSView(_ nsView: AndroidCaptureHostView, context: Context) {}
+    override func toolbarActions() -> [CapturePaneAction] {
+        let streaming = session.status == .streaming
+        return [
+            CapturePaneAction(title: session.isRecording ? "Stop Recording" : "Record Screen", symbol: session.isRecording ? "stop.circle.fill" : "record.circle", enabled: streaming || session.isRecording, perform: { [weak self] in self?.session.toggleRecording() }),
+            CapturePaneAction(title: "Take Screenshot", symbol: "camera.viewfinder", enabled: streaming, perform: { [weak self] in self?.session.takeScreenshot() }),
+            CapturePaneAction(title: "Copy Screenshot", symbol: "clipboard", enabled: streaming, perform: { [weak self] in self?.session.copyScreenshotToClipboard() }),
+            CapturePaneAction(title: "Back", symbol: "arrow.uturn.backward", enabled: streaming, perform: { [weak self] in self?.session.sendKeycode(AndroidKeyMap.Keycode.back) }),
+            CapturePaneAction(title: "Home", symbol: "square.on.square", enabled: streaming, perform: { [weak self] in self?.session.sendKeycode(AndroidKeyMap.Keycode.home) }),
+            CapturePaneAction(title: "App Switch", symbol: "square.grid.2x2", enabled: streaming, perform: { [weak self] in self?.session.sendKeycode(AndroidKeyMap.Keycode.appSwitch) }),
+            CapturePaneAction(title: "Choose Device", symbol: "list.bullet", perform: { [weak self] in self?.session.chooseAnotherDevice() }),
+        ]
+    }
 }
 
-/// Hosts the session's display layer and replays pointer/keyboard input to the
-/// device over adb. Flipped so the local origin is top-left, matching the
-/// video. Gestures are recorded and replayed on mouse-up (adb's `input` tool
-/// has no live event channel), classified to preserve tap/long-press/swipe/
-/// drag semantics; right-click sends Android Back.
 final class AndroidCaptureHostView: NSView {
     private let session: AndroidDeviceSession
     private var classifier = AndroidGestureClassifier()
@@ -419,11 +239,6 @@ final class AndroidCaptureHostView: NSView {
     override func layout() {
         super.layout()
         session.displayLayer.frame = bounds
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil { window?.makeFirstResponder(self) }
     }
 
     // MARK: coordinate mapping

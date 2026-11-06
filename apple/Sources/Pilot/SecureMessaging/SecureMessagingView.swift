@@ -1,358 +1,248 @@
-#if os(macOS)
-import SwiftUI
 import AppKit
 import CryptoKit
 
-/// Pilot's peer-to-peer secure messaging screen (issue #51, Phase 4).
-///
-/// The macOS counterpart of Copilot's `SecureMessagingView`: Pilot is the
-/// **responder**. The user pastes the peer's pinned static public key (the
-/// initiator's) plus the shared pairing token, then Connect: the
-/// ``SecureChannelResponder`` walks signaling -> hole-punch -> Noise IK
-/// handshake (authenticating the initiator against the pinned key) -> connected,
-/// and exposes a live status, the decrypted message log, and send paths for
-/// reliable text and a best-effort test blob.
-///
-/// Reached from the shared Identity & Keys section in `SettingsView`
-/// (Pilot's Settings window, ⌘,).
-struct PilotSecureMessagingView: View {
-    @AppStorage("p2p.rendezvousURL") private var rendezvousURL = "https://rendezvous.blau.app"
-    @AppStorage("p2p.allowInsecureLocalhost") private var allowInsecureLocalhost = false
-
-    @State private var peerKeyInput = ""
-    @State private var tokenInput = ""
-    @State private var transport: SecureChannelResponder?
-    @State private var outgoing = ""
-    @State private var errorMessage: String?
-
-    private var myPublicKey: String { DeviceIdentity.publicKeyBase64() ?? "—" }
+@MainActor
+final class PilotSecureMessagingViewController: NSViewController, NSTextFieldDelegate {
+    private let defaults: UserDefaults
+    private let loadsPairingSecrets: Bool
+    private let suppliedPublicKey: String?
     private let pairingStore = SecurePairingStore()
+    private let observation = NativeSettingsObservation()
+    private var transport: SecureChannelResponder?
+    private var secretsLoaded = false
+    private var visible = false
+    private let status = NativeSettingsUI.label("Idle")
+    private let publicKey = NativeSettingsUI.label("", size: 11, selectable: true)
+    private let peerKey = NativeSettingsTextField(size: 11, monospaced: true)
+    private let token = NativeSettingsTextField()
+    private let rendezvous = NativeSettingsTextField()
+    private let outgoing = NativeSettingsTextField()
+    private let keyError = NativeSettingsUI.label("", size: 11, color: .systemRed)
+    private let errorLabel = NativeSettingsUI.label("", color: .systemRed)
+    private let log = NativeSettingsTextView()
+    private let sendSection = NSView()
+    private var connectionButton: NSButton!
+    private var sendButton: NSButton!
+    private var allowLocalhost: NSButton!
+    private var myPublicKey: String { publicKey.stringValue }
 
-    var body: some View {
-        Form {
-            statusSection
-            identitySection
-            pairingSection
-            if let transport, transport.state.isConnected {
-                messagingSection(transport)
-            }
-            if let transport {
-                logSection(transport)
-            }
-        }
-        .formStyle(.grouped)
-        .navigationTitle("Secure Messaging")
-        .frame(minWidth: 480, minHeight: 560)
-        .task { loadPairingSecrets() }
-        .onDisappear { savePairingSecrets() }
-        .alert("Secure Messaging Error", isPresented: Binding(
-            get: { errorMessage != nil },
-            set: { if !$0 { errorMessage = nil } }
-        )) {
-            Button("Dismiss", role: .cancel) { errorMessage = nil }
-        } message: {
-            Text(errorMessage ?? "")
-        }
+    init(defaults: UserDefaults = .standard, loadsPairingSecrets: Bool = true, localPublicKey: String? = nil) {
+        self.defaults = defaults
+        self.loadsPairingSecrets = loadsPairingSecrets
+        suppliedPublicKey = localPublicKey
+        super.init(nibName: nil, bundle: nil)
+        preferredContentSize = NSSize(width: 620, height: 760)
     }
+    required init?(coder: NSCoder) { nil }
 
-    // MARK: - Sections
-
-    private var statusSection: some View {
-        Section("Status") {
-            LabeledContent("Connection") {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    // In-flight stages show activity rather than a static dot
-                    // (MOT-5); settled states keep the colored indicator.
-                    if isConnecting {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Circle().fill(statusColor).frame(width: 8, height: 8)
-                            .accessibilityHidden(true)
-                    }
-                    Text(statusText)
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.opacity)
-                }
-                .animation(LiquidGlassMetrics.stateChange, value: statusText)
-            }
-        }
-    }
-
-    private var identitySection: some View {
-        Section {
-            LabeledContent("This device") {
-                Text(myPublicKey)
-                    .font(.system(.footnote, design: .monospaced))
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-                    .textSelection(.enabled)
-            }
-            Button {
+    override func loadView() {
+        let body = NativeSettingsUI.column(spacing: 18)
+        body.addArrangedSubview(NativeSettingsUI.label("Secure Messaging", size: 26, weight: .bold))
+        NativeSettingsUI.fillWidth(errorLabel, in: body)
+        errorLabel.isHidden = true
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("Status", [status]), in: body)
+        publicKey.usesMonospacedFont = true
+        publicKey.stringValue = suppliedPublicKey ?? (loadsPairingSecrets ? DeviceIdentity.publicKeyBase64() : nil) ?? "—"
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("My Public Key", [
+            publicKey,
+            NativeSettingsButton("Copy My Key") { [weak self] in
+                guard let self else { return }
                 NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(myPublicKey, forType: .string)
-            } label: {
-                Label("Copy My Key", systemImage: "key")
-            }
-            .compatGlassButtonStyle()
-        } header: {
-            Text("My Public Key")
-        } footer: {
-            Text("Send this to your peer; they paste it as the peer key on their device.")
+                NSPasteboard.general.setString(self.myPublicKey, forType: .string)
+            },
+            NativeSettingsUI.label("Send this to your peer; they paste it as the peer key on their device.", size: 11, color: .secondaryLabelColor)
+        ]), in: body)
+        for (field, title, placeholder) in [
+            (peerKey, "Peer public key", "Paste your peer's base64 key"),
+            (token, "Pairing token", "Generate or paste a token"),
+            (rendezvous, "Rendezvous URL", "https://rendezvous.blau.app"),
+            (outgoing, "Message", "")
+        ] {
+            field.placeholderString = placeholder
+            field.setAccessibilityLabel(title)
+            field.delegate = self
+            field.isAutomaticTextCompletionEnabled = false
         }
-    }
-
-    private var pairingSection: some View {
-        Section {
-            // Persistent labels above each field; placeholders are only an
-            // instruction or a bare example (FORM-1/FORM-2). Each field is a
-            // Liquid Glass field with a focus ring (FORM-4), matching Walkie's
-            // Secure Messaging form.
-            labeledField("Peer public key", error: peerKeyError) {
-                TextField(
-                    "Peer public key",
-                    text: $peerKeyInput,
-                    prompt: Text("Paste your peer's base64 key"),
-                    axis: .vertical
-                )
-                .labelsHidden()
-                .font(.system(.footnote, design: .monospaced))
-                .autocorrectionDisabled()
-                .lineLimit(1...3)
-                .liquidGlassField(multiline: true)
-                // A grouped Form row offers no container shape, so the
-                // field's concentric corners resolved to square on macOS 27
-                // while the capsule fields below stayed round (LAY-4). Give
-                // it the field radius to be concentric with.
-                .liquidGlassContainerShape(cornerRadius: LiquidGlassMetrics.Radius.field)
-            }
-            labeledField("Pairing token") {
-                TextField("Pairing token", text: $tokenInput, prompt: Text("Generate or paste a token"))
-                    .labelsHidden()
-                    .autocorrectionDisabled()
-                    .liquidGlassField()
-            }
-            Button("Generate Pairing Token") { generateToken() }
-                .compatGlassButtonStyle()
-            labeledField("Rendezvous URL") {
-                TextField("Rendezvous URL", text: $rendezvousURL, prompt: Text(verbatim: "https://rendezvous.blau.app"))
-                    .labelsHidden()
-                    .autocorrectionDisabled()
-                    .liquidGlassField()
-            }
-            Toggle("Allow HTTP for localhost development", isOn: $allowInsecureLocalhost)
-
-            if let transport, !transport.state.isFailed {
-                Button(transport.state == .signaling ? "Cancel Connection" : "Disconnect", role: .destructive) {
-                    transport.disconnect()
-                    self.transport = nil
-                }
-                .compatGlassButtonStyle()
-            } else {
-                Button("Connect") { connect() }
-                    .compatGlassProminentButtonStyle()
-                    .disabled(!canConnect)
-            }
-        } header: {
-            Text("Peer")
-        } footer: {
-            Text("The pairing token must match on both devices. The peer key is pinned and authenticated by the handshake.")
-        }
-    }
-
-    private func messagingSection(_ transport: SecureChannelResponder) -> some View {
-        Section("Send") {
-            // A persistent label above the glass field (FORM-1), with the
-            // field and its action side by side. Connect is hidden while
-            // connected, so Send is the view's single prominent action (BTN-1).
-            labeledField("Message") {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    TextField("Message", text: $outgoing)
-                        .labelsHidden()
-                        .onSubmit(send)
-                        .liquidGlassField()
-                    Button("Send", action: send)
-                        .compatGlassProminentButtonStyle()
-                        .disabled(outgoing.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
-            Button {
-                transport.sendTestBlob()
-            } label: {
-                Label("Send Test Blob (Best-Effort)", systemImage: "shippingbox")
-            }
-            .compatGlassButtonStyle()
-        }
-    }
-
-    private func logSection(_ transport: SecureChannelResponder) -> some View {
-        Section("Session Log") {
-            if transport.log.isEmpty {
-                Label("No activity yet.", systemImage: "text.alignleft")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(transport.log.reversed()) { entry in
-                    Text(entry.text)
-                        .font(.system(.footnote, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-    }
-
-    /// A grouped-`Form` row with its visible label stacked above the field
-    /// (FORM-1). The field's own title is its VoiceOver name, so the visible
-    /// label is hidden from VoiceOver to avoid reading it twice; fields pass
-    /// `.labelsHidden()` so the Form does not also draw a leading row label.
-    /// `error`, when set, is shown under the field as its inline error state.
-    private func labeledField<Field: View>(
-        _ title: LocalizedStringKey,
-        error: String? = nil,
-        @ViewBuilder field: () -> Field
-    ) -> some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            // Input → helper/error text at 4pt (FORM-5); the error is the
-            // field's designed error state (FORM-4).
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                field()
-                if let error {
-                    Label(error, systemImage: "exclamationmark.circle")
-                        .font(.footnote)
-                        .foregroundStyle(.red)
-                        .transition(.opacity)
-                }
-            }
-            .animation(LiquidGlassMetrics.stateChange, value: error)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-    }
-
-    // MARK: - Actions
-
-    /// Inline validation for the peer key. The slot is the shared device pin
-    /// (also used by PeerSync), so malformed text is never persisted; tell
-    /// the user before they leave the screen. An empty field is not an
-    /// error: it unpairs.
-    private var peerKeyError: String? {
-        SecurePairingStore.peerKeyUpdate(for: peerKeyInput) == .rejectInvalid
-            ? "Not a valid base64 X25519 key. It won't be saved."
-            : nil
-    }
-
-    /// The field's key when it is one the store would pin, else `nil`.
-    private var validPeerKey: String? {
-        guard case .save(let key) = SecurePairingStore.peerKeyUpdate(for: peerKeyInput) else { return nil }
-        return key
-    }
-
-    private var canConnect: Bool {
-        validPeerKey != nil
-            && SecurePairingStore.isValidIdentifier(
-                tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        rendezvous.stringValue = defaults.string(forKey: "p2p.rendezvousURL") ?? "https://rendezvous.blau.app"
+        allowLocalhost = NativeSettingsButton(
+            checkbox: "Allow HTTP for localhost development", checked: defaults.bool(forKey: "p2p.allowInsecureLocalhost")
+        ) { [weak self] enabled in self?.defaults.set(enabled, forKey: "p2p.allowInsecureLocalhost") }
+        connectionButton = NativeSettingsButton("Connect") { [weak self] in self?.toggleConnection() }
+        let generate = NativeSettingsButton("Generate Pairing Token") { [weak self] in self?.generateToken() }
+        generate.isEnabled = loadsPairingSecrets
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("Peer", [
+            NativeSettingsUI.label("Peer public key", weight: .medium), peerKey, keyError,
+            NativeSettingsUI.label("Pairing token", weight: .medium), token,
+            generate,
+            NativeSettingsUI.label("Rendezvous URL", weight: .medium), rendezvous,
+            allowLocalhost, connectionButton,
+            NativeSettingsUI.label(
+                "The pairing token must match on both devices. The peer key is pinned and authenticated by the handshake.",
+                size: 11, color: .secondaryLabelColor
             )
+        ]), in: body)
+        sendButton = NativeSettingsButton("Send") { [weak self] in self?.send() }
+        outgoing.target = self
+        outgoing.action = #selector(send)
+        let message = NativeSettingsUI.section("Send", [
+            NativeSettingsUI.label("Message", weight: .medium), outgoing, sendButton,
+            NativeSettingsButton("Send Test Blob (Best-Effort)") { [weak self] in self?.transport?.sendTestBlob() }
+        ])
+        NativeSettingsUI.pin(message, to: sendSection)
+        NativeSettingsUI.fillWidth(sendSection, in: body)
+        log.isEditable = false
+        log.isSelectable = true
+        log.isRichText = false
+        log.autoresizingMask = [.width]
+        log.textContainer?.widthTracksTextView = true
+        let scroll = NSScrollView()
+        scroll.documentView = log
+        scroll.hasVerticalScroller = true
+        scroll.heightAnchor.constraint(equalToConstant: 180).isActive = true
+        NativeSettingsUI.fillWidth(NativeSettingsUI.section("Session Log", [scroll]), in: body)
+        view = NativeSettingsUI.scrolling(body)
+        refresh()
     }
 
-    private func connect() {
-        guard let pin = validPeerKey, let peerKey = DeviceIdentity.parsePeerPublicKey(pin) else {
-            errorMessage = "Peer public key is not a valid base64 X25519 key."
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        visible = true
+        if loadsPairingSecrets, !secretsLoaded {
+            secretsLoaded = true
+            loadSecrets()
+        }
+        observeTransport()
+    }
+
+    override func viewWillDisappear() {
+        super.viewWillDisappear()
+        visible = false
+        observation.stop()
+        if loadsPairingSecrets { saveSecrets() }
+    }
+
+    func shutdown() {
+        observation.stop()
+        if isViewLoaded, loadsPairingSecrets { saveSecrets() }
+        transport?.disconnect()
+        transport = nil
+    }
+
+    func controlTextDidChange(_ notification: Notification) {
+        if notification.object as? NSTextField === rendezvous {
+            defaults.set(rendezvous.stringValue, forKey: "p2p.rendezvousURL")
+        }
+        refresh()
+    }
+
+    private var validPeerKey: String? {
+        guard case .save(let value) = SecurePairingStore.peerKeyUpdate(for: peerKey.stringValue) else { return nil }
+        return value
+    }
+
+    private func refresh() {
+        guard isViewLoaded else { return }
+        let connected = transport?.state.isConnected == true
+        sendSection.isHidden = !connected
+        keyError.stringValue = SecurePairingStore.peerKeyUpdate(for: peerKey.stringValue) == .rejectInvalid
+            ? "Not a valid base64 X25519 key. It won't be saved." : ""
+        keyError.isHidden = keyError.stringValue.isEmpty
+        switch transport?.state {
+        case .none: status.stringValue = "Idle"; status.textColor = .secondaryLabelColor
+        case .signaling: status.stringValue = "Signaling…"; status.textColor = .systemOrange
+        case .holePunching: status.stringValue = "Hole punching…"; status.textColor = .systemOrange
+        case .handshake: status.stringValue = "Handshaking…"; status.textColor = .systemOrange
+        case .connected: status.stringValue = "Connected"; status.textColor = .systemGreen
+        case .failed(let reason): status.stringValue = "Failed: \(reason)"; status.textColor = .systemRed
+        }
+        if let transport, !transport.state.isFailed {
+            connectionButton.title = transport.state == .signaling ? "Cancel Connection" : "Disconnect"
+            connectionButton.isEnabled = true
+        } else {
+            connectionButton.title = "Connect"
+            connectionButton.isEnabled = loadsPairingSecrets && validPeerKey != nil && SecurePairingStore.isValidIdentifier(
+                token.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+        sendButton.isEnabled = connected && !outgoing.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let next = transport?.log.reversed().map(\.text).joined(separator: "\n") ?? "No activity yet."
+        if log.string != next { log.string = next.isEmpty ? "No activity yet." : next }
+    }
+
+    private func observeTransport() {
+        if visible { observation.start { [weak self] in self?.refresh() } } else { refresh() }
+    }
+
+    private func toggleConnection() {
+        guard loadsPairingSecrets else { return }
+        if let transport, !transport.state.isFailed {
+            transport.disconnect()
+            self.transport = nil
+            observeTransport()
             return
         }
-        let token = tokenInput.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard SecurePairingStore.isValidIdentifier(token) else {
-            errorMessage = "Use a randomly generated pairing token."
+        guard let pin = validPeerKey, let peerStatic = DeviceIdentity.parsePeerPublicKey(pin) else {
+            showError("Peer public key is not a valid base64 X25519 key.")
+            return
+        }
+        let pairingToken = token.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard SecurePairingStore.isValidIdentifier(pairingToken) else {
+            showError("Use a randomly generated pairing token.")
             return
         }
         do {
             try pairingStore.setPeerPublicKey(pin)
-            try pairingStore.setToken(token)
+            try pairingStore.setToken(pairingToken)
             let identity = try DeviceIdentity.loadOrCreate()
-            let client = try SignalingClient(
-                baseURLString: rendezvousURL,
-                allowInsecureLocalhost: allowInsecureLocalhost
+            let signaling = try SignalingClient(
+                baseURLString: rendezvous.stringValue, allowInsecureLocalhost: allowLocalhost.state == .on
             )
-            let t = SecureChannelResponder(
-                role: .responder,
-                signaling: client,
-                token: token,
-                staticKey: identity,
-                peerStatic: peerKey
+            let connection = SecureChannelResponder(
+                role: .responder, signaling: signaling, token: pairingToken, staticKey: identity, peerStatic: peerStatic
             )
-            replaceActiveConnection(&transport, with: t) { $0.disconnect() }
-            t.connect()
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+            replaceActiveConnection(&transport, with: connection) { $0.disconnect() }
+            connection.connect()
+            errorLabel.isHidden = true
+            observeTransport()
+        } catch { showError(error.localizedDescription) }
     }
 
-    private func loadPairingSecrets() {
+    private func loadSecrets() {
         do {
             let secrets = try pairingStore.loadMigratingLegacy()
-            peerKeyInput = secrets.peerPublicKey
-            tokenInput = secrets.token
-        } catch {
-            errorMessage = "Could not load secure pairing settings."
-        }
+            peerKey.stringValue = secrets.peerPublicKey
+            token.stringValue = secrets.token
+        } catch { showError("Could not load secure pairing settings.") }
     }
 
-    private func savePairingSecrets() {
+    private func saveSecrets() {
         do {
-            // Writes only a valid key or clears an emptied field; malformed
-            // text leaves the existing pin untouched (shown inline above).
-            try pairingStore.applyPeerKeyInput(peerKeyInput)
-            try pairingStore.setToken(tokenInput)
-        } catch {
-            errorMessage = "Could not save secure pairing settings."
-        }
+            try pairingStore.applyPeerKeyInput(peerKey.stringValue)
+            try pairingStore.setToken(token.stringValue)
+        } catch { showError("Could not save secure pairing settings.") }
     }
 
     private func generateToken() {
+        guard loadsPairingSecrets else { return }
         do {
-            tokenInput = try SecurePairingStore.generateToken()
-            try pairingStore.setToken(tokenInput)
-        } catch {
-            errorMessage = "Could not generate a secure pairing token."
-        }
+            token.stringValue = try SecurePairingStore.generateToken()
+            try pairingStore.setToken(token.stringValue)
+            refresh()
+        } catch { showError("Could not generate a secure pairing token.") }
     }
 
-    private func send() {
-        let text = outgoing.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        transport?.sendText(text)
-        outgoing = ""
+    @objc private func send() {
+        guard transport?.state.isConnected == true else { return }
+        let message = outgoing.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        transport?.sendText(message)
+        outgoing.stringValue = ""
+        refresh()
     }
 
-    // MARK: - Status presentation
-
-    private var statusText: String {
-        switch transport?.state {
-        case .none: return "Idle"
-        case .signaling: return "Signaling…"
-        case .holePunching: return "Hole punching…"
-        case .handshake: return "Handshaking…"
-        case .connected: return "Connected"
-        case .failed(let reason): return "Failed: \(reason)"
-        }
-    }
-
-    private var isConnecting: Bool {
-        switch transport?.state {
-        case .signaling, .holePunching, .handshake: return true
-        case .none, .connected, .failed: return false
-        }
-    }
-
-    private var statusColor: Color {
-        switch transport?.state {
-        case .connected: return .green
-        case .failed: return .red
-        // Idle reads as the semantic secondary tint in both appearances (COL-2).
-        case .none: return .secondary
-        default: return .orange
-        }
+    private func showError(_ message: String) {
+        errorLabel.stringValue = message
+        errorLabel.isHidden = false
+        if visible, let window = view.window { NativeSettingsUI.error(message, in: window) }
     }
 }
-#endif

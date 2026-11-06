@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 // RoyalVNCKit predates Swift 6 strict concurrency; `@preconcurrency` keeps its
 // non-Sendable types (VNCConnection/VNCFramebuffer/…) from tripping the actor
 // checks when we bridge its delegate callbacks back onto the main actor.
@@ -11,36 +10,41 @@ import SwiftUI
 ///
 /// This view owns *no* connection. Mounting it builds a framebuffer view over
 /// the session's existing framebuffer and unmounting tears only that view down,
-/// so switching tabs costs a view rebuild rather than a reconnect and a second
+/// so switching groups costs a view rebuild rather than a reconnect and a second
 /// trip through authentication.
-struct RemoteDesktopViewer: NSViewRepresentable {
-    let session: RemoteDesktopSession
-    /// Read from the session in the caller's `body` so SwiftUI re-runs
-    /// `updateNSView` when the framebuffer is created, resized, or dropped.
-    let framebufferGeneration: Int
-    var onActivate: () -> Void = {}
+@MainActor
+final class RemoteDesktopViewer: NSView {
+    private let coordinator = Coordinator()
+    private let framebufferContainer = RemoteFramebufferContainerView()
 
-    func makeNSView(context: Context) -> NSView {
-        let container = RemoteFramebufferContainerView()
-        container.onActivate = onActivate
-        container.wantsLayer = true
-        context.coordinator.attach(to: container, session: session)
-        context.coordinator.sync(generation: framebufferGeneration)
-        return container
+    init(session: RemoteDesktopSession, framebufferGeneration: Int, onActivate: @escaping () -> Void = {}) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.black.cgColor
+        framebufferContainer.frame = bounds
+        framebufferContainer.autoresizingMask = [.width, .height]
+        framebufferContainer.onActivate = onActivate
+        addSubview(framebufferContainer)
+        coordinator.attach(to: framebufferContainer, session: session)
+        coordinator.sync(generation: framebufferGeneration)
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        (nsView as? RemoteFramebufferContainerView)?.onActivate = onActivate
-        context.coordinator.sync(generation: framebufferGeneration)
+    required init?(coder: NSCoder) { nil }
+
+    func update(generation: Int, onActivate: @escaping () -> Void) {
+        framebufferContainer.onActivate = onActivate
+        coordinator.sync(generation: generation)
     }
 
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        // Detach only. The connection belongs to the session manager and must
-        // survive this view so tabbing back does not re-handshake.
+    func detach() {
+        if let responder = window?.firstResponder as? NSView,
+           responder === self || responder.isDescendant(of: self) {
+            window?.makeFirstResponder(nil)
+        }
         coordinator.detach()
     }
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    isolated deinit { coordinator.detach() }
 
     @MainActor
     final class Coordinator {

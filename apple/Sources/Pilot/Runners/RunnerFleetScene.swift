@@ -1,7 +1,6 @@
 import AppKit
 import Metal
 import SceneKit
-import SwiftUI
 
 struct RunnerFleetItem: Equatable, Identifiable {
     let id: Int
@@ -356,7 +355,7 @@ final class RunnerFleetScene {
         return palette[index % palette.count]
     }
 
-    /// A flat card facing the camera: SwiftUI draws the rounded glass smoothly,
+    /// A flat card facing the camera: native bitmap drawing keeps its edges smooth,
     /// where a chamfered box showed faceted edges and stretched side textures.
     private func buildHub() {
         let size = RunnerFleetLayout.hubSize
@@ -737,85 +736,84 @@ extension RunnerFleetScene {
     }
 }
 
-/// SwiftUI-rendered text for the scene; SceneKit's own text meshes look soft.
+/// AppKit text rasterized at 3× so SceneKit labels stay crisp without a UI host.
 @MainActor
 private enum FleetLabels {
     static func runner(name: String, state: GitHubRunner.State) -> CGImage? {
-        render(width: 180) {
-            VStack(alignment: .center, spacing: 4) {
-                Text(name)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack(spacing: 5) {
-                    Circle().fill(state.fleetColor).frame(width: 7, height: 7)
-                    Text(state.rawValue)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color(white: 0.72))
-                }
-            }
-            // A back row's caption hangs over the lids of the row in front;
-            // without a scrim its light-gray state text vanishes against a
-            // silver case (COL-6). The padding keeps the halo inside the image.
-            .shadow(color: .black.opacity(0.9), radius: 1.5)
-            .shadow(color: .black.opacity(0.6), radius: 4)
-            .padding(.vertical, 4)
+        render(size: NSSize(width: 180, height: 48)) {
+            let shadow = NSShadow()
+            shadow.shadowColor = NSColor.black.withAlphaComponent(0.9)
+            shadow.shadowBlurRadius = 4
+            shadow.shadowOffset = .zero
+            shadow.set()
+            text(name, rect: NSRect(x: 4, y: 25, width: 172, height: 20), size: 14, weight: .semibold, color: .white)
+            let stateWidth = (state.rawValue as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width
+            let start = (180 - stateWidth - 12) / 2
+            state.fleetColor.setFill()
+            NSBezierPath(ovalIn: NSRect(x: start, y: 10, width: 7, height: 7)).fill()
+            text(state.rawValue, rect: NSRect(x: start + 12, y: 6, width: stateWidth, height: 18), size: 12, weight: .medium,
+                 color: NSColor(white: 0.72, alpha: 1))
         }
     }
 
     static func hub(title: String) -> CGImage? {
-        let shape = RoundedRectangle(cornerRadius: 34, style: .continuous)
-        return render(width: 300) {
-            VStack(spacing: 6) {
-                Image("GitHubMark")
-                    .renderingMode(.template)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 58, height: 58)
-                    .foregroundStyle(.white)
-                Text("GitHub").font(.system(size: 28, weight: .semibold)).foregroundStyle(.white)
-                if !title.isEmpty {
-                    Text(title)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(Color(red: 0.72, green: 0.84, blue: 1))
-                        .lineLimit(1)
-                }
+        render(size: NSSize(width: 300, height: 200)) {
+            let card = NSBezierPath(roundedRect: NSRect(x: 8, y: 8, width: 284, height: 184), xRadius: 34, yRadius: 34)
+            NSGradient(starting: NSColor(red: 0.05, green: 0.13, blue: 0.45, alpha: 1),
+                       ending: NSColor(red: 0.17, green: 0.38, blue: 0.98, alpha: 1))?.draw(in: card, angle: 90)
+            NSGraphicsContext.saveGraphicsState()
+            card.addClip()
+            NSGradient(starting: NSColor.white.withAlphaComponent(0.28), ending: NSColor.clear)?.draw(
+                fromCenter: NSPoint(x: 150, y: 170), radius: 0,
+                toCenter: NSPoint(x: 150, y: 170), radius: 170, options: .drawsAfterEndingLocation)
+            NSGraphicsContext.restoreGraphicsState()
+            NSColor(red: 0.7, green: 0.86, blue: 1, alpha: 0.9).setStroke()
+            card.lineWidth = 2.5
+            card.stroke()
+            if let mark = NSImage(named: "GitHubMark") {
+                let tinted = NSImage(size: mark.size)
+                tinted.lockFocus()
+                mark.draw(at: .zero, from: .zero, operation: .sourceOver, fraction: 1)
+                NSColor.white.setFill()
+                NSRect(origin: .zero, size: mark.size).fill(using: .sourceAtop)
+                tinted.unlockFocus()
+                tinted.draw(in: NSRect(x: 121, y: 112, width: 58, height: 58))
             }
-            .frame(width: 284, height: 184)
-            .background {
-                shape.fill(LinearGradient(
-                    colors: [Color(red: 0.17, green: 0.38, blue: 0.98), Color(red: 0.05, green: 0.13, blue: 0.45)],
-                    startPoint: .top, endPoint: .bottom
-                ))
-                shape.fill(RadialGradient(
-                    colors: [Color.white.opacity(0.28), .clear], center: UnitPoint(x: 0.5, y: 0.15),
-                    startRadius: 0, endRadius: 170
-                ))
-            }
-            .overlay {
-                shape.strokeBorder(LinearGradient(
-                    colors: [Color(red: 0.7, green: 0.86, blue: 1), Color(red: 0.32, green: 0.55, blue: 1).opacity(0.7)],
-                    startPoint: .top, endPoint: .bottom
-                ), lineWidth: 2.5)
-            }
-            .frame(width: 300, height: 200)
+            text("GitHub", rect: NSRect(x: 16, y: 68, width: 268, height: 38), size: 28, weight: .semibold, color: .white)
+            text(title, rect: NSRect(x: 20, y: 42, width: 260, height: 22), size: 15, weight: .medium,
+                 color: NSColor(red: 0.72, green: 0.84, blue: 1, alpha: 1))
         }
     }
 
-    private static func render<Content: View>(width: CGFloat, @ViewBuilder _ content: () -> Content) -> CGImage? {
-        let renderer = ImageRenderer(content: content().frame(width: width).environment(\.colorScheme, .dark))
-        renderer.scale = 3
-        return renderer.cgImage
+    private static func text(_ value: String, rect: NSRect, size: CGFloat, weight: NSFont.Weight, color: NSColor) {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byTruncatingMiddle
+        (value as NSString).draw(in: rect, withAttributes: [
+            .font: NSFont.systemFont(ofSize: size, weight: weight), .foregroundColor: color, .paragraphStyle: paragraph,
+        ])
+    }
+
+    private static func render(size: NSSize, draw: () -> Void) -> CGImage? {
+        let scale: CGFloat = 3
+        guard let context = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+                                      bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.scaleBy(x: scale, y: scale)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        draw()
+        NSGraphicsContext.restoreGraphicsState()
+        return context.makeImage()
     }
 }
 
 extension GitHubRunner.State {
-    var fleetColor: Color {
+    var fleetColor: NSColor {
         switch self {
-        case .idle: .green
-        case .busy: .orange
-        case .offline: Color(white: 0.45)
+        case .idle: .systemGreen
+        case .busy: .systemOrange
+        case .offline: NSColor(white: 0.45, alpha: 1)
         }
     }
 }

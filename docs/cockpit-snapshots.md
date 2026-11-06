@@ -78,7 +78,7 @@ complete website manifest. Build and capture logs live in
 composes the production Notes editor, Docker view, runner cards, usage
 dashboard, and all five inspector panels. The capture-only sidebar, tab strips,
 window chrome, and
-terminal/editor/browser/remote/device surfaces are SwiftUI stand-ins. They show
+terminal/editor/browser/remote/device surfaces are native AppKit stand-ins. They show
 fictional work; they are not live terminal emulation, browser rendering, VNC,
 or device capture. This distinction lets screenshots remain useful without
 starting processes or connecting to machines. The harness does not capture or
@@ -91,8 +91,9 @@ fixed history dates, and no real credentials. Task ages and plan reset times are
 omitted rather than tied to today's clock. The temporary preferences suite is
 removed after each run.
 
-Captures render an AppKit hosting hierarchy, which includes native scroll views
-and the Notes text editor. SwiftUI `ImageRenderer` alone omits those surfaces.
+Captures render an AppKit controller hierarchy, which includes native scroll
+views and the Notes text editor. Production panels use injected fixture stores;
+engine previews never create live sessions.
 Native glass and sidebar-selection effects require the window-server compositor;
 the capture shell uses opaque equivalents so exported controls stay legible
 without screen-recording permission or visible capture windows.

@@ -1060,9 +1060,10 @@ final class Workspace {
     @discardableResult
     func removePane(
         _ pane: Pane,
+        allowEmpty: Bool = false,
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {
-        guard panes.count > 1 else { return false }
+        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }) else { return false }
         let context = modelContext
         let deletedDevicePaneID = pane.kind == .device ? pane.id : nil
         pane.tearDownRuntimeResources(preservingDevicePreference: true)

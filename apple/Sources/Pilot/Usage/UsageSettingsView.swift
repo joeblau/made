@@ -1,220 +1,232 @@
-import SwiftUI
+import AppKit
 
-/// Settings section for AI usage. There are **no keys to enter** — usage is read
-/// from the `claude`, `codex`, `grok`, and `kimi` CLI sessions and the Cursor
-/// editor's session already on this Mac. This page shows whether each is
-/// signed in and how to sign in if not.
-struct UsageSettingsView: View {
-    var showsPageHeader = false
+/// Consent is stored before credentials are inspected, just as in the former
+/// settings form. Detection owns a generation so late reads cannot update a
+/// dismissed page or a provider whose consent has since been revoked.
+@MainActor
+final class UsageSettingsViewController: NSViewController {
+    typealias SessionDetector = @Sendable (UsageAccount) async -> Bool
+    let defaults: UserDefaults
+    let showsPageHeader: Bool
+    private let detector: SessionDetector
+    private let stack = InspectorNativeUI.vertical(spacing: 20)
+    private var toggles: [UsageAccount: NSButton] = [:]
+    private var statuses: [UsageAccount: NSTextField] = [:]
+    private var enabled: [UsageAccount: Bool] = [:]
+    private var signedIn: [UsageAccount: Bool] = [:]
+    private var sharingToggle: NSButton?
+    private var isActive = false
+    private var detectionGeneration = 0
+    private var detectionTask: Task<Void, Never>?
+    private var preferencesObserver: NSObjectProtocol?
+    private var zoomObserver: NSObjectProtocol?
+    private var renderedZoom: Double
 
-    @AppStorage(UsageConsent.claudeKey) private var claudeEnabled = false
-    @AppStorage(UsageConsent.codexKey) private var codexEnabled = false
-    @AppStorage(UsageConsent.cursorKey) private var cursorEnabled = false
-    @AppStorage(UsageConsent.grokKey) private var grokEnabled = false
-    @AppStorage(UsageConsent.kimiKey) private var kimiEnabled = false
-    @AppStorage(UsageDashboardSharing.preferenceKey) private var dashboardSharing = false
-    @State private var claudeSignedIn: Bool?
-    @State private var codexSignedIn: Bool?
-    @State private var cursorSignedIn: Bool?
-    @State private var grokSignedIn: Bool?
-    @State private var kimiSignedIn: Bool?
+    init(defaults: UserDefaults = .standard, showsPageHeader: Bool = true,
+         detector: @escaping SessionDetector = UsageSettingsViewController.detectSession) {
+        self.defaults = defaults
+        self.showsPageHeader = showsPageHeader
+        self.detector = detector
+        self.renderedZoom = InspectorNativeUI.zoom(defaults: defaults)
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
 
-    private static let claudeDocsURL = URL(string: "https://code.claude.com/docs/en/overview")!
-    private static let codexDocsURL = URL(string: "https://developers.openai.com/codex/cli")!
-    private static let cursorDocsURL = URL(string: "https://cursor.com/docs")!
-    private static let grokDocsURL = URL(string: "https://docs.x.ai/build/overview")!
-    private static let kimiDocsURL = URL(
-        string: "https://www.kimi.ai/help/kimi-code/cli-getting-started"
-    )!
-
-    var body: some View {
-        Form {
-            if showsPageHeader {
-                PilotSettingsPageHeader(
-                    title: "Usage",
-                    subtitle: "Connect local coding-agent sessions and review their usage in Cockpit.",
-                    systemImage: "chart.bar.xaxis",
-                    tint: .blue
-                )
-            }
-
-            Section {
-                Toggle("Allow Cockpit to read Claude Code credentials and usage", isOn: $claudeEnabled)
-                statusRow(enabled: claudeEnabled, signedIn: claudeSignedIn)
-                Link(destination: Self.claudeDocsURL) {
-                    Label("Install & sign in to Claude Code", systemImage: "arrow.up.forward.app")
-                }
-            } header: {
-                Text("Claude")
-            } footer: {
-                Text("When enabled, Cockpit reads Claude Code's credential file or Keychain item and sends its bearer token only to Anthropic's usage endpoint. Keychain access may prompt once.")
-            }
-
-            Section {
-                Toggle("Allow Cockpit to read Codex credentials and usage", isOn: $codexEnabled)
-                statusRow(enabled: codexEnabled, signedIn: codexSignedIn)
-                Link(destination: Self.codexDocsURL) {
-                    Label("Install & sign in to Codex", systemImage: "arrow.up.forward.app")
-                }
-            } header: {
-                Text("Codex")
-            } footer: {
-                Text("When enabled, Cockpit reads ~/.codex/auth.json and sends its bearer token only to ChatGPT's Codex usage endpoint.")
-            }
-
-            Section {
-                Toggle("Allow Cockpit to read Kimi Code credentials and usage", isOn: $kimiEnabled)
-                statusRow(enabled: kimiEnabled, signedIn: kimiSignedIn)
-                Link(destination: Self.kimiDocsURL) {
-                    Label("Install & sign in to Kimi Code", systemImage: "arrow.up.forward.app")
-                }
-            } header: {
-                Text("Kimi")
-            } footer: {
-                Text(
-                    "When enabled, Cockpit reads Kimi Code's credential file under "
-                        + "$KIMI_CODE_HOME (or ~/.kimi-code), with legacy ~/.kimi fallback, "
-                        + "and sends its bearer token only to Kimi's usage and sign-in endpoints. "
-                        + "Kimi's fifteen-minute tokens rotate on refresh, so when the stored token "
-                        + "has expired Cockpit refreshes it and saves the rotated token back to "
-                        + "Kimi Code's own credential file — keeping both Cockpit and the kimi CLI "
-                        + "signed in."
-                )
-            }
-
-            Section {
-                Toggle("Allow Cockpit to read Grok credentials and usage", isOn: $grokEnabled)
-                statusRow(enabled: grokEnabled, signedIn: grokSignedIn)
-                Link(destination: Self.grokDocsURL) {
-                    Label("Install & sign in to Grok", systemImage: "arrow.up.forward.app")
-                }
-            } header: {
-                Text("Grok")
-            } footer: {
-                Text(
-                    "When enabled, Cockpit reads $GROK_HOME/auth.json (or ~/.grok/auth.json) "
-                        + "and sends its bearer token only to xAI's usage and sign-in endpoints. "
-                        + "Grok's six-hour tokens rotate on refresh, so when the stored token has "
-                        + "expired Cockpit refreshes it and saves the rotated token back to "
-                        + "auth.json — keeping both Cockpit and the grok CLI signed in."
-                )
-            }
-
-            Section {
-                Toggle("Allow Cockpit to read Cursor credentials and usage", isOn: $cursorEnabled)
-                statusRow(enabled: cursorEnabled, signedIn: cursorSignedIn)
-                Link(destination: Self.cursorDocsURL) {
-                    Label("Install & sign in to Cursor", systemImage: "arrow.up.forward.app")
-                }
-            } header: {
-                Text("Cursor")
-            } footer: {
-                Text(
-                    "When enabled, Cockpit reads the Cursor app's local state database "
-                        + "(~/Library/Application Support/Cursor) and sends its session token "
-                        + "only to cursor.com's usage endpoints."
-                )
-            }
-
-            Section {
-                Toggle("Share AI Usage on Lock Screen and Companions", isOn: $dashboardSharing)
-            } footer: {
-                Text("Shares only aggregate estimated cost, token totals, and plan utilization with widgets and paired companions. Raw usage records, logs, and session identifiers are never included. Turning this off removes published usage snapshots.")
-            }
-
-            Section {
-                EmptyView()
-            } footer: {
-                Text("All providers are disabled by default. Cockpit does not read auth files, query Keychain, or make usage requests until you enable that provider. Cockpit keeps no token store of its own; the only credentials it ever writes are Grok's and Kimi's rotated tokens, back into each CLI's own credential file.")
-            }
+    override func loadView() {
+        let scroll = NSScrollView()
+        view = scroll
+        stack.fillsWidth = true
+        if showsPageHeader {
+            stack.addArrangedSubview(InspectorNativeUI.label("Usage", size: 24, weight: .bold, defaults: defaults))
+            stack.addArrangedSubview(InspectorNativeUI.label(
+                "Connect local coding-agent sessions and review their usage in Cockpit.",
+                color: .secondaryLabelColor, defaults: defaults
+            ))
         }
-        .task { await detect() }
-        .onChange(of: claudeEnabled) { consentChanged() }
-        .onChange(of: codexEnabled) { consentChanged() }
-        .onChange(of: cursorEnabled) { consentChanged() }
-        .onChange(of: grokEnabled) { consentChanged() }
-        .onChange(of: kimiEnabled) { consentChanged() }
-        .onChange(of: dashboardSharing) {
-            NotificationCenter.default.post(name: UsageDashboardSharing.changedNotification, object: nil)
+        for account in UsageAccount.allCases {
+            let title = InspectorNativeUI.label(account.title, size: 14, weight: .semibold, defaults: defaults)
+            let checkbox = NSButton(checkboxWithTitle: "Allow Cockpit to read \(account.displayName) credentials and usage",
+                                    target: self, action: #selector(consentChanged(_:)))
+            checkbox.tag = account.rawValue
+            checkbox.font = InspectorNativeUI.font(defaults: defaults)
+            checkbox.cell?.wraps = true
+            checkbox.identifier = .init("usage.consent.\(account.title.lowercased())")
+            let status = InspectorNativeUI.label("Disabled", color: .secondaryLabelColor, defaults: defaults)
+            status.setAccessibilityLabel("\(account.title) sign-in status")
+            status.identifier = .init("usage.status.\(account.title.lowercased())")
+            let docs = InspectorActionButton("Install & sign in to \(account.displayName)", symbol: "arrow.up.forward.app") {
+                NSWorkspace.shared.open(account.documentationURL)
+            }
+            let description = InspectorNativeUI.label(account.disclosure, size: 11,
+                                                       color: .secondaryLabelColor, defaults: defaults)
+            let section = InspectorNativeUI.vertical([title, checkbox, status, docs, description])
+            section.fillsWidth = true
+            stack.addArrangedSubview(section)
+            toggles[account] = checkbox
+            statuses[account] = status
+        }
+        let sharing = NSButton(checkboxWithTitle: "Share AI Usage on Lock Screen and Companions",
+                               target: self, action: #selector(sharingChanged(_:)))
+        sharing.font = InspectorNativeUI.font(defaults: defaults)
+        sharing.cell?.wraps = true
+        sharing.identifier = .init("usage.dashboard-sharing")
+        sharingToggle = sharing
+        let sharingDescription = InspectorNativeUI.label(
+            "Shares only aggregate estimated cost, token totals, and plan utilization with widgets and paired companions. Raw usage records, logs, and session identifiers are never included. Turning this off removes published usage snapshots.",
+            size: 11, color: .secondaryLabelColor, defaults: defaults
+        )
+        let sharingSection = InspectorNativeUI.vertical([sharing, sharingDescription])
+        sharingSection.fillsWidth = true
+        stack.addArrangedSubview(sharingSection)
+        stack.addArrangedSubview(InspectorNativeUI.label(
+            "All providers are disabled by default. Cockpit does not read auth files, query Keychain, or make usage requests until you enable that provider. Cockpit keeps no token store of its own; the only credentials it ever writes are Grok's and Kimi's rotated tokens, back into each CLI's own credential file.",
+            size: 11, color: .secondaryLabelColor, defaults: defaults
+        ))
+        InspectorNativeUI.scrollDocument(stack, in: scroll, inset: 20)
+        synchronizePreferences()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        setPresentationActive(true)
+    }
+    override func viewWillDisappear() {
+        setPresentationActive(false)
+        super.viewWillDisappear()
+    }
+
+    isolated deinit { setPresentationActive(false) }
+
+    func setPresentationActive(_ active: Bool) {
+        guard active != isActive else { return }
+        isActive = active
+        detectionGeneration += 1
+        if active {
+            _ = view
+            preferencesObserver = NotificationCenter.default.addObserver(
+                forName: UserDefaults.didChangeNotification, object: defaults, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isActive else { return }
+                    let old = self.enabled
+                    self.synchronizePreferences()
+                    if old != self.enabled { self.detect() }
+                }
+            }
+            zoomObserver = NotificationCenter.default.addObserver(
+                forName: .cockpitUIZoomDidChange, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    guard let self, self.isActive else { return }
+                    self.synchronizePreferences()
+                }
+            }
+            synchronizePreferences()
+            detect()
+        } else {
+            detectionTask?.cancel()
+            detectionTask = nil
+            if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+            preferencesObserver = nil
+            if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }
+            zoomObserver = nil
         }
     }
 
-    @ViewBuilder
-    private func statusRow(enabled: Bool, signedIn: Bool?) -> some View {
-        LabeledContent("Status") {
-            if !enabled {
-                Label("Disabled", systemImage: "lock.fill")
-                    .foregroundStyle(.secondary)
-                    .labelStyle(.titleAndIcon)
-            } else {
-                switch signedIn {
-                case .some(true):
-                    Label("Signed in", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .labelStyle(.titleAndIcon)
-                case .some(false):
-                    Label("Not signed in", systemImage: "xmark.circle")
-                        .foregroundStyle(.secondary)
-                        .labelStyle(.titleAndIcon)
-                case .none:
-                    ProgressView().controlSize(.small)
-                }
-            }
-        }
-    }
-
-    private func detect() async {
-        claudeSignedIn = nil
-        codexSignedIn = nil
-        cursorSignedIn = nil
-        grokSignedIn = nil
-        kimiSignedIn = nil
-        async let claude = Self.detectClaude(enabled: claudeEnabled)
-        async let codex = Self.detectCodex(enabled: codexEnabled)
-        async let cursor = Self.detectCursor(enabled: cursorEnabled)
-        async let grok = Self.detectGrok(enabled: grokEnabled)
-        async let kimi = Self.detectKimi(enabled: kimiEnabled)
-        let values = await (claude, codex, cursor, grok, kimi)
-        claudeSignedIn = claudeEnabled ? values.0 : nil
-        codexSignedIn = codexEnabled ? values.1 : nil
-        cursorSignedIn = cursorEnabled ? values.2 : nil
-        grokSignedIn = grokEnabled ? values.3 : nil
-        kimiSignedIn = kimiEnabled ? values.4 : nil
-    }
-
-    private func consentChanged() {
+    @objc private func consentChanged(_ sender: NSButton) {
+        guard let account = UsageAccount(rawValue: sender.tag) else { return }
+        defaults.set(sender.state == .on, forKey: account.consentKey)
+        synchronizePreferences()
         NotificationCenter.default.post(name: UsageConsent.changedNotification, object: nil)
-        Task { await detect() }
+        detect()
     }
 
-    private static func detectClaude(enabled: Bool) async -> Bool {
-        guard enabled else { return false }
-        return await Task.detached { UsageSessions.ClaudeSession.load() != nil }.value
+    @objc private func sharingChanged(_ sender: NSButton) {
+        defaults.set(sender.state == .on, forKey: UsageDashboardSharing.preferenceKey)
+        NotificationCenter.default.post(name: UsageDashboardSharing.changedNotification, object: nil)
     }
 
-    private static func detectCodex(enabled: Bool) async -> Bool {
-        guard enabled else { return false }
-        return await Task.detached { UsageSessions.CodexSession.load() != nil }.value
+    private func synchronizePreferences() {
+        let zoom = InspectorNativeUI.zoom(defaults: defaults)
+        if zoom != renderedZoom {
+            resizeFonts(in: stack, ratio: zoom / renderedZoom)
+            renderedZoom = zoom
+        }
+        for account in UsageAccount.allCases {
+            let value = defaults.bool(forKey: account.consentKey)
+            enabled[account] = value
+            toggles[account]?.state = value ? .on : .off
+            toggles[account]?.font = InspectorNativeUI.font(defaults: defaults)
+            renderStatus(account)
+        }
+        sharingToggle?.state = UsageDashboardSharing.isEnabled(defaults: defaults) ? .on : .off
     }
 
-    private static func detectCursor(enabled: Bool) async -> Bool {
-        guard enabled else { return false }
+    private func resizeFonts(in view: NSView, ratio: Double) {
+        if let control = view as? NSControl, let font = control.font {
+            control.font = NSFontManager.shared.convert(font, toSize: font.pointSize * ratio)
+        }
+        view.subviews.forEach { resizeFonts(in: $0, ratio: ratio) }
+    }
+
+    private func renderStatus(_ account: UsageAccount) {
+        let status = statuses[account]
+        status?.font = InspectorNativeUI.font(defaults: defaults)
+        if enabled[account] != true {
+            status?.stringValue = "Disabled"
+            status?.textColor = .secondaryLabelColor
+        } else if let value = signedIn[account] {
+            status?.stringValue = value ? "Signed in" : "Not signed in"
+            status?.textColor = value ? .systemGreen : .secondaryLabelColor
+        } else {
+            status?.stringValue = "Checking sign-in…"
+            status?.textColor = .secondaryLabelColor
+        }
+    }
+
+    private func detect() {
+        guard isActive else { return }
+        detectionGeneration += 1
+        let generation = detectionGeneration
+        detectionTask?.cancel()
+        signedIn.removeAll()
+        UsageAccount.allCases.forEach(renderStatus)
+        let enabledAccounts = UsageAccount.allCases.filter { enabled[$0] == true }
+        let detector = self.detector
+        detectionTask = Task { @MainActor [weak self] in
+            await withTaskGroup(of: (UsageAccount, Bool).self) { group in
+                for account in enabledAccounts {
+                    group.addTask {
+                        guard !Task.isCancelled else { return (account, false) }
+                        return (account, await detector(account))
+                    }
+                }
+                for await (account, result) in group {
+                    guard !Task.isCancelled, let self, self.isActive,
+                          generation == self.detectionGeneration,
+                          self.defaults.bool(forKey: account.consentKey) else { continue }
+                    self.signedIn[account] = result
+                    self.renderStatus(account)
+                }
+            }
+        }
+    }
+
+    nonisolated static func detectSession(_ account: UsageAccount) async -> Bool {
+        guard !Task.isCancelled else { return false }
         return await Task.detached {
-            guard let session = UsageSessions.CursorSession.load() else { return false }
-            return !session.isExpired
-        }.value
-    }
-
-    private static func detectGrok(enabled: Bool) async -> Bool {
-        guard enabled else { return false }
-        return await Task.detached { UsageSessions.GrokSession.load() != nil }.value
-    }
-
-    private static func detectKimi(enabled: Bool) async -> Bool {
-        guard enabled else { return false }
-        return await Task.detached {
-            guard let session = UsageSessions.KimiSession.load() else { return false }
-            return !session.isExpired
+            guard !Task.isCancelled else { return false }
+            switch account {
+            case .claude: return UsageSessions.ClaudeSession.load() != nil
+            case .codex: return UsageSessions.CodexSession.load() != nil
+            case .grok: return UsageSessions.GrokSession.load() != nil
+            case .cursor:
+                guard let session = UsageSessions.CursorSession.load() else { return false }
+                return !session.isExpired
+            case .kimi:
+                guard let session = UsageSessions.KimiSession.load() else { return false }
+                return !session.isExpired
+            }
         }.value
     }
 }

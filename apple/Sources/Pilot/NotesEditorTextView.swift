@@ -1,8 +1,7 @@
 import AppKit
-import SwiftUI
 
-// The NSTextView layer of the Notes editor. Split from NotesView.swift so the
-// SwiftUI composition and the AppKit text machinery each have one owner.
+// The NSTextView layer of the Notes editor, independent of its window and tab
+// controllers.
 
 /// A small color swatch placed just after an inline-code color (e.g. `#00FF3F`).
 /// Clicking it copies the color string to the pasteboard.
@@ -88,7 +87,7 @@ final class MultiCursorTextView: NSTextView, NSViewToolTipOwner {
     /// and previously re-ran the fenced-block and color-chip regexes over the
     /// whole document each time. The scans depend only on the text, so they
     /// hold until it changes — typing and the programmatic reflows both funnel
-    /// through `didChangeText()`, and SwiftUI's binding pushes via `string`.
+    /// through `didChangeText()`, and external model updates push via `string`.
     var cachedFencedBlocks: [(range: NSRange, content: String)]?
     private var cachedColorChipMatches: [ColorChip.Match]?
     var cachedMarkdownImageMatches: [MarkdownImage.Match]?

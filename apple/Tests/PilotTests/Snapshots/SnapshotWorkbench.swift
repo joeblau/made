@@ -1,126 +1,109 @@
-import SwiftUI
+import AppKit
 @testable import Pilot
 
-/// A capture-only composition of production panels. Live process, browser,
-/// remote-frame and device surfaces are deliberately replaced at the boundary.
-struct SnapshotWorkbench: View {
+/// Native capture composition of production panels and fictional engine views.
+/// It never creates live terminal, browser, remote-frame or device sessions.
+final class SnapshotWorkbench: NSViewController {
     let scene: SnapshotScene
     let fixtures: SnapshotFixtures
 
-    var body: some View {
-        VStack(spacing: 0) {
-            titleBar.fixedSize(horizontal: false, vertical: true)
-            Divider()
-            HStack(spacing: 0) {
-                sidebar.frame(width: 208).background(Color.primary.opacity(0.035))
-                Divider()
-                detail.frame(maxWidth: .infinity, maxHeight: .infinity)
-                if let tab = scene.inspector {
-                    Divider()
-                    InspectorPanelView(gitStore: fixtures.repository, tasksStore: fixtures.tasks,
-                                       usageStore: fixtures.usage, selectedTab: .constant(tab))
-                        .frame(width: 360)
-                        .environment(\.uiZoom, 0.9)
-                        .controlSize(.small)
-                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-                }
-            }.frame(maxHeight: .infinity).clipped()
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .defaultAppStorage(fixtures.defaults)
-        .environment(\.uiZoom, 1)
-        .allowsHitTesting(false)
-        .transaction { $0.animation = nil }
+    init(scene: SnapshotScene, fixtures: SnapshotFixtures) {
+        self.scene = scene
+        self.fixtures = fixtures
+        super.init(nibName: nil, bundle: nil)
     }
 
-    private var titleBar: some View {
-        HStack(spacing: 18) {
-            HStack(spacing: 8) {
-                ForEach([Color.red, .yellow, .green], id: \.self) { color in
-                    Circle().fill(color.opacity(0.85)).frame(width: 12, height: 12)
-                }
-            }
-            Image(systemName: "sidebar.left").foregroundStyle(.secondary)
-            Text(scene.title).font(.headline)
-            Spacer()
-            if scene.selection == nil {
-                Text("Fast Command").font(.system(size: 12, design: .monospaced)).foregroundStyle(.secondary)
-                    .frame(width: 230, alignment: .leading).padding(8)
-                    .background(.quaternary, in: Capsule())
-                Image(systemName: "play.fill").foregroundStyle(.secondary)
-            }
-            Spacer()
-            HStack(spacing: 18) {
-                ForEach(["terminal", "safari", "apple.logo", "curlybraces", "folder", "sidebar.right"], id: \.self) {
-                    Image(systemName: $0)
-                }
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 14).padding(.vertical, 8)
-            .background(.quaternary.opacity(0.5), in: Capsule())
+    required init?(coder: NSCoder) { nil }
+
+    override func loadView() {
+        view = SnapshotBackgroundView(color: .windowBackgroundColor)
+        let header = titleBar()
+        header.heightAnchor.constraint(equalToConstant: 52).isActive = true
+        let sidebar = sidebar()
+        sidebar.widthAnchor.constraint(equalToConstant: 208).isActive = true
+        let detail = detail()
+        var columns: [NSView] = [sidebar, SnapshotUI.divider(vertical: true), detail]
+        if let tab = scene.inspector, let workspace = fixtures.workspace.workspaces.first {
+            let inspector = InspectorViewController(
+                workspace: workspace, usageStore: fixtures.usage,
+                gitStore: fixtures.repository, tasksStore: fixtures.tasks,
+                defaults: fixtures.defaults, isLive: false
+            )
+            inspector.selectTab(tab)
+            let panel = attach(inspector)
+            panel.widthAnchor.constraint(equalToConstant: 360).isActive = true
+            columns += [SnapshotUI.divider(vertical: true), panel]
         }
-        .padding(.horizontal, 18)
-        .frame(height: 52)
+        let body = SnapshotUI.stack(.horizontal, columns, spacing: 0)
+        body.alignment = .top
+        for column in columns { column.heightAnchor.constraint(equalTo: body.heightAnchor).isActive = true }
+        let rows: [NSView] = [header, SnapshotUI.divider(), body]
+        let root = SnapshotUI.stack(.vertical, rows, spacing: 0)
+        SnapshotUI.expand(rows, in: root)
+        SnapshotUI.pin(root, in: view)
     }
 
-    private var sidebar: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach([SnapshotScene.notes, .remoteDesktop, .docker, .agenticUse, .runners], id: \.self) { item in
-                    let selected = scene == item
-                    HStack(spacing: 9) {
-                        Image(systemName: symbol(for: item))
-                            .foregroundStyle(selected ? Color.white : .accentColor).frame(width: 18)
-                        Text(item.title).fontWeight(selected ? .semibold : .medium)
-                        Spacer()
-                    }
-                    .font(.system(size: 13)).padding(.horizontal, 10).frame(height: 31)
-                    .foregroundStyle(selected ? Color.white : .primary)
-                    .background(selected ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 7))
-                }
-                sidebarHeading("Pinned")
-                ForEach(fixtures.workspace.workspaces.filter(\.isPinned)) { workspace in
-                    projectRow(workspace)
-                }
-                sidebarHeading("Workspaces")
-                ForEach(fixtures.workspace.workspaces.filter { !$0.isPinned }) { workspace in
-                    projectRow(workspace)
-                }
-                Spacer(minLength: 0)
-            }.padding(.horizontal, 10).padding(.top, 12)
-            HStack(spacing: 17) {
-                Image(systemName: "mic")
-                Image(systemName: "cup.and.saucer")
-                Spacer()
-                Image(systemName: "iphone")
-                Image(systemName: "ipad")
-                Circle().fill(.green).frame(width: 6, height: 6)
-            }
-            .font(.system(size: 12)).foregroundStyle(.secondary).padding(14)
-        }
+    private func attach(_ controller: NSViewController) -> NSView {
+        addChild(controller)
+        controller.view.clipsToBounds = true
+        return controller.view
     }
 
-    private func sidebarHeading(_ title: String) -> some View {
-        Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-            .padding(.top, 24).padding(.bottom, 5).padding(.leading, 5)
+    private func titleBar() -> NSView {
+        let traffic = SnapshotUI.stack(.horizontal, [
+            SnapshotUI.label("●", size: 16, color: .systemRed),
+            SnapshotUI.label("●", size: 16, color: .systemYellow),
+            SnapshotUI.label("●", size: 16, color: .systemGreen),
+        ], spacing: 7)
+        var items: [NSView] = [
+            traffic, SnapshotUI.symbol("sidebar.left"), SnapshotUI.label(scene.title, weight: .semibold),
+            SnapshotUI.spacer(),
+        ]
+        if scene.selection == nil {
+            let field = SnapshotUI.card(SnapshotUI.label("Fast Command", size: 12, color: .secondaryLabelColor, mono: true), inset: 8)
+            field.widthAnchor.constraint(equalToConstant: 230).isActive = true
+            items += [field, SnapshotUI.symbol("play.fill"), SnapshotUI.spacer()]
+        }
+        items.append(SnapshotUI.stack(.horizontal, ["terminal", "safari", "apple.logo", "curlybraces", "folder", "sidebar.right"].map {
+            SnapshotUI.symbol($0, size: 15)
+        }, spacing: 18))
+        return SnapshotUI.stack(.horizontal, items, spacing: 18, padding: 12)
     }
 
-    private func projectRow(_ workspace: Workspace) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(workspace.name).font(.system(size: 13, weight: .medium))
-                Text(workspace.name == "orbit-web" ? "feat/activity-timeline" : "main")
-                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            if workspace.isPinned {
-                Text("1/2").font(.system(size: 9, weight: .semibold)).padding(4)
-                    .overlay(Circle().stroke(Color.accentColor.opacity(0.5), lineWidth: 2))
+    private func sidebar() -> NSView {
+        var rows: [NSView] = []
+        for item in [SnapshotScene.notes, .remoteDesktop, .docker, .agenticUse, .runners] {
+            let selected = scene == item
+            let row = SnapshotUI.stack(.horizontal, [
+                SnapshotUI.symbol(symbol(for: item), color: selected ? .white : .controlAccentColor),
+                SnapshotUI.label(item.title, weight: selected ? .semibold : .medium, color: selected ? .white : .labelColor),
+                SnapshotUI.spacer(),
+            ], spacing: 9)
+            rows.append(SnapshotUI.card(row, tint: selected ? .controlAccentColor : .clear, inset: 8))
+        }
+        for (title, pinned) in [("Pinned", true), ("Workspaces", false)] {
+            rows.append(SnapshotUI.label(title, size: 11, weight: .semibold, color: .secondaryLabelColor))
+            for workspace in fixtures.workspace.workspaces.filter({ $0.isPinned == pinned }) {
+                let text = SnapshotUI.stack(.vertical, [
+                    SnapshotUI.label(workspace.name, size: 13, weight: .medium),
+                    SnapshotUI.label(workspace.name == "orbit-web" ? "feat/activity-timeline" : "main",
+                                     size: 10, color: .secondaryLabelColor),
+                ], spacing: 4)
+                let row = SnapshotUI.stack(.horizontal, [text, SnapshotUI.spacer()])
+                if workspace.isPinned { row.addArrangedSubview(SnapshotUI.label("1/2", size: 10, color: .controlAccentColor)) }
+                let selected = scene.selection == nil && workspace.name == scene.title
+                rows.append(SnapshotUI.card(row, tint: selected ? .labelColor.withAlphaComponent(0.09) : .clear, inset: 9))
             }
         }
-        .padding(.horizontal, 10).padding(.vertical, 9)
-        .background(scene.selection == nil && workspace.name == scene.title ? Color.primary.opacity(0.09) : .clear,
-                    in: RoundedRectangle(cornerRadius: 7))
+        rows.append(SnapshotUI.spacer())
+        rows.append(SnapshotUI.stack(.horizontal, [
+            SnapshotUI.symbol("mic", size: 12), SnapshotUI.symbol("cup.and.saucer", size: 12),
+            SnapshotUI.spacer(), SnapshotUI.symbol("iphone", size: 12), SnapshotUI.symbol("ipad", size: 12),
+            SnapshotUI.label("●", size: 10, color: .systemGreen),
+        ], spacing: 15))
+        let content = SnapshotUI.stack(.vertical, rows, spacing: 8, padding: 10)
+        SnapshotUI.expand(rows, in: content)
+        return SnapshotUI.card(content, tint: .labelColor.withAlphaComponent(0.035), inset: 0)
     }
 
     private func symbol(for scene: SnapshotScene) -> String {
@@ -133,198 +116,119 @@ struct SnapshotWorkbench: View {
         }
     }
 
-    @ViewBuilder private var detail: some View {
+    private func detail() -> NSView {
         switch scene {
         case .notes:
-            SnapshotNotes(fixtures: fixtures)
+            return notes()
         case .docker:
-            DockerView(store: fixtures.docker)
+            return attach(DockerViewController(store: fixtures.docker))
         case .runners:
-            RunnersView(store: fixtures.runners)
+            fixtures.defaults.set("cards", forKey: "runners.layout")
+            return attach(RunnersViewController(store: fixtures.runners, defaults: fixtures.defaults))
         case .agenticUse:
-            VStack(spacing: 0) {
-                // Mirrors AgenticUseView's header bar: the toolbar titles the page.
-                HStack {
-                    Text("Sep 24 – Oct 23").fontWeight(.medium).foregroundStyle(.secondary)
-                    Spacer()
-                    PilotSegmentedControl(
-                        "Range",
-                        selection: .constant("30d"),
-                        options: ["24h", "7d", "30d", "90d", "All"],
-                        title: { $0 },
-                        controlSize: .small
-                    )
-                    .frame(width: 230)
-                }.font(.system(size: 12)).padding(.horizontal, 16).frame(height: 44)
-                AgenticUseDashboard(snapshot: fixtures.history, pricingStatus: "Pricing reviewed Oct 23, 2026")
-            }
+            let range = NSSegmentedControl(labels: ["24h", "7d", "30d", "90d", "All"], trackingMode: .selectOne,
+                                           target: nil, action: nil)
+            range.selectedSegment = 2
+            range.controlSize = .small
+            let header = SnapshotUI.stack(.horizontal, [
+                SnapshotUI.label("Sep 24 – Oct 23", size: 12, weight: .medium, color: .secondaryLabelColor),
+                SnapshotUI.spacer(), range,
+            ], padding: 12)
+            header.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            let dashboard = AgenticUseDashboard(snapshot: fixtures.history, pricingStatus: "Pricing reviewed Oct 23, 2026")
+            let scroll = SnapshotDashboardScrollView(dashboard: dashboard)
+            let content = SnapshotUI.stack(.vertical, [header, scroll], spacing: 0)
+            SnapshotUI.expand([header, scroll], in: content)
+            return content
         case .remoteDesktop:
-            SnapshotRemoteDesktop()
+            return SnapshotRemoteDesktop()
         case .editor:
-            HStack(spacing: 1) {
-                SnapshotPane(title: "Editor · Sources/Projects.swift", symbol: "curlybraces") { SnapshotCode() }
-                SnapshotPane(title: "Terminal · atlas-api", symbol: "terminal") { SnapshotTerminal(variant: .tests) }
-            }
+            return pair(
+                SnapshotPane(title: "Editor · Sources/Projects.swift", symbol: "curlybraces", content: SnapshotCode()),
+                SnapshotPane(title: "Terminal · atlas-api", symbol: "terminal", content: SnapshotTerminal(variant: .tests))
+            )
         case .browser:
-            HStack(spacing: 1) {
-                SnapshotPane(title: "Terminal · orbit-web", symbol: "terminal") { SnapshotTerminal(variant: .agent) }
-                SnapshotPane(title: "Browser · localhost:3000", symbol: "safari") { SnapshotWebPreview() }
-            }
+            return pair(
+                SnapshotPane(title: "Terminal · orbit-web", symbol: "terminal", content: SnapshotTerminal(variant: .agent)),
+                SnapshotPane(title: "Browser · localhost:3000", symbol: "safari", content: SnapshotWebPreview())
+            )
         case .device:
-            HStack(spacing: 1) {
-                SnapshotPane(title: "Browser · localhost:3000", symbol: "safari") { SnapshotWebPreview() }
-                SnapshotPane(title: "Device · iPhone", symbol: "iphone") { SnapshotDevice() }
-            }
+            return pair(
+                SnapshotPane(title: "Browser · localhost:3000", symbol: "safari", content: SnapshotWebPreview()),
+                SnapshotPane(title: "Device · iPhone", symbol: "iphone", content: SnapshotDevice())
+            )
         default:
-            HStack(spacing: 1) {
-                SnapshotPane(title: "Terminal · Claude", symbol: "terminal") { SnapshotTerminal(variant: .agent) }
-                SnapshotPane(title: "Terminal · Codex", symbol: "terminal") { SnapshotTerminal(variant: .review) }
-            }
+            return pair(
+                SnapshotPane(title: "Terminal · Claude", symbol: "terminal", content: SnapshotTerminal(variant: .agent)),
+                SnapshotPane(title: "Terminal · Codex", symbol: "terminal", content: SnapshotTerminal(variant: .review))
+            )
         }
+    }
+
+    private func pair(_ leading: NSView, _ trailing: NSView) -> NSView {
+        let stack = SnapshotUI.stack(.horizontal, [leading, trailing], spacing: 1)
+        stack.distribution = .fillEqually
+        leading.heightAnchor.constraint(equalTo: stack.heightAnchor).isActive = true
+        trailing.heightAnchor.constraint(equalTo: stack.heightAnchor).isActive = true
+        return stack
+    }
+
+    private func notes() -> NSView {
+        var tabs: [NSView] = fixtures.workspace.notes.map { note in
+            SnapshotUI.card(SnapshotUI.label(note.displayTitle, size: 12, weight: .medium),
+                            tint: note.id == fixtures.workspace.selectedNoteID
+                                ? .controlAccentColor.withAlphaComponent(0.25) : .labelColor.withAlphaComponent(0.08),
+                            inset: 8)
+        }
+        tabs += [SnapshotUI.symbol("plus.circle.fill"), SnapshotUI.spacer(),
+                 SnapshotUI.label("Word Wrap  None ⌃", size: 12, color: .secondaryLabelColor)]
+        let header = SnapshotUI.stack(.horizontal, tabs, spacing: 8, padding: 12)
+        let warning = SnapshotUI.label(
+            "Secret masking is visual only. Notes are stored locally as plaintext—do not use Notes as a secret manager.",
+            size: 11, color: .secondaryLabelColor
+        )
+        let editor = NoteTextView(text: SnapshotFixtures.releaseNote, fontSize: 13, wordWrapColumns: nil)
+        let content = SnapshotUI.stack(.vertical, [header, warning, editor], spacing: 6)
+        SnapshotUI.expand([header, warning, editor], in: content)
+        return content
     }
 }
 
-struct SnapshotPane<Content: View>: View {
-    let title: String
-    let symbol: String
-    @ViewBuilder var content: () -> Content
+/// Match the production analytics document sizing while keeping the capture's
+/// date range and data deterministic.
+private final class SnapshotDashboardScrollView: NSScrollView {
+    let dashboard: AgenticUseDashboard
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Label(title, systemImage: symbol).lineLimit(1)
-                Spacer(minLength: 4)
-                Image(systemName: "ellipsis")
-            }
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12).frame(height: 32)
-            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 7))
-            .padding(5)
-            content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+    init(dashboard: AgenticUseDashboard) {
+        self.dashboard = dashboard
+        super.init(frame: .zero)
+        hasVerticalScroller = true
+        drawsBackground = false
+        documentView = dashboard
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func layout() {
+        super.layout()
+        let width = contentSize.width
+        dashboard.setFrameSize(NSSize(width: width, height: dashboard.contentHeight(for: width)))
+        dashboard.needsLayout = true
     }
 }
 
-struct SnapshotTerminal: View {
-    enum Variant { case agent, review, tests }
-    var variant: Variant
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(variant == .review ? "› Codex" : variant == .tests ? "$ swift test" : "✳ Claude Code")
-                .font(.system(size: 19, weight: .semibold, design: .monospaced))
-                .foregroundStyle(variant == .agent ? Color.orange : .accentColor)
-            Text(variant == .tests ? "~/Projects/atlas-api" : "~/Projects/orbit-web · feat/activity-timeline")
-                .foregroundStyle(.secondary)
-            Divider()
-            if variant == .tests {
-                testOutput
-            } else {
-                Text(variant == .agent ? "❯ Build a project activity timeline.\n  Keep filters in sync with the URL." : "❯ Review the activity timeline and\n  add coverage for the new filters.")
-                    .fontWeight(.medium)
-                Text(variant == .agent ? "I'll connect the timeline to project events\nand add a compact filter bar." : "The timeline is connected. I'm checking\nkeyboard navigation and empty states.")
-                    .foregroundStyle(.secondary)
-                Text("● Read \(variant == .agent ? "3" : "5") files").foregroundStyle(.cyan)
-                Text("  src/components/ActivityTimeline.tsx\n  src/hooks/useProjectEvents.ts\n  tests/activity.test.ts")
-                    .foregroundStyle(.secondary)
-                Text(variant == .agent ? "● Updated ActivityTimeline.tsx" : "● Added tests/activity.test.ts")
-                    .foregroundStyle(.green)
-                Text("  + const events = useProjectEvents(id)\n  + const visible = filterEvents(events)\n  + return <Timeline events={visible} />")
-                    .foregroundStyle(.green)
-                    .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.green.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
-                Text("● bun test").foregroundStyle(.cyan)
-                Text("  ✓ project filters          12 passed\n  ✓ activity timeline        24 passed\n  ✓ keyboard navigation       8 passed")
-                    .foregroundStyle(.secondary)
-                Text("✓ All checks passed").foregroundStyle(.green)
-                Text(variant == .agent ? "The timeline is ready for review. Filters\npersist across navigation and refreshes." : "Added 8 regression tests. No issues found\nin the updated project views.")
-            }
-            Spacer(minLength: 12)
-            Text("❯ \(variant == .tests ? "_" : "Ask a follow-up…")")
-                .foregroundStyle(.secondary).padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-            HStack {
-                Text(variant == .tests ? "atlas-api" : "orbit-web")
-                Spacer()
-                Text("⌘K commands")
-            }.font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
-        }
-        .font(.system(size: 12, design: .monospaced))
-        .textSelection(.disabled)
-        .padding(20)
+final class SnapshotPane: NSView {
+    init(title: String, symbol: String, content: NSView) {
+        super.init(frame: .zero)
+        let header = SnapshotUI.stack(.horizontal, [
+            SnapshotUI.symbol(symbol, size: 13), SnapshotUI.label(title, size: 12, weight: .medium),
+            SnapshotUI.spacer(), SnapshotUI.symbol("ellipsis", size: 13),
+        ], padding: 12)
+        header.heightAnchor.constraint(equalToConstant: 42).isActive = true
+        let root = SnapshotUI.stack(.vertical, [header, content], spacing: 0)
+        SnapshotUI.expand([header, content], in: root)
+        SnapshotUI.pin(root, in: self)
     }
 
-    private var testOutput: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Building for debugging…\nBuild complete! (1.42s)").foregroundStyle(.secondary)
-            ForEach(["ProjectRoutes", "ActivityEvents", "TeamInvitations", "CursorPagination", "Authentication"], id: \.self) {
-                Text("✓ \($0)Tests\n  12 tests passed in 0.08 seconds").foregroundStyle(.green)
-            }
-            Text("Test Suite 'All tests' passed\nExecuted 60 tests, with 0 failures.")
-            Text("$ git status --short\n M Sources/Projects.swift\n M Tests/ProjectRoutesTests.swift").foregroundStyle(.secondary)
-        }
-    }
-}
-
-struct SnapshotCode: View {
-    private let lines = ["import Foundation", "", "struct Project: Codable, Identifiable {", "    let id: UUID", "    var name: String",
-                         "    var status: Status", "    var updatedAt: Date", "", "    enum Status: String, Codable {",
-                         "        case planning", "        case inProgress", "        case complete", "    }", "}", "",
-                         "actor ProjectService {", "    private let database: Database", "", "    init(database: Database) {",
-                         "        self.database = database", "    }", "", "    func activity(", "        for projectID: UUID,",
-                         "        after cursor: String? = nil", "    ) async throws -> ActivityPage {", "        let events = try await database",
-                         "            .events(for: projectID)", "            .after(cursor)", "            .limit(50)", "            .fetch()", "",
-                         "        return ActivityPage(", "            events: events,", "            nextCursor: events.last?.cursor", "        )", "    }", "}"]
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { index, line in
-                HStack(alignment: .top, spacing: 18) {
-                    Text(String(index + 1)).foregroundStyle(.tertiary).frame(width: 24, alignment: .trailing)
-                    Text(line.isEmpty ? " " : line)
-                        .foregroundStyle(line.contains("func") || line.contains("struct") || line.contains("actor") ? Color.purple : .primary)
-                }
-            }
-            Spacer(minLength: 0)
-        }.font(.system(size: 12, design: .monospaced)).padding(.vertical, 18).padding(.horizontal, 12)
-    }
-}
-
-/// Glass and native sidebar selection require the window-server compositor.
-/// Opaque capture chrome keeps offscreen exports independent of screen access.
-private struct SnapshotNotes: View {
-    let fixtures: SnapshotFixtures
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                ForEach(fixtures.workspace.notes) { note in
-                    Text(note.displayTitle).lineLimit(1)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        // Opaque stand-in for NotesView's capsule glass tabs.
-                        .background(note.id == fixtures.workspace.selectedNoteID ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.08),
-                                    in: Capsule())
-                }
-                Image(systemName: "plus.circle.fill").foregroundStyle(.secondary)
-                Spacer()
-                // Mirrors NotesView's standard pop-up picker (label + value).
-                HStack(spacing: 8) {
-                    Text("Word Wrap").foregroundStyle(.secondary)
-                    HStack(spacing: 4) {
-                        Text("None")
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(.quaternary.opacity(0.6), in: Capsule())
-                }
-            }.font(.system(size: 12, weight: .medium)).padding(12)
-            Label("Secret masking is visual only. Notes are stored locally as plaintext—do not use Notes as a secret manager.",
-                  systemImage: "eye.slash")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.bottom, 6)
-            NoteTextView(text: .constant(SnapshotFixtures.releaseNote), fontSize: 13, wordWrapColumns: nil, onCopySecret: {})
-        }
-    }
+    required init?(coder: NSCoder) { nil }
 }

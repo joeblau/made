@@ -1,311 +1,194 @@
-import SwiftUI
+import AppKit
 
-/// Sankey-style token flow: provider → model → token type.
-///
-/// Swift Charts has no flow mark, so ribbons are drawn in a `Canvas` and the
-/// nodes are ordinary SwiftUI cards laid over it. Each ribbon's thickness at
-/// either end is its share of that node's tokens, so every node's ribbons
-/// exactly fill its edge; hovering a node highlights the flow through it.
-struct AgenticUseTokenFlowPanel: View {
-    let snapshot: AgenticUseSnapshot
-
-    @State private var hovered: AgenticTokenFlowGraph.NodeID?
-
-    private var graph: AgenticTokenFlowGraph {
-        AgenticTokenFlowGraph.make(modelTotals: snapshot.modelTotals)
+@MainActor
+final class AgenticUseTokenFlowPanel: AgenticUseCardView {
+    private let subtitle = NSTextField(labelWithString: "")
+    private let scroll = NSScrollView()
+    private let diagram: AgenticUseTokenFlowDiagram
+    private var graph: AgenticTokenFlowGraph
+    init(snapshot: AgenticUseSnapshot) {
+        graph = AgenticTokenFlowGraph.make(modelTotals: snapshot.modelTotals)
+        diagram = AgenticUseTokenFlowDiagram(graph: graph, modelTotals: snapshot.modelTotals)
+        super.init(title: "Token Flow")
+        subtitle.textColor = .secondaryLabelColor
+        addSubview(subtitle)
+        scroll.documentView = diagram
+        scroll.drawsBackground = false
+        scroll.hasHorizontalScroller = true
+        scroll.autohidesScrollers = true
+        addSubview(scroll)
+        update(snapshot: snapshot)
     }
-
-    var body: some View {
-        let graph = graph
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
-            HStack(alignment: .firstTextBaseline, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Text("Token Flow").agenticUseCardTitle()
-                Text("\(AgenticUseFormat.tokens(graph.totalTokens)) tokens by provider, model, and type")
-                    .agenticUseFont(.meta)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-            }
-            if graph.links.isEmpty {
-                ContentUnavailableView("No token flow", systemImage: "point.3.connected.trianglepath.dotted")
-                    .legibleSecondaryHierarchy()
-                    .frame(minHeight: 200)
-            } else {
-                AgenticUseTokenFlowDiagram(
-                    graph: graph,
-                    modelTotals: snapshot.modelTotals,
-                    hovered: $hovered
-                )
-                .frame(height: Self.height(for: graph))
-            }
-        }
-        .agenticUseCard()
+    required init?(coder: NSCoder) { nil }
+    func update(snapshot: AgenticUseSnapshot) {
+        graph = AgenticTokenFlowGraph.make(modelTotals: snapshot.modelTotals)
+        subtitle.stringValue = "\(AgenticUseFormat.tokens(graph.totalTokens)) tokens by provider, model, and type"
+        diagram.update(graph: graph, modelTotals: snapshot.modelTotals)
+        needsLayout = true
     }
-
-    /// Tall enough that the busiest column's nodes keep a comfortable gap.
     static func height(for graph: AgenticTokenFlowGraph) -> CGFloat {
-        let models = CGFloat(graph.models.count) * (AgenticUseTokenFlowDiagram.modelHeight + 14)
-        let providers = CGFloat(graph.providers.count) * (AgenticUseTokenFlowDiagram.providerHeight + 18)
-        let types = CGFloat(graph.tokenTypes.count) * (AgenticUseTokenFlowDiagram.typeHeight + 22)
-        return max(300, models, providers, types)
+        max(300, CGFloat(graph.models.count) * 44, CGFloat(graph.providers.count) * 78, CGFloat(graph.tokenTypes.count) * 74)
+    }
+    override func preferredHeight(for width: CGFloat) -> CGFloat { (Self.height(for: graph) + 98) * AgenticUseLayout.zoom }
+    override func layout() {
+        super.layout()
+        let z = AgenticUseLayout.zoom
+        subtitle.font = AgenticUseLayout.font(.meta)
+        subtitle.frame = NSRect(x: 16, y: 41 * z, width: max(1, bounds.width - 32), height: 19 * z)
+        scroll.frame = NSRect(x: 16, y: 72 * z, width: max(1, bounds.width - 32), height: max(1, bounds.height - 82 * z))
+        diagram.frame = NSRect(x: 0, y: 0, width: max(520 * z, scroll.contentSize.width), height: Self.height(for: graph) * z)
+        diagram.needsLayout = true
     }
 }
 
-private struct AgenticUseTokenFlowDiagram: View {
-    let graph: AgenticTokenFlowGraph
-    let modelTotals: [AgenticModelTotal]
-    @Binding var hovered: AgenticTokenFlowGraph.NodeID?
-
+@MainActor
+private final class AgenticUseTokenFlowDiagram: AgenticUseFlippedView {
     nonisolated static let providerHeight: CGFloat = 60
     nonisolated static let modelHeight: CGFloat = 30
     nonisolated static let typeHeight: CGFloat = 52
-
     typealias NodeID = AgenticTokenFlowGraph.NodeID
+    private var graph: AgenticTokenFlowGraph
+    private var modelTotals: [AgenticModelTotal]
+    private var hovered: NodeID?
+    private var selected: NodeID?
+    private var nodes: [NodeID: AgenticUseFlowNode] = [:]
+    private var geometry: Layout?
+    private var geometrySize = NSSize.zero
+    private var geometryZoom: CGFloat = 0
+    private var highlighted: Set<String>?
 
-    var body: some View {
-        GeometryReader { geometry in
-            let layout = Layout(graph: graph, size: geometry.size)
-            let highlighted = highlightedLinks
-            ZStack(alignment: .topLeading) {
-                Canvas { context, _ in
-                    for ribbon in layout.ribbons {
-                        let emphasis: Double = if let highlighted {
-                            highlighted.contains(ribbon.link.id) ? 0.78 : 0.07
-                        } else {
-                            0.4
-                        }
-                        let from = color(for: ribbon.link.source).opacity(emphasis)
-                        let to = color(for: ribbon.link.target).opacity(emphasis)
-                        // Hold the source color for most of the run and blend
-                        // only on approach: a full-length blend between two hues
-                        // muddies to gray, so the model→type half read dimmer
-                        // than the provider→model half.
-                        context.fill(
-                            ribbon.path,
-                            with: .linearGradient(
-                                Gradient(stops: [
-                                    .init(color: from, location: 0),
-                                    .init(color: from, location: 0.45),
-                                    .init(color: to, location: 1),
-                                ]),
-                                startPoint: CGPoint(x: ribbon.startX, y: 0),
-                                endPoint: CGPoint(x: ribbon.endX, y: 0)
-                            )
-                        )
-                    }
-                }
-                .allowsHitTesting(false)
-                .animation(LiquidGlassMetrics.stateChange, value: hovered)
-
-                ForEach(layout.frames, id: \.id) { frame in
-                    node(frame.id)
-                        .frame(width: frame.rect.width, height: frame.rect.height)
-                        .position(x: frame.rect.midX, y: frame.rect.midY)
-                        .onHover { inside in
-                            if inside {
-                                hovered = frame.id
-                            } else if hovered == frame.id {
-                                hovered = nil
-                            }
-                        }
-                }
+    init(graph: AgenticTokenFlowGraph, modelTotals: [AgenticModelTotal]) {
+        self.graph = graph
+        self.modelTotals = modelTotals
+        super.init(frame: .zero)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Token flow from provider through model to token type")
+        update(graph: graph, modelTotals: modelTotals)
+    }
+    required init?(coder: NSCoder) { nil }
+    func update(graph: AgenticTokenFlowGraph, modelTotals: [AgenticModelTotal]) {
+        self.graph = graph
+        self.modelTotals = modelTotals
+        let all = graph.providers + graph.models + graph.tokenTypes
+        let identifiers = Set(all.map(\.id))
+        for id in Array(nodes.keys) where !identifiers.contains(id) { nodes.removeValue(forKey: id)?.removeFromSuperview() }
+        if let selected, !identifiers.contains(selected) { self.selected = nil }
+        if let hovered, !identifiers.contains(hovered) { self.hovered = nil }
+        for node in all {
+            let view = nodes[node.id] ?? AgenticUseFlowNode()
+            view.configure(title: title(for: node.id), detail: detail(for: node), tint: color(for: node.id), compact: Self.isModel(node.id))
+            view.toolTip = help(for: node)
+            view.setAccessibilityLabel(help(for: node))
+            view.onHover = { [weak self] inside in
+                guard let self else { return }
+                if inside { self.hovered = node.id } else if self.hovered == node.id { self.hovered = nil }
+                self.updateHighlight()
             }
+            view.onSelect = { [weak self] in
+                guard let self else { return }
+                self.selected = self.selected == node.id ? nil : node.id
+                self.updateHighlight()
+            }
+            view.onClear = { [weak self] in self?.selected = nil; self?.hovered = nil; self?.updateHighlight() }
+            if nodes[node.id] == nil { addSubview(view); nodes[node.id] = view }
+        }
+        geometry = nil
+        updateHighlight()
+        needsLayout = true
+    }
+    private static func isModel(_ id: NodeID) -> Bool {
+        switch id { case .model, .otherModels: true; default: false }
+    }
+    private func title(for id: NodeID) -> String {
+        switch id {
+        case .provider(let provider): provider.displayName
+        case .model(let name): modelTotals.first { $0.model == name }?.displayName ?? name
+        case .otherModels: "Other Models"
+        case .tokenType(let type): type.title
         }
     }
-
-    // MARK: - Highlighting
-
-    /// Links to emphasize for the hovered node: its own links plus the flow
-    /// one hop beyond, so hovering a provider lights its models' outputs.
-    private var highlightedLinks: Set<String>? {
-        guard let hovered else { return nil }
-        let direct = graph.links.filter { $0.source == hovered || $0.target == hovered }
-        var ids = Set(direct.map(\.id))
-        let neighbors = Set(direct.flatMap { [$0.source, $0.target] }).subtracting([hovered])
-        switch hovered {
-        case .provider:
-            for link in graph.links where neighbors.contains(link.source) { ids.insert(link.id) }
+    private func detail(for node: AgenticTokenFlowGraph.Node) -> String {
+        let count = AgenticUseFormat.tokens(node.tokens)
+        switch node.id {
+        case .provider: return "\(count) tokens · \(node.cost > 0 ? AgenticUseFormat.cost(node.cost) : "—")"
+        case .model, .otherModels: return count
         case .tokenType:
-            for link in graph.links where neighbors.contains(link.target) { ids.insert(link.id) }
-        case .model, .otherModels:
-            break
+            let share = graph.totalTokens > 0 ? Double(node.tokens) / Double(graph.totalTokens) : 0
+            return "\(count) (\(AgenticUseFormat.percent(share)))"
         }
-        return ids
     }
-
-    // MARK: - Colors
-
-    private func color(for id: NodeID) -> Color {
+    private func help(for node: AgenticTokenFlowGraph.Node) -> String {
+        var help = "\(title(for: node.id)): \(node.tokens) tokens"
+        if case .model(let name) = node.id, let total = modelTotals.first(where: { $0.model == name }) {
+            help += total.isUnpriced ? " (unpriced)" : " · \(AgenticUseFormat.cost(total.cost))"
+        }
+        if node.id == .otherModels { help += ": " + graph.otherModelNames.joined(separator: ", ") }
+        return help + ". Activate to highlight connected flows. Escape clears selection."
+    }
+    private func color(for id: NodeID) -> NSColor {
         switch id {
-        case .provider(let provider):
-            AgenticUseModelPalette.providerColor(for: provider)
-        case .model(let model):
-            modelTotals.first { $0.model == model }
-                .map { AgenticUseModelPalette.providerColor(for: $0.provider) } ?? .gray
-        case .otherModels:
-            .gray
-        case .tokenType(let type):
-            Self.tint(for: type)
+        case .provider(let provider): AgenticUseModelPalette.providerColor(for: provider)
+        case .model(let name): modelTotals.first { $0.model == name }.map { AgenticUseModelPalette.providerColor(for: $0.provider) } ?? .systemGray
+        case .otherModels: .systemGray
+        case .tokenType(let type): Self.tint(for: type)
         }
     }
-
-    static func tint(for type: AgenticTokenFlowGraph.TokenType) -> Color {
+    static func tint(for type: AgenticTokenFlowGraph.TokenType) -> NSColor {
         switch type {
-        case .input: .cyan
-        case .cacheWrite: .indigo
-        case .cacheRead: .purple
-        case .output: .mint
+        case .input: .systemCyan
+        case .cacheWrite: .systemIndigo
+        case .cacheRead: .systemPurple
+        case .output: .systemMint
         }
     }
-
-    // MARK: - Nodes
-
-    @ViewBuilder
-    private func node(_ id: NodeID) -> some View {
-        switch id {
-        case .provider(let provider):
-            if let node = graph.providers.first(where: { $0.id == id }) {
-                providerNode(provider, node: node)
+    private func updateHighlight() {
+        if let id = hovered ?? selected {
+            let direct = graph.links.filter { $0.source == id || $0.target == id }
+            var ids = Set(direct.map(\.id))
+            let neighbors = Set(direct.flatMap { [$0.source, $0.target] }).subtracting([id])
+            switch id {
+            case .provider:
+                for link in graph.links where neighbors.contains(link.source) { ids.insert(link.id) }
+            case .tokenType:
+                for link in graph.links where neighbors.contains(link.target) { ids.insert(link.id) }
+            case .model, .otherModels: break
             }
-        case .model(let model):
-            if let total = modelTotals.first(where: { $0.model == model }) {
-                modelNode(
-                    id,
-                    title: total.displayName,
-                    provider: total.provider,
-                    tokens: total.tokens,
-                    help: "\(total.displayName): \(AgenticUseFormat.tokens(total.tokens)) tokens"
-                        + (total.isUnpriced ? " (unpriced)" : " · \(AgenticUseFormat.cost(total.cost))")
-                )
-            }
-        case .otherModels:
-            modelNode(
-                id,
-                title: "Other Models",
-                provider: nil,
-                tokens: graph.models.first { $0.id == id }?.tokens ?? 0,
-                help: graph.otherModelNames.joined(separator: ", ")
-            )
-        case .tokenType(let type):
-            if let node = graph.tokenTypes.first(where: { $0.id == id }) {
-                typeNode(type, node: node)
-            }
+            highlighted = ids
+        } else { highlighted = nil }
+        let connected = Set(graph.links.filter { highlighted?.contains($0.id) ?? true }.flatMap { [$0.source, $0.target] })
+        for (id, node) in nodes {
+            node.alphaValue = highlighted == nil || connected.contains(id) || id == hovered || id == selected ? 1 : 0.45
+            node.state = id == selected ? .on : .off
+        }
+        needsDisplay = true
+    }
+    override func layout() {
+        super.layout()
+        if geometry == nil || geometrySize != bounds.size || geometryZoom != AgenticUseLayout.zoom {
+            geometry = Layout(graph: graph, size: bounds.size)
+            geometrySize = bounds.size
+            geometryZoom = AgenticUseLayout.zoom
+        }
+        for frame in geometry?.frames ?? [] { nodes[frame.id]?.frame = frame.rect; nodes[frame.id]?.needsDisplay = true }
+        needsDisplay = true
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        if graph.links.isEmpty {
+            let text = "No token flow" as NSString
+            text.draw(at: NSPoint(x: 20, y: 40), withAttributes: [.font: AgenticUseLayout.font(.body), .foregroundColor: NSColor.secondaryLabelColor])
+            return
+        }
+        for ribbon in geometry?.ribbons ?? [] {
+            let alpha: CGFloat = highlighted.map { $0.contains(ribbon.link.id) ? 0.78 : 0.07 } ?? 0.4
+            let from = color(for: ribbon.link.source).withAlphaComponent(alpha)
+            let to = color(for: ribbon.link.target).withAlphaComponent(alpha)
+            NSGraphicsContext.saveGraphicsState()
+            ribbon.path.addClip()
+            let gradient = NSGradient(colorsAndLocations: (from, 0), (from, 0.45), (to, 1))
+            gradient?.draw(from: NSPoint(x: ribbon.startX, y: 0), to: NSPoint(x: ribbon.endX, y: 0), options: [.drawsBeforeStartingLocation, .drawsAfterEndingLocation])
+            NSGraphicsContext.restoreGraphicsState()
         }
     }
-
-    private func isDimmed(_ id: NodeID) -> Bool {
-        guard let hovered, hovered != id, let links = highlightedLinks else { return false }
-        return !graph.links.contains { links.contains($0.id) && ($0.source == id || $0.target == id) }
-    }
-
-    private func providerNode(_ provider: AgenticProvider, node: AgenticTokenFlowGraph.Node) -> some View {
-        let tint = AgenticUseModelPalette.providerColor(for: provider)
-        // Soft tint like the token-type tiles: a solid gradient tile read as
-        // a button and out-shouted the flow itself.
-        return HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            RoundedRectangle(cornerRadius: NodeMetrics.tileRadius, style: .continuous)
-                .fill(tint.opacity(0.2))
-                .frame(width: 36, height: 36)
-                .overlay {
-                    // Icon glyphs fill about 55% of their tile; they don't follow the text scale.
-                    Image(provider.brandSymbol)
-                        .scaledFont(size: 20, weight: .semibold)
-                        .foregroundStyle(tint)
-                }
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(provider.displayName)
-                    .agenticUseFont(.body, weight: .semibold)
-                Text("\(AgenticUseFormat.tokens(node.tokens)) tokens")
-                    .agenticUseFont(.caption)
-                    .foregroundStyle(.secondary)
-                Text(node.cost > 0 ? AgenticUseFormat.cost(node.cost) : "—")
-                    .agenticUseFont(.caption, weight: .medium)
-                    .monospacedDigit()
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, NodeMetrics.padding)
-        .nodeChrome(tint: tint, dimmed: isDimmed(.provider(provider)))
-    }
-
-    /// Model nodes get the same tinted card as the provider and token-type
-    /// columns (in their provider's color) so the middle column reads as part
-    /// of the flow rather than a strip of plain labels.
-    private func modelNode(
-        _ id: NodeID,
-        title: String,
-        provider: AgenticProvider?,
-        tokens: Int,
-        help: String
-    ) -> some View {
-        let tint = provider.map(AgenticUseModelPalette.providerColor(for:))
-        return HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Group {
-                if let provider {
-                    Image(provider.brandSymbol)
-                        .foregroundStyle(AgenticUseModelPalette.providerColor(for: provider))
-                } else {
-                    Image(systemName: "square.grid.2x2")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .agenticUseFont(.meta, weight: .semibold)
-            .frame(width: 16)
-            .accessibilityHidden(true)
-            Text(title)
-                .agenticUseFont(.meta, weight: .medium)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .layoutPriority(1)
-            Spacer(minLength: 4)
-            Text(AgenticUseFormat.tokens(tokens))
-                .scaledFont(size: 10)
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        // Model nodes are short, so the concentric node radius renders them
-        // as capsules; pad a little more so the text clears the round ends.
-        .padding(.horizontal, NodeMetrics.padding + LiquidGlassMetrics.Spacing.xxSmall)
-        .nodeChrome(tint: tint, dimmed: isDimmed(id))
-        .help(help)
-    }
-
-    private func typeNode(_ type: AgenticTokenFlowGraph.TokenType, node: AgenticTokenFlowGraph.Node) -> some View {
-        let tint = Self.tint(for: type)
-        let share = graph.totalTokens > 0 ? Double(node.tokens) / Double(graph.totalTokens) : 0
-        return HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            RoundedRectangle(cornerRadius: NodeMetrics.tileRadius, style: .continuous)
-                .fill(tint.opacity(0.2))
-                .frame(width: 32, height: 32)
-                .overlay {
-                    // Glyph sized to its tile, not to the text scale.
-                    Image(systemName: type.symbol)
-                        .scaledFont(size: 17, weight: .semibold)
-                        .foregroundStyle(tint)
-                }
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(type.title)
-                    .agenticUseFont(.body, weight: .semibold)
-                Text("\(AgenticUseFormat.tokens(node.tokens)) (\(AgenticUseFormat.percent(share)))")
-                    .agenticUseFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-            .lineLimit(1)
-            .minimumScaleFactor(0.8)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, NodeMetrics.padding)
-        .nodeChrome(tint: tint, dimmed: isDimmed(.tokenType(type)))
-    }
-
-    // MARK: - Layout
-
     struct NodeFrame {
         let id: NodeID
         let rect: CGRect
@@ -313,7 +196,7 @@ private struct AgenticUseTokenFlowDiagram: View {
 
     struct Ribbon {
         let link: AgenticTokenFlowGraph.Link
-        let path: Path
+        let path: NSBezierPath
         let startX: CGFloat
         let endX: CGFloat
     }
@@ -328,13 +211,14 @@ private struct AgenticUseTokenFlowDiagram: View {
         /// Thinnest ribbon end drawn, so a tiny output share stays visible.
         static let minimumSpan: CGFloat = 1.5
 
-        init(graph: AgenticTokenFlowGraph, size: CGSize) {
-            let width = max(size.width, 300)
-            let nodeWidth = min(180, max(118, (width - 2 * 56) / 3))
+        @MainActor init(graph: AgenticTokenFlowGraph, size: CGSize) {
+            let zoom = AgenticUseLayout.zoom
+            let width = max(size.width, 520 * zoom)
+            let nodeWidth = min(180 * zoom, max(118 * zoom, (width - 112 * zoom) / 3))
             let columns: [(nodes: [AgenticTokenFlowGraph.Node], x: CGFloat, height: CGFloat)] = [
-                (graph.providers, 0, AgenticUseTokenFlowDiagram.providerHeight),
-                (graph.models, (width - nodeWidth) / 2, AgenticUseTokenFlowDiagram.modelHeight),
-                (graph.tokenTypes, width - nodeWidth, AgenticUseTokenFlowDiagram.typeHeight),
+                (graph.providers, 0, AgenticUseTokenFlowDiagram.providerHeight * zoom),
+                (graph.models, (width - nodeWidth) / 2, AgenticUseTokenFlowDiagram.modelHeight * zoom),
+                (graph.tokenTypes, width - nodeWidth, AgenticUseTokenFlowDiagram.typeHeight * zoom),
             ]
             var frames: [NodeFrame] = []
             var rects: [NodeID: CGRect] = [:]
@@ -356,7 +240,7 @@ private struct AgenticUseTokenFlowDiagram: View {
             var outgoing: [String: (CGFloat, CGFloat)] = [:]
             var incoming: [String: (CGFloat, CGFloat)] = [:]
             for (id, rect) in rects {
-                let inset: CGFloat = 5
+                let inset: CGFloat = 5 * zoom
                 let band = rect.height - inset * 2
                 let total = CGFloat(tokensByNode[id] ?? 0)
                 guard total > 0 else { continue }
@@ -384,20 +268,20 @@ private struct AgenticUseTokenFlowDiagram: View {
                 let x0 = source.maxX - 1
                 let x1 = target.minX + 1
                 let mid = (x0 + x1) / 2
-                var path = Path()
+                let path = NSBezierPath()
                 path.move(to: CGPoint(x: x0, y: start.0))
-                path.addCurve(
+                path.curve(
                     to: CGPoint(x: x1, y: end.0),
-                    control1: CGPoint(x: mid, y: start.0),
-                    control2: CGPoint(x: mid, y: end.0)
+                    controlPoint1: CGPoint(x: mid, y: start.0),
+                    controlPoint2: CGPoint(x: mid, y: end.0)
                 )
-                path.addLine(to: CGPoint(x: x1, y: end.1))
-                path.addCurve(
+                path.line(to: CGPoint(x: x1, y: end.1))
+                path.curve(
                     to: CGPoint(x: x0, y: start.1),
-                    control1: CGPoint(x: mid, y: end.1),
-                    control2: CGPoint(x: mid, y: start.1)
+                    controlPoint1: CGPoint(x: mid, y: end.1),
+                    controlPoint2: CGPoint(x: mid, y: start.1)
                 )
-                path.closeSubpath()
+                path.close()
                 return Ribbon(link: link, path: path, startX: x0, endX: x1)
             }
             self.frames = frames
@@ -417,28 +301,58 @@ private struct AgenticUseTokenFlowDiagram: View {
     }
 }
 
-/// Node geometry. Icon tiles sit `padding` in from the node edge, so the node
-/// radius is the tile radius plus that padding — concentric corners (LAY-4).
-private enum NodeMetrics {
-    static let padding: CGFloat = LiquidGlassMetrics.Spacing.xSmall
-    static let tileRadius: CGFloat = LiquidGlassMetrics.Radius.control
-    static let radius: CGFloat = tileRadius + padding
-}
-
-private extension View {
-    /// Shared node card: an opaque fill so ribbons pass cleanly underneath,
-    /// with a tinted wash for provider and token-type nodes. No outline —
-    /// the wash already separates each node from the ribbons. Nodes are
-    /// content (data), not controls, so they stay solid rather than glass.
-    func nodeChrome(tint: Color?, dimmed: Bool) -> some View {
-        frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: NodeMetrics.radius, style: .continuous)
-                    .fill(.background)
-                RoundedRectangle(cornerRadius: NodeMetrics.radius, style: .continuous)
-                    .fill((tint ?? .secondary).opacity(tint == nil ? 0.1 : 0.16))
-            }
-            .opacity(dimmed ? 0.45 : 1)
-            .animation(LiquidGlassMetrics.stateChange, value: dimmed)
+@MainActor
+private final class AgenticUseFlowNode: NSButton {
+    var onHover: ((Bool) -> Void)?
+    var onSelect: (() -> Void)?
+    var onClear: (() -> Void)?
+    private var detail = ""
+    private var tint = NSColor.systemGray
+    private var compact = false
+    private var tracking: NSTrackingArea?
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setButtonType(.pushOnPushOff)
+        isBordered = false
+        target = self
+        action = #selector(selectNode)
+    }
+    required init?(coder: NSCoder) { nil }
+    override var isFlipped: Bool { true }
+    func configure(title: String, detail: String, tint: NSColor, compact: Bool) {
+        self.title = title
+        self.detail = detail
+        self.tint = tint
+        self.compact = compact
+        needsDisplay = true
+    }
+    @objc private func selectNode() { onSelect?() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let tracking = NSTrackingArea(rect: bounds, options: [.activeInKeyWindow, .mouseEnteredAndExited, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(tracking)
+        self.tracking = tracking
+    }
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { onClear?() } else { super.keyDown(with: event) }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        let z = AgenticUseLayout.zoom
+        let path = NSBezierPath(roundedRect: bounds, xRadius: 12 * z, yRadius: 12 * z)
+        NSColor.windowBackgroundColor.setFill(); path.fill()
+        tint.withAlphaComponent(state == .on ? 0.28 : 0.16).setFill(); path.fill()
+        if window?.firstResponder === self { NSColor.keyboardFocusIndicatorColor.setStroke(); path.lineWidth = 2; path.stroke() }
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingMiddle
+        let titleFont = AgenticUseLayout.font(compact ? .meta : .body, weight: .semibold)
+        let textHeight = titleFont.ascender - titleFont.descender + 3
+        let titleRect = NSRect(x: 10 * z, y: compact ? (bounds.height - textHeight) / 2 : 8 * z, width: max(1, bounds.width - (compact ? 62 : 20) * z), height: textHeight)
+        (title as NSString).draw(in: titleRect, withAttributes: [.font: titleFont, .foregroundColor: NSColor.labelColor, .paragraphStyle: style])
+        style.alignment = compact ? .right : .left
+        let detailRect = compact ? NSRect(x: bounds.width - 54 * z, y: (bounds.height - textHeight) / 2, width: 44 * z, height: textHeight) : NSRect(x: 10 * z, y: 29 * z, width: max(1, bounds.width - 20 * z), height: 24 * z)
+        (detail as NSString).draw(in: detailRect, withAttributes: [.font: AgenticUseLayout.font(.caption), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style])
     }
 }

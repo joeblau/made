@@ -36,8 +36,7 @@ packages:
     url: https://github.com/FluidInference/FluidAudio.git
     exactVersion: "0.17.7"
   CodeEditSourceEditor:
-    url: https://github.com/CodeEditApp/CodeEditSourceEditor.git
-    exactVersion: "0.15.2"
+    path: Packages/CodeEditSourceEditor
   CodeEditLanguages:
     url: https://github.com/CodeEditApp/CodeEditLanguages.git
     exactVersion: "0.1.20"
@@ -171,12 +170,17 @@ targets:
     productName: Cockpit
     sources:
       - Sources/Pilot
-      - Sources/DashboardShared
+      - path: Sources/DashboardShared
+        excludes:
+          - "DashboardPresentation.swift"
+          - "DashboardWidgets.swift"
       - path: Sources/Shared
         # Audio capture + Parakeet transcription live on Copilot now —
         # Pilot just receives the finished text over the sync channel.
         excludes:
           - "TranscriptionService.swift"
+          - "SettingsView.swift"
+          - "LiquidGlassStyles.swift"
     dependencies:
       - target: PilotWidgets
         embed: true

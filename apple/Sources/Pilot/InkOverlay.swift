@@ -1,5 +1,5 @@
 import AppKit
-import SwiftUI
+import Observation
 
 struct InkStroke {
     var color: NSColor
@@ -87,173 +87,198 @@ final class RemoteInkModel {
     }
 }
 
-/// Freehand annotation layer drawn over the active pane (terminal/browser/
-/// device). Used in place of PencilKit's `PKCanvasView`, which is iOS/Catalyst
-/// only and unavailable in this native macOS app. Strokes clear when dismissed.
-struct InkOverlay: View {
-    @Binding var isActive: Bool
-    @State private var model = InkModel()
+/// Native freehand annotation overlay. Its canvas owns input only while this
+/// controller is attached; removing the overlay restores the pane responder.
+@MainActor
+final class InkOverlayViewController: NSViewController {
+    let model: InkModel
+    private let onDismiss: () -> Void
+    private let canvas = InkCanvasNSView()
+    private let palette: [NSColor] = [.systemRed, .systemOrange, .systemYellow, .systemGreen, .systemBlue, .white]
+    private let names = ["Red", "Orange", "Yellow", "Green", "Blue", "White"]
+    private var swatches: [NSButton] = []
+    private var eraser: NSButton?
+    private var undo: NSButton?
+    private var clear: NSButton?
+    private lazy var observation = CockpitObservation(owner: self) { $0.updateControls() }
 
-    private let palette: [NSColor] = [.systemRed, .systemOrange, .systemYellow,
-                                      .systemGreen, .systemBlue, .white]
-    private let paletteNames = ["Red", "Orange", "Yellow", "Green", "Blue", "White"]
-
-    /// Swatch hit target; the swatch capsule wraps it at `swatchInset` on every
-    /// side, so the capsule ends and the hover circles stay concentric (LAY-4).
-    private static let swatchTarget: CGFloat = 28
-    private static let swatchDiameter: CGFloat = 20
-    private static let swatchInset = LiquidGlassMetrics.Spacing.xxSmall
-
-    var body: some View {
-        // The controls float at the bottom edge. At the top they sat across
-        // the pane tab strip and covered the tab titles (LAY-5).
-        ZStack(alignment: .bottom) {
-            InkCanvas(model: model, onDismiss: { isActive = false })
-            toolbar.padding(.bottom, LiquidGlassMetrics.Spacing.large)
-        }
+    init(model: InkModel = InkModel(), onDismiss: @escaping () -> Void) {
+        self.model = model
+        self.onDismiss = onDismiss
+        super.init(nibName: nil, bundle: nil)
     }
 
-    /// Three neighboring glass groups — the color picker, the tool buttons, and
-    /// the single primary action — blended by one container (BTN-1).
-    private var toolbar: some View {
-        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                swatchPicker
+    required init?(coder: NSCoder) { nil }
 
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    toolButton("eraser", help: "Eraser", active: model.isEraser) { model.isEraser.toggle() }
-                    toolButton("arrow.uturn.backward", help: "Undo last stroke", disabled: model.strokes.isEmpty) {
-                        model.undo()
-                    }
-                    toolButton(
-                        "trash",
-                        help: "Clear annotations",
-                        role: .destructive,
-                        disabled: model.strokes.isEmpty
-                    ) { model.clear() }
-                }
-
-                Button("Done") { isActive = false }
-                    .scaledFont(size: 12, weight: .semibold)
-                    .compatGlassProminentButtonStyle()
-                    .controlSize(.large)
-                    .help("Finish annotating")
-            }
+    override func loadView() {
+        view = NSView()
+        canvas.model = model
+        canvas.onDismiss = { [weak self] in self?.dismissInk() }
+        canvas.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(canvas)
+        NSLayoutConstraint.activate([
+            canvas.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            canvas.topAnchor.constraint(equalTo: view.topAnchor),
+            canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        let controls = NSStackView()
+        controls.spacing = 5
+        for (index, color) in palette.enumerated() {
+            let button = CaptureActionButton(CapturePaneAction(title: names[index] + " ink", symbol: "circle.fill", perform: { [weak self] in
+                self?.model.color = color
+                self?.model.isEraser = false
+                // A toggle button toggles off before its action. Reconcile
+                // even when choosing the current color produces no model edit.
+                self?.updateControls()
+            }), iconOnly: true)
+            button.contentTintColor = color
+            button.setButtonType(.toggle)
+            controls.addArrangedSubview(button)
+            swatches.append(button)
         }
-        .fixedSize()
+        let eraser = CaptureActionButton(CapturePaneAction(title: "Eraser", symbol: "eraser", perform: { [weak self] in self?.model.isEraser.toggle() }), iconOnly: true)
+        eraser.setButtonType(.toggle)
+        self.eraser = eraser
+        controls.addArrangedSubview(eraser)
+        let undo = CaptureActionButton(CapturePaneAction(title: "Undo last stroke", symbol: "arrow.uturn.backward", perform: { [weak self] in self?.model.undo() }), iconOnly: true)
+        self.undo = undo
+        controls.addArrangedSubview(undo)
+        let clear = CaptureActionButton(CapturePaneAction(title: "Clear annotations", symbol: "trash", perform: { [weak self] in self?.model.clear() }), iconOnly: true)
+        self.clear = clear
+        controls.addArrangedSubview(clear)
+        controls.addArrangedSubview(CaptureActionButton(CapturePaneAction(title: "Done", symbol: "checkmark", perform: { [weak self] in self?.dismissInk() })))
+        let backdrop = inkControlsBackdrop(controls)
+        view.addSubview(backdrop)
+        NSLayoutConstraint.activate([
+            backdrop.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            backdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+            backdrop.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 4),
+            backdrop.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -4),
+        ])
+        updateControls()
     }
 
-    /// The swatches are one picker on one glass capsule; each swatch is a
-    /// plain button inside it with hover/press feedback (no glass on glass).
-    private var swatchPicker: some View {
-        HStack(spacing: 0) {
-            ForEach(palette.indices, id: \.self) { index in
-                let swatch = palette[index]
-                let isSelected = !model.isEraser && model.color == swatch
-                // A real button, so keyboard and VoiceOver can pick a color.
-                Button {
-                    model.color = swatch
-                    model.isEraser = false
-                } label: {
-                    ZStack {
-                        Circle()
-                            .fill(Color(nsColor: swatch))
-                            // Hairline keeps the white swatch visible on light glass.
-                            .overlay { Circle().strokeBorder(.primary.opacity(0.15), lineWidth: 0.5) }
-                            .frame(width: Self.swatchDiameter, height: Self.swatchDiameter)
-                        Circle()
-                            .strokeBorder(.primary, lineWidth: 2)
-                            .opacity(isSelected ? 0.9 : 0)
-                    }
-                    .frame(width: Self.swatchTarget, height: Self.swatchTarget)
-                    .animation(LiquidGlassMetrics.stateChange, value: isSelected)
-                }
-                .buttonStyle(.liquidGlassPressable(cornerRadius: Self.swatchTarget / 2))
-                .help("\(paletteNames[index]) ink")
-                .accessibilityLabel("\(paletteNames[index]) ink")
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
-            }
-        }
-        .padding(Self.swatchInset)
-        .compatFloatingGlassCapsule()
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        observation.start()
+        view.window?.makeFirstResponder(canvas)
     }
 
-    private func toolButton(_ symbol: String, help: String, active: Bool = false,
-                            role: ButtonRole? = nil, disabled: Bool = false,
-                            action: @escaping () -> Void) -> some View {
-        Button(role: role, action: action) {
-            Label(help, systemImage: symbol)
-                .scaledFont(size: 13, weight: .medium)
-                .foregroundStyle(active ? Color.accentColor : .primary)
+    override func viewWillDisappear() {
+        observation.stop()
+        super.viewWillDisappear()
+    }
+
+    private func dismissInk() {
+        model.clear()
+        onDismiss()
+    }
+
+    private func updateControls() {
+        for (index, button) in swatches.enumerated() {
+            button.state = !model.isEraser && model.color == palette[index] ? .on : .off
         }
-        .compatGlassIconButton(controlSize: .large)
-        .disabled(disabled)
-        .help(help)
-        .accessibilityLabel(help)
-        .accessibilityAddTraits(active ? .isSelected : [])
+        eraser?.state = model.isEraser ? .on : .off
+        undo?.isEnabled = !model.strokes.isEmpty
+        clear?.isEnabled = !model.strokes.isEmpty
+        canvas.needsDisplay = true
+        canvas.refreshCursor()
     }
 }
 
-struct RemoteInkOverlay: View {
-    var model: RemoteInkModel
+/// The normalized remote canvas is click-through. Only its undo/clear buttons
+/// participate in hit testing; the paired iPad remains the drawing authority.
+@MainActor
+final class RemoteInkOverlayViewController: NSViewController {
+    let model: RemoteInkModel
+    private let canvas = RemoteInkCanvasNSView()
+    private var controls: NSView?
+    private lazy var observation = CockpitObservation(owner: self) { $0.refresh() }
 
-    var body: some View {
-        RemoteInkCanvas(model: model)
-            .allowsHitTesting(false)
+    init(model: RemoteInkModel) {
+        self.model = model
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func loadView() {
+        view = InkPassThroughView()
+        canvas.model = model
+        canvas.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(canvas)
+        NSLayoutConstraint.activate([
+            canvas.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            canvas.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            canvas.topAnchor.constraint(equalTo: view.topAnchor),
+            canvas.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        let row = NSStackView(views: [
+            CaptureActionButton(CapturePaneAction(title: "Undo last Kneeboard stroke", symbol: "arrow.uturn.backward", perform: { [weak self] in self?.model.undo() }), iconOnly: true),
+            CaptureActionButton(CapturePaneAction(title: "Clear Kneeboard annotations", symbol: "trash", perform: { [weak self] in self?.model.clear() }), iconOnly: true),
+        ])
+        row.spacing = 5
+        let backdrop = inkControlsBackdrop(row)
+        view.addSubview(backdrop)
+        NSLayoutConstraint.activate([
+            backdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            backdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -16),
+        ])
+        controls = backdrop
+        refresh()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        observation.start()
+    }
+
+    override func viewWillDisappear() {
+        observation.stop()
+        super.viewWillDisappear()
+    }
+
+    private func refresh() {
+        _ = model.changeID
+        controls?.isHidden = !model.hasInk
+        canvas.needsDisplay = true
     }
 }
 
-/// Floating undo + clear controls for the Plotter-drawn ink. Shown on Pilot
-/// while remote ink is present; actions round-trip to the iPad so both stay in
-/// sync (see ``RemoteInkModel/onLocalEdit``).
-struct RemoteInkControls: View {
-    var model: RemoteInkModel
-
-    /// Two circular glass buttons blended by one container, matching the
-    /// local ink toolbar's tool buttons.
-    var body: some View {
-        CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                button("arrow.uturn.backward", help: "Undo last Kneeboard stroke") { model.undo() }
-                button("trash", help: "Clear Kneeboard annotations", role: .destructive) { model.clear() }
-            }
-        }
-    }
-
-    private func button(_ symbol: String, help: String, role: ButtonRole? = nil,
-                        action: @escaping () -> Void) -> some View {
-        Button(role: role, action: action) {
-            Label(help, systemImage: symbol)
-                .scaledFont(size: 13, weight: .medium)
-                // Neutral like the local toolbar: the role carries the
-                // semantics without scattering red (COL-4).
-                .foregroundStyle(.primary)
-        }
-        .compatGlassIconButton(controlSize: .large)
-        .help(help)
-        .accessibilityLabel(help)
+@MainActor
+private final class InkPassThroughView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let target = super.hitTest(point)
+        return target === self ? nil : target
     }
 }
 
-private struct RemoteInkCanvas: NSViewRepresentable {
-    var model: RemoteInkModel
-
-    func makeNSView(context: Context) -> RemoteInkCanvasNSView {
-        let view = RemoteInkCanvasNSView()
-        view.model = model
-        return view
-    }
-
-    func updateNSView(_ nsView: RemoteInkCanvasNSView, context: Context) {
-        nsView.model = model
-        nsView.needsDisplay = true
-    }
+@MainActor
+private func inkControlsBackdrop(_ controls: NSView) -> NSView {
+    let backdrop = NSVisualEffectView()
+    backdrop.material = .hudWindow
+    backdrop.blendingMode = .withinWindow
+    backdrop.state = .active
+    backdrop.wantsLayer = true
+    backdrop.layer?.cornerRadius = 16
+    backdrop.translatesAutoresizingMaskIntoConstraints = false
+    controls.translatesAutoresizingMaskIntoConstraints = false
+    backdrop.addSubview(controls)
+    NSLayoutConstraint.activate([
+        controls.leadingAnchor.constraint(equalTo: backdrop.leadingAnchor, constant: 8),
+        controls.trailingAnchor.constraint(equalTo: backdrop.trailingAnchor, constant: -8),
+        controls.topAnchor.constraint(equalTo: backdrop.topAnchor, constant: 8),
+        controls.bottomAnchor.constraint(equalTo: backdrop.bottomAnchor, constant: -8),
+    ])
+    return backdrop
 }
 
 final class RemoteInkCanvasNSView: NSView {
     weak var model: RemoteInkModel?
 
     override var isFlipped: Bool { true }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
@@ -277,28 +302,6 @@ final class RemoteInkCanvasNSView: NSView {
 
     private func denormalize(_ point: CGPoint) -> CGPoint {
         CGPoint(x: point.x * bounds.width, y: point.y * bounds.height)
-    }
-}
-
-/// AppKit canvas capturing freehand strokes and rendering them transparently
-/// on top of whatever pane is behind it.
-private struct InkCanvas: NSViewRepresentable {
-    var model: InkModel
-    var onDismiss: (() -> Void)?
-
-    func makeNSView(context: Context) -> InkCanvasNSView {
-        let view = InkCanvasNSView()
-        view.model = model
-        view.onDismiss = onDismiss
-        return view
-    }
-
-    func updateNSView(_ nsView: InkCanvasNSView, context: Context) {
-        nsView.model = model
-        nsView.onDismiss = onDismiss
-        nsView.needsDisplay = true
-        // Recolor the pencil/eraser cursor immediately when the tool/color changes.
-        nsView.refreshCursor()
     }
 }
 

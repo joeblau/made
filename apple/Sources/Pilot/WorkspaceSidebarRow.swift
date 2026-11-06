@@ -1,488 +1,61 @@
-import SwiftUI
+import AppKit
 
-struct WorkspaceSidebarHeading: View {
-    let title: String
-
-    var body: some View {
-        Text(title)
-            .scaledFont(size: 11, weight: .semibold)
-            // Vibrant `.secondary` measured 3.2:1 on the glass sidebar in
-            // both appearances (TYPE-3).
-            .glassLegibleForeground(.secondary)
-            .lineLimit(1)
-    }
-}
-
-/// One workspace row in the sidebar: an in-place rename field, the current
-/// git branch as secondary text, the badge count, and the row's context menu.
-///
-/// Every row puts the branch on its own line under the name. Trailing it
-/// inline instead loses it entirely on a narrow sidebar: the name field is
-/// greedy, so the branch compresses to nothing before the field gives up any
-/// width.
-struct WorkspaceSidebarRow: View {
-    let workspace: Workspace
-    let branch: String?
-    let store: WorkspaceStore
-    let onUpdateRootPath: () -> Void
-
-    /// Edit mode is deliberately decoupled from focus. A focused view that
-    /// resigns first responder writes `nil` back into its `@FocusState`, so
-    /// one state driving both "show the field" and "focus the field" tears
-    /// the field down on any spurious resign — the context menu closing,
-    /// a row rebuild — before the user can type or press Return.
-    @State private var isRenaming = false
-    @State private var draftName = ""
-    @FocusState private var renameFocused: Bool
-
-    var body: some View {
-        // Hidden while renaming so the branch never competes with the field
-        // the user is typing in.
-        let branch = isRenaming ? nil : branch
-
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                if isRenaming {
-                    TextField("Name", text: $draftName)
-                        .clearsFieldEditorBackground()
-                        .focused($renameFocused)
-                        .onSubmit(commitRename)
-                        .onExitCommand(perform: cancelRename)
-                        .onChange(of: renameFocused) { _, focused in
-                            // Clicking away commits whatever was typed.
-                            if !focused, isRenaming { commitRename() }
-                        }
-                        .onAppear {
-                            draftName = workspace.name
-                            // The field exists only now; focus it once the
-                            // context menu that opened it has closed.
-                            DispatchQueue.main.async { renameFocused = true }
-                        }
-                        // Free-standing in-place field: capsule glass with a
-                        // visible focus ring (FORM-4). The branch line hides
-                        // while renaming, so the row height barely changes.
-                        .liquidGlassField(isFocused: renameFocused)
-                        .layoutPriority(1)
-                } else {
-                    Text(workspace.name)
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .layoutPriority(1)
-                }
-
-                // The gauge outranks the name field for space. The field is
-                // greedy, so without a higher priority and a fixed size the
-                // ring gets truncated away.
-                WorkspaceLLMGauge(workspace: workspace, store: store)
-                    .fixedSize()
-                    .layoutPriority(2)
-            }
-
-            if let branch {
-                branchLabel(branch)
-            }
-        }
-        .tag(SidebarSelection.workspace(workspace.id))
-        .contentShape(Rectangle())
-        .draggable(WorkspaceSidebarDragPayload(workspaceID: workspace.id)) {
-            // Snapshotted without a backdrop, so material rather than glass.
-            Text(workspace.name)
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-                .background(.regularMaterial, in: Capsule())
-        }
-        .contextMenu {
-            Button {
-                // Defer past the menu's own tracking loop; flipping view
-                // state from inside a context-menu action is otherwise
-                // swallowed while the menu is still closing.
-                DispatchQueue.main.async { isRenaming = true }
-            } label: {
-                Label("Rename Workspace", systemImage: "pencil")
-            }
-
-            Button(action: onUpdateRootPath) {
-                Label("Update Root Path…", systemImage: "arrow.triangle.2.circlepath")
-            }
-
-            Divider()
-
-            Button {
-                store.togglePin(workspace)
-            } label: {
-                Label(
-                    workspace.isPinned ? "Unpin" : "Pin",
-                    systemImage: workspace.isPinned ? "pin.slash" : "pin"
-                )
-            }
-            Menu("Move to Group") {
-                Button("Ungrouped") { store.moveWorkspace(workspace, toGroup: nil) }
-                ForEach(store.workspaceGroups.groups) { group in
-                    Button(group.name) { store.moveWorkspace(workspace, toGroup: group.id) }
-                }
-            }
-            Divider()
-            Button("Delete Workspace", role: .destructive) {
-                store.requestDeleteWorkspace(workspace)
-            }
-        }
-    }
-
-    /// Writes the draft back to the model, keeping the current name when the
-    /// draft is empty or all whitespace.
-    private func commitRename() {
-        let trimmed = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            workspace.name = trimmed
-        }
-        isRenaming = false
-    }
-
-    private func cancelRename() {
-        isRenaming = false
-    }
-
-    private func branchLabel(_ branch: String) -> some View {
-        Text(branch)
-            .scaledFont(size: 10)
-            .glassLegibleForeground(.secondary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .help("On branch \(branch)")
-            .accessibilityLabel("On branch \(branch)")
-    }
-}
-
-/// Ring gauge showing `agents working / agents started` for a workspace. A
-/// terminal with an idle agent TUI contributes only to the denominator, so
-/// three agents all waiting for input reads `0/3`. Hidden when no agent is
-/// currently started, even if the workspace has ordinary terminal panes.
-///
-/// Polls the process tree every couple of seconds while Pilot is active — the
-/// same walk the pane header's agent capsule uses. Every mounted row shares
-/// one batched tmux snapshot per tick (see `PersistentTerminalSession`), so a
-/// tall sidebar costs one subprocess, not one per pane.
-///
-/// Clicking the ring while at least one agent is running jumps straight to
-/// the working pane: it activates the workspace (leaving Notes or any other
-/// full-detail mode), expands the pane if collapsed, and selects it.
-private struct WorkspaceLLMGauge: View {
-    let workspace: Workspace
-    let store: WorkspaceStore
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-    /// Rows stay mounted (and their `.task` loops alive) while Pilot sits in
-    /// the background, so polling gates on window activity the way the tab
-    /// badges gate on `isWorkspaceActive`.
-    @Environment(\.appearsActive) private var appearsActive
-    /// An accent-filled selection draws white text; the ring follows it.
-    @Environment(\.backgroundProminence) private var backgroundProminence
-    @State private var running = 0
-    @State private var started = 0
-    @State private var runningPaneIDs: Set<UUID> = []
-
-    /// Row budget for the gauge. The ring is drawn at this size instead of
-    /// scaling the much larger `.accessoryCircular` control into the row.
-    private static let diameter: CGFloat = 26
-
-    /// Ticks the poll may hold previous state while cache snapshots are cold
-    /// (reactivation after the TTL, a transient tmux stall). Two cover the
-    /// runtime refresh plus the capture-pane refresh it unlocks; after that a
-    /// still-cold cache is believed to mean tmux is gone, and zeros commit.
-    private static let coldCacheGraceTicks = 2
-
-    var body: some View {
-        let isVisible = started > 0
-
-        // Keep the gauge mounted even before the first poll. Besides giving
-        // `.task` a permanent host, this gives SwiftUI a zero-value ring to
-        // interpolate from when the first agent status arrives.
-        ZStack {
-            // Draw the ring ourselves instead of using `.accessoryCircular`.
-            // That native style renders a detached value marker which looks
-            // like a stray dot at zero. The custom arc also exposes its
-            // fraction as animatable data, so progress cannot snap.
-            AnimatedWorkspaceGauge(
-                fraction: gaugeFraction,
-                running: running,
-                started: started,
-                tint: gaugeTint
-            )
-            .scaleEffect(isVisible ? 1 : 0.75)
-            .opacity(isVisible ? 1 : 0)
-            .frame(width: Self.diameter, height: Self.diameter)
-            .help(gaugeDescription)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(gaugeDescription)
-            .accessibilityHidden(!isVisible)
-            // The tap below has no button of its own, so VoiceOver gets the
-            // trait and the same action while it can jump to a pane.
-            .accessibilityAddTraits(running > 0 ? .isButton : [])
-            // The tap gesture alone still made VoiceOver announce an idle
-            // ring as a button whose action did nothing; only a ring that
-            // can jump to a pane is a button.
-            .accessibilityRemoveTraits(running > 0 ? [] : .isButton)
-            .accessibilityAction { selectRunningPane() }
-            // Tappable only while an agent is running; an idle ring has
-            // no pane to jump to.
-            .contentShape(Rectangle())
-            .onTapGesture(perform: selectRunningPane)
-            .allowsHitTesting(running > 0)
-        }
-        // Zero-width while empty so a workspace with no started agent does not
-        // reserve a hole where the ring would be.
-        .frame(
-            width: isVisible ? Self.diameter : 0,
-            height: isVisible ? Self.diameter : 0
-        )
-        .clipped()
-        // Restart polling when activation flips; only an active app polls.
-        .task(id: appearsActive) {
-            guard appearsActive else { return }
-            // The cache snapshots these status reads serve age out while
-            // Pilot sits inactive, so the restarted task's first ticks would
-            // read nil for every pane and animate a live ring down to zero
-            // width, shifting the row. A nil snapshot means "unknown", not
-            // "no agents": hold the previous gauge state for a bounded number
-            // of ticks while the refreshes those reads schedule land. The
-            // bound keeps a genuinely wedged tmux server from freezing a
-            // stale ring forever.
-            var graceTicks = Self.coldCacheGraceTicks
-            while !Task.isCancelled {
-                // A workspace with no terminal panes probes nothing: status
-                // reads are cache snapshots, so this tick spawns no subprocess
-                // of its own and just idles until a pane appears.
-                let terminals = workspace.panes.filter { $0.kind == .terminal }
-                if !terminals.isEmpty, graceTicks > 0,
-                   terminals.contains(where: { !$0.hasTerminalRuntimeSnapshot }) {
-                    graceTicks -= 1
-                    try? await Task.sleep(for: .seconds(2))
-                    continue
-                }
-                var nextStarted = 0
-                var nextRunningPaneIDs: Set<UUID> = []
-                var contentsPending = false
-                for pane in terminals {
-                    guard let status = pane.liveShellAgentStatus() else { continue }
-                    nextStarted += 1
-                    // Agents classified from viewport text read a second,
-                    // separately cached snapshot. While it is cold the status
-                    // above fell back to cursor state alone and can misreport
-                    // idle, so treat this tick as unresolved too.
-                    if status.agent.needsVisibleTerminalContentsForActivity,
-                       pane.visibleTerminalContents() == nil {
-                        contentsPending = true
-                    }
-                    if status.activity == .running {
-                        nextRunningPaneIDs.insert(pane.id)
-                    }
-                }
-                if contentsPending, graceTicks > 0 {
-                    graceTicks -= 1
-                    try? await Task.sleep(for: .seconds(2))
-                    continue
-                }
-                graceTicks = Self.coldCacheGraceTicks
-                runningPaneIDs = nextRunningPaneIDs
-                let nextRunning = nextRunningPaneIDs.count
-                if started != nextStarted || running != nextRunning {
-                    withAnimation(gaugeAnimation) {
-                        started = nextStarted
-                        running = nextRunning
-                    }
-                }
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
-    }
-
-    private var gaugeFraction: Double {
-        guard started > 0 else { return 0 }
-        return min(1, max(0, Double(running) / Double(started)))
-    }
-
-    private var gaugeAnimation: Animation? {
-        accessibilityReduceMotion ? nil : .easeInOut(duration: 0.4)
-    }
-
-    /// Jump to the first pane reported active by the latest poll.
-    private func selectRunningPane() {
-        let terminals = workspace.panes.filter { $0.kind == .terminal }
-        guard let pane = terminals.first(where: { runningPaneIDs.contains($0.id) }) else { return }
-        store.selectWorkspace(workspace.id)
-        if pane.isCollapsed {
-            workspace.expandPane(pane)
-        }
-        workspace.selectedPaneID = pane.id
-    }
-
-    /// Idle drops to the quaternary label color so quiet workspaces recede
-    /// into the sidebar instead of every ring sitting at accent strength. Use
-    /// a concrete dynamic NSColor so selected-row appearances resolve it too.
-    ///
-    /// Active rings are meaningful graphics, so they keep 3:1 against the
-    /// sidebar glass: system green measured 2.2:1 on a selected light row,
-    /// so light mode uses a deeper green, and partial progress uses the
-    /// legible accent. On an accent-filled selection the ring turns white
-    /// like the row's text.
-    private var gaugeTint: Color {
-        if running == 0 { return Color(nsColor: .quaternaryLabelColor) }
-        if backgroundProminence == .increased { return .white }
-        if running == started { return Color(nsColor: Self.legibleGreen) }
-        return LegibleAccent.color
-    }
-
-    /// System green in dark mode; a deeper green (5.1:1 on white) in light.
-    private static let legibleGreen = NSColor(name: "WorkspaceLLMGaugeGreen") { appearance in
-        let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return isDark ? .systemGreen : NSColor(srgbRed: 0.0, green: 0.50, blue: 0.20, alpha: 1)
-    }
-
-    /// Spell out both sides for the tooltip and VoiceOver.
-    private var gaugeDescription: String {
-        let agents = started == 1 ? "agent" : "agents"
-        if running == 0 {
-            return "0 of \(started) started \(agents) working"
-        }
-        return "\(running) of \(started) started \(agents) working. Click to jump to a pane."
-    }
-}
-
-/// Compact gauge face with a neutral track and an explicitly animatable
-/// progress arc. A zero fraction produces no foreground path, avoiding the
-/// detached round-cap dot shown by the native accessory gauge.
-private struct AnimatedWorkspaceGauge: View {
-    let fraction: Double
-    let running: Int
-    let started: Int
-    let tint: Color
-
-    private static let lineWidth: CGFloat = 3
-    /// Label size for a 26pt ring: leaves the stroke visible around `0/1`.
-    private static let labelSize: CGFloat = 8
-
-    var body: some View {
-        ZStack {
-            WorkspaceGaugeArc(fraction: 1)
-                .strokeBorder(
-                    Color(nsColor: .quaternaryLabelColor),
-                    style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round)
-                )
-
-            WorkspaceGaugeArc(fraction: fraction)
-                .strokeBorder(
-                    tint,
-                    style: StrokeStyle(lineWidth: Self.lineWidth, lineCap: .round)
-                )
-
-            // Fixed size rather than `scaledFont`: the ring diameter does not
-            // follow UI zoom, so a zoom-scaled label would outgrow its face.
-            // Two-digit counts shrink instead of colliding with the stroke.
-            Text("\(running)/\(started)")
-                .font(.system(size: Self.labelSize, weight: .medium))
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .padding(Self.lineWidth + 1)
-                .contentTransition(.numericText())
-        }
-    }
-}
-
-/// A 270-degree ring with its opening at the bottom. The progress value is the
-/// shape's animatable data, so SwiftUI interpolates the path on every frame.
-/// Returning an empty path at zero is intentional: stroking a zero-length path
-/// with round caps produces the detached dot this gauge is designed to avoid.
-struct WorkspaceGaugeArc: InsettableShape {
+/// A native path used by sidebar status rings. A zero fraction deliberately
+/// produces no foreground path, so a rounded stroke has no detached dot.
+struct WorkspaceGaugeArc {
     var fraction: Double
     private var insetAmount: CGFloat = 0
-
-    init(fraction: Double) {
-        self.fraction = fraction
-    }
-
+    init(fraction: Double) { self.fraction = fraction }
     var animatableData: Double {
         get { fraction }
         set { fraction = newValue }
     }
-
-    func path(in rect: CGRect) -> Path {
-        let progress = min(1, max(0, fraction))
-        guard progress > 0 else { return Path() }
-
-        let drawingRect = rect.insetBy(dx: insetAmount, dy: insetAmount)
-        guard drawingRect.width > 0, drawingRect.height > 0 else { return Path() }
-
-        let center = CGPoint(x: drawingRect.midX, y: drawingRect.midY)
-        let radius = min(drawingRect.width, drawingRect.height) / 2
-        let start = Angle.degrees(135)
-        let end = Angle.degrees(135 + (270 * progress))
-        var path = Path()
-        path.addArc(
-            center: center,
-            radius: radius,
-            startAngle: start,
-            endAngle: end,
-            clockwise: false
-        )
-        return path
+    func inset(by amount: CGFloat) -> Self {
+        var result = self
+        result.insetAmount += amount
+        return result
     }
-
-    func inset(by amount: CGFloat) -> WorkspaceGaugeArc {
-        var copy = self
-        copy.insetAmount += amount
-        return copy
+    func path(in rect: CGRect) -> NSBezierPath {
+        let path = NSBezierPath()
+        guard fraction > 0 else { return path }
+        let radius = max(0, min(rect.width, rect.height) / 2 - insetAmount)
+        path.appendArc(withCenter: NSPoint(x: rect.midX, y: rect.midY), radius: radius,
+                       startAngle: 225, endAngle: 225 - CGFloat(min(1, fraction)) * 270,
+                       clockwise: true)
+        return path
     }
 }
 
-/// A group header is one list row; its members are sibling rows with indentation.
-/// Keeping them out of a nested DisclosureGroup lets every row export its drag.
-struct WorkspaceGroupSidebarRow: View {
-    let group: WorkspaceGroup
-    let store: WorkspaceStore
-    let onRename: () -> Void
-    let onNewWorkspace: () -> Void
-    @State private var isDropTarget = false
-
-    var body: some View {
-        Button {
-            store.workspaceGroups.setExpanded(group.id, !group.isExpanded)
-        } label: {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                // One chevron that rotates, so expanding reads as motion
-                // rather than a glyph swap (MOT-4).
-                Image(systemName: "chevron.right")
-                    .scaledFont(size: 9, weight: .semibold)
-                    .glassLegibleForeground(.secondary)
-                    .rotationEffect(.degrees(group.isExpanded ? 90 : 0))
-                    .frame(width: 10)
-                WorkspaceSidebarHeading(title: group.name)
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .background(
-                isDropTarget ? Color.accentColor.opacity(0.15) : .clear,
-                in: RoundedRectangle(cornerRadius: LiquidGlassMetrics.Radius.control, style: .continuous)
-            )
-            .animation(LiquidGlassMetrics.spring, value: group.isExpanded)
-            .animation(LiquidGlassMetrics.stateChange, value: isDropTarget)
-        }
-        // Whole-row tap target: stays unglazed but gets hover and press
-        // feedback (BTN-5).
-        .buttonStyle(.liquidGlassPressable)
-        .accessibilityLabel(group.name)
-        .accessibilityValue(group.isExpanded ? "Expanded" : "Collapsed")
-        .onDrop(of: [.pilotWorkspace], isTargeted: $isDropTarget) { providers in
-            WorkspaceSidebarDragPayload.load(providers) { item in
-                store.acceptWorkspaceDrop([item], toGroup: group.id)
-            }
-        }
-        .draggable(WorkspaceSidebarDragPayload(groupID: group.id))
-        .contextMenu {
-            Button("New Workspace in Group…", action: onNewWorkspace)
-            Button("Rename Group…", action: onRename)
-            Button("Ungroup Workspaces") {
-                store.workspaceGroups.remove(group.id, workspaceIDs: store.unpinnedWorkspaceIDs)
-            }
-        }
+@MainActor
+final class WorkspaceGaugeView: NSButton {
+    var running = 0 { didSet { needsDisplay = true } }
+    var started = 0 { didSet { needsDisplay = true } }
+    var onJump: (() -> Void)?
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false
+        title = ""
+        target = self
+        action = #selector(jump)
+    }
+    required init?(coder: NSCoder) { nil }
+    @objc private func jump() { if running > 0 { onJump?() } }
+    override func draw(_ dirtyRect: NSRect) {
+        guard started > 0 else { return }
+        let track = WorkspaceGaugeArc(fraction: 1).inset(by: 2).path(in: bounds)
+        track.lineWidth = 3
+        track.lineCapStyle = .round
+        NSColor.quaternaryLabelColor.setStroke()
+        track.stroke()
+        let fraction = Double(running) / Double(started)
+        let path = WorkspaceGaugeArc(fraction: fraction).inset(by: 2).path(in: bounds)
+        path.lineWidth = 3
+        path.lineCapStyle = .round
+        (running == started ? NSColor.systemGreen : NSColor.controlAccentColor).setStroke()
+        path.stroke()
+        let text = "\(running)/\(started)" as NSString
+        let attributes: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 8, weight: .medium), .foregroundColor: NSColor.labelColor]
+        let size = text.size(withAttributes: attributes)
+        text.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2), withAttributes: attributes)
     }
 }

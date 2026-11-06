@@ -1,105 +1,112 @@
-import SwiftUI
+import AppKit
+import Observation
 
-// UIZoom — single source of truth for IDE-wide text scaling.
-//
-// Driven by ⌘+ / ⌘- / ⌥⌘0 in the View menu. Stepped through a fixed
-// ladder so zoom-in / zoom-out feel snappy instead of drifting on
-// arbitrary 5%-ish increments. Propagated through the SwiftUI
-// environment so chrome (.scaledFont), the WebKit `pageZoom`, and
-// `GhosttyRuntime.userZoomFactor` all read from one number.
-
-private struct UIZoomKey: EnvironmentKey {
-    static let defaultValue: Double = 1.0
-}
-
-extension EnvironmentValues {
-    var uiZoom: Double {
-        get { self[UIZoomKey.self] }
-        set { self[UIZoomKey.self] = newValue }
-    }
-}
-
+/// The persisted text-size ladder shared by native chrome and embedded engines.
 enum UIZoomLadder {
     static let steps: [Double] = [0.85, 1.0, 1.15, 1.3, 1.5, 1.75, 2.0]
     static let `default`: Double = 1.0
 
     static func next(after current: Double) -> Double {
-        guard let index = nearestIndex(to: current) else { return `default` }
-        return steps[min(index + 1, steps.count - 1)]
+        steps[min(nearestIndex(to: current) + 1, steps.count - 1)]
     }
 
     static func previous(before current: Double) -> Double {
-        guard let index = nearestIndex(to: current) else { return `default` }
-        return steps[max(index - 1, 0)]
+        steps[max(nearestIndex(to: current) - 1, 0)]
     }
 
     static func stepOffset(for current: Double) -> Int {
-        guard let currentIndex = nearestIndex(to: current),
-              let defaultIndex = nearestIndex(to: `default`) else { return 0 }
-        return currentIndex - defaultIndex
+        nearestIndex(to: current) - nearestIndex(to: Self.default)
     }
 
-    private static func nearestIndex(to value: Double) -> Int? {
-        guard !steps.isEmpty else { return nil }
-        var bestIndex = 0
-        var bestDistance = abs(steps[0] - value)
-        for (i, step) in steps.enumerated().dropFirst() {
-            let distance = abs(step - value)
-            if distance < bestDistance {
-                bestDistance = distance
-                bestIndex = i
+    static func normalized(_ value: Double) -> Double {
+        guard value.isFinite, value > 0 else { return Self.default }
+        return steps[nearestIndex(to: value)]
+    }
+
+    private static func nearestIndex(to value: Double) -> Int {
+        guard value.isFinite else { return steps.firstIndex(of: Self.default) ?? 0 }
+        return steps.indices.min { abs(steps[$0] - value) < abs(steps[$1] - value) } ?? 0
+    }
+}
+
+extension Notification.Name {
+    static let cockpitUIZoomDidChange = Notification.Name("app.blau.pilot.uiZoomDidChange")
+}
+
+/// Owns the same `ui.zoom` preference used by the old shell. Controllers observe
+/// `factor` or the notification and update existing controls without rebuilding
+/// their hierarchy or disturbing a field editor's selection.
+@MainActor
+@Observable
+final class CockpitUIZoomController {
+    static let storageKey = "ui.zoom"
+    static let shared = CockpitUIZoomController(defaults: sharedDefaults())
+
+    var factor: Double {
+        didSet {
+            let normalized = UIZoomLadder.normalized(factor)
+            if normalized != factor { factor = normalized }
+            guard oldValue != factor else { return }
+            defaults.set(factor, forKey: Self.storageKey)
+            NotificationCenter.default.post(name: .cockpitUIZoomDidChange, object: self)
+        }
+    }
+
+    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private var preferenceObserver: NSObjectProtocol?
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        factor = Self.readFactor(defaults)
+        preferenceObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: defaults,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let next = Self.readFactor(self.defaults)
+                if next != self.factor { self.factor = next }
             }
         }
-        return bestIndex
+    }
+
+    func increase() { factor = UIZoomLadder.next(after: factor) }
+    func decrease() { factor = UIZoomLadder.previous(before: factor) }
+    func reset() { factor = UIZoomLadder.default }
+
+    private static func readFactor(_ defaults: UserDefaults) -> Double {
+        guard defaults.object(forKey: storageKey) != nil else { return UIZoomLadder.default }
+        return UIZoomLadder.normalized(defaults.double(forKey: storageKey))
+    }
+
+    private static func sharedDefaults() -> UserDefaults {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["BLAU_COCKPIT_FIXTURE"] != nil || environment["XCTestConfigurationFilePath"] != nil else {
+            return .standard
+        }
+        let name = "app.blau.pilot.fixture-ui-zoom.\(ProcessInfo.processInfo.processIdentifier)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    isolated deinit {
+        if let preferenceObserver { NotificationCenter.default.removeObserver(preferenceObserver) }
     }
 }
 
-private extension DynamicTypeSize {
-    func offset(by offset: Int) -> DynamicTypeSize {
-        let sizes = Self.allCases
-        guard let currentIndex = sizes.firstIndex(of: self) else { return self }
-        let adjustedIndex = min(max(currentIndex + offset, 0), sizes.count - 1)
-        return sizes[adjustedIndex]
-    }
-}
-
-private struct UIZoomedDynamicTypeModifier: ViewModifier {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    @Environment(\.uiZoom) private var uiZoom
-
-    func body(content: Content) -> some View {
-        content.dynamicTypeSize(
-            dynamicTypeSize.offset(by: UIZoomLadder.stepOffset(for: uiZoom))
-        )
-    }
-}
-
-private struct ScaledFontModifier: ViewModifier {
-    @Environment(\.uiZoom) private var uiZoom
-
-    let baseSize: CGFloat
-    let weight: Font.Weight
-    let design: Font.Design
-
-    func body(content: Content) -> some View {
-        content.font(.system(size: baseSize * uiZoom, weight: weight, design: design))
-    }
-}
-
-extension View {
-    /// Keep semantic Apple text styles responsive to Pilot's text-size ladder.
-    /// The system's current Dynamic Type size remains the baseline.
-    func uiZoomedDynamicType() -> some View {
-        modifier(UIZoomedDynamicTypeModifier())
-    }
-
-    /// Apply a font that scales with the IDE's `uiZoom` environment.
-    /// Use anywhere you'd otherwise write `.font(.system(size: N, …))`.
-    func scaledFont(
+@MainActor
+enum CockpitTypography {
+    static func font(
         size: CGFloat,
-        weight: Font.Weight = .regular,
-        design: Font.Design = .default
-    ) -> some View {
-        modifier(ScaledFontModifier(baseSize: size, weight: weight, design: design))
+        weight: NSFont.Weight = .regular,
+        monospaced: Bool = false,
+        zoom: Double? = nil
+    ) -> NSFont {
+        let pointSize = size * CGFloat(zoom ?? CockpitUIZoomController.shared.factor)
+        return monospaced
+            ? NSFont.monospacedSystemFont(ofSize: pointSize, weight: weight)
+            : NSFont.systemFont(ofSize: pointSize, weight: weight)
     }
 }

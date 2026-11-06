@@ -21,39 +21,7 @@ import SwiftUI
 
 // MARK: - Metrics
 
-/// Shared spacing, radius, and motion tokens for glass surfaces.
-enum LiquidGlassMetrics {
-    /// 4pt spacing grid (LAY-3). Use these instead of one-off literals.
-    enum Spacing {
-        static let xxSmall: CGFloat = 4
-        static let xSmall: CGFloat = 8
-        static let small: CGFloat = 12
-        static let medium: CGFloat = 16
-        static let large: CGFloat = 20
-        static let xLarge: CGFloat = 24
-        static let xxLarge: CGFloat = 32
-    }
-
-    /// Corner radius tokens. Single-line controls are capsules and need no
-    /// radius; these cover rounded rectangles.
-    enum Radius {
-        /// Small inset elements: thumbnails, row highlights, badges.
-        static let control: CGFloat = 8
-        /// Multi-line fields and composers (the minimum when concentric).
-        static let field: CGFloat = 12
-        /// Content cards and grouped surfaces.
-        static let card: CGFloat = 16
-        /// Floating panels, sheets, popovers, and large overlay surfaces.
-        static let panel: CGFloat = 24
-
-        /// The concentric inner radius for an element inset by `padding`
-        /// inside a container of radius `outer` (LAY-4: outer = inner +
-        /// padding). Clamped so tight insets never go negative.
-        static func inner(outer: CGFloat, padding: CGFloat) -> CGFloat {
-            max(outer - padding, 0)
-        }
-    }
-
+extension LiquidGlassMetrics {
     /// Spatial changes (selection pills, expanding panels): energetic start,
     /// gentle settle (MOT-4).
     static var spring: Animation { .spring(duration: 0.3, bounce: 0.15) }
@@ -61,18 +29,6 @@ enum LiquidGlassMetrics {
     /// State feedback (hover, press, focus): quick ease-out (BTN-5).
     static var stateChange: Animation { .easeOut(duration: 0.15) }
 
-    #if os(macOS)
-    static let fieldVerticalPadding: CGFloat = 8
-    static let segmentVerticalPadding: CGFloat = 4
-    /// The height of the system Liquid Glass capsule behind toolbar items
-    /// (measured on macOS 27.2). A glass field in its own toolbar item takes
-    /// this height so its capsule lines up with the neighboring items; at the
-    /// default field padding it would sit 3pt short.
-    static let toolbarControlHeight: CGFloat = 36
-    #else
-    static let fieldVerticalPadding: CGFloat = 12
-    static let segmentVerticalPadding: CGFloat = 8
-    #endif
 }
 
 // MARK: - Input fields
@@ -564,51 +520,7 @@ extension View {
 
 // MARK: - Legible accent fill
 
-/// The user's accent, darkened just enough that white label text on it stays
-/// legible: the fill behind the selected segment of Cockpit's segmented
-/// pickers and behind every prominent button (`liquidGlassButtonStyle(
-/// prominent: true)`, Pilot's `compatGlassProminentButtonStyle()`). White on
-/// the system blue measured 3.5:1 (light) and 3.2:1 (dark) on Walkie and
-/// Kneeboard's prominent glass, and 3.8–4.0:1 on Cockpit's, under TYPE-3's
-/// 4.5:1. A hue that already clears the floor is returned unchanged.
-enum LegibleAccent {
-    /// Above 4.5:1 because rendering lightens the fill a little: Cockpit's
-    /// dark-appearance segmented bezel draws lighter than its fill (a 4.8:1
-    /// fill measured 4.65:1 on screen). One floor for every use keeps the
-    /// selected segment and the primary button the same shade.
-    static let minimumContrast = 5.2
-
-    /// `red`/`green`/`blue` (sRGB, 0...1) mixed toward black in small steps
-    /// until white text on it reaches `minimumContrast`; a color that already
-    /// does is returned unchanged, so the hue stays the user's accent.
-    static func legibleFill(
-        red: Double,
-        green: Double,
-        blue: Double
-    ) -> (red: Double, green: Double, blue: Double) {
-        let (red, green, blue) = (clamp(red), clamp(green), clamp(blue))
-        var scale = 1.0
-        while scale > 0, contrastWithWhite(red: red * scale, green: green * scale, blue: blue * scale) < minimumContrast {
-            scale -= 0.01
-        }
-        scale = max(0, scale)
-        return (red * scale, green * scale, blue * scale)
-    }
-
-    /// WCAG 2 contrast ratio of white against an sRGB color.
-    static func contrastWithWhite(red: Double, green: Double, blue: Double) -> Double {
-        func linear(_ channel: Double) -> Double {
-            channel <= 0.03928 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
-        }
-        let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
-        return 1.05 / (luminance + 0.05)
-    }
-
-    /// Extended-range components (Display P3 accents) are clamped into sRGB.
-    private static func clamp(_ channel: Double) -> Double {
-        min(max(channel, 0), 1)
-    }
-
+extension LegibleAccent {
     static let color: Color = {
         #if os(macOS)
         Color(nsColor: nsColor)
@@ -616,27 +528,4 @@ enum LegibleAccent {
         Color(uiColor: uiColor)
         #endif
     }()
-
-    #if os(macOS)
-    /// Resolved per appearance from the user's System Settings accent.
-    static let nsColor = NSColor(name: nil) { appearance in
-        var accent = NSColor.systemBlue
-        appearance.performAsCurrentDrawingAppearance {
-            accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .systemBlue
-        }
-        let fill = legibleFill(red: accent.redComponent, green: accent.greenComponent, blue: accent.blueComponent)
-        return NSColor(srgbRed: fill.red, green: fill.green, blue: fill.blue, alpha: 1)
-    }
-    #else
-    /// Resolved per trait collection (light, dark, increased contrast) from
-    /// the app's AccentColor asset, which the apps leave unset, so it is the
-    /// system blue the prominent styles would otherwise draw.
-    static let uiColor = UIColor { traits in
-        let accent = (UIColor(named: "AccentColor") ?? .systemBlue).resolvedColor(with: traits)
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        guard accent.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return accent }
-        let fill = legibleFill(red: red, green: green, blue: blue)
-        return UIColor(red: fill.red, green: fill.green, blue: fill.blue, alpha: 1)
-    }
-    #endif
 }

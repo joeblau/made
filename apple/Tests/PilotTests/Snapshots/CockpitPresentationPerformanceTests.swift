@@ -1,0 +1,100 @@
+import AppKit
+import Darwin
+import XCTest
+@testable import Pilot
+
+/// Opt-in measurements of isolated production panels in the capture harness.
+/// These are not whole-application launch, input latency, or GPU measurements.
+final class CockpitPresentationPerformanceTests: XCTestCase {
+    @MainActor
+    func testPresentationWorkloads() async throws {
+        guard let destination = ProcessInfo.processInfo.environment["MADE_PERFORMANCE_OUTPUT"] else {
+            throw XCTSkip("Set MADE_PERFORMANCE_OUTPUT through the benchmark runner")
+        }
+        let fixtures = try SnapshotFixtures()
+        defer { fixtures.close() }
+        try await fixtures.prepare()
+        let scenes: [SnapshotScene] = [.notes, .docker, .runners, .agenticUse, .files, .tasks, .actions, .pullRequests, .usage]
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1440, height: 960),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        defer { window.close() }
+        var samples: [PresentationSample] = []
+        for scene in scenes {
+            // One unrecorded warm-up and seven recorded mounts. Package loading,
+            // fixture setup, and the intentional settling delay are excluded.
+            for iteration in 0..<8 {
+                let begin = ProcessInfo.processInfo.systemUptime
+                let controller = SnapshotWorkbench(scene: scene, fixtures: fixtures)
+                let view = controller.view
+                window.contentView = view
+                view.frame = NSRect(x: 0, y: 0, width: 1440, height: 960)
+                view.layoutSubtreeIfNeeded()
+                let mount = (ProcessInfo.processInfo.systemUptime - begin) * 1000
+                try await Task.sleep(for: .milliseconds(180))
+                view.layoutSubtreeIfNeeded()
+                var resize: [Double] = []
+                for step in 0..<20 {
+                    let width = step.isMultiple(of: 2) ? 1280 : 1600
+                    let start = ProcessInfo.processInfo.systemUptime
+                    window.setContentSize(NSSize(width: width, height: 960))
+                    view.frame = NSRect(x: 0, y: 0, width: width, height: 960)
+                    view.layoutSubtreeIfNeeded()
+                    resize.append((ProcessInfo.processInfo.systemUptime - start) * 1000)
+                }
+                if iteration > 0 {
+                    samples.append(PresentationSample(scene: scene.rawValue, iteration: iteration,
+                                                      mountLayoutMilliseconds: mount,
+                                                      resizeLayoutMilliseconds: resize,
+                                                      residentBytes: residentBytes()))
+                }
+                window.contentView = nil
+                try await Task.sleep(for: .milliseconds(20))
+            }
+        }
+        let report = PresentationReport(
+            version: 1, implementation: ProcessInfo.processInfo.environment["MADE_PERFORMANCE_IMPLEMENTATION"] ?? "appkit",
+            sourceRevision: ProcessInfo.processInfo.environment["MADE_PERFORMANCE_REVISION"] ?? "unknown",
+            configuration: "Debug with -O wholemodule; hosted XCTest, services disabled",
+            workload: "offscreen native production panels inside fictional snapshot shell; one warmup, seven mounts, twenty width changes per mount",
+            exclusions: ["application launch", "interactive input", "frame rendering/GPU", "live terminal/browser/video", "large-history scaling", "energy", "cross-process Chromium memory"],
+            samples: samples
+        )
+        let url = URL(fileURLWithPath: destination)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(report).write(to: url, options: .atomic)
+        XCTAssertEqual(samples.count, scenes.count * 7)
+    }
+
+    private func residentBytes() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        return result == KERN_SUCCESS ? UInt64(info.resident_size) : 0
+    }
+}
+
+private struct PresentationSample: Codable {
+    let scene: String
+    let iteration: Int
+    let mountLayoutMilliseconds: Double
+    let resizeLayoutMilliseconds: [Double]
+    let residentBytes: UInt64
+}
+
+private struct PresentationReport: Codable {
+    let version: Int
+    let implementation: String
+    let sourceRevision: String
+    let configuration: String
+    let workload: String
+    let exclusions: [String]
+    let samples: [PresentationSample]
+}

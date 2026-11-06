@@ -1,1215 +1,721 @@
 import AppKit
 import SwiftData
-import SwiftUI
+import Observation
 
-/// Shared ⌘1…⌘9 workspace-number mapping plus Main-window key
-/// equivalents. Extension uses the same visible ordering from a scene menu so
-/// focused AppKit panes cannot swallow its shortcuts.
 struct WorkspaceNumberShortcut: Identifiable, Equatable {
     let number: Int
     let workspaceID: UUID
-
     var id: UUID { workspaceID }
 }
 
-struct WorkspaceNumberShortcuts: View {
-    let workspaceIDs: [UUID]
-    let onSelect: (UUID) -> Void
-
-    var body: some View {
-        Group {
-            ForEach(Self.shortcuts(for: workspaceIDs)) { shortcut in
-                Button("") {
-                    onSelect(shortcut.workspaceID)
-                }
-                .keyboardShortcut(KeyEquivalent(Character("\(shortcut.number)")), modifiers: .command)
-                .hidden()
-            }
-        }
-        .id(workspaceIDs)
-    }
-
+enum WorkspaceNumberShortcuts {
     static func shortcuts(for workspaceIDs: [UUID]) -> [WorkspaceNumberShortcut] {
-        Array(workspaceIDs.prefix(9).enumerated()).map { index, workspaceID in
-            WorkspaceNumberShortcut(number: index + 1, workspaceID: workspaceID)
-        }
+        Array(workspaceIDs.prefix(9).enumerated()).map { WorkspaceNumberShortcut(number: $0.offset + 1, workspaceID: $0.element) }
     }
 }
 
-/// Keeps every pane-specific toolbar identical between Main and Extendo.
-/// Both windows install this content in the same toolbar placement, so
-/// control order, overflow behavior, and future additions stay synchronized.
-///
-/// A browser pane's address field is its own Liquid Glass capsule, so it
-/// gets a dedicated item with the toolbar's shared capsule hidden (no glass
-/// on glass), between the navigation group and the tools group.
-struct PaneToolbarContent: ToolbarContent {
-    let pane: Pane?
-
-    var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .secondaryAction) {
-            BrowserPaneToolbarSlot(pane: pane, slot: .navigation)
-        }
-        ToolbarItem(placement: .secondaryAction) {
-            BrowserPaneToolbarSlot(pane: pane, slot: .address)
-        }
-        .compatSharedBackgroundHidden()
-        ToolbarItemGroup(placement: .secondaryAction) {
-            if let pane {
-                PaneToolbarControls(pane: pane)
-            }
-        }
+/// A small value adapter retains the stale-selection guards used by the
+/// inspector without coupling the application model to SwiftUI.Binding.
+struct CockpitValueBinding<Value> {
+    let get: () -> Value
+    let set: (Value) -> Void
+    var wrappedValue: Value {
+        get { get() }
+        nonmutating set { set(newValue) }
     }
 }
 
-/// The pane-kind tools of `PaneToolbarContent`, after any browser navigation
-/// and address items.
-struct PaneToolbarControls: View {
-    let pane: Pane
-
-    @ViewBuilder
-    var body: some View {
-        if !pane.isCollapsed {
-            switch pane.kind {
-            case .browser:
-                if let state = BrowserToolbarSelection.state(for: pane) {
-                    BrowserToolsToolbarControls(state: state)
-                }
-            case .device:
-                DeviceToolbarControls(paneID: pane.id)
-            case .simulator:
-                SimulatorToolbarControls(paneID: pane.id)
-            case .android:
-                AndroidToolbarControls(paneID: pane.id)
-            case .terminal, .editor, .agentChat:
-                EmptyView()
-            }
-        }
-    }
-}
-
-struct SimulatorToolbarControls: View {
-    let paneID: UUID
-
-    var body: some View {
-        let session = SimulatorRegistry.shared.session(for: paneID)
-        let isStreaming = session.status == .streaming
-
-        Button {
-            session.toggleRecording()
-        } label: {
-            Label(
-                session.isRecording ? "Stop Recording" : "Record Screen",
-                systemImage: session.isRecording ? "stop.circle.fill" : "record.circle"
-            )
-            .foregroundStyle(session.isRecording ? .red : .primary)
-        }
-        .disabled(!isStreaming)
-        .help(session.isRecording ? "Stop recording" : "Record the simulator screen")
-
-        Button {
-            session.goHome()
-        } label: {
-            Label("Home", systemImage: "square.grid.3x3.fill")
-        }
-        .disabled(!isStreaming)
-        .help("Go to the simulator Home screen")
-
-        Button {
-            session.takeScreenshot()
-        } label: {
-            Label("Take Screenshot", systemImage: "camera.viewfinder")
-        }
-        .disabled(!isStreaming)
-        .help("Save a screenshot of the simulator screen to the Desktop")
-
-        Button {
-            session.copyScreenshotToClipboard()
-        } label: {
-            Label("Copy Screenshot", systemImage: "clipboard")
-        }
-        .disabled(!isStreaming)
-        .help("Copy a screenshot of the simulator screen to the clipboard")
-
-        Button {
-            session.chooseAnotherDevice()
-        } label: {
-            Label("Choose Device", systemImage: "list.bullet")
-        }
-        .help("Pick a different simulator")
-
-        Button {
-            session.shutdownSimulator()
-        } label: {
-            Label("Shutdown Simulator", systemImage: "power")
-        }
-        .disabled(session.bootedUDID == nil)
-        .help("Power off the booted simulator")
-    }
-}
-
-struct AndroidToolbarControls: View {
-    let paneID: UUID
-
-    var body: some View {
-        let session = AndroidDeviceRegistry.shared.session(for: paneID)
-        let isStreaming = session.status == .streaming
-
-        Button {
-            session.toggleRecording()
-        } label: {
-            Label(
-                session.isRecording ? "Stop Recording" : "Record Screen",
-                systemImage: session.isRecording ? "stop.circle.fill" : "record.circle"
-            )
-            .foregroundStyle(session.isRecording ? .red : .primary)
-        }
-        .disabled(!isStreaming && !session.isRecording)
-        .help(session.isRecording ? "Stop recording" : "Record the Android screen")
-
-        Button {
-            session.takeScreenshot()
-        } label: {
-            Label("Take Screenshot", systemImage: "camera.viewfinder")
-        }
-        .disabled(!isStreaming)
-        .help("Save a screenshot of the Android screen to the Desktop")
-
-        Button {
-            session.copyScreenshotToClipboard()
-        } label: {
-            Label("Copy Screenshot", systemImage: "clipboard")
-        }
-        .disabled(!isStreaming)
-        .help("Copy a screenshot of the Android screen to the clipboard")
-
-        Button {
-            session.sendKeycode(AndroidKeyMap.Keycode.back)
-        } label: {
-            Label("Back", systemImage: "arrow.uturn.backward")
-        }
-        .disabled(!isStreaming)
-        .help("Android Back")
-
-        Button {
-            session.sendKeycode(AndroidKeyMap.Keycode.home)
-        } label: {
-            Label("Home", systemImage: "square.grid.3x3.fill")
-        }
-        .disabled(!isStreaming)
-        .help("Android Home")
-
-        Button {
-            session.sendKeycode(AndroidKeyMap.Keycode.appSwitch)
-        } label: {
-            Label("App Switch", systemImage: "square.on.square")
-        }
-        .disabled(!isStreaming)
-        .help("Android recent apps")
-
-        Button {
-            session.chooseAnotherDevice()
-        } label: {
-            Label("Choose Device", systemImage: "list.bullet")
-        }
-        .help("Pick a different Android device")
-    }
-}
-
-struct ContentView: View {
-    @Bindable var store: WorkspaceStore
-    var syncService: PeerSyncService
-    var peerDeviceStatus: DeviceStatus
-    var localAudioOutput: AudioOutputDevice?
-    var isPlotterConnected: Bool
-    var remoteInkModel: RemoteInkModel
-    /// Reflects whether a Copilot peer is currently push-to-talking. The
-    /// transcription itself runs on the iPhone now — Pilot only paints
-    /// the "listening" indicator and pastes the finished text.
-    var isPeerRecording: Bool
-    var usageStore: UsageStore
-    var agenticUseStore: AgenticUsageStore
-    var runnersStore: RunnersStore
-    @State private var gitStore = RepositoryStore()
-    @State private var tasksStore = GitHubTasksStore()
-    @State private var dockerStore = DockerStore()
-    @State private var branchStore = WorkspaceBranchStore()
-    @State private var isDrawingActive = false
-    @AppStorage("sidebar.pinnedExpanded") private var pinnedSectionExpanded = true
-    @AppStorage("sidebar.workspacesExpanded") private var workspacesSectionExpanded = true
-    /// Persisted inspector column width. SwiftUI's `.inspector` resets to its
-    /// `ideal` every time it re-presents (e.g. toggling Notes/Remote Desktop),
-    /// so we remember the user's chosen width and feed it back as the ideal.
-    @AppStorage("inspector.width") private var inspectorWidth = 280.0
-    @State private var notesToggleMonitor: Any?
-    @State private var persistenceFailure: PersistenceFailure?
-    @State private var isGroupNamePresented = false
-    @State private var editingGroupID: UUID?
-    @State private var groupName = ""
-    @State private var newWorkspaceRequest: NewWorkspaceRequest?
-    @State private var newWorkspaceFinder = DirectoryFinder()
-
-    var body: some View {
-        let activeInspectorRepoPath = isInspectorPresentedForSelectedWorkspace ? selectedWorkspaceRootPath : nil
-        let _ = store.changeCount  // observation dependency for pin/unpin re-sort
-        let workspaces = store.workspaces
-        let workspaceShortcutIDs = workspaces.prefix(9).map(\.id)
-
-        NavigationSplitView {
-            WorkspaceSidebarList(
-                store: store,
-                selection: sidebarSelectionBinding,
-                pinnedExpanded: $pinnedSectionExpanded,
-                workspacesExpanded: $workspacesSectionExpanded,
-                onRenameGroup: { group in
-                    editingGroupID = group.id
-                    groupName = group.name
-                    isGroupNamePresented = true
-                },
-                onNewWorkspaceInGroup: { group in
-                    newWorkspaceRequest = NewWorkspaceRequest(groupID: group.id)
-                },
-                workspaceRow: workspaceRow
-            )
-            .safeAreaInset(edge: .bottom) {
-                // A floating cluster of circular glass status buttons over the
-                // sidebar's scrolling content, rendered in one container (no
-                // glass on glass); spacing 0 keeps every circle distinct.
-                CompatGlassContainer(spacing: 0) {
-                    HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                        RecordingStatusIndicator(isRecording: isPeerRecording)
-                        AwakeStatusButton()
-
-                        Spacer(minLength: 0)
-
-                        HStack(spacing: StatusClusterMetrics.spacing) {
-                            ForEach(connectedDevices) { device in
-                                DeviceStatusButton(
-                                    device: device,
-                                    connectionDetail: connectionDetail(for: device)
-                                )
-                            }
-                        }
-                    }
-                }
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-                .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-            }
-            // A glass prompt sheet rather than a system alert, so the name
-            // field is a Liquid Glass field like every other text input.
-            .sheet(isPresented: $isGroupNamePresented) {
-                TextPromptSheet(
-                    title: editingGroupID == nil ? "New Workspace Group" : "Rename Workspace Group",
-                    label: "Group name",
-                    prompt: "Frontend",
-                    confirmTitle: editingGroupID == nil ? "Create" : "Save",
-                    text: $groupName
-                ) {
-                    if let editingGroupID {
-                        store.workspaceGroups.rename(editingGroupID, to: groupName)
-                    } else {
-                        store.workspaceGroups.add(name: groupName, workspaceIDs: store.unpinnedWorkspaceIDs)
-                        workspacesSectionExpanded = true
-                    }
-                }
-            }
-            .sheet(item: $newWorkspaceRequest) { request in
-                NewWorkspaceSheet(finder: newWorkspaceFinder) { directory in
-                    store.addWorkspace(directory: directory)
-                    if let groupID = request.groupID, let workspace = store.selectedWorkspace {
-                        store.moveWorkspace(workspace, toGroup: groupID)
-                    }
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-            .toolbar {
-                ToolbarItem(placement: .navigation) {
-                    Menu {
-                        Button {
-                            newWorkspaceRequest = NewWorkspaceRequest()
-                        } label: {
-                            Label("New Workspace…", systemImage: "rectangle.on.rectangle")
-                        }
-                        Button {
-                            editingGroupID = nil
-                            groupName = ""
-                            isGroupNamePresented = true
-                        } label: {
-                            Label("New Workspace Group…", systemImage: "folder.badge.plus")
-                        }
-                    } label: {
-                        Label("New Workspace", systemImage: "plus")
-                    }
-                    .menuIndicator(.hidden)
-                    .help("New workspace or workspace group")
-                }
-            }
-        } detail: {
-            ZStack {
-                if workspaces.isEmpty {
-                    // Empty state with a clear next action (MOT-6); the only
-                    // action here, so it is the prominent one (BTN-1). Only
-                    // in workspace detail: the global modes draw without a
-                    // background, so it used to show through Notes.
-                    if store.isWorkspaceDetailVisible {
-                        ContentUnavailableView {
-                            // Nothing exists to select yet, so say that (HIER-2);
-                            // "No Workspace Selected" is the state below.
-                            Label("No Workspaces", systemImage: "rectangle.on.rectangle.slash")
-                        } description: {
-                            Text("Create a workspace with the + button.")
-                        } actions: {
-                            Button {
-                                newWorkspaceRequest = NewWorkspaceRequest()
-                            } label: {
-                                Label("New Workspace…", systemImage: "plus")
-                            }
-                            .compatGlassProminentButtonStyle()
-                            .buttonBorderShape(.capsule)
-                            .controlSize(.large)
-                            .accessibilityIdentifier("workspace.empty.new-workspace")
-                        }
-                        .legibleSecondaryHierarchy()
-                    }
-                } else {
-                    // The workspace stack stays mounted at all times — even in
-                    // Notes mode — so entering Notes never tears down live
-                    // terminals/browsers. Notes just deactivates every
-                    // workspace, exactly like switching between workspaces does.
-                    ZStack {
-                        ForEach(workspaces) { workspace in
-                            let isActive = store.isWorkspaceDetailVisible
-                                && workspace.id == store.selectedWorkspaceID
-                            WorkspaceView(
-                                workspace: workspace,
-                                isActive: isActive,
-                                projectID: workspace.id,
-                                surface: .main,
-                                onPaneDrop: { payload, targetPane in
-                                    store.movePane(payload, to: workspace, onto: targetPane)
-                                }
-                            )
-                                .zIndex(isActive ? 1 : 0)
-                                .opacity(isActive ? 1 : 0)
-                                .allowsHitTesting(isActive)
-                                .accessibilityHidden(!isActive)
-                        }
-                    }
-                    // Same hardening as the pane slots inside WorkspaceView:
-                    // workspace frames are pure layout for AppKit surfaces and
-                    // must apply instantly, never via an ambient animation.
-                    .transaction { $0.animation = nil }
-
-                    if store.isWorkspaceDetailVisible && !hasSelectedWorkspace {
-                        ContentUnavailableView {
-                            Label("No Workspace Selected", systemImage: "rectangle.on.rectangle.slash")
-                        } description: {
-                            Text("Select a workspace from the sidebar.")
-                        } actions: {
-                            PinnedQuickJumpRow(
-                                workspaces: workspaces,
-                                onSelect: store.selectWorkspace
-                            )
-                        }
-                        .legibleSecondaryHierarchy()
-                    }
-                }
-
-                if store.isNotesMode {
-                    NotesView(store: store)
-                        .zIndex(100)
-                }
-
-                if store.isRemoteDesktopMode {
-                    RemoteDesktopView(store: store)
-                        .zIndex(100)
-                }
-
-                if store.isDockerMode {
-                    DockerView(store: dockerStore)
-                        .zIndex(100)
-                }
-
-                if store.isAgenticUseMode {
-                    AgenticUseView(store: agenticUseStore)
-                        .zIndex(100)
-                }
-
-                if store.isRunnersMode {
-                    RunnersView(store: runnersStore)
-                        .zIndex(100)
-                }
-
-                if isDrawingActive && store.isWorkspaceDetailVisible && !workspaces.isEmpty {
-                    InkOverlay(isActive: $isDrawingActive)
-                        .zIndex(60)
-                }
-            }
-            .navigationTitle(navigationTitle)
-        }
-        .inspector(isPresented: selectedWorkspaceInspectorPresentedBinding) {
-            InspectorPanelView(
-                gitStore: gitStore,
-                tasksStore: tasksStore,
-                usageStore: usageStore,
-                selectedTab: selectedWorkspaceInspectorTabBinding
-            )
-                // Capture the user's resize so the width survives re-presentation.
-                .onGeometryChange(for: CGFloat.self) { proxy in
-                    proxy.size.width
-                } action: { width in
-                    let clamped = min(max(Double(width), 220), 600)
-                    if abs(clamped - inspectorWidth) > 1 { inspectorWidth = clamped }
-                }
-                .inspectorColumnWidth(min: 220, ideal: CGFloat(inspectorWidth), max: 600)
-        }
-        .onChange(of: activeInspectorRepoPath) {
-            syncInspectorRepo(activeInspectorRepoPath)
-        }
-        .onChange(of: store.selectedWorkspaceID) {
-            syncSelectedWorkspaceRootPath()
-            if let workspace = store.selectedWorkspace {
-                for pane in workspace.panes where pane.kind == .terminal {
-                    pane.resetBellCount()
-                }
-            }
-            focusSelectedWorkspaceTerminal()
-        }
-        .onChange(of: remoteInkModel.changeID) {
-            guard remoteInkModel.hasInk,
-                  !store.isNotesMode,
-                  !workspaces.isEmpty else { return }
-            isDrawingActive = true
-        }
-        .task {
-            syncSelectedWorkspaceRootPath()
-            syncInspectorRepo(activeInspectorRepoPath)
-            focusSelectedWorkspaceTerminal()
-            branchStore.refresh(branchTargets(in: workspaces), force: true)
-        }
-        // A checkout happens in a terminal pane, so re-read when the workspace
-        // set or the selection changes; the store itself rate-limits the rest.
-        .onChange(of: store.changeCount) {
-            branchStore.refresh(branchTargets(in: store.workspaces))
-        }
-        .onChange(of: store.selectedWorkspaceID) {
-            branchStore.refresh(branchTargets(in: store.workspaces))
-        }
-        // Re-aim inspector polling the moment the tab changes: each store fetches
-        // its list once and only the visible tab keeps polling, so a parked tab
-        // costs no `gh` spawns. Usage refetches so a key just saved in Settings
-        // shows results without waiting for the poll.
-        .onChange(of: store.selectedWorkspace?.inspectorTab) { _, tab in
-            if tab == .usage { usageStore.reload() }
-            syncInspectorTab(tab)
-        }
-        .onAppear { installNotesToggleMonitor() }
-        .onDisappear { removeNotesToggleMonitor() }
-        .onReceive(NotificationCenter.default.publisher(for: .pilotPersistenceSaveFailed)) { notification in
-            let operation = notification.userInfo?["operation"] as? String ?? "Saving Cockpit data"
-            let message = notification.userInfo?["message"] as? String ?? "Unknown persistence error"
-            persistenceFailure = PersistenceFailure(operation: operation, message: message)
-        }
-        #if DEBUG
-        .task { await DemoReviewFixture.postPersistenceFailureOnce() }
-        #endif
-        .onReceive(NotificationCenter.default.publisher(for: UsageConsent.changedNotification)) { _ in
-            usageStore.reload()
-        }
-        .alert(item: $persistenceFailure) { failure in
-            Alert(
-                title: Text("Changes could not be saved"),
-                message: Text("\(failure.operation) failed: \(failure.message)\n\nYour non-destructive edits remain in memory. Free disk space or fix permissions, then retry."),
-                primaryButton: .default(Text("Retry")) {
-                    _ = store.modelContext.saveReporting(operation: "Retrying Cockpit data save")
-                },
-                secondaryButton: .cancel()
-            )
-        }
-        .focusedSceneValue(
-            store.isWorkspaceDetailVisible ? store.selectedWorkspace : nil
-        )
-        .focusedSceneValue(
-            \.pilotCloseTabAction,
-            PilotCloseTabAction(
-                isEnabled: canCloseActiveTab,
-                perform: closeActiveTab
-            )
-        )
-        .toolbar {
-            // The field is its own glass capsule, so the item's shared
-            // toolbar capsule is hidden (no glass on glass).
-            ToolbarItem(placement: .principal) {
-                if store.isWorkspaceDetailVisible,
-                   let pane = TerminalToolbarSelection.pane(
-                       for: store.selectedWorkspace?.selectedPane
-                   ) {
-                    TerminalFastCommandToolbarField(pane: pane)
-                        .id(pane.id)
-                }
-            }
-            .compatSharedBackgroundHidden()
-            ToolbarItem(placement: .principal) {
-                if store.isWorkspaceDetailVisible,
-                   let pane = TerminalToolbarSelection.pane(
-                       for: store.selectedWorkspace?.selectedPane
-                   ) {
-                    TerminalFastCommandToolbarActions(pane: pane)
-                        .id(pane.id)
-                }
-            }
-            PaneToolbarContent(
-                pane: store.isWorkspaceDetailVisible
-                    ? store.selectedWorkspace?.selectedPane
-                    : nil
-            )
-            if #available(macOS 26.0, *) {
-                ToolbarItem(placement: .primaryAction) {
-                    // ⌘T / ⌘B live as main-menu commands (see PilotApp.commands)
-                    // so a focused browser web view can't swallow them.
-                    WorkspacePaneLauncher(workspace: store.selectedWorkspace)
-                        .disabled(store.isNotesMode)
-                }
-                .sharedBackgroundVisibility(.hidden)
-                ToolbarSpacer(.fixed, placement: .primaryAction)
-            } else {
-                ToolbarItem(placement: .primaryAction) {
-                    WorkspacePaneLauncher(workspace: store.selectedWorkspace)
-                        .disabled(store.isNotesMode)
-                }
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    isDrawingActive.toggle()
-                } label: {
-                    Label("Annotate",
-                          systemImage: isDrawingActive ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle")
-                }
-                .disabled(store.selectedWorkspace == nil || store.isNotesMode)
-                .help("Draw over the active pane (⇧⌘D)")
-            }
-            // The Inspector toggle is window layout, not a pane tool: give it
-            // its own glass group, as the system does for sidebar toggles.
-            if #available(macOS 26.0, *) {
-                ToolbarSpacer(.fixed, placement: .primaryAction)
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    guard let workspace = store.selectedWorkspace else { return }
-                    workspace.setInspectorPresented(!workspace.isInspectorPresented)
-                } label: {
-                    Label("Inspector", systemImage: "sidebar.trailing")
-                }
-                .disabled(store.selectedWorkspace == nil || !store.isWorkspaceDetailVisible)
-                .help("Show or hide the Inspector")
-            }
-        }
-        .background(LeadingWorkspaceToolbarItem())
-        .background(PilotWindowCloseMenuInstaller())
-        .background {
-            WorkspaceNumberShortcuts(
-                workspaceIDs: workspaceShortcutIDs,
-                onSelect: store.selectWorkspace
-            )
-            Button("") {
-                guard store.selectedWorkspace != nil, !store.isNotesMode else { return }
-                isDrawingActive.toggle()
-            }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
-            .hidden()
-            Button("") {
-                store.selectedWorkspace?.selectNextPane()
-                focusSelectedPaneIfTerminal()
-            }
-            .keyboardShortcut(.tab, modifiers: .control)
-            .hidden()
-            Button("") {
-                store.selectedWorkspace?.selectPreviousPane()
-                focusSelectedPaneIfTerminal()
-            }
-            .keyboardShortcut(.tab, modifiers: [.control, .shift])
-            .hidden()
-        }
-        // Remote ink (from Plotter) overlays the entire Pilot window — sidebar
-        // and detail — so its strokes line up with what Plotter mirrors, which
-        // is the whole window. It's non-interactive, so the UI beneath stays
-        // fully usable.
-        .overlay {
-            if remoteInkModel.hasInk {
-                RemoteInkOverlay(model: remoteInkModel)
-                    .ignoresSafeArea()
-            }
-        }
-        // Undo / clear controls for the Plotter-drawn ink. Interactive (unlike
-        // the render-only overlay above); commands round-trip to the iPad.
-        .overlay(alignment: .bottomTrailing) {
-            if remoteInkModel.hasInk {
-                RemoteInkControls(model: remoteInkModel)
-                    .padding(16)
-            }
-        }
-        // Capsule is the default control shape for the whole window and the
-        // sheets it presents: on macOS 26 the bordered/glass buttons, popup
-        // pickers and segmented pickers otherwise draw squared rounded
-        // rectangles beside the capsule fields and chips. A control that
-        // sets its own shape (glass icon circles) still wins, because the
-        // innermost buttonBorderShape applies.
-        .buttonBorderShape(.capsule)
-    }
-
-    private var canCloseActiveTab: Bool {
-        if store.isNotesMode {
-            return store.selectedNote != nil
-        }
-        guard store.isWorkspaceDetailVisible else { return false }
-        return store.selectedWorkspace?.selectedPane != nil
-    }
-
-    private func closeActiveTab() {
-        if store.isNotesMode {
-            guard let note = store.selectedNote else { return }
-            store.requestCloseNote(note)
-            return
-        }
-        guard store.isWorkspaceDetailVisible,
-              let workspace = store.selectedWorkspace,
-              let pane = workspace.selectedPane else { return }
-        workspace.requestRemovePane(pane)
-    }
-
-    /// Bridges the single-typed `List` selection to the store's split state:
-    /// Notes mode lives in `isNotesMode`, workspace selection in
-    /// `selectedWorkspaceID`. Selecting a workspace row (even the one already
-    /// backing `selectedWorkspaceID`) flips out of Notes mode, because the
-    /// selection value changes from `.notes` to `.workspace`.
-    private var navigationTitle: String {
-        if store.isNotesMode { return "Notes" }
-        if store.isRemoteDesktopMode { return "Remote Desktop" }
-        if store.isDockerMode { return "Docker" }
-        if store.isAgenticUseMode { return "Agentic Use" }
-        if store.isRunnersMode { return "Runners" }
-        return store.selectedWorkspace?.name ?? ""
-    }
-
-    private var sidebarSelectionBinding: Binding<SidebarSelection?> {
-        Binding(
-            get: {
-                if store.isNotesMode { return .notes }
-                if store.isRemoteDesktopMode { return .remoteDesktop }
-                if store.isDockerMode { return .docker }
-                if store.isAgenticUseMode { return .agenticUse }
-                if store.isRunnersMode { return .runners }
-                if let id = store.selectedWorkspaceID { return .workspace(id) }
-                return nil
-            },
-            set: { newValue in
-                switch newValue {
-                case .notes:
-                    store.enterNotesMode()
-                case .remoteDesktop:
-                    store.enterRemoteDesktopMode()
-                case .docker:
-                    store.enterDockerMode()
-                case .agenticUse:
-                    store.enterAgenticUseMode()
-                case .runners:
-                    store.enterRunnersMode()
-                case .workspace(let id):
-                    store.selectWorkspace(id)
-                case nil:
-                    break
-                }
-            }
-        )
-    }
-
-    /// ⌘0 toggles Notes ↔ the current workspace from anywhere. We use a local
-    /// `NSEvent` monitor rather than only a menu shortcut because monitors run
-    /// before key-equivalent dispatch and before the focused view — so it beats
-    /// both Ghostty (which binds ⌘0 to reset-font-size) and the notes editor's
-    /// field editor. `⌥⌘0` (Actual Size) is excluded by the exact-flags check.
-    private func installNotesToggleMonitor() {
-        guard notesToggleMonitor == nil else { return }
-        notesToggleMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard flags == .command,
-                  event.charactersIgnoringModifiers == "0" else {
-                return event
-            }
-            store.toggleNotesMode()
-            return nil
-        }
-    }
-
-    private func removeNotesToggleMonitor() {
-        if let monitor = notesToggleMonitor {
-            NSEvent.removeMonitor(monitor)
-            notesToggleMonitor = nil
-        }
-    }
-
-    private func focusSelectedPaneIfTerminal() {
-        guard let pane = store.selectedWorkspace?.selectedPane,
-              pane.kind == .terminal else { return }
-        DispatchQueue.main.async {
-            _ = GhosttyMetalView.focus(paneID: pane.id)
-        }
-    }
-
-    private var connectedDevices: [ConnectedDevice] {
-        let audioDevice = ConnectedDevice(
-            kind: localAudioOutput?.kind ?? .headphonesBluetooth,
-            isConnected: localAudioOutput != nil,
-            name: localAudioOutput?.name
-        )
-        #if DEBUG
-        // Review-only: `-demoPeersConnected YES` in a demo launch shows the
-        // connected glyphs without a paired peer.
-        let demoConnected = DemoReviewFixture.flag("demoPeersConnected")
-        #else
-        let demoConnected = false
-        #endif
-        return [
-            ConnectedDevice(kind: .iphone, isConnected: syncService.isConnected || demoConnected),
-            ConnectedDevice(kind: .ipad, isConnected: isPlotterConnected || demoConnected),
-            ConnectedDevice(kind: .appleWatch, isConnected: peerDeviceStatus.isWatchConnected || demoConnected),
-            audioDevice
-        ]
-    }
-
-    private func connectionDetail(for device: ConnectedDevice) -> String? {
-        switch device.kind {
-        case .iphone:
-            syncService.statusText
-        case .ipad:
-            isPlotterConnected ? "Kneeboard connected" : nil
-        case .appleWatch:
-            peerDeviceStatus.isWatchConnected ? "Companion watch connected" : nil
-        case .airpods, .airpodsPro, .airpodsMax, .beats, .headphonesWired,
-             .headphonesBluetooth, .usb, .speaker, .unknown:
-            nil
-        case .computer:
-            nil
-        }
-    }
-
-    private func workspaceRow(_ workspace: Workspace) -> some View {
-        WorkspaceSidebarRow(
-            workspace: workspace,
-            branch: branchStore.branches[workspace.id],
-            store: store,
-            onUpdateRootPath: { presentRootPathPicker(for: workspace) }
-        )
-    }
-
-    private var selectedWorkspaceInspectorTabBinding: Binding<InspectorTab> {
-        Binding(
-            get: { self.store.selectedWorkspace?.inspectorTab ?? .actions },
-            set: { tab in
-                self.store.selectedWorkspace?.setInspectorTab(tab)
-            }
-        )
-    }
-
-    private var selectedWorkspaceInspectorPresentedBinding: Binding<Bool> {
-        Self.makeInspectorPresentedBinding(for: store.selectedWorkspace, in: store)
-    }
-
+enum ContentView {
     @MainActor
-    static func makeInspectorPresentedBinding(
-        for workspace: Workspace?,
-        in store: WorkspaceStore
-    ) -> Binding<Bool> {
+    static func makeInspectorPresentedBinding(for workspace: Workspace?, in store: WorkspaceStore) -> CockpitValueBinding<Bool> {
         let allowsPresentation = store.isWorkspaceDetailVisible
-        return Binding(
-            get: {
-                guard allowsPresentation,
-                      store.isWorkspaceDetailVisible,
-                      let workspace,
-                      store.selectedWorkspace === workspace else { return false }
-                return workspace.isInspectorPresented
-            },
-            set: { isPresented in
-                // SwiftUI can deliver a hide echo after a global mode has
-                // already closed or another workspace has been selected. Only
-                // accept writes for the workspace and mode that made this binding.
-                guard allowsPresentation,
-                      store.isWorkspaceDetailVisible,
-                      let workspace,
-                      store.selectedWorkspace === workspace else { return }
-                workspace.setInspectorPresented(isPresented)
+        return CockpitValueBinding(get: {
+            guard allowsPresentation, store.isWorkspaceDetailVisible, let workspace,
+                  store.selectedWorkspace === workspace else { return false }
+            return workspace.isInspectorPresented
+        }, set: { isPresented in
+            guard allowsPresentation, store.isWorkspaceDetailVisible, let workspace,
+                  store.selectedWorkspace === workspace else { return }
+            workspace.setInspectorPresented(isPresented)
+        })
+    }
+}
+
+struct CockpitConnectionStatus: Equatable {
+    let name: String
+    let symbol: String
+    let isConnected: Bool
+    var detail: String? = nil
+}
+
+@MainActor
+final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate {
+    let store: WorkspaceStore
+    let extensionController: ExtensionWorkspaceController
+    let surface: WorkspacePaneSurface
+    let paneCache: CockpitPaneControllerCache
+    var onWindowActivate: (() -> Void)?
+    var onWindowIDChange: ((CGWindowID?) -> Void)?
+    var onSelectionChange: ((Workspace?, Pane?) -> Void)?
+    var featureToolbarFactory: ((Pane) -> NSView?)? { didSet { lastToolbarPaneID = nil; refreshToolbar() } }
+    var inspectorFactory: ((Workspace) -> NSViewController?)? { didSet { refreshInspector() } }
+    var overlayFactory: (() -> NSViewController?)?
+    var remoteOverlayController: NSViewController? { didSet { bodyController.setRemoteOverlay(remoteOverlayController) } }
+    var statusItems: [CockpitConnectionStatus] = [] { didSet { sidebarContainer.statusBar.statusItems = statusItems } }
+    var isPeerRecording = false { didSet { sidebarContainer.statusBar.isRecording = isPeerRecording } }
+    private(set) var isDrawingActive = false
+    private let paneFactory: (Pane, String?) -> NSViewController
+    private let globalFactory: (SidebarSelection) -> NSViewController?
+    private let splitController = NSSplitViewController()
+    private let bodyController = CockpitWindowBodyController()
+    private let inspectorContainer = NSViewController()
+    private let sidebarContainer: CockpitSidebarContainer
+    private var sidebarItem: NSSplitViewItem?
+    private var inspectorItem: NSSplitViewItem!
+    private var workspaceController: CockpitWorkspaceViewController?
+    private var globalControllers: [SidebarSelection: NSViewController] = [:]
+    private var inspectorController: NSViewController?
+    private var lastInspectorWorkspaceID: UUID?
+    private var lastToolbarPaneID: UUID?
+    private var lastToolbarKind: PaneKind?
+    private var lastExtensionState: ExtensionWorkspaceSyncState?
+    private var observedGeneration = 0
+    private var refreshScheduled = false
+    private var closeApproved = false
+    private var closePending = false
+    private var isRefreshing = false
+    private var newWorkspaceSheet: NewWorkspaceSheet?
+    private var observers: [NSObjectProtocol] = []
+    private var notesKeyMonitor: Any?
+    private var toolbarFeature: NSToolbarItem?
+    private var launcher: WorkspacePaneLauncher?
+    private var windowVisible = false
+
+    var selectedWorkspace: Workspace? {
+        if surface == .extension { return extensionController.selectedWorkspace }
+        return store.isWorkspaceDetailVisible ? store.selectedWorkspace : nil
+    }
+    var selectedPane: Pane? { selectedWorkspace?.selectedPane }
+    var allPaneControllers: [NSViewController] { paneCache.allControllers }
+
+    init(store: WorkspaceStore, extensionController: ExtensionWorkspaceController,
+         surface: WorkspacePaneSurface, defaults: UserDefaults = .standard, isLive: Bool = true, paneCache: CockpitPaneControllerCache = .shared,
+         paneFactory: @escaping (Pane, String?) -> NSViewController,
+         globalFactory: @escaping (SidebarSelection) -> NSViewController?) {
+        self.store = store
+        self.extensionController = extensionController
+        self.surface = surface
+        self.paneCache = paneCache
+        self.paneFactory = paneFactory
+        self.globalFactory = globalFactory
+        sidebarContainer = CockpitSidebarContainer(store: store, defaults: defaults, isLive: isLive)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: surface == .main ? 1440 : 1000, height: 920),
+                              styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                              backing: .buffered, defer: false)
+        let requestedFrame = window.frame
+        window.title = surface == .main ? "Cockpit" : PilotWindowID.extendoTitle
+        window.identifier = NSUserInterfaceItemIdentifier(surface == .main ? PilotWindowID.main : PilotWindowID.extendo)
+        window.minSize = NSSize(width: surface == .main ? 760 : 560, height: 480)
+        window.isReleasedWhenClosed = false
+        window.tabbingMode = .disallowed
+        super.init(window: window)
+        window.delegate = self
+        splitController.splitView.isVertical = true
+        if isLive { splitController.splitView.autosaveName = surface == .main ? "cockpit-main-columns" : "cockpit-extendo-columns" }
+        if surface == .main {
+            let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarContainer)
+            sidebar.minimumThickness = 180
+            sidebar.maximumThickness = 420
+            sidebar.canCollapse = true
+            splitController.addSplitViewItem(sidebar)
+            sidebarItem = sidebar
+        }
+        let content = NSSplitViewItem(viewController: bodyController)
+        content.minimumThickness = 260
+        splitController.addSplitViewItem(content)
+        inspectorContainer.view = NSView()
+        inspectorItem = NSSplitViewItem(viewController: inspectorContainer)
+        inspectorItem.minimumThickness = 220
+        inspectorItem.maximumThickness = 600
+        inspectorItem.canCollapse = true
+        inspectorItem.isCollapsed = true
+        splitController.addSplitViewItem(inspectorItem)
+        splitController.view.frame = NSRect(origin: .zero, size: window.contentLayoutRect.size)
+        window.contentViewController = splitController
+        let toolbar = NSToolbar(identifier: NSToolbar.Identifier("cockpit.toolbar.\(surface.rawValue)"))
+        toolbar.delegate = self
+        toolbar.allowsUserCustomization = false
+        toolbar.displayMode = .iconOnly
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
+        window.setFrame(requestedFrame, display: false)
+        let frameName = surface == .main ? PilotWindowID.main : PilotWindowID.extendo
+        if let savedFrame = defaults.string(forKey: "NSWindow Frame " + frameName), !savedFrame.isEmpty {
+            window.setFrame(from: savedFrame)
+        } else if isLive {
+            if !window.setFrameUsingName(frameName) { window.center() }
+        } else { window.center() }
+        if isLive { window.setFrameAutosaveName(frameName) }
+        sidebarContainer.sidebar.onSelect = { [weak self] in self?.select($0) }
+        sidebarContainer.sidebar.onNewWorkspace = { [weak self] in self?.presentNewWorkspace(groupID: $0) }
+        sidebarContainer.sidebar.onDeleteWorkspace = { [weak self] in self?.deleteWorkspace($0) }
+        observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        })
+        observers.append(NotificationCenter.default.addObserver(forName: .cockpitUIZoomDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        })
+
+    }
+    required init?(coder: NSCoder) { nil }
+    isolated deinit {
+        for token in observers { NotificationCenter.default.removeObserver(token) }
+        if let notesKeyMonitor { NSEvent.removeMonitor(notesKeyMonitor) }
+        workspaceController?.deactivate()
+    }
+
+    override func showWindow(_ sender: Any?) {
+        super.showWindow(sender)
+        windowVisible = true
+        closeApproved = false
+        if surface == .extension { ExtensionWindowVisibility.shared.isVisible = true }
+        refresh()
+        observe()
+        installNotesKeyMonitor()
+        sidebarContainer.sidebar.startMonitoring()
+        sidebarContainer.statusBar.start()
+        window?.makeKeyAndOrderFront(sender)
+        onWindowIDChange?(window.map { CGWindowID($0.windowNumber) })
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) { onWindowActivate?(); refresh() }
+    func windowDidChangeOcclusionState(_ notification: Notification) { refresh() }
+    func windowDidResize(_ notification: Notification) { bodyController.view.needsLayout = true }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if closeApproved { return true }
+        guard !closePending else { return false }
+        closePending = true
+        let workspaces = surface == .main ? store.workspaces : extensionController.mountedWorkspaces.map(\.workspace)
+        let ids = Set(workspaces.flatMap { $0.panes.map(\.id) })
+        paneCache.prepareToClose(ids: ids) { [weak self] allowed in
+            guard let self else { return }
+            self.closePending = false
+            if allowed { self.closeApproved = true; DispatchQueue.main.async { sender.performClose(nil) } }
+        }
+        return false
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        windowVisible = false
+        observedGeneration += 1
+        workspaceController?.deactivate()
+        for controller in globalControllers.values { (controller as? CockpitPanePresenting)?.updatePresentation(isActive: false, isSelected: false) }
+        (inspectorController as? InspectorViewController)?.setPresentationActive(false)
+        sidebarContainer.sidebar.stopMonitoring()
+        sidebarContainer.statusBar.stop()
+        if let notesKeyMonitor { NSEvent.removeMonitor(notesKeyMonitor); self.notesKeyMonitor = nil }
+        if surface == .extension { ExtensionWindowVisibility.shared.isVisible = false }
+        onWindowIDChange?(nil)
+    }
+
+    func select(_ selection: SidebarSelection) {
+        switch selection {
+        case .notes: store.enterNotesMode()
+        case .remoteDesktop: store.enterRemoteDesktopMode()
+        case .docker: store.enterDockerMode()
+        case .agenticUse: store.enterAgenticUseMode()
+        case .runners: store.enterRunnersMode()
+        case .workspace(let id): store.selectWorkspace(id)
+        }
+        refresh()
+        observe()
+        focusSelectedPane()
+    }
+
+    func refresh() {
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        defer { isRefreshing = false }
+        let sources = store.workspaces
+        let sync = ExtensionWorkspaceSyncState(source: ExtensionWorkspaceSource(store.selectedWorkspace), sourceWorkspaceIDs: sources.map(\.id))
+        if lastExtensionState != sync {
+            lastExtensionState = sync
+            extensionController.update(with: store.selectedWorkspace, validSourceIDs: Set(sources.map(\.id)))
+        }
+        // A removed pane can remain a detached SwiftData object. Membership,
+        // rather than a fetch of every Pane record, defines session ownership.
+        let liveWorkspaces = sources + extensionController.mountedWorkspaces.map(\.workspace)
+        paneCache.retainOnly(Set(liveWorkspaces.flatMap { $0.panes.map(\.id) }))
+        let active = windowVisible && window?.occlusionState.contains(.visible) == true
+        if let workspace = selectedWorkspace {
+            if workspaceController?.workspace !== workspace {
+                workspaceController?.deactivate()
+                workspaceController = CockpitWorkspaceViewController(workspace: workspace,
+                    projectID: surface == .extension ? (store.selectedWorkspaceID ?? workspace.id) : workspace.id,
+                    surface: surface, cache: paneCache, factory: paneFactory,
+                    onDrop: { [weak self, weak workspace] payload, target in
+                        guard let self, let workspace else { return false }
+                        return self.store.movePane(payload, to: workspace, onto: target)
+                    })
+                workspaceController?.onSelectionChange = { [weak self] in self?.scheduleRefresh() }
+                workspaceController?.onClosePane = { [weak self] pane in self?.closePane(pane) }
+                setDrawingActive(false)
             }
-        )
+            for controller in globalControllers.values { (controller as? CockpitPanePresenting)?.updatePresentation(isActive: false, isSelected: false) }
+            if let workspaceController {
+                bodyController.setContent(workspaceController)
+                workspaceController.refresh(isActive: active)
+            }
+            window?.title = surface == .main ? workspace.name + " — Cockpit" : workspace.name + " — Extendo"
+        } else {
+            workspaceController?.deactivate()
+            workspaceController = nil
+            setDrawingActive(false)
+            if surface == .main, let mode = selectedGlobalMode {
+                let controller = globalControllers[mode] ?? globalFactory(mode)
+                if let controller {
+                    globalControllers[mode] = controller
+                    for (key, value) in globalControllers { (value as? CockpitPanePresenting)?.updatePresentation(isActive: active && key == mode, isSelected: key == mode) }
+                    bodyController.setContent(controller)
+                }
+            } else {
+                let empty = NSViewController()
+                let heading = shellLabel(store.workspaces.isEmpty ? "No Workspaces" : "No Workspace Selected")
+                heading.font = CockpitTypography.font(size: 20, weight: .semibold)
+                var controls: [NSView] = [heading, shellLabel("Select a workspace in the sidebar.", secondary: true)]
+                if store.workspaces.isEmpty { controls.append(ShellActionButton("New Workspace…") { [weak self] in self?.presentNewWorkspace() }) }
+                for target in PinnedQuickJumpTarget.targets(in: store.workspaces) {
+                    controls.append(ShellActionButton(target.name + "  ⌘\(target.shortcutNumber)") { [weak self] in self?.select(.workspace(target.id)) })
+                }
+                let stack = shellStack(controls, spacing: 12)
+                stack.alignment = .centerX
+                empty.view = NSView()
+                empty.view.addSubview(stack)
+                stack.translatesAutoresizingMaskIntoConstraints = false
+                NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: empty.view.centerXAnchor), stack.centerYAnchor.constraint(equalTo: empty.view.centerYAnchor)])
+                bodyController.setContent(empty)
+            }
+            window?.title = surface == .main ? "Cockpit" : PilotWindowID.extendoTitle
+        }
+        sidebarContainer.sidebar.refresh()
+        refreshInspector()
+        refreshToolbar()
+        onSelectionChange?(selectedWorkspace, selectedPane)
     }
 
-    private var isInspectorPresentedForSelectedWorkspace: Bool {
-        store.isWorkspaceDetailVisible
-            && (store.selectedWorkspace?.isInspectorPresented ?? false)
+    private var selectedGlobalMode: SidebarSelection? {
+        if store.isNotesMode { return .notes }
+        if store.isRemoteDesktopMode { return .remoteDesktop }
+        if store.isDockerMode { return .docker }
+        if store.isAgenticUseMode { return .agenticUse }
+        if store.isRunnersMode { return .runners }
+        return nil
     }
 
-    /// Workspaces that could have a branch — one without a root path has no
-    /// work tree to read, so it is never handed to a `git` lookup.
-    private func branchTargets(in workspaces: [Workspace]) -> [WorkspaceBranchStore.Target] {
-        workspaces.compactMap { workspace in
-            guard let path = workspace.effectiveRootPath else { return nil }
-            return WorkspaceBranchStore.Target(id: workspace.id, rootPath: path)
+    private func observe() {
+        guard windowVisible else { return }
+        observedGeneration += 1
+        let generation = observedGeneration
+        withObservationTracking {
+            _ = store.changeCount; _ = store.selectedWorkspaceID
+            _ = store.isNotesMode; _ = store.isRemoteDesktopMode; _ = store.isDockerMode; _ = store.isAgenticUseMode; _ = store.isRunnersMode
+            _ = extensionController.selectedSourceID
+            _ = CockpitUIZoomController.shared.factor
+            for workspace in store.workspaces + extensionController.mountedWorkspaces.map(\.workspace) {
+                _ = workspace.name; _ = workspace.effectiveRootPath; _ = workspace.selectedPaneID
+                _ = workspace.isInspectorPresented; _ = workspace.inspectorTab; _ = workspace.axis
+                for pane in workspace.panes { _ = pane.id; _ = pane.isCollapsed; _ = pane.sizeFraction; _ = pane.sortOrder; _ = pane.displayTitle }
+            }
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.observedGeneration == generation else { return }
+                self.scheduleRefresh()
+            }
         }
     }
 
-    private var hasSelectedWorkspace: Bool {
-        guard let id = store.selectedWorkspaceID else { return false }
-        return store.workspaces.contains { $0.id == id }
-    }
-
-    private func focusSelectedWorkspaceTerminal() {
-        guard let workspace = store.selectedWorkspace,
-              let pane = workspace.frontmostTerminalPane else { return }
-        workspace.setFrontmostTerminalPaneID(pane.id)
-        DispatchQueue.main.async {
-            _ = GhosttyMetalView.focus(paneID: pane.id)
+    private func scheduleRefresh() {
+        guard !refreshScheduled else { return }
+        refreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.refreshScheduled = false
+            self.refresh()
+            self.observe()
         }
     }
 
-    private var selectedWorkspaceRootPath: String? {
-        store.selectedWorkspace?.effectiveRootPath
+    /// Makes a rejected close actionable even when that editor was cached in
+    /// a different workspace or its window had previously been closed.
+    @discardableResult
+    func revealPane(withID id: UUID) -> Bool {
+        let sources: [(UUID, Workspace)] = surface == .main
+            ? store.workspaces.map { ($0.id, $0) }
+            : extensionController.mountedWorkspaces.map { ($0.sourceID, $0.workspace) }
+        guard let (sourceID, workspace) = sources.first(where: { $0.1.panes.contains(where: { $0.id == id }) }),
+              let pane = workspace.panes.first(where: { $0.id == id }) else { return false }
+        store.selectWorkspace(sourceID)
+        if pane.isCollapsed { workspace.expandPane(pane) }
+        workspace.selectedPaneID = id
+        showWindow(nil)
+        refresh()
+        focusSelectedPane()
+        return true
     }
 
-    private func syncSelectedWorkspaceRootPath() {
-        store.selectedWorkspace?.syncDefaultRootPathIfNeeded()
+    func paneController(for pane: Pane) -> NSViewController {
+        paneCache.controller(for: pane, rootPath: pane.workspace?.effectiveRootPath, factory: paneFactory)
     }
 
-    /// Browse to and pick the workspace's root directory with AppKit's native
-    /// folder panel (issue #65). The panel only returns directories that exist,
-    /// so we get validation for free; cancelling leaves the path unchanged.
-    /// Pilot ships unsandboxed, so the returned path is usable directly with no
-    /// security-scoped bookmark.
-    private func presentRootPathPicker(for workspace: Workspace) {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Set Root Path"
-        panel.message = "Choose the root directory for “\(workspace.name)”."
-        // Seed the browser at the current root when one is set.
-        if let current = workspace.effectiveRootPath {
-            panel.directoryURL = URL(fileURLWithPath: current)
-        }
-
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        workspace.setRootPath(url.path)
+    var canCloseSelectedPane: Bool {
+        if surface == .main, store.isNotesMode { return store.selectedNote != nil }
+        if surface == .main, store.isRemoteDesktopMode { return store.selectedRemoteConnection != nil }
+        return selectedPane != nil && ((selectedWorkspace?.panes.count ?? 0) > 1 || surface == .extension)
     }
 
-    private func syncInspectorRepo(_ repoPath: String?) {
-        guard let repoPath else {
-            gitStore.stopWatching()
-            tasksStore.load(directory: nil)
+    func closeSelectedPane() {
+        if surface == .main, store.isNotesMode {
+            if let notes = globalControllers[.notes] as? NotesViewController {
+                notes.closeSelectedNote()
+            } else if let note = store.selectedNote {
+                store.requestCloseNote(note)
+            }
             return
         }
-
-        let tab = store.selectedWorkspace?.inspectorTab ?? .actions
-        gitStore.startWatching(directory: repoPath, visibleTab: tab)
-        tasksStore.load(directory: repoPath, isVisible: tab == .tasks)
-    }
-
-    private func syncInspectorTab(_ tab: InspectorTab?) {
-        guard isInspectorPresentedForSelectedWorkspace,
-              let repoPath = selectedWorkspaceRootPath else { return }
-        gitStore.setVisibleTab(tab ?? .actions)
-        tasksStore.load(directory: repoPath, isVisible: tab == .tasks)
-    }
-}
-
-/// SwiftUI inserts a flexible toolbar spacer before sidebar-scoped navigation
-/// items on macOS, pushing New Workspace to the sidebar divider. Keep the
-/// native sidebar toggle/tracking separator, but move only New Workspace ahead
-/// of that spacer so it sits immediately after the traffic lights.
-private struct LeadingWorkspaceToolbarItem: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        InstallerView()
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-
-    private final class InstallerView: NSView {
-        private var toolbarObservers: [NSObjectProtocol] = []
-        private weak var observedToolbar: NSToolbar?
-        private var isReordering = false
-
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            installToolbarObserversIfNeeded()
-            scheduleReordering()
+        if surface == .main, store.isRemoteDesktopMode {
+            if let connection = store.selectedRemoteConnection { store.requestCloseRemoteConnection(connection) }
+            return
         }
+        if let pane = selectedPane { closePane(pane) }
+    }
 
-        override func viewWillMove(toWindow newWindow: NSWindow?) {
-            if newWindow == nil {
-                toolbarObservers.forEach(NotificationCenter.default.removeObserver)
-                toolbarObservers.removeAll()
-                observedToolbar = nil
+    func closePane(_ pane: Pane) {
+        guard let workspace = pane.workspace,
+              workspace.panes.count > 1 || surface == .extension else { return }
+        paneCache.prepareToClose(ids: [pane.id]) { [weak self, weak pane, weak workspace] allowed in
+            guard allowed, let self, let pane, let workspace, workspace.panes.contains(where: { $0 === pane }) else { return }
+            workspace.requestRemovePane(pane, allowEmpty: self.surface == .extension) { [weak self] in
+                self?.paneCache.validateCloseReadiness(ids: [pane.id]) ?? false
             }
-            super.viewWillMove(toWindow: newWindow)
+            self.scheduleRefresh()
         }
+    }
 
-        private func installToolbarObserversIfNeeded() {
-            guard let toolbar = window?.toolbar, toolbar !== observedToolbar else { return }
-            toolbarObservers.forEach(NotificationCenter.default.removeObserver)
-            toolbarObservers.removeAll()
-            observedToolbar = toolbar
-
-            for name in [NSToolbar.willAddItemNotification, NSToolbar.didRemoveItemNotification] {
-                toolbarObservers.append(
-                    NotificationCenter.default.addObserver(
-                        forName: name,
-                        object: toolbar,
-                        queue: .main
-                    ) { [weak self] _ in
-                        Task { @MainActor in
-                            self?.scheduleReordering()
-                        }
-                    }
-                )
+    func deleteWorkspace(_ workspace: Workspace) {
+        let linked = extensionController.workspace(forSourceID: workspace.id)?.panes ?? []
+        let ids = Set((workspace.panes + linked).map(\.id))
+        paneCache.prepareToClose(ids: ids) { [weak self, weak workspace] allowed in
+            guard allowed, let self, let workspace, self.store.workspaces.contains(where: { $0 === workspace }) else { return }
+            self.store.requestDeleteWorkspace(workspace) { [weak self] in
+                self?.paneCache.validateCloseReadiness(ids: ids) ?? false
             }
         }
+    }
 
-        private func scheduleReordering() {
-            DispatchQueue.main.async { [weak self] in
-                self?.moveWorkspaceButtonToLeadingEdge()
-            }
+    func prepareForTermination(completion: @escaping @MainActor (Bool) -> Void) { paneCache.prepareToClose(completion: completion) }
+
+    func presentNewWorkspace(groupID: UUID? = nil) {
+        guard newWorkspaceSheet == nil, let window, window.attachedSheet == nil else { return }
+        let sheet = NewWorkspaceSheet { [weak self] directory in
+            guard let self else { return }
+            self.store.addWorkspace(directory: directory)
+            if let groupID, let workspace = self.store.selectedWorkspace { self.store.moveWorkspace(workspace, toGroup: groupID) }
+            self.refresh()
         }
+        sheet.onDismiss = { [weak self] in self?.newWorkspaceSheet = nil }
+        newWorkspaceSheet = sheet
+        sheet.present(on: window)
+    }
 
-        private func moveWorkspaceButtonToLeadingEdge() {
-            guard !isReordering, let toolbar = window?.toolbar else { return }
-            installToolbarObserversIfNeeded()
-            guard let currentIndex = toolbar.items.firstIndex(where: {
-                $0.label == "New Workspace"
-            }), currentIndex > 0 else { return }
-
-            isReordering = true
-            let identifier = toolbar.items[currentIndex].itemIdentifier
-            toolbar.removeItem(at: currentIndex)
-            toolbar.insertItem(withItemIdentifier: identifier, at: 0)
-            isReordering = false
+    func presentNewGroup() {
+        TextPromptSheet.present(on: window, title: "New Workspace Group", label: "Group name", value: "", confirmTitle: "Create") { [weak self] name in
+            guard let self else { return }
+            self.store.workspaceGroups.add(name: name, workspaceIDs: self.store.unpinnedWorkspaceIDs)
+            self.refresh()
         }
     }
-}
 
-private struct RecordingStatusIndicator: View {
-    let isRecording: Bool
-    @State private var isPopoverPresented = false
-
-    var body: some View {
-        Button {
-            isPopoverPresented.toggle()
-        } label: {
-            // The glass circle is the button shape, so the glyph drops its
-            // own circle; live recording animates instead of only recoloring.
-            Image(systemName: "waveform")
-                .foregroundStyle(isRecording ? .red : .secondary)
-                .symbolEffect(.variableColor.iterative, isActive: isRecording)
-                .statusGlyphFrame()
-        }
-        .statusButtonStyle()
-        .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
-            StatusPopoverContent(
-                title: "Microphone",
-                status: isRecording ? "Recording" : "Idle",
-                systemImage: isRecording ? "waveform.circle.fill" : "waveform.circle",
-                tint: isRecording ? .red : .secondary
-            )
-        }
-        .help(isRecording ? "Microphone recording" : "Microphone idle")
-        .accessibilityLabel(isRecording ? "Microphone recording" : "Microphone idle")
-        .accessibilityIdentifier("sidebar.microphone-status")
+    func toggleInspector() {
+        guard let workspace = selectedWorkspace else { return }
+        workspace.setInspectorPresented(!workspace.isInspectorPresented)
+        refreshInspector()
     }
-}
-
-private struct AwakeStatusButton: View {
-    @State private var controller = AwakeSessionController.shared
-    @State private var isPopoverPresented = false
-
-    var body: some View {
-        Button {
-            isPopoverPresented.toggle()
-        } label: {
-            Image(systemName: "cup.and.heat.waves")
-                .foregroundStyle(controller.isEnabled ? Color.green : .secondary)
-                .statusGlyphFrame()
-        }
-        .statusButtonStyle()
-        .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
-            AwakeSessionDetailsView(controller: controller)
-        }
-        .help(controller.isEnabled ? "Keep Awake active" : "Keep Awake off")
-        .accessibilityLabel(controller.isEnabled ? "Keep Awake active" : "Keep Awake off")
-        .accessibilityIdentifier("sidebar.keep-awake-status")
+    func toggleSidebar() { if let sidebarItem { sidebarItem.animator().isCollapsed.toggle() } }
+    func toggleDrawing() { setDrawingActive(!isDrawingActive) }
+    func setDrawingActive(_ enabled: Bool) {
+        let enabled = enabled && selectedWorkspace != nil
+        guard enabled != isDrawingActive else { return }
+        isDrawingActive = enabled
+        bodyController.setDrawingOverlay(enabled ? overlayFactory?() : nil)
+        if !enabled { focusSelectedPane() }
     }
-}
+    func focusSelectedPane() { workspaceController?.focusSelectedPane() }
+    func cyclePane(by delta: Int) {
+        guard let workspace = selectedWorkspace else { return }
+        if delta > 0 { workspace.selectNextPane() } else { workspace.selectPreviousPane() }
+        refresh(); focusSelectedPane()
+    }
 
-private struct AwakeSessionDetailsView: View {
-    @Bindable var controller: AwakeSessionController
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle(isOn: $controller.isEnabled) {
-                HStack(spacing: 8) {
-                    Image(systemName: "cup.and.heat.waves")
-                    Text("Keep Awake")
-                        .fontWeight(.semibold)
-                    Spacer(minLength: 12)
-                    Circle()
-                        .fill(controller.isEnabled ? Color.green : Color.secondary.opacity(0.6))
-                        .frame(width: 8, height: 8)
+    private func refreshInspector() {
+        guard isWindowLoaded else { return }
+        let workspace = selectedWorkspace
+        let presented = workspace?.isInspectorPresented == true
+        if let workspace, presented {
+            if lastInspectorWorkspaceID != workspace.id || inspectorController == nil {
+                (inspectorController as? InspectorViewController)?.setPresentationActive(false)
+                inspectorController?.view.removeFromSuperview(); inspectorController?.removeFromParent()
+                inspectorController = inspectorFactory?(workspace)
+                lastInspectorWorkspaceID = workspace.id
+                if let controller = inspectorController {
+                    controller.view.removeFromSuperview(); controller.removeFromParent()
+                    inspectorContainer.addChild(controller)
+                    shellPin(controller.view, to: inspectorContainer.view)
                 }
             }
-            .toggleStyle(.checkbox)
-
-            Text(controller.sessionStatus)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .contentTransition(.numericText())
-
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Allow display sleep", isOn: $controller.allowDisplaySleep)
-                Toggle(
-                    "Allow system sleep when display is closed",
-                    isOn: $controller.allowSystemSleepWhenDisplayClosed
-                )
-                Toggle(
-                    "Allow screen saver after 45m of inactivity",
-                    isOn: $controller.allowScreenSaverAfter45Minutes
-                )
-            }
-            .toggleStyle(.checkbox)
-
-            if let assertionError = controller.assertionError {
-                Text(assertionError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            (inspectorController as? InspectorViewController)?.update(workspace: workspace)
         }
-        .padding(16)
-        .frame(width: 350, alignment: .leading)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("keep-awake.popover")
-    }
-}
-
-private struct DeviceStatusButton: View {
-    let device: ConnectedDevice
-    let connectionDetail: String?
-    @State private var isPopoverPresented = false
-
-    var body: some View {
-        Button {
-            isPopoverPresented.toggle()
-        } label: {
-            Image(systemName: device.kind.systemImageName)
-                .symbolVariant(device.kind.usesFillVariant ? .fill : .none)
-                .foregroundStyle(device.isConnected ? .green : .secondary)
-                .contentTransition(.symbolEffect(.replace))
-                .statusGlyphFrame()
-        }
-        .statusButtonStyle()
-        .popover(isPresented: $isPopoverPresented, arrowEdge: .bottom) {
-            StatusPopoverContent(
-                title: device.name ?? device.kind.displayName,
-                status: device.isConnected ? "Connected" : "Not connected",
-                detail: connectionDetail,
-                systemImage: device.kind.systemImageName,
-                tint: device.isConnected ? .green : .secondary
-            )
-        }
-        .help(device.name ?? device.kind.displayName)
-        .accessibilityLabel(
-            "\(device.name ?? device.kind.displayName), \(device.isConnected ? "connected" : "not connected")"
-        )
-        .accessibilityIdentifier("sidebar.device-status.\(device.kind.rawValue)")
-    }
-}
-
-private struct StatusPopoverContent: View {
-    let title: String
-    let status: String
-    var detail: String?
-    let systemImage: String
-    let tint: Color
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: systemImage)
-                .foregroundStyle(tint)
-                .font(.title3)
-                .frame(width: 24)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.headline)
-                Text(status)
-                    .foregroundStyle(.secondary)
-                if let detail, detail != status {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .padding(16)
-        .frame(width: 240, alignment: .leading)
-    }
-}
-
-/// Sidebar status cluster sizing: every circle matches, whatever the glyph's
-/// natural width (IMG-1), and the five circles still fit the 180pt minimum
-/// sidebar width.
-private enum StatusClusterMetrics {
-    static let spacing = LiquidGlassMetrics.Spacing.xxSmall
-    static let glyphSize: CGFloat = 14
-}
-
-private extension View {
-    /// A square glyph frame so circular glass buttons come out the same size.
-    func statusGlyphFrame() -> some View {
-        frame(width: StatusClusterMetrics.glyphSize, height: StatusClusterMetrics.glyphSize)
+        inspectorItem.isCollapsed = !presented || inspectorController == nil
+        (inspectorController as? InspectorViewController)?.setPresentationActive(presented && windowVisible && window?.occlusionState.contains(.visible) == true)
     }
 
-    /// Icon-only circular glass for the sidebar status cluster (one control
-    /// size for the whole row).
-    func statusButtonStyle() -> some View {
-        compatGlassIconButton(controlSize: .small)
+    private enum ToolbarID {
+        static let sidebar = NSToolbarItem.Identifier("cockpit.sidebar")
+        static let newWorkspace = NSToolbarItem.Identifier("cockpit.new-workspace")
+        static let feature = NSToolbarItem.Identifier("cockpit.feature")
+        static let launcher = NSToolbarItem.Identifier("cockpit.launcher")
+        static let draw = NSToolbarItem.Identifier("cockpit.draw")
+        static let inspector = NSToolbarItem.Identifier("cockpit.inspector")
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+        let leading: [NSToolbarItem.Identifier] = surface == .main ? [ToolbarID.sidebar, ToolbarID.newWorkspace] : []
+        return leading + [.flexibleSpace, ToolbarID.feature, .flexibleSpace, ToolbarID.launcher, ToolbarID.draw, ToolbarID.inspector]
+    }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        switch identifier {
+        case ToolbarID.feature:
+            toolbarFeature = item
+            item.label = "Pane Controls"
+            item.view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 28))
+        case ToolbarID.launcher:
+            let launcher = WorkspacePaneLauncher(workspace: selectedWorkspace)
+            launcher.onCreate = { [weak self] in self?.scheduleRefresh() }
+            self.launcher = launcher
+            item.view = launcher; item.label = "New Pane"
+        case ToolbarID.sidebar: item.view = ShellActionButton("Sidebar", symbol: "sidebar.left") { [weak self] in self?.toggleSidebar() }; item.label = "Sidebar"
+        case ToolbarID.newWorkspace: item.view = ShellActionButton("Workspace", symbol: "plus") { [weak self] in self?.presentNewWorkspace() }; item.label = "New Workspace"
+        case ToolbarID.draw: item.view = ShellActionButton("Annotate", symbol: "pencil.tip.crop.circle") { [weak self] in self?.toggleDrawing() }; item.label = "Annotate"
+        case ToolbarID.inspector: item.view = ShellActionButton("Inspector", symbol: "sidebar.trailing") { [weak self] in self?.toggleInspector() }; item.label = "Inspector"
+        default: return nil
+        }
+        return item
+    }
+
+    private func refreshToolbar() {
+        guard isWindowLoaded else { return }
+        launcher?.workspace = selectedWorkspace
+        let pane = selectedPane.flatMap { $0.isCollapsed ? nil : $0 }
+        if pane?.id != lastToolbarPaneID || pane?.kind != lastToolbarKind {
+            lastToolbarPaneID = pane?.id; lastToolbarKind = pane?.kind
+            let feature = pane.flatMap { featureToolbarFactory?($0) }
+            toolbarFeature?.view = feature ?? NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 28))
+            toolbarFeature?.isEnabled = feature != nil
+        }
+        for item in window?.toolbar?.items ?? [] where item.itemIdentifier == ToolbarID.draw || item.itemIdentifier == ToolbarID.inspector {
+            (item.view as? NSControl)?.isEnabled = selectedWorkspace != nil
+        }
+    }
+
+    private func installNotesKeyMonitor() {
+        guard surface == .main, notesKeyMonitor == nil else { return }
+        notesKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, self.window?.isKeyWindow == true,
+                  event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
+                  event.charactersIgnoringModifiers == "0" else { return event }
+            self.store.toggleNotesMode(); self.refresh(); return nil
+        }
+    }
+
+}
+
+@MainActor
+private final class CockpitWindowBodyController: NSViewController {
+    private weak var content: NSViewController?
+    private var drawing: NSViewController?
+    private var remote: NSViewController?
+    override func loadView() { view = NSView() }
+    func setContent(_ controller: NSViewController) {
+        loadViewIfNeeded()
+        guard content !== controller else { return }
+        content?.view.removeFromSuperview(); content?.removeFromParent()
+        controller.view.removeFromSuperview(); controller.removeFromParent()
+        addChild(controller)
+        view.addSubview(controller.view, positioned: .below, relativeTo: nil)
+        controller.view.frame = view.bounds
+        controller.view.autoresizingMask = [.width, .height]
+        content = controller
+    }
+    func setDrawingOverlay(_ controller: NSViewController?) { replaceOverlay(drawing, with: controller); drawing = controller }
+    func setRemoteOverlay(_ controller: NSViewController?) { replaceOverlay(remote, with: controller); remote = controller }
+    private func replaceOverlay(_ old: NSViewController?, with next: NSViewController?) {
+        loadViewIfNeeded()
+        old?.view.removeFromSuperview(); old?.removeFromParent()
+        if let next {
+            next.view.removeFromSuperview(); next.removeFromParent(); addChild(next)
+            view.addSubview(next.view)
+            next.view.frame = view.bounds; next.view.autoresizingMask = [.width, .height]
+        }
     }
 }
 
 @MainActor
-private enum ContentViewPreviewData {
-    static let container: ModelContainer = {
-        let schema = Schema([
-            Workspace.self,
-            Pane.self,
-            BrowserState.self,
-            EditorState.self,
-            Note.self,
-            RemoteDesktopConnection.self,
-            ExtensionWorkspaceLink.self,
-        ])
-        let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
-        return try! ModelContainer(for: schema, configurations: configuration)
-    }()
+private final class CockpitSidebarContainer: NSViewController {
+    let sidebar: WorkspaceSidebarViewController
+    let statusBar: CockpitStatusBar
+    init(store: WorkspaceStore, defaults: UserDefaults, isLive: Bool) {
+        sidebar = WorkspaceSidebarViewController(store: store, defaults: defaults, isLive: isLive)
+        statusBar = CockpitStatusBar(isLive: isLive)
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() {
+        view = NSView()
+        addChild(sidebar)
+        let stack = shellStack([sidebar.view, statusBar], spacing: 0)
+        stack.alignment = .leading
+        shellPin(stack, to: view)
+        sidebar.view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        statusBar.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        statusBar.heightAnchor.constraint(equalToConstant: 42).isActive = true
+    }
 }
 
-#Preview {
-    ContentView(
-        store: WorkspaceStore(modelContext: ContentViewPreviewData.container.mainContext),
-        syncService: PeerSyncService(role: .advertiser, displayName: "Preview"),
-        peerDeviceStatus: DeviceStatus(),
-        localAudioOutput: nil,
-        isPlotterConnected: false,
-        remoteInkModel: RemoteInkModel(),
-        isPeerRecording: false,
-        usageStore: UsageStore(),
-        agenticUseStore: AgenticUsageStore(),
-        runnersStore: RunnersStore()
-    )
-    .modelContainer(ContentViewPreviewData.container)
+@MainActor
+private final class CockpitStatusBar: NSView {
+    var statusItems: [CockpitConnectionStatus] = [] { didSet { if oldValue != statusItems { rebuild() } } }
+    var isRecording = false { didSet { if oldValue != isRecording { rebuild() } } }
+    private var stack: NSStackView?
+    private var popover: NSPopover?
+    private var awakeObservation: CockpitObservation?
+    private let isLive: Bool
+    private var awakeController: AwakeSessionController? { isLive ? .shared : nil }
+
+    init(isLive: Bool) { self.isLive = isLive; super.init(frame: .zero); rebuild() }
+    required init?(coder: NSCoder) { nil }
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil {
+            if awakeObservation == nil { awakeObservation = CockpitObservation(owner: self) { owner in _ = owner.awakeController?.isEnabled; owner.rebuild() } }
+            awakeObservation?.start()
+        } else { stop() }
+    }
+    func start() { awakeObservation?.start() }
+    func stop() { awakeObservation?.stop(); popover?.close() }
+    private func rebuild() {
+        stack?.removeFromSuperview()
+        let microphoneLabel = isRecording ? "Microphone recording" : "Microphone idle"
+        let mic = ShellActionButton("", symbol: isRecording ? "waveform.circle.fill" : "waveform", perform: {})
+        mic.perform = { [weak self, weak mic] in
+            guard let self, let mic else { return }
+            let controller = NSViewController()
+            let content = shellStack([shellLabel("Microphone"), shellLabel(self.isRecording ? "Recording" : "Idle", secondary: true)])
+            content.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+            content.setAccessibilityIdentifier("sidebar.microphone-popover")
+            controller.view = content
+            controller.preferredContentSize = NSSize(width: 220, height: 90)
+            self.showPopover(from: mic, controller: controller)
+        }
+        mic.isBordered = false
+        mic.contentTintColor = isRecording ? .systemRed : .secondaryLabelColor
+        mic.toolTip = microphoneLabel
+        mic.setAccessibilityLabel(microphoneLabel)
+        mic.setAccessibilityIdentifier("sidebar.microphone-status")
+        let awake = ShellActionButton("", symbol: "cup.and.heat.waves") { [weak self] in self?.showAwake() }
+        awake.isEnabled = isLive
+        awake.contentTintColor = awakeController?.isEnabled == true ? .systemGreen : .secondaryLabelColor
+        awake.toolTip = "Keep Awake"
+        awake.setAccessibilityLabel("Keep Awake")
+        awake.setAccessibilityIdentifier("sidebar.keep-awake-status")
+        var controls: [NSView] = [mic, awake]
+        for item in statusItems {
+            let button = ShellActionButton("", symbol: item.symbol, perform: {})
+            button.perform = { [weak self, weak button] in
+                guard let self, let button else { return }
+                self.showPopover(from: button, controller: self.statusController(item))
+            }
+            button.contentTintColor = item.isConnected ? .systemGreen : .secondaryLabelColor
+            button.isBordered = false
+            button.toolTip = item.name
+            button.setAccessibilityLabel(item.name + ", " + (item.isConnected ? "connected" : "not connected"))
+            controls.append(button)
+        }
+        for control in controls { control.widthAnchor.constraint(equalToConstant: 22).isActive = true }
+        let stack = shellStack(controls, orientation: .horizontal, spacing: 3)
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: 8, bottom: 4, right: 8)
+        self.stack = stack
+        shellPin(stack, to: self)
+    }
+    private func statusController(_ item: CockpitConnectionStatus) -> NSViewController {
+        let controller = NSViewController()
+        let stack = shellStack([shellLabel(item.name), shellLabel(item.isConnected ? "Connected" : "Not connected", secondary: true), shellLabel(item.detail ?? "", secondary: true)])
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        controller.view = stack
+        controller.preferredContentSize = NSSize(width: 280, height: 100)
+        return controller
+    }
+    private func showAwake() {
+        guard isLive, let button = stack?.arrangedSubviews.dropFirst().first else { return }
+        showPopover(from: button, controller: AwakeSessionDetailsViewController())
+    }
+    private func showPopover(from view: NSView, controller: NSViewController) {
+        popover?.close()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = controller
+        self.popover = popover
+        popover.show(relativeTo: view.bounds, of: view, preferredEdge: .maxY)
+    }
+}
+
+@MainActor
+private final class AwakeSessionDetailsViewController: NSViewController {
+    private let controller = AwakeSessionController.shared
+    private var observation: CockpitObservation?
+    private let status = shellLabel("", secondary: true)
+    private let error = shellLabel("", secondary: true)
+    private var checks: [NSButton] = []
+    override func loadView() {
+        let titles = ["Keep Awake", "Allow display sleep", "Allow system sleep when display is closed", "Allow screen saver after 45m of inactivity"]
+        checks = titles.enumerated().map { index, title in
+            let checkbox = NSButton(checkboxWithTitle: title, target: self, action: #selector(change(_:)))
+            checkbox.tag = index
+            return checkbox
+        }
+        let stack = shellStack([checks[0], status] + Array(checks.dropFirst()) + [error], spacing: 12)
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        view = stack
+        preferredContentSize = NSSize(width: 370, height: 220)
+        observation = CockpitObservation(owner: self) { owner in owner.refresh() }
+    }
+    override func viewDidAppear() { super.viewDidAppear(); observation?.start() }
+    override func viewDidDisappear() { super.viewDidDisappear(); observation?.stop() }
+    private func refresh() {
+        let values = [controller.isEnabled, controller.allowDisplaySleep, controller.allowSystemSleepWhenDisplayClosed, controller.allowScreenSaverAfter45Minutes]
+        for (index, value) in values.enumerated() { checks[index].state = value ? .on : .off }
+        status.stringValue = controller.sessionStatus
+        error.stringValue = controller.assertionError ?? ""
+        error.isHidden = controller.assertionError == nil
+    }
+    @objc private func change(_ sender: NSButton) {
+        let value = sender.state == .on
+        switch sender.tag {
+        case 0: controller.isEnabled = value
+        case 1: controller.allowDisplaySleep = value
+        case 2: controller.allowSystemSleepWhenDisplayClosed = value
+        default: controller.allowScreenSaverAfter45Minutes = value
+        }
+    }
 }

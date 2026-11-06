@@ -1,5 +1,4 @@
 import AppKit
-import SwiftUI
 import XCTest
 @testable import Pilot
 
@@ -80,18 +79,15 @@ final class LandingSnapshotTests: XCTestCase {
         _ scene: SnapshotScene, appearance: String, fixtures: SnapshotFixtures, options: SnapshotOptions
     ) async throws -> Data {
         let size = NSSize(width: options.width, height: options.height)
-        let root = SnapshotWorkbench(scene: scene, fixtures: fixtures)
-            .frame(width: size.width, height: size.height)
-            .environment(\.colorScheme, appearance == "light" ? .light : .dark)
-            .environment(\.locale, Locale(identifier: "en_US_POSIX"))
-            .environment(\.timeZone, TimeZone(secondsFromGMT: 0)!)
-        let host = NSHostingView(rootView: root)
+        let controller = SnapshotWorkbench(scene: scene, fixtures: fixtures)
+        let host = controller.view
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: appearance == "light" ? .aqua : .darkAqua)
         window.contentView = host
         host.frame = NSRect(origin: .zero, size: size)
+        window.setContentSize(size)
         let priorAppearance = NSApp.appearance
         NSApp.appearance = window.appearance
         defer {
@@ -99,10 +95,12 @@ final class LandingSnapshotTests: XCTestCase {
             NSApp.appearance = priorAppearance
         }
         host.layoutSubtreeIfNeeded()
-        // Let representables and native scroll views finish their first layout.
+        // Let native controllers and scroll views finish their first layout.
         // Data readiness was checked separately; this is not a network timeout.
         try await Task.sleep(for: .milliseconds(180))
         host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(host.bounds.width, size.width, accuracy: 1)
+        XCTAssertEqual(host.bounds.height, size.height, accuracy: 1)
         host.displayIfNeeded()
         guard let bitmap = NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: options.width * options.scale,

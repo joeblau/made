@@ -1,4 +1,5 @@
-import SwiftUI
+import Foundation
+import Observation
 
 /// Owns this device's long-term identity key and auto-exchanges public keys
 /// with the paired device over the encrypted Multipeer sync channel — the user
@@ -13,6 +14,9 @@ import SwiftUI
 @Observable
 final class SecureIdentity {
     let role: ConnectedDeviceAppRole
+    /// Isolation belongs to the identity's lifetime, including later UI actions
+    /// and peer callbacks, so fixtures can never access production keys.
+    let isIsolated: Bool
 
     /// This device's public key (base64). Generated automatically on first use.
     private(set) var localPublicKey: String?
@@ -24,9 +28,12 @@ final class SecureIdentity {
 
     var isSynced: Bool { peerPublicKey != nil }
 
-    init(role: ConnectedDeviceAppRole) {
+    init(role: ConnectedDeviceAppRole, isolated: Bool = false) {
         self.role = role
-        guard !ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath") else {
+        let environment = ProcessInfo.processInfo.environment
+        self.isIsolated = isolated || environment["BLAU_COCKPIT_FIXTURE"] != nil
+            || environment["XCTestConfigurationFilePath"] != nil
+        guard !isIsolated else {
             // Hosted test apps must not touch the developer's Keychain. Besides
             // mutating real trust state, a locked Keychain can block test launch
             // before XCTest has a chance to execute the bundle.
@@ -50,7 +57,7 @@ final class SecureIdentity {
     /// the Multipeer pairing flow. Network traffic can never create or replace
     /// a trust pin; a changed key requires a fresh user confirmation there.
     func receive(_ announce: DeviceKeyAnnounce) {
-        guard announce.role != role,
+        guard !isIsolated, announce.role != role,
               DeviceIdentity.parsePeerPublicKey(announce.publicKey) != nil,
               announce.publicKey == DeviceIdentity.peerPublicKeyBase64() else { return }
         peerPublicKey = announce.publicKey
@@ -58,6 +65,7 @@ final class SecureIdentity {
 
     /// Reload the pin after an explicit pairing decision stored it.
     func refreshPeer() {
+        guard !isIsolated else { return }
         peerPublicKey = Self.storedPeerPublicKey()
     }
 
@@ -69,6 +77,7 @@ final class SecureIdentity {
 
     /// Generate a fresh identity key and push it to the peer.
     func regenerate() {
+        guard !isIsolated else { return }
         _ = try? DeviceIdentity.regenerate()
         localPublicKey = DeviceIdentity.publicKeyBase64()
         announce()
