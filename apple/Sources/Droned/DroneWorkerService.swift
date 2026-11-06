@@ -1,10 +1,16 @@
 import Foundation
 
-actor DroneWorkerService {
+actor DroneWorkerService: DroneWorkerHealthReporting {
     private let transport: DroneLANTransport
     private let terminals: DroneTerminalEngine
     private let jobs: DroneJobEngine
     private let tools: DroneJobToolEngine
+    private let pairingStore: DronePairingStore
+    private let healthProbeDirectory: URL
+    private var listenerReady = false
+    private var storageHealthy = true
+    private var stopping = false
+    private var revokedControllers = Set<UUID>()
     private let permissions: DroneControllerPermissions
     private var toolLeases: DroneToolLeaseRegistry
     private var pairings: [DroneConnectionID: UUID] = [:]
@@ -21,10 +27,13 @@ actor DroneWorkerService {
         stateDirectory: URL,
         transport: DroneLANTransport? = nil,
         workerID: UUID? = nil,
+        pairingStore: DronePairingStore? = nil,
         permissions: DroneControllerPermissions = [],
         onAudit: (@Sendable (String) -> Void)? = nil
     ) throws {
         self.transport = transport ?? DroneLANTransport(role: .worker)
+        self.pairingStore = pairingStore ?? DronePairingStore(role: .worker)
+        healthProbeDirectory = stateDirectory
         self.permissions = permissions
         toolLeases = DroneToolLeaseRegistry(
             droneID: try workerID ?? DroneIdentityStore(role: .worker).loadOrCreatePeerID().rawValue
@@ -49,7 +58,8 @@ actor DroneWorkerService {
         permissions requested: DroneControllerPermissions,
         lifetime: TimeInterval = 300
     ) throws -> DroneToolLease {
-        guard pairings.values.contains(controllerID), workspaceID == DroneWorkspaceIDs.default,
+        guard !stopping, !revokedControllers.contains(controllerID),
+              pairings.values.contains(controllerID), workspaceID == DroneWorkspaceIDs.default,
               requested.isSubset(of: permissions)
         else { throw DroneProtocolError.unauthorized }
         let lease = try toolLeases.issue(
@@ -60,11 +70,81 @@ actor DroneWorkerService {
         return lease
     }
 
+    func healthSnapshot() async -> DroneWorkerHealthSnapshot {
+        var paired = false
+        do {
+            for id in try pairingStore.pairedPeerIDs() {
+                if try pairingStore.pinnedKey(for: id) != nil { paired = true }
+            }
+            let probe = healthProbeDirectory.appendingPathComponent(".health-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: probe) }
+            try Data([0]).write(to: probe, options: .atomic)
+        } catch {
+            storageHealthy = false
+        }
+        return DroneWorkerHealthSnapshot(
+            listenerReady: listenerReady && !stopping, paired: paired, storageHealthy: storageHealthy
+        )
+    }
+
+    /// Revoke locally before any suspension; accepted edits retain their durable outcome.
+    /// Running tool processes are cancelled; detached user terminals are not terminated.
+    func revokeController(_ controllerID: UUID) async throws {
+        revokedControllers.insert(controllerID)
+        toolLeases.revoke(controllerID: controllerID)
+        let connections = pairings.filter { $0.value == controllerID }.map(\.key)
+        for connection in connections {
+            pairings.removeValue(forKey: connection)
+            outputPumps.cancel(connectionID: connection)
+        }
+        let operations = toolOperations.values.filter { $0.lease?.controllerID == controllerID }
+        toolHistories = toolHistories.filter { $0.value.first?.lease?.controllerID != controllerID }
+        toolHistoryOrder.removeAll { toolHistories[$0] == nil }
+        onAudit?("controller.revoked")
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                transport.revoke(DronePeerID(rawValue: controllerID)) { result in
+                    continuation.resume(with: result.mapError { $0 as any Error })
+                }
+            }
+        } catch {
+            storageHealthy = false
+            onAudit?("revocation.storageFailed")
+            // Local denial remains active even when persistent pin removal failed.
+            await cancelRevokedOperations(operations)
+            for connection in connections {
+                await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
+            }
+            throw error
+        }
+        await cancelRevokedOperations(operations)
+        for connection in connections {
+            await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
+        }
+    }
+
+    private func cancelRevokedOperations(_ operations: [DroneEnvelope]) async {
+        for operation in operations {
+            guard let lease = operation.lease, let id = operation.requestID,
+                  let key = operation.idempotencyKey else { continue }
+            do {
+                try await tools.cancel(
+                    context: DroneToolRequestContext(lease: lease, requestID: id, idempotencyKey: key),
+                    operationRequestID: id
+                )
+            } catch {
+                onAudit?("revocation.cancelIncomplete")
+            }
+        }
+    }
+
     func setOnListening(_ handler: @escaping @Sendable (UInt16) -> Void) {
         onListening = handler
     }
 
     func start(bonjourInstanceID: String) {
+        guard !stopping else { return }
+        listenerReady = false
         transport.onEvent = { [weak self] event in
             Task { await self?.handle(event) }
         }
@@ -72,6 +152,14 @@ actor DroneWorkerService {
     }
 
     func stop() async {
+        stopping = true
+        listenerReady = false
+        for controller in Set(pairings.values) { toolLeases.revoke(controllerID: controller) }
+        pairings.removeAll()
+        if !(await jobs.shutdown()) {
+            storageHealthy = false
+            onAudit?("shutdown.incomplete")
+        }
         outputPumps.cancelAll()
         transport.stop()
         await terminals.shutdown()
@@ -88,7 +176,9 @@ actor DroneWorkerService {
     }
 
     func resolvePairing(requestID: UUID, approved: Bool) {
-        approvals.removeValue(forKey: requestID)
+        if let request = approvals.removeValue(forKey: requestID), approved {
+            revokedControllers.remove(request.peerID.rawValue)
+        }
         onAudit?(approved ? "pairing.approved" : "pairing.rejected")
         transport.resolvePairing(requestID: requestID, approved: approved)
     }
@@ -96,10 +186,16 @@ actor DroneWorkerService {
     private func handle(_ event: DroneTransportEvent) {
         switch event {
         case .listening(let port):
+            guard !stopping else { return }
+            listenerReady = true
             onListening?(port)
         case .connecting:
             break
         case .connected(let id, let peerID, _):
+            guard !stopping, !revokedControllers.contains(peerID.rawValue) else {
+                transport.disconnect(id)
+                return
+            }
             pairings[id] = peerID.rawValue
         case .pairingRequired(let request):
             approvals[request.id] = request
@@ -110,7 +206,9 @@ actor DroneWorkerService {
                 outputPumps.cancel(connectionID: id)
                 Task { await terminals.disconnect(pairingID: pairingID, connectionID: id.rawValue) }
             }
-        case .failed(let id, _):
+        case .failed(let id, let failure):
+            if id == nil { listenerReady = false }
+            if failure == .storage { storageHealthy = false }
             if let id, let pairingID = pairings.removeValue(forKey: id) {
                 outputPumps.cancel(connectionID: id)
                 Task { await terminals.disconnect(pairingID: pairingID, connectionID: id.rawValue) }
@@ -119,7 +217,8 @@ actor DroneWorkerService {
     }
 
     private func handle(_ envelope: DroneEnvelope, connectionID: DroneConnectionID) async {
-        guard let pairingID = pairings[connectionID] else { return }
+        guard !stopping, let pairingID = pairings[connectionID],
+              !revokedControllers.contains(pairingID) else { return }
         do {
             if envelope.kind == .heartbeat { return }
             if envelope.kind.isTool {
@@ -244,6 +343,10 @@ actor DroneWorkerService {
                 throw DroneProtocolError.malformedMessage
             }
         } catch {
+            if (error as? DroneProtocolError) == .unauthorized || (error as? DroneJobError) == .unauthorized {
+                onAudit?("authorization.failed")
+            }
+            if (error as? DroneJobError) == .storeCorrupted { storageHealthy = false }
             try? await send(DroneEnvelope(
                 kind: .error,
                 requestID: envelope.requestID,
@@ -386,6 +489,7 @@ actor DroneWorkerService {
         ), on: connectionID)
         var history: [DroneEnvelope] = []
         for try await event in stream {
+            guard !revokedControllers.contains(lease.controllerID) else { continue }
             let response: DroneEnvelope
             switch event {
             case .output(let output):
@@ -407,6 +511,10 @@ actor DroneWorkerService {
             }
             history.append(response)
             try await send(response, on: connectionID)
+        }
+        guard !revokedControllers.contains(lease.controllerID) else {
+            toolOperations.removeValue(forKey: requestID)
+            return
         }
         toolHistories[requestID] = history
         toolHistoryOrder.append(requestID)
@@ -460,11 +568,15 @@ actor DroneWorkerService {
     }
 
     private static func errorCode(_ error: any Error) -> String {
-        let code = String(describing: error).filter { $0.isLetter || $0.isNumber || $0 == "_" }
-        return code.isEmpty ? "remoteRejected" : String(code.prefix(64))
+        // Only payload-free protocol/job enums may be reflected onto the wire.
+        if let code = error as? DroneProtocolError { return String(describing: code) }
+        if let code = error as? DroneJobError { return String(describing: code) }
+        return "remoteRejected"
     }
 
     private func send(_ envelope: DroneEnvelope, on connectionID: DroneConnectionID) async throws {
+        guard !stopping, let controller = pairings[connectionID],
+              !revokedControllers.contains(controller) else { throw DroneProtocolError.disconnected }
         try envelope.validate()
         transport.send(envelope, on: connectionID)
     }
