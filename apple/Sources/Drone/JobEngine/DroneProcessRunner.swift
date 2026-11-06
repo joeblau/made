@@ -63,6 +63,9 @@ final class DroneProcessGroupControl: @unchecked Sendable {
     func finish() {
         lock.lock()
         defer { lock.unlock() }
+        // The runner retains the unreaped group leader until this point, so
+        // its PID cannot be recycled while we finish cancellation escalation.
+        if stopReason != nil, let groupID { _ = Darwin.kill(-groupID, SIGKILL) }
         finished = true
         groupID = nil
     }
@@ -100,11 +103,10 @@ enum DroneProcessRunner {
             )
         }
         let stdoutPipe = try NonblockingPipe()
+        defer { stdoutPipe.closeAll() }
         let stderrPipe = try NonblockingPipe()
-        defer {
-            stdoutPipe.closeAll()
-            stderrPipe.closeAll()
-        }
+        defer { stderrPipe.closeAll() }
+        let waker = try DroneProcessWaker()
         let pid = try spawn(
             operation: operation,
             currentDirectory: currentDirectory,
@@ -115,8 +117,10 @@ enum DroneProcessRunner {
         stdoutPipe.closeWriter()
         stderrPipe.closeWriter()
         control.register(groupID: pid)
-        defer { control.finish() }
-        let waker = try DroneProcessWaker()
+        defer {
+            control.finish()
+            reap(pid)
+        }
         control.setWakeHandler { waker.signal() }
         defer { control.setWakeHandler {} }
 
@@ -140,9 +144,11 @@ enum DroneProcessRunner {
 
         while true {
             if waitStatus == nil {
-                var status: Int32 = 0
-                let result = Darwin.waitpid(pid, &status, WNOHANG)
-                if result == pid { waitStatus = status }
+                var info = siginfo_t()
+                let result = Darwin.waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+                if result == 0, info.si_pid == pid {
+                    waitStatus = info.si_code == CLD_EXITED ? info.si_status << 8 : info.si_status & 0x7F
+                }
             }
             if ContinuousClock.now >= deadline { control.requestStop(.deadline) }
             if control.requestedStop != nil, forcedStopDeadline == nil {
@@ -190,8 +196,20 @@ enum DroneProcessRunner {
         )
     }
 
-    private static func controlGraceInterval(_ control: DroneProcessGroupControl) -> Int {
-        0
+    private static func reap(_ pid: pid_t) {
+        var status: Int32 = 0
+        var result: pid_t
+        repeat {
+            result = Darwin.waitpid(pid, &status, WNOHANG)
+        } while result < 0 && errno == EINTR
+        if result == 0 {
+            // A forced-stop deadline must not block the caller indefinitely,
+            // but the owned child still needs a waiter to prevent a zombie.
+            DispatchQueue.global(qos: .utility).async {
+                var status: Int32 = 0
+                while Darwin.waitpid(pid, &status, 0) < 0, errno == EINTR {}
+            }
+        }
     }
 
     private static func decodeWaitStatus(_ status: Int32) -> (exitCode: Int32?, signal: Int32?) {

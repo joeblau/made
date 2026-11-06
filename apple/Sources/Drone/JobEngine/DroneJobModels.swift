@@ -258,4 +258,5 @@ enum DroneJobError: Error, Equatable {
     case jobNotFound
     case outputGap
     case storeCorrupted
+    case shuttingDown
 }
