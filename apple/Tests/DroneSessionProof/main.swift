@@ -55,6 +55,8 @@ enum DroneSessionProof {
         precondition(factory.connections[1].sent.contains(where: { $0.kind == .input }), "replacement did not receive input")
         precondition(originalConnection.sent.filter { $0.kind == .input }.count == 1)
 
+        try await delayedCleanupProof(store: store, id: id, connection: factory.connections[1])
+
         factory.revokeFails = true
         await store.forget(id: id)
         precondition(store.records.count == 1 && store.persistenceError != nil, "failed revoke erased metadata")
@@ -95,6 +97,32 @@ enum DroneSessionProof {
         _ = first.append(oversized)
         precondition(first.contents!.utf8.count == 256 * 1_024, "viewport not byte bounded")
         precondition(first.append(oversized) == nil, "duplicate output appended")
+    }
+
+    @MainActor
+    private static func delayedCleanupProof(store: DroneStore, id: UUID, connection: SessionConnection) async throws {
+        let client = store.terminalClient(for: id) as! DroneRemoteTerminalClient
+        for operation in [DroneMessageKind.detach, .close] {
+            let sessionID = UUID()
+            let reference = DroneTerminalSessionReference(droneID: id, sessionID: sessionID, generation: 1)
+            await client.setOutputHandler({ _ in false }, for: reference)
+            let cleanup = Task {
+                if operation == .detach { try await client.detach(reference) } else { try await client.close(reference) }
+            }
+            await wait { connection.sent.contains { $0.kind == operation && $0.sessionID?.rawValue == sessionID } }
+            let request = connection.sent.first { $0.kind == operation && $0.sessionID?.rawValue == sessionID }!
+            let replacement = DroneTerminalResumeState(sessionID: sessionID)
+            await client.setOutputHandler({ replacement.append($0) != nil }, for: reference)
+            try await client.attachTerminal(reference)
+            connection.emit(DroneEnvelope(kind: operation == .detach ? .detached : .closed,
+                                            requestID: request.requestID, sessionID: DroneSessionID(rawValue: sessionID)))
+            try await cleanup.value
+            await client.handle(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: sessionID),
+                                              body: .output(DroneOutputBody(sequence: 0, offset: 0,
+                                                                           data: Data("new".utf8), isFinal: false))))
+            precondition(replacement.contents == "new", "late cleanup removed same-generation replacement")
+            try await client.sendInput(Data("kept".utf8), to: reference)
+        }
     }
 
     @MainActor
