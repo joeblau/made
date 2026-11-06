@@ -317,15 +317,18 @@ and statuses only. Provider authentication remains with the agent's host;
 remote terminal agents use credentials already on their Drone. This interface
 does not authorize copying credentials to Cockpit or another worker.
 
-The production path still has acceptance gaps: `DroneWorkerService` currently
-passes the incoming lease itself as the approved lease and takes its Drone ID
-from that lease. Issuance and durable validation against worker-owned job
-metadata are outstanding. Replay now checks the full stored lease, but history
-is retained only after streaming ends and is lost on service restart. The tool
-engine's edit-result cache is keyed only by idempotency string; edits are a
-separate read and write rather than an atomic conditional replacement. Process
-execution has user-level file/network authority, not workspace confinement.
-These are #326/#327 gates, not properties proved by the fake tool transport.
+Worker-local approval issues bounded leases tied to the worker identity,
+configured workspace and authenticated controller. Grants are held in memory
+and expire on worker restart. Older clients that construct their own leases
+are rejected; a local control adapter must obtain an approved lease before
+using the unchanged typed calls. There is no remote first-use registration.
+The lease job ID identifies the approved orchestration session; individual
+operations retain their own durable job records.
+
+Authorization, resource-governance and recovery acceptance remains tracked in
+#326/#327. Keep detailed security findings and remediation evidence in private
+review as described in [SECURITY.md](../SECURITY.md). The fake tool proof does
+not replace production integration or physical rollout checks.
 
 Run `apple/bin/test-drone-tools.sh` for the typed client/fake-engine proof and
 `apple/bin/test-drone-worker.sh --tool-replay-authorization` for the encrypted

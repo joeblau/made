@@ -33,12 +33,11 @@ drone doctor
 ```
 
 `BLAU_DRONE_WORKSPACE` registers the root used by typed workspace operations.
-It is not an OS sandbox: terminals and process jobs run as the worker user and
-can access that user's files and network. The daemon-wide permission list enables
-interactive terminals, process jobs, file reads/writes, and Git status/diff;
-it does not yet provide separate grants per paired controller. Granting process
-or terminal execution also permits commands that write files or mutate Git.
-Use only trusted controllers while these hardening gates remain open. Installation creates a per-user `app.blau.drone` LaunchAgent with
+Terminals and process jobs intentionally run with the worker user's authority;
+they are not an OS sandbox. Use trusted controllers and grant only the
+capabilities required for the controlled rollout. Tool calls additionally need
+a worker-issued lease from the local approval/control path. The hardening and
+recovery checklist remains a prerequisite for broader rollout. Installation creates a per-user `app.blau.drone` LaunchAgent with
 `RunAtLoad`, crash supervision, restart throttling, private state directories,
 and two bounded log generations. It does not install a root daemon, cron job,
 or unmanaged shell loop.
@@ -80,9 +79,8 @@ print secrets, and bounded output is not automatic redaction.
   state. It never silently moves a live pane to another destination.
 - Transport revocation closes active channels and blocks reconnect until fresh
   approval. Detached terminals may still run processes; detachment is not
-  suspension. Worker-side revocation controls and the policy for already-running
-  jobs require completion under #327. Do not treat Cockpit forgetting a worker
-  as proof that worker-side execution has stopped.
+  suspension. Verify the running-work policy as part of the #327 checklist;
+  do not treat detachment as proof that execution has stopped.
 - Worker updates preserve identity, pins, and durable records. Protocol
   incompatibility blocks execution and requires a compatible upgrade rather
   than an unsafe downgrade. `status` and `doctor` distinguish stopped, paired,
