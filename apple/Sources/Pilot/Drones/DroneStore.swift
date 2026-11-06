@@ -238,7 +238,8 @@ final class DroneStore {
     }
 
     func terminalClient(for id: UUID) -> (any DroneTerminalClient)? {
-        terminalClients[id]
+        guard states[id]?.isConnected == true else { return nil }
+        return terminalClients[id]
     }
 
     func makeToolClient(
@@ -281,11 +282,9 @@ final class DroneStore {
                     connection: connection
                 )
             }
-        case .offline, .unauthorized, .incompatible, .busy, .pairing:
+        case .offline, .unauthorized, .incompatible, .busy, .pairing, .connecting, .forgetting:
             let client = terminalClients.removeValue(forKey: id)
             Task { await client?.closeRequests() }
-        case .connecting, .forgetting:
-            break
         }
         guard let index = records.firstIndex(where: { $0.id == id }) else { return }
         let previous = records[index]

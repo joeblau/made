@@ -5,6 +5,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     let authenticatedControllerID: UUID
     var authenticatedDroneID: UUID { droneID }
     let capabilities: Set<String> = ["terminal.v1", "tools.v1"]
+    private var isClosed = false
     private let connection: any DroneConnection
     private var requests: [UUID: CheckedContinuation<DroneEnvelope, any Error>] = [:]
     private var toolRequests: [UUID: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation] = [:]
@@ -29,7 +30,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
                 columns: 80,
                 rows: 24
             )),
-            idempotencyKey: "terminal-\(generation)-\(requestID.uuidString)"
+            idempotencyKey: "terminal-\(requestID.uuidString)"
         )
         guard response.kind == .created, let sessionID = response.sessionID else {
             throw TerminalSessionFailure.remoteSessionMissing
@@ -46,6 +47,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func sendInput(_ data: Data, to reference: DroneTerminalSessionReference) async throws {
+        guard !isClosed else { throw DroneTransportError.disconnected }
         try await connection.send(DroneEnvelope(
             kind: .input,
             requestID: UUID(),
@@ -100,6 +102,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     func perform(
         _ request: DroneEnvelope
     ) async throws -> AsyncThrowingStream<DroneEnvelope, any Error> {
+        guard !isClosed else { throw DroneTransportError.disconnected }
         guard let requestID = request.requestID else { throw DroneProtocolError.malformedMessage }
         let stream = AsyncThrowingStream<DroneEnvelope, any Error> { continuation in
             toolRequests[requestID] = continuation
@@ -113,6 +116,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func handle(_ envelope: DroneEnvelope) {
+        guard !isClosed else { return }
         if envelope.kind.isTool, let requestID = envelope.requestID,
            let continuation = toolRequests[requestID] {
             continuation.yield(envelope)
@@ -163,6 +167,8 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func closeRequests() {
+        isClosed = true
+        outputHandler = nil
         let continuations = requests.values
         requests.removeAll()
         for continuation in continuations {
@@ -178,11 +184,13 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
         body: DroneEnvelope.Body = .empty,
         idempotencyKey: String? = nil
     ) async throws -> DroneEnvelope {
+        guard !isClosed else { throw DroneTransportError.disconnected }
         let requestID = UUID()
         return try await withCheckedThrowingContinuation { continuation in
             requests[requestID] = continuation
             Task {
                 do {
+                    guard !isClosed else { throw DroneTransportError.disconnected }
                     try await connection.send(DroneEnvelope(
                         kind: kind,
                         requestID: requestID,

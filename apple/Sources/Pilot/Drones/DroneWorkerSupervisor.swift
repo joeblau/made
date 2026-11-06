@@ -73,7 +73,7 @@ final class DroneWorkerSupervisor {
         diagnostics.generation = generation
         diagnostics.lastIssue = nil
         diagnostics.record("generation \(generation) started", at: date())
-        onUpdate(droneID)
+        transition(.connecting(attempt: diagnostics.connectAttempts + 1))
         let candidate = generation
         runTask = Task { [weak self] in
             guard let self else { return }
