@@ -37,6 +37,7 @@ actor DroneJobToolEngine: DroneToolEngine {
         _ request: DroneToolReadRequest,
         context: DroneToolRequestContext
     ) async throws -> DroneToolReadResult {
+        try DroneToolValidation.validate(read: request)
         let snapshot = try await complete(
             operation: .readFile(DroneReadFileOperation(
                 relativePath: request.path,
@@ -84,7 +85,7 @@ actor DroneJobToolEngine: DroneToolEngine {
         )
         guard case .file(let data)? = read.result else { throw DroneJobError.storeCorrupted }
         if let expected = request.expectedSHA256 {
-            guard Self.digest(data) == expected else { throw DroneProtocolError.invalidState }
+            guard Self.digest(data) == expected.lowercased() else { throw DroneProtocolError.invalidState }
         }
         guard let range = data.range(of: request.oldData),
               data.range(of: request.oldData, in: range.upperBound..<data.endIndex) == nil
@@ -105,16 +106,19 @@ actor DroneJobToolEngine: DroneToolEngine {
         _ request: DroneToolProcessRequest,
         context: DroneToolRequestContext
     ) async throws -> AsyncThrowingStream<DroneToolEvent, Error> {
+        try DroneToolValidation.validate(process: request)
         let executable = try resolveExecutable(request.executable)
         let operation = DroneProcessOperation(
             executablePath: executable,
             arguments: request.arguments,
             relativeDirectory: request.workingDirectory ?? ".",
-            timeoutMilliseconds: Int(request.timeout * 1_000),
+            timeoutMilliseconds: Int((request.timeout * 1_000).rounded(.up)),
             standardOutputLimit: request.outputLimit,
             standardErrorLimit: request.outputLimit
         )
-        let snapshot = try createTracked(operation: .process(operation), context: context)
+        let snapshot = try createTracked(
+            operation: .process(operation), context: context, environment: request.environment
+        )
         return stream(snapshot.id, context: context, outputKind: .process, outputLimit: request.outputLimit)
     }
 
@@ -122,7 +126,11 @@ actor DroneJobToolEngine: DroneToolEngine {
         _ request: DroneToolDiffRequest,
         context: DroneToolRequestContext
     ) async throws -> AsyncThrowingStream<DroneToolEvent, Error> {
-        guard request.paths.count <= 1 else { throw DroneProtocolError.resourceLimit }
+        try DroneToolValidation.validate(diff: request)
+        // The durable typed Git operation currently supports one path and the default context only.
+        guard request.paths.count <= 1, request.contextLines == 3 else {
+            throw DroneProtocolError.resourceLimit
+        }
         let operation = DroneGitDiffOperation(
             relativePath: request.paths.first,
             outputLimit: request.maxBytes
@@ -144,7 +152,8 @@ actor DroneJobToolEngine: DroneToolEngine {
 
     private func createTracked(
         operation: DroneJobOperation,
-        context: DroneToolRequestContext
+        context: DroneToolRequestContext,
+        environment: [String: String] = [:]
     ) throws -> DroneJobSnapshot {
         _ = try scopedKey(context)
         let key = try operationKey(lease: context.lease, requestID: context.requestID)
@@ -164,11 +173,11 @@ actor DroneJobToolEngine: DroneToolEngine {
         if let entry = operations[key] {
             let existing = try jobs.snapshot(id: entry.jobID, controllerID: context.lease.controllerID)
             guard existing.idempotencyKey == (try scopedKey(context)),
-                  existing.request.operation == operation
+                  existing.request.operation == operation, existing.request.environment == environment
             else { throw DroneProtocolError.idempotencyConflict }
             return existing
         }
-        let snapshot = try create(operation: operation, context: context)
+        let snapshot = try create(operation: operation, context: context, environment: environment)
         operations[key] = OperationEntry(jobID: snapshot.id, lease: context.lease)
         return snapshot
     }
@@ -181,12 +190,15 @@ actor DroneJobToolEngine: DroneToolEngine {
     private func create(
         operation: DroneJobOperation,
         context: DroneToolRequestContext,
-        keySuffix: String = ""
+        keySuffix: String = "",
+        environment: [String: String] = [:]
     ) throws -> DroneJobSnapshot {
         try jobs.createJob(DroneJobCreate(
             controllerID: context.lease.controllerID,
             idempotencyKey: try scopedKey(context) + keySuffix,
-            request: DroneJobRequest(workspaceID: context.lease.workspaceID, operation: operation)
+            request: DroneJobRequest(
+                workspaceID: context.lease.workspaceID, operation: operation, environment: environment
+            )
         ))
     }
 
@@ -248,6 +260,7 @@ actor DroneJobToolEngine: DroneToolEngine {
         }
 
         func next() async throws -> DroneToolEvent? {
+            try Task.checkCancellation()
             while queued.isEmpty && !finished {
                 try Task.checkCancellation()
                 let page = try jobs.events(
