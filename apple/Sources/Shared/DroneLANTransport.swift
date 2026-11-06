@@ -185,6 +185,16 @@ final class DroneLANTransport: @unchecked Sendable {
         )
     }
 
+    /// Local lifecycle query used to retire owner approval prompts after a
+    /// handshake closes. Never exposes pins, keys, or remote execution payloads.
+    func pendingPairingRequestIDs() async -> Set<UUID> {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                continuation.resume(returning: Set(requests.keys))
+            }
+        }
+    }
+
     func resolvePairing(requestID: UUID, approved: Bool) {
         queue.async { [weak self] in
             guard let self, let id = self.requests.removeValue(forKey: requestID),
