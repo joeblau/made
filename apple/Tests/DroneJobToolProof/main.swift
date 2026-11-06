@@ -51,6 +51,15 @@ struct DroneJobToolProof {
             _ = try await engine.edit(request, context: context(controller: first.lease.controllerID))
             fatalError("full edit cache accepted new lease")
         } catch DroneProtocolError.resourceLimit {}
+        let clock = ProofClock()
+        let expiring = DroneJobToolEngine(jobs: jobs, maximumRetainedEntries: 1, now: { clock.value })
+        try Data("old".utf8).write(to: file)
+        _ = try await expiring.edit(request, context: context(controller: first.lease.controllerID))
+        clock.advance(by: DroneLimits.idempotencyLifetime + 1)
+        try Data("old".utf8).write(to: file)
+        _ = try await expiring.edit(request, context: context(controller: first.lease.controllerID))
+        let expiredContents = try Data(contentsOf: file)
+        precondition(expiredContents == Data("new".utf8))
         let bounded = DroneJobToolEngine(jobs: jobs, maximumRetainedEntries: 1)
         let running = context()
         let events = try await bounded.run(
@@ -135,13 +144,29 @@ struct DroneJobToolProof {
         let gapEngine = DroneJobToolEngine(jobs: gapJobs, eventPageSize: 1)
         let gapContext = context()
         let gapRequest = DroneToolProcessRequest(executable: "printf", arguments: ["history"])
-        do { _ = try await collect(gapEngine.run(gapRequest, context: gapContext)) }
-        catch DroneJobError.outputGap {}
+        do { _ = try await collect(gapEngine.run(gapRequest, context: gapContext)) } catch DroneJobError.outputGap {}
         do {
             _ = try await collect(gapEngine.run(gapRequest, context: gapContext))
             fatalError("retained history gap silently completed")
         } catch DroneJobError.outputGap {}
         print("Stream proof passed: terminal pagination replay, combined limit, truncation, offsets, cancellation schema")
         print("Drone job tool proof passed: edit validation, scope, conflict, concurrent retry, retention")
+    }
+}
+
+private final class ProofClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var time: TimeInterval = 0
+
+    var value: TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return time
+    }
+
+    func advance(by interval: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        time += interval
     }
 }
