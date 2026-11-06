@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 @main
@@ -15,6 +16,8 @@ enum DroneJobProof {
         let engine = try DroneJobEngine(stateURL: stateURL, workspaces: registry)
 
         try verifyOutputBackpressure(in: workspace)
+        try await verifyShutdown(in: workspace, root: root)
+        try await verifyShutdownTimeout(in: workspace, root: root)
 
         let source = Data("print(\"drone-build-ok\")\n".utf8)
         let write = try engine.createJob(DroneJobCreate(
@@ -134,6 +137,99 @@ enum DroneJobProof {
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
     }
 
+    private static func verifyShutdownTimeout(in workspace: URL, root: URL) async throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let clock = ProofBlockingClock()
+        let engine = try DroneJobEngine(
+            stateURL: root.appendingPathComponent("shutdown-timeout"),
+            workspaces: registry,
+            now: { clock.now() }
+        )
+        let controllerID = UUID()
+        let job = try engine.createJob(DroneJobCreate(
+            controllerID: controllerID,
+            idempotencyKey: "shutdown-timeout-job-001",
+            request: DroneJobRequest(workspaceID: workspaceID, operation: .writeFile(
+                DroneWriteFileOperation(relativePath: "must-not-run", data: Data("side effect".utf8))
+            ))
+        ))
+        defer { clock.release.signal() }
+        let blocked = await Task.detached { clock.waitUntilEntered() }.value
+        expect(blocked, "job did not reach blocked persistence")
+        let stopped = await engine.shutdown(timeout: 0.05)
+        expect(!stopped, "shutdown claimed a blocked job had joined")
+        clock.release.signal()
+        let joined = await engine.shutdown()
+        expect(joined, "shutdown did not join after persistence resumed")
+        let snapshot = try engine.snapshot(id: job.id, controllerID: controllerID)
+        expect(snapshot.state == .cancelled, "queued job did not record shutdown cancellation")
+        expect(!FileManager.default.fileExists(atPath: workspace.appendingPathComponent("must-not-run").path),
+               "cancelled queued file job executed a side effect")
+    }
+
+    private static func verifyShutdown(
+        in workspace: URL, root: URL
+    ) async throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let state = root.appendingPathComponent("shutdown-jobs")
+        var limits = DroneJobEngineLimits()
+        limits.cancellationGracePeriod = 3
+        let engine = try DroneJobEngine(stateURL: state, workspaces: registry, limits: limits)
+        let controller = UUID()
+        let unrelated = Process()
+        unrelated.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        unrelated.arguments = ["30"]
+        try unrelated.run()
+        defer { unrelated.terminate(); unrelated.waitUntilExit() }
+        let create = DroneJobCreate(
+            controllerID: controller,
+            idempotencyKey: "shutdown-resistant-child-001",
+            request: DroneJobRequest(workspaceID: workspaceID, operation: .process(DroneProcessOperation(
+                executablePath: "/bin/sh",
+                arguments: ["-c", """
+                /bin/sh -c 'trap "" TERM; echo $$ > child.pid; while :; do /bin/sleep 1; done' >/dev/null 2>&1 &
+                exec /bin/sleep 30
+                """],
+                timeoutMilliseconds: 30_000
+            )))
+        )
+        let job = try engine.createJob(create)
+        var child: pid_t?
+        for _ in 0..<200 {
+            if let text = try? String(contentsOf: workspace.appendingPathComponent("child.pid"), encoding: .utf8),
+               let pid = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                child = pid
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        defer { if let child { _ = Darwin.kill(child, SIGKILL) } }
+        let stopped = await engine.shutdown()
+        expect(stopped, "shutdown did not join owned tasks")
+        guard let child else { throw ProofError.failed("shutdown child never started") }
+        for _ in 0..<200 {
+            if Darwin.kill(child, 0) != 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard Darwin.kill(child, 0) != 0 else {
+            throw ProofError.failed("TERM-resistant descendant survived parent exit and shutdown")
+        }
+        expect(unrelated.isRunning, "shutdown killed an unrelated process")
+        let final = try engine.snapshot(id: job.id, controllerID: controller)
+        expect(final.state == .cancelled, "job not cancelled")
+        do {
+            _ = try engine.createJob(create)
+            throw ProofError.failed("shutdown accepted new work")
+        } catch DroneJobError.shuttingDown {}
+        let stoppedAgain = await engine.shutdown()
+        expect(stoppedAgain, "repeated shutdown did not finish")
+        let recovered = try DroneJobEngine(stateURL: state, workspaces: registry)
+        let retry = try recovered.createJob(create)
+        expect(retry.id == job.id && retry.state == .cancelled, "restart duplicated cancelled work")
+    }
+
     private static func verifyOutputBackpressure(in workspace: URL) throws {
         var receivedBytes = 0
         let outcome = try DroneProcessRunner.run(
@@ -193,4 +289,27 @@ enum DroneJobProof {
 
 private enum ProofError: Error {
     case failed(String)
+}
+
+private final class ProofBlockingClock: @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var calls = 0
+
+    func waitUntilEntered() -> Bool {
+        entered.wait(timeout: .now() + 5) == .success
+    }
+
+    func now() -> TimeInterval {
+        lock.lock()
+        calls += 1
+        let shouldBlock = calls == 2
+        lock.unlock()
+        if shouldBlock {
+            entered.signal()
+            release.wait()
+        }
+        return Date().timeIntervalSince1970
+    }
 }
