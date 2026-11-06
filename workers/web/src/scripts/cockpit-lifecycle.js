@@ -71,8 +71,10 @@ export function disposeCockpitResources(scene, environmentTarget, renderer) {
   const materials = new Set();
   const textures = new Set();
   const renderTargets = new Set();
+  const instancedMeshes = new Set();
 
   scene.traverse((object) => {
+    if (object.isInstancedMesh) instancedMeshes.add(object);
     if (object.geometry) geometries.add(object.geometry);
     if (object.shadow?.map) renderTargets.add(object.shadow.map);
     const objectMaterials = Array.isArray(object.material) ? object.material : [object.material];
@@ -88,6 +90,9 @@ export function disposeCockpitResources(scene, environmentTarget, renderer) {
     }
   });
 
+  // Instance attributes belong to the mesh, not its shared geometry.
+  // Dispose while renderer listeners can still release their GPU buffers.
+  for (const mesh of instancedMeshes) mesh.dispose();
   for (const texture of textures) texture.dispose();
   for (const material of materials) material.dispose();
   for (const geometry of geometries) geometry.dispose();

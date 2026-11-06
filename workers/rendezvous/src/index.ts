@@ -352,7 +352,7 @@ export class RendezvousRoom extends DurableObject<WorkerEnv> {
     // No alarm re-arm here: a message only moves lastActivityAt forward, so
     // the already-armed (earlier) alarm is still safe — when it fires, alarm()
     // re-checks liveness and re-arms at the later deadline. Re-arming per
-    // message would be a billed storage write for every relayed frame.
+    // message would add a redundant setAlarm call for every relayed frame.
   }
 
   async webSocketClose(sender: WebSocket): Promise<void> {
