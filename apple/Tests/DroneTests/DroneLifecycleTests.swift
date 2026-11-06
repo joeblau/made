@@ -267,6 +267,71 @@ final class DroneInstallerTests: XCTestCase {
         XCTAssertEqual(try releaseNames().count, 2)
     }
 
+    func testRemovalQueryTimeoutPreservesInstallationAndSocket() throws {
+        try assertRemovalFailurePreservesFiles(status: nil)
+    }
+
+    func testRemovalQueryErrorPreservesInstallationAndSocket() throws {
+        try assertRemovalFailurePreservesFiles(status: 5)
+    }
+
+    private func assertRemovalFailurePreservesFiles(status: Int32?) throws {
+        try preparePrevious()
+        try Data("socket fixture".utf8).write(to: paths.controlSocket)
+        var bootedOut = false
+        let launchd = DroneLaunchd(paths: paths, commandTimeout: 0.1, execute: { args, _ in
+            if args.first == "bootout" { bootedOut = true; return 0 }
+            if args.first == "print" {
+                if !bootedOut { return 0 }
+                if let status { return status }
+                throw DroneWorkerError.processTimedOut
+            }
+            return 0
+        })
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source))
+        try assertPreviousRestored()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.controlSocket.path))
+        XCTAssertEqual(try releaseNames(), ["old"])
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).uninstall())
+        try assertPreviousRestored()
+    }
+
+    func testInitialQueryErrorDoesNotMutateInstallation() throws {
+        try preparePrevious()
+        let launchd = DroneLaunchd(paths: paths, execute: { _, _ in 5 })
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source))
+        try assertPreviousRestored()
+        XCTAssertEqual(try releaseNames(), ["old"])
+    }
+
+    func testRemovalWaitsForConfirmedAbsence() throws {
+        try Data("socket fixture".utf8).write(to: paths.controlSocket)
+        var prints = 0
+        var budgets: [TimeInterval] = []
+        let launchd = DroneLaunchd(paths: paths, commandTimeout: 0.5, execute: { args, timeout in
+            budgets.append(timeout)
+            if args.first == "print" {
+                prints += 1
+                return prints < 3 ? 0 : 113
+            }
+            return 0
+        })
+        try launchd.stop()
+        XCTAssertEqual(prints, 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.controlSocket.path))
+        XCTAssertTrue(zip(budgets, budgets.dropFirst()).allSatisfy { $0 >= $1 })
+        XCTAssertLessThan(try XCTUnwrap(budgets.last), 0.5)
+    }
+
+    func testRemovalTimeoutKeepsSocketWhileLoaded() throws {
+        try Data("socket fixture".utf8).write(to: paths.controlSocket)
+        let launchd = DroneLaunchd(paths: paths, commandTimeout: 0.05, execute: { _, _ in 0 })
+        XCTAssertThrowsError(try launchd.stop()) {
+            XCTAssertEqual($0 as? DroneWorkerError, .processTimedOut)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.controlSocket.path))
+    }
+
     private func preparePrevious() throws {
         let old = paths.releases.appendingPathComponent("old")
         try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
