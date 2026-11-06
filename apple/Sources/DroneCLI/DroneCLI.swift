@@ -104,13 +104,13 @@ struct DroneCLI {
 
     private func status(launchd: DroneLaunchd) -> DroneStatusReport {
         let response = try? DroneControlClient(paths: paths).status()
-        let loaded = launchd.isLoaded
-        let state = DroneStatusEvaluator.state(response: response, launchdLoaded: loaded)
+        let loaded = try? launchd.isLoaded
+        let state = loaded.map { DroneStatusEvaluator.state(response: response, launchdLoaded: $0) } ?? .unhealthy
         return DroneStatusReport(
             state: state,
             response: response,
             installed: FileManager.default.fileExists(atPath: paths.launchAgent.path),
-            launchdLoaded: loaded
+            launchdLoaded: loaded ?? false
         )
     }
 
