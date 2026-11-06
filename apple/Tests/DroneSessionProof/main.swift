@@ -23,6 +23,8 @@ enum DroneSessionProof {
         let first = provider.session(for: pane)
         let restored = try await provider.restore(pane: pane)
         precondition(restored.remoteSessionID == factory.remoteID)
+        let display = DisplayRecorder()
+        await first.setOutputHandler { display.record($0) }
         let firstSent = await first.send(.literal("first"))
         precondition(firstSent)
         let originalConnection = factory.connections[0]
@@ -35,22 +37,38 @@ enum DroneSessionProof {
         originalConnection.emit(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: factory.remoteID),
                                                body: .output(DroneOutputBody(sequence: 1, offset: 2,
                                                                             data: Data([0x93]), isFinal: false))))
-        await wait { first.visibleContents() == "✓" }
+        await wait { display.latest == "✓" }
+        factory.holdNextAttach = true
         store.retry(id: id)
         precondition(store.terminalClient(for: id) == nil, "retry retained retired client")
         await wait { factory.connections.count == 2 && store.states[id]?.isConnected == true }
+        // No UI task restart or explicit provider.restore: the registry event must reattach.
+        await wait { factory.connections[1].sent.contains { $0.kind == .attach } }
         let next = provider.session(for: pane)
         precondition(next.identity.generation > first.identity.generation)
         let staleSent = await first.send(.literal("stale"))
         precondition(!staleSent, "retired session accepted input")
-        let reattached = try await provider.restore(pane: pane)
-        precondition(reattached.remoteSessionID == restored.remoteSessionID)
+        var inputStarted = false
+        let pendingInput = Task {
+            inputStarted = true
+            return await next.send(.literal("next"))
+        }
+        await wait { inputStarted }
+        precondition(!factory.connections[1].sent.contains { $0.kind == .input }, "input preceded reattachment")
+        factory.connections[1].releaseAttach()
+        let reconnectedInput = await pendingInput.value
+        precondition(reconnectedInput, "replacement rejected input without a manual restore")
+        precondition(next.destination.remoteSessionID == restored.remoteSessionID)
         let attach = factory.connections[1].sent.first(where: { $0.kind == .attach })!
         precondition(attach.body == .attach(DroneAttachBody(afterSequence: 2, afterOffset: 3)), "reattach lost cursor")
         precondition(next.visibleContents() == "✓", "reattach lost retained bytes")
+        await first.setOutputHandler { _ in fatalError("retired display handler replaced the live binding") }
+        factory.connections[1].emit(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: factory.remoteID),
+                                                 body: .output(DroneOutputBody(sequence: 2, offset: 3,
+                                                                              data: Data("!".utf8), isFinal: false))))
+        await wait { display.latest == "✓!" }
+        precondition(next.visibleContents() == "✓!", "replacement display did not follow output")
         try await routingProof(store: store, id: id, generation: next.identity.generation)
-        let nextSent = await next.send(.literal("next"))
-        precondition(nextSent)
         precondition(!factory.connections[1].sent.contains(where: { $0.kind == .create }), "reattach created another session")
         precondition(factory.connections[1].sent.contains(where: { $0.kind == .input }), "replacement did not receive input")
         precondition(originalConnection.sent.filter { $0.kind == .input }.count == 1)
@@ -136,8 +154,9 @@ private final class SessionTransport: DroneTransportFactory {
     let remoteID = UUID()
     var connections: [SessionConnection] = []
     var revokeFails = false
+    var holdNextAttach = false
     func connect(_ request: DroneTransportRequest) async throws -> any DroneConnection {
-        let connection = SessionConnection(remoteID: remoteID)
+        let connection = SessionConnection(remoteID: remoteID, holdAttach: holdNextAttach)
         connections.append(connection)
         return connection
     }
@@ -152,12 +171,14 @@ private final class SessionConnection: DroneConnection, @unchecked Sendable {
     private let lock = NSLock()
     private var envelopes: [DroneEnvelope] = []
     private var closed = false
+    private var holdAttach: Bool
     private let stream: AsyncThrowingStream<DroneEnvelope, any Error>
     private let continuation: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation
     var sent: [DroneEnvelope] { lock.withLock { envelopes } }
 
-    init(remoteID: UUID) {
+    init(remoteID: UUID, holdAttach: Bool) {
         self.remoteID = remoteID
+        self.holdAttach = holdAttach
         (stream, continuation) = AsyncThrowingStream.makeStream()
     }
     func send(_ envelope: DroneEnvelope) async throws {
@@ -165,6 +186,7 @@ private final class SessionConnection: DroneConnection, @unchecked Sendable {
             guard !closed else { throw DroneTransportError.disconnected }
             envelopes.append(envelope)
         }
+        if envelope.kind == .attach && lock.withLock({ holdAttach }) { return }
         if envelope.kind == .create || envelope.kind == .attach {
             continuation.yield(DroneEnvelope(kind: envelope.kind == .create ? .created : .attached,
                                              requestID: envelope.requestID,
@@ -176,10 +198,25 @@ private final class SessionConnection: DroneConnection, @unchecked Sendable {
         guard let value = try await iterator.next() else { throw DroneTransportError.disconnected }
         return value
     }
+    func releaseAttach() {
+        let request = lock.withLock { () -> DroneEnvelope in
+            holdAttach = false
+            return envelopes.first { $0.kind == .attach }!
+        }
+        emit(DroneEnvelope(kind: .attached, requestID: request.requestID, sessionID: DroneSessionID(rawValue: remoteID)))
+    }
+
     func emit(_ envelope: DroneEnvelope) { continuation.yield(envelope) }
 
     func close() {
         lock.withLock { closed = true }
         continuation.finish()
     }
+}
+
+private final class DisplayRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = ""
+    var latest: String { lock.withLock { value } }
+    func record(_ text: String) { lock.withLock { value = text } }
 }
