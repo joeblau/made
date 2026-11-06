@@ -167,6 +167,21 @@ Chromium real-engine, screenshot-export and presentation-benchmark tests;
 those run through their dedicated gates rather than silently exercising live
 services in the default suite.
 
+Signed Chromium real-engine tests passed on arm64 and on x86_64 under Rosetta
+(one test each, no failures or skips), including the existing pinned budgets.
+Both reported a CEF worker-thread QoS priority-inversion warning during
+shutdown; exported stacks contain CEF/pthread frames rather than Pilot/AppKit
+frames. The warning remains recorded and was not suppressed.
+
+A clean universal Chromium build passed from the isolated review checkout.
+Release archive validation is **not passed**: the strict validator rejected
+extra application/team identity entitlements injected by Development signing.
+The subsequent Manual Developer ID build requires matching Pilot and
+PilotWidgets provisioning profiles that are not installed locally. The
+reviewed entitlements and validator remain unchanged. Complete this gate in
+the provisioned release environment; notarization and publication were not
+attempted.
+
 All fourteen fixture scenes were exported and visually inspected in light
 and dark, along with the actual native Notes window. No blocking clipping,
 missing content or unreadable controls were found. Engine/device fixtures
@@ -207,6 +222,12 @@ complete. Do not substitute fixture screenshots for the physical checks.
   state. Native macOS controls can use system compositing that a view bitmap
   does not capture; check affected controls in an actual fixture window and
   record that limitation alongside any image.
+- [ ] Complete the Developer ID universal Chromium build with matching Pilot
+  and PilotWidgets provisioning profiles, then pass the unchanged
+  `apple/bin/validate-chromium-archive.sh` gate. Follow
+  [the release signing process](apple-releases.md); a successful Development
+  build and real-engine test do not substitute for the release entitlement
+  policy. Record the retained CEF shutdown QoS warning with the candidate.
 - [ ] Repeat optimized panel benchmarks with other builds idle; keep raw
   samples and compare against the frozen baseline on the same machine. Then
   separately profile full launch, rapid workspace switching, streaming chat,
