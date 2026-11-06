@@ -9,19 +9,12 @@ enum DroneWorkerProof {
             .appendingPathComponent("drone-worker-proof-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let workspace = root.appendingPathComponent("workspace", isDirectory: true)
-        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         let reviewIndex = CommandLine.arguments.firstIndex(of: "--review-case")
         let reviewCase = reviewIndex.flatMap { index in
             CommandLine.arguments.indices.contains(index + 1) ? CommandLine.arguments[index + 1] : nil
         }
         let replayOnly = CommandLine.arguments.contains("--tool-replay-authorization") || reviewCase != nil
-        try Data("print(\"drone-tools-before\")\n".utf8).write(
-            to: workspace.appendingPathComponent("main.swift")
-        )
-        if !replayOnly {
-            try runProcess("/usr/bin/git", ["init", "-q"], directory: workspace)
-            try runProcess("/usr/bin/git", ["add", "-N", "main.swift"], directory: workspace)
-        }
+        try prepareWorkspace(workspace, includeGit: !replayOnly)
         let workerIdentity = DroneIdentityStore(role: .worker, storage: ProofPairingStorage())
         let workerID = try workerIdentity.loadOrCreatePeerID().rawValue
         let workerPairingStorage = ProofPairingStorage()
@@ -97,6 +90,8 @@ enum DroneWorkerProof {
                         controller: controller, connectionID: connectionID, controllerID: controllerID,
                         service: service, observed: observed, port: port
                     )
+                case "stale-approval":
+                    try await verifyStaleApproval(service: service, port: port)
                 default: throw ProofError.failed("unknown review regression")
                 }
             } catch {
@@ -213,6 +208,17 @@ enum DroneWorkerProof {
         print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
     }
 
+    private static func prepareWorkspace(_ workspace: URL, includeGit: Bool) throws {
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        try Data("print(\"drone-tools-before\")\n".utf8).write(
+            to: workspace.appendingPathComponent("main.swift")
+        )
+        if includeGit {
+            try runProcess("/usr/bin/git", ["init", "-q"], directory: workspace)
+            try runProcess("/usr/bin/git", ["add", "-N", "main.swift"], directory: workspace)
+        }
+    }
+
     private static func verifyExpiredOwnerRevocation(
         controller: DroneLANTransport, connectionID: DroneConnectionID, controllerID: UUID,
         service: DroneWorkerService, observed: ProofObserved
@@ -278,6 +284,36 @@ enum DroneWorkerProof {
             guard let replacement else { throw ProofError.failed("fixture reconnect failed") }
             connection = replacement
         }
+    }
+
+    private static func verifyStaleApproval(service: DroneWorkerService, port: UInt16) async throws {
+        let identity = DroneIdentityStore(role: .controller, storage: ProofPairingStorage())
+        let transport = DroneLANTransport(
+            role: .controller, identityStore: identity,
+            pairingStore: DronePairingStore(role: .controller, storage: ProofPairingStorage())
+        )
+        transport.onEvent = { event in
+            if case .pairingRequired(let request) = event {
+                transport.resolvePairing(requestID: request.id, approved: true)
+            }
+        }
+        transport.pair(peerID: DronePeerID(), host: "127.0.0.1", port: port)
+        var requestID: UUID?
+        for _ in 0..<200 {
+            if let approval = await service.approvalSummaries().first { requestID = approval.requestID; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard let requestID else { transport.stop(); throw ProofError.failed("pending pairing fixture missing") }
+        transport.stop()
+        try await Task.sleep(for: .milliseconds(200))
+        let staleWasRetired = !(await service.approvalSummaries()).contains { $0.requestID == requestID }
+        await service.resolvePairing(requestID: requestID, approved: true)
+        try await Task.sleep(for: .milliseconds(100))
+        let health = await service.healthSnapshot()
+        guard health.listenerReady else { throw ProofError.failed("stale approval marked live listener unavailable") }
+        guard staleWasRetired else { throw ProofError.failed("ended pairing remained in approval summaries") }
+        let another = try await connectController(service: service, port: port)
+        another.transport.stop()
     }
 
     private static func verifyOwnerControl(service: DroneWorkerService, port: UInt16, workspace: URL) async throws {

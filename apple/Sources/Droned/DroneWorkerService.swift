@@ -192,14 +192,23 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         await terminals.shutdown()
     }
 
-    func approvalSummaries() -> [DroneApprovalSummary] {
-        approvals.values.map {
+    func approvalSummaries() async -> [DroneApprovalSummary] {
+        await retireEndedApprovals()
+        return approvals.values.map {
             DroneApprovalSummary(
                 requestID: $0.id,
                 verificationCode: $0.verificationCode,
                 isKeyChange: $0.isKeyChange
             )
         }.sorted { $0.requestID.uuidString < $1.requestID.uuidString }
+    }
+
+    private func retireEndedApprovals() async {
+        // Only examine prompts present before suspension. A newer request may
+        // arrive while the transport snapshot is in flight and must survive.
+        let candidates = Set(approvals.keys)
+        let pending = await transport.pendingPairingRequestIDs()
+        for id in candidates.subtracting(pending) { approvals.removeValue(forKey: id) }
     }
 
     func resolvePairing(requestID: UUID, approved: Bool) {
@@ -210,7 +219,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         transport.resolvePairing(requestID: requestID, approved: approved)
     }
 
-    private func handle(_ event: DroneTransportEvent) {
+    private func handle(_ event: DroneTransportEvent) async {
         switch event {
         case .listening(let port):
             guard !stopping else { return }
@@ -229,12 +238,18 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         case .envelope(let id, _, let envelope):
             Task { await self.handle(envelope, connectionID: id) }
         case .disconnected(let id, _):
+            await retireEndedApprovals()
             if let pairingID = pairings.removeValue(forKey: id) {
                 outputPumps.cancel(connectionID: id)
                 Task { await terminals.disconnect(pairingID: pairingID, connectionID: id.rawValue) }
             }
         case .failed(let id, let failure):
-            if id == nil { listenerReady = false }
+            await retireEndedApprovals()
+            // Nil IDs also describe rejected owner requests and admission
+            // limits; only listener startup/failure events invalidate readiness.
+            if id == nil && [.disconnected, .invalidRole, .invalidBonjourInstance].contains(failure) {
+                listenerReady = false
+            }
             if failure == .storage { storageHealthy = false }
             if let id, let pairingID = pairings.removeValue(forKey: id) {
                 outputPumps.cancel(connectionID: id)

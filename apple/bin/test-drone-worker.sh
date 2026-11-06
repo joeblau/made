@@ -40,3 +40,11 @@ xcrun swiftc -parse-as-library -swift-version 6 -o "$BUILD_DIR/drone" \
   "$APPLE_ROOT/Sources/DroneCLI/DroneCLI.swift"
 
 "$BUILD_DIR/DroneWorkerProof" "$@" --proof-cli "$BUILD_DIR/drone"
+
+# Run review regressions in the normal worker lane as well as the isolated
+# authorization mode. A single --review-case remains available for iteration.
+if [[ $# -eq 0 || "${1:-}" == "--tool-replay-authorization" ]]; then
+  for review_case in expiry disconnect stale-approval; do
+    "$BUILD_DIR/DroneWorkerProof" --review-case "$review_case" --proof-cli "$BUILD_DIR/drone"
+  done
+fi
