@@ -13,7 +13,12 @@ actor DroneJobToolEngine: DroneToolEngine {
     private var edits: [String: EditEntry] = [:]
     private let maximumRetainedEntries: Int
     private let now: @Sendable () -> TimeInterval
-    private var operations: [UUID: DroneJobID] = [:]
+    private struct OperationEntry {
+        let jobID: DroneJobID
+        let lease: DroneToolLease
+    }
+
+    private var operations: [String: OperationEntry] = [:]
 
     init(
         jobs: DroneJobEngine,
@@ -106,8 +111,7 @@ actor DroneJobToolEngine: DroneToolEngine {
             standardOutputLimit: request.outputLimit,
             standardErrorLimit: request.outputLimit
         )
-        let snapshot = try create(operation: .process(operation), context: context)
-        operations[context.requestID] = snapshot.id
+        let snapshot = try createTracked(operation: .process(operation), context: context)
         return stream(snapshot.id, context: context, outputKind: .process)
     }
 
@@ -120,14 +124,50 @@ actor DroneJobToolEngine: DroneToolEngine {
             relativePath: request.paths.first,
             outputLimit: request.maxBytes
         )
-        let snapshot = try create(operation: .gitDiff(operation), context: context)
-        operations[context.requestID] = snapshot.id
+        let snapshot = try createTracked(operation: .gitDiff(operation), context: context)
         return stream(snapshot.id, context: context, outputKind: .diff)
     }
 
     func cancel(context: DroneToolRequestContext, operationRequestID: UUID) async throws {
-        guard let jobID = operations[operationRequestID] else { throw DroneProtocolError.invalidIdentifier }
-        _ = try jobs.cancelJob(id: jobID, controllerID: context.lease.controllerID)
+        _ = try scopedKey(context)
+        let key = try operationKey(lease: context.lease, requestID: operationRequestID)
+        guard let entry = operations[key] else { throw DroneProtocolError.invalidIdentifier }
+        _ = try jobs.cancelJob(id: entry.jobID, controllerID: context.lease.controllerID)
+    }
+
+    private func operationKey(lease: DroneToolLease, requestID: UUID) throws -> String {
+        try Self.fingerprint(lease) + requestID.uuidString
+    }
+
+    private func createTracked(
+        operation: DroneJobOperation,
+        context: DroneToolRequestContext
+    ) throws -> DroneJobSnapshot {
+        _ = try scopedKey(context)
+        let key = try operationKey(lease: context.lease, requestID: context.requestID)
+        // Completed jobs remain in the durable store; only live cancellation mappings are needed.
+        for (key, entry) in operations {
+            do {
+                if try jobs.snapshot(id: entry.jobID, controllerID: entry.lease.controllerID).state.isTerminal {
+                    operations.removeValue(forKey: key)
+                }
+            } catch DroneJobError.jobNotFound {
+                operations.removeValue(forKey: key)
+            }
+        }
+        guard operations[key] != nil || operations.count < maximumRetainedEntries else {
+            throw DroneProtocolError.resourceLimit
+        }
+        if let entry = operations[key] {
+            let existing = try jobs.snapshot(id: entry.jobID, controllerID: context.lease.controllerID)
+            guard existing.idempotencyKey == (try scopedKey(context)),
+                  existing.request.operation == operation
+            else { throw DroneProtocolError.idempotencyConflict }
+            return existing
+        }
+        let snapshot = try create(operation: operation, context: context)
+        operations[key] = OperationEntry(jobID: snapshot.id, lease: context.lease)
+        return snapshot
     }
 
     private enum OutputKind {

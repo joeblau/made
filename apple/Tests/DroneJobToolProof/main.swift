@@ -51,6 +51,26 @@ struct DroneJobToolProof {
             _ = try await engine.edit(request, context: context(controller: first.lease.controllerID))
             fatalError("full edit cache accepted new lease")
         } catch DroneProtocolError.resourceLimit {}
+        let bounded = DroneJobToolEngine(jobs: jobs, maximumRetainedEntries: 1)
+        let running = context()
+        let events = try await bounded.run(
+            DroneToolProcessRequest(executable: "sleep", arguments: ["30"]), context: running
+        )
+        do {
+            _ = try await bounded.run(DroneToolProcessRequest(executable: "true"), context: context())
+            fatalError("operation capacity not enforced before create")
+        } catch DroneProtocolError.resourceLimit {}
+        do {
+            try await bounded.cancel(context: context(controller: running.lease.controllerID),
+                                     operationRequestID: running.requestID)
+            fatalError("different lease cancelled operation")
+        } catch DroneProtocolError.invalidIdentifier {}
+        try await bounded.cancel(context: running, operationRequestID: running.requestID)
+        for try await event in events {
+            if case .completed(let body) = event { precondition(body.status == .cancelled) }
+        }
+        let replacement = try await bounded.run(DroneToolProcessRequest(executable: "true"), context: context())
+        for try await _ in replacement {}
         print("Drone job tool proof passed: edit validation, scope, conflict, concurrent retry, retention")
     }
 }
