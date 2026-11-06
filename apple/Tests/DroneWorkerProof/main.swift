@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 @main
@@ -19,18 +20,24 @@ enum DroneWorkerProof {
         }
         let workerIdentity = DroneIdentityStore(role: .worker, storage: ProofPairingStorage())
         let workerID = try workerIdentity.loadOrCreatePeerID().rawValue
+        let workerPairingStorage = ProofPairingStorage()
+        let workerPairings = DronePairingStore(role: .worker, storage: workerPairingStorage)
         let workerTransport = DroneLANTransport(
             role: .worker,
             identityStore: workerIdentity,
-            pairingStore: DronePairingStore(role: .worker, storage: ProofPairingStorage())
+            pairingStore: workerPairings
         )
         let service = try DroneWorkerService(
             workspace: workspace,
             stateDirectory: root.appendingPathComponent("state", isDirectory: true),
             transport: workerTransport,
             workerID: workerID,
+            pairingStore: workerPairings,
             permissions: .all
         )
+        let beforeStart = await service.healthSnapshot()
+        expect(!beforeStart.listenerReady && !beforeStart.paired && beforeStart.storageHealthy,
+               "initial health invented listener or pairing state")
         let observed = ProofObserved()
         await service.setOnListening { observed.set(port: $0) }
         await service.start(bonjourInstanceID: "drone-proof-\(UUID().uuidString)")
@@ -85,9 +92,13 @@ enum DroneWorkerProof {
                 service: service,
                 observed: observed
             )
+            try await verifyRevocationAndHealth(
+                controller: controller, connectionID: connectionID, controllerID: controllerID,
+                service: service, observed: observed, port: port, pairingStorage: workerPairingStorage
+            )
             controller.stop()
             await service.stop()
-            print("Drone worker replay authorization passed: original lease resumes; all changed authority fields denied.")
+            print("Drone worker authorization passed: issued leases, replay, revocation, health, shutdown, and pump isolation.")
             return
         }
 
@@ -170,6 +181,122 @@ enum DroneWorkerProof {
         controller.stop()
         await service.stop()
         print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
+    }
+
+    private static func verifyRevocationAndHealth(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        controllerID: UUID,
+        service: DroneWorkerService,
+        observed: ProofObserved,
+        port: UInt16,
+        pairingStorage: ProofPairingStorage
+    ) async throws {
+        let initial = await service.healthSnapshot()
+        expect(initial.listenerReady && initial.paired && initial.storageHealthy, "live health was not truthful")
+        let other = try await connectController(service: service, port: port)
+        defer { other.transport.stop() }
+        let lease = try await service.issueToolLease(controllerID: controllerID, permissions: [.files, .jobs])
+        let foreignRead = UUID()
+        other.transport.send(DroneEnvelope(
+            kind: .toolRead, requestID: foreignRead, lease: lease, idempotencyKey: UUID().uuidString,
+            body: .toolRead(DroneToolReadRequest(path: "main.swift", maxBytes: 1_024))
+        ), on: other.connectionID)
+        try await expectUnauthorized(foreignRead, observed: other.observed)
+        let pid = try await startTrackedProcess(
+            controller: controller, connectionID: connectionID, lease: lease, observed: observed
+        )
+        pairingStorage.setFailDeletes(true)
+        do {
+            try await service.revokeController(controllerID)
+            throw ProofError.failed("persistent revocation failure was reported as success")
+        } catch DroneTransportFailure.storage {}
+        let failed = await service.healthSnapshot()
+        expect(!failed.storageHealthy, "revocation storage failure was hidden from health")
+        do {
+            _ = try await service.issueToolLease(controllerID: controllerID, permissions: .files)
+            throw ProofError.failed("revoked controller obtained a fresh grant")
+        } catch DroneProtocolError.unauthorized {}
+        try await expectProcessStopped(pid)
+        pairingStorage.setFailDeletes(false)
+        try await service.revokeController(controllerID)
+        let otherLease = try await service.issueToolLease(
+            controllerID: other.controllerID, permissions: [.files, .jobs]
+        )
+        let readID = UUID()
+        other.transport.send(DroneEnvelope(
+            kind: .toolRead, requestID: readID, lease: otherLease, idempotencyKey: UUID().uuidString,
+            body: .toolRead(DroneToolReadRequest(path: "main.swift", maxBytes: 1_024))
+        ), on: other.connectionID)
+        _ = try await waitForResponse(readID, kind: .toolReadResult, observed: other.observed)
+        let shutdownPID = try await startTrackedProcess(
+            controller: other.transport, connectionID: other.connectionID,
+            lease: otherLease, observed: other.observed
+        )
+        await service.stop()
+        try await expectProcessStopped(shutdownPID)
+        let stopped = await service.healthSnapshot()
+        expect(!stopped.listenerReady && stopped.paired, "stop lost pin evidence or reported ready")
+    }
+
+    private static func startTrackedProcess(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        lease: DroneToolLease,
+        observed: ProofObserved
+    ) async throws -> Int32 {
+        let id = UUID()
+        controller.send(DroneEnvelope(
+            kind: .toolRun, requestID: id, lease: lease, idempotencyKey: UUID().uuidString,
+            body: .toolRun(DroneToolProcessRequest(
+                executable: "sh", arguments: ["-c", "echo $$; exec sleep 10"], timeout: 5
+            ))
+        ), on: connectionID)
+        let response = try await waitForResponse(id, kind: .toolOutput, observed: observed)
+        guard case .toolOutput(let output) = response.body,
+              let pid = Int32(String(decoding: output.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)),
+              pid > 1 else { throw ProofError.failed("fixture PID missing") }
+        return pid
+    }
+
+    private static func expectProcessStopped(_ pid: Int32) async throws {
+        for _ in 0..<120 {
+            if kill(pid, 0) == -1 && errno == ESRCH { return }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        throw ProofError.failed("owned process survived cancellation/shutdown")
+    }
+
+    private static func connectController(service: DroneWorkerService, port: UInt16) async throws -> ProofController {
+        let identity = DroneIdentityStore(role: .controller, storage: ProofPairingStorage())
+        let controllerID = try identity.loadOrCreatePeerID().rawValue
+        let transport = DroneLANTransport(
+            role: .controller, identityStore: identity,
+            pairingStore: DronePairingStore(role: .controller, storage: ProofPairingStorage())
+        )
+        let observed = ProofObserved()
+        transport.onEvent = { event in
+            switch event {
+            case .pairingRequired(let request): transport.resolvePairing(requestID: request.id, approved: true)
+            case .connected(let id, _, _): observed.set(connectionID: id)
+            case .envelope(_, _, let envelope): observed.record(envelope)
+            default: break
+            }
+        }
+        transport.pair(peerID: DronePeerID(), host: "127.0.0.1", port: port)
+        for _ in 0..<400 {
+            for approval in await service.approvalSummaries() {
+                await service.resolvePairing(requestID: approval.requestID, approved: true)
+            }
+            if let connectionID = observed.connectionID {
+                return ProofController(
+                    transport: transport, connectionID: connectionID, controllerID: controllerID, observed: observed
+                )
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        transport.stop()
+        throw ProofError.failed("second controller failed to authenticate")
     }
 
     private static func verifyTerminalPumps() async {
@@ -356,6 +483,13 @@ private func runProcess(_ executable: String, _ arguments: [String], directory: 
     guard process.terminationStatus == 0 else { throw ProofError.failed("git setup failed") }
 }
 
+private struct ProofController {
+    let transport: DroneLANTransport
+    let connectionID: DroneConnectionID
+    let controllerID: UUID
+    let observed: ProofObserved
+}
+
 private final class ProofObserved: @unchecked Sendable {
     private let lock = NSLock()
     private var storedPort: UInt16?
@@ -387,10 +521,18 @@ private final class ProofObserved: @unchecked Sendable {
 private final class ProofPairingStorage: PairingSecretStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: Data] = [:]
+    private var failDeletes = false
+
+    func setFailDeletes(_ value: Bool) { lock.withLock { failDeletes = value } }
 
     func read(account: String) throws -> Data? { lock.withLock { values[account] } }
     func write(_ data: Data, account: String) throws { lock.withLock { values[account] = data } }
-    func delete(account: String) throws { _ = lock.withLock { values.removeValue(forKey: account) } }
+    func delete(account: String) throws {
+        try lock.withLock {
+            if failDeletes { throw ProofError.failed("synthetic storage failure") }
+            _ = values.removeValue(forKey: account)
+        }
+    }
 }
 
 private enum ProofError: Error {
