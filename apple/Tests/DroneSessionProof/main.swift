@@ -28,6 +28,14 @@ enum DroneSessionProof {
         let originalConnection = factory.connections[0]
         let originalCreateKey = originalConnection.sent.first(where: { $0.kind == .create })?.idempotencyKey
         precondition(originalCreateKey == "terminal-\(pane.id.uuidString)", "create key depends on generation")
+        originalConnection.emit(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: factory.remoteID),
+                                               body: .output(DroneOutputBody(sequence: 0, offset: 0,
+                                                                            data: Data([0xE2, 0x9C]), isFinal: false))))
+        await wait { first.visibleContents() != nil }
+        originalConnection.emit(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: factory.remoteID),
+                                               body: .output(DroneOutputBody(sequence: 1, offset: 2,
+                                                                            data: Data([0x93]), isFinal: false))))
+        await wait { first.visibleContents() == "✓" }
         store.retry(id: id)
         precondition(store.terminalClient(for: id) == nil, "retry retained retired client")
         await wait { factory.connections.count == 2 && store.states[id]?.isConnected == true }
@@ -37,6 +45,10 @@ enum DroneSessionProof {
         precondition(!staleSent, "retired session accepted input")
         let reattached = try await provider.restore(pane: pane)
         precondition(reattached.remoteSessionID == restored.remoteSessionID)
+        let attach = factory.connections[1].sent.first(where: { $0.kind == .attach })!
+        precondition(attach.body == .attach(DroneAttachBody(afterSequence: 2, afterOffset: 3)), "reattach lost cursor")
+        precondition(next.visibleContents() == "✓", "reattach lost retained bytes")
+        try await routingProof(store: store, id: id, generation: next.identity.generation)
         let nextSent = await next.send(.literal("next"))
         precondition(nextSent)
         precondition(!factory.connections[1].sent.contains(where: { $0.kind == .create }), "reattach created another session")
@@ -52,7 +64,37 @@ enum DroneSessionProof {
         precondition(store.records.isEmpty, "successful revoke retained metadata")
         precondition(provider.session(for: pane) is UnavailableTerminalSession)
         store.stop()
-        print("Drone session proof passed: offline recovery, client replacement, stable ID/key, stale input rejection, revoke failure/retry.")
+        print("Drone session proof passed: offline recovery, client replacement, stable ID/key/cursor, split UTF-8, output isolation/bounds, stale input, revoke retry.")
+    }
+
+    @MainActor
+    private static func routingProof(store: DroneStore, id: UUID, generation: UInt64) async throws {
+        let client = store.terminalClient(for: id) as! DroneRemoteTerminalClient
+        let firstID = UUID()
+        let secondID = UUID()
+        let first = DroneTerminalResumeState(sessionID: firstID)
+        let second = DroneTerminalResumeState(sessionID: secondID)
+        let firstRef = DroneTerminalSessionReference(droneID: id, sessionID: firstID, generation: generation)
+        let secondRef = DroneTerminalSessionReference(droneID: id, sessionID: secondID, generation: generation)
+        await client.setOutputHandler({ first.append($0) != nil }, for: firstRef)
+        await client.setOutputHandler({ second.append($0) != nil }, for: secondRef)
+        await client.handle(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: firstID),
+                                          body: .output(DroneOutputBody(sequence: 0, offset: 0,
+                                                                       data: Data("one".utf8), isFinal: false))))
+        await client.handle(DroneEnvelope(kind: .output, sessionID: DroneSessionID(rawValue: secondID),
+                                          body: .output(DroneOutputBody(sequence: 0, offset: 0,
+                                                                       data: Data("two".utf8), isFinal: false))))
+        precondition(first.contents == "one" && second.contents == "two", "cross-session output")
+        let stale = DroneTerminalSessionReference(droneID: id, sessionID: firstID, generation: generation - 1)
+        await client.setOutputHandler({ _ in fatalError("stale subscriber invoked") }, for: stale)
+        do {
+            try await client.sendInput(Data("stale".utf8), to: stale)
+            fatalError("stale client reference accepted")
+        } catch TerminalSessionFailure.staleGeneration {}
+        let oversized = DroneOutputBody(sequence: 1, offset: 3, data: Data(repeating: 65, count: 300 * 1_024), isFinal: false)
+        _ = first.append(oversized)
+        precondition(first.contents!.utf8.count == 256 * 1_024, "viewport not byte bounded")
+        precondition(first.append(oversized) == nil, "duplicate output appended")
     }
 
     @MainActor
@@ -106,6 +148,8 @@ private final class SessionConnection: DroneConnection, @unchecked Sendable {
         guard let value = try await iterator.next() else { throw DroneTransportError.disconnected }
         return value
     }
+    func emit(_ envelope: DroneEnvelope) { continuation.yield(envelope) }
+
     func close() {
         lock.withLock { closed = true }
         continuation.finish()
