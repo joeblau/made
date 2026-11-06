@@ -14,6 +14,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     private var requests: [UUID: CheckedContinuation<DroneEnvelope, any Error>] = [:]
     private var toolRequests: [UUID: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation] = [:]
     private struct Subscription {
+        let token = UUID()
         let generation: UInt64
         let handler: @Sendable (DroneOutputBody) -> Bool
     }
@@ -103,22 +104,24 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
 
     func detach(_ reference: DroneTerminalSessionReference) async throws {
         try validate(reference)
+        let subscriptionToken = subscriptions[reference.sessionID]?.token
         _ = try await request(
             kind: .detach,
             sessionID: DroneSessionID(rawValue: reference.sessionID)
         )
-        if subscriptions[reference.sessionID]?.generation == reference.generation {
+        if subscriptions[reference.sessionID]?.token == subscriptionToken {
             subscriptions.removeValue(forKey: reference.sessionID)
         }
     }
 
     func close(_ reference: DroneTerminalSessionReference) async throws {
         try validate(reference)
+        let subscriptionToken = subscriptions[reference.sessionID]?.token
         _ = try await request(
             kind: .close,
             sessionID: DroneSessionID(rawValue: reference.sessionID)
         )
-        if subscriptions[reference.sessionID]?.generation == reference.generation {
+        if subscriptions[reference.sessionID]?.token == subscriptionToken {
             subscriptions.removeValue(forKey: reference.sessionID)
         }
     }
@@ -180,7 +183,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
                 let cursor = DroneTerminalCursor(output: output)
                 Task {
                     guard !isClosed,
-                          subscriptions[sessionID.rawValue]?.generation == subscription.generation else { return }
+                          subscriptions[sessionID.rawValue]?.token == subscription.token else { return }
                     try? await connection.send(DroneEnvelope(
                         kind: .acknowledge,
                         requestID: UUID(),
