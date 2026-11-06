@@ -255,7 +255,7 @@ struct DroneTerminalSessionReference: Hashable, Sendable {
     let generation: UInt64
 }
 
-protocol DroneTerminalClient: Sendable {
+protocol DroneTerminalClient: AnyObject, Sendable {
     var droneID: UUID { get }
 
     func createTerminal(
@@ -283,6 +283,7 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     let identity: TerminalSessionIdentity
     private let client: any DroneTerminalClient
     private let lock = NSLock()
+    private var retired = false
     private var storedRemoteSessionID: UUID?
     private var storedOutput = ""
     private var outputHandler: (@Sendable (String) -> Void)?
@@ -307,6 +308,14 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
         self.client = client
     }
 
+    func uses(_ candidate: (any DroneTerminalClient)?) -> Bool {
+        candidate.map { ObjectIdentifier($0) == ObjectIdentifier(client) } ?? false
+    }
+
+    func retire() {
+        lock.withLock { retired = true }
+    }
+
     var destination: TerminalDestination {
         TerminalDestination(
             kind: identity.ownership.kind,
@@ -326,6 +335,7 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     }
 
     func restore(workingDirectory: String?) async throws -> TerminalSessionRestoration {
+        guard !lock.withLock({ retired }) else { throw TerminalSessionFailure.staleGeneration }
         guard client.droneID == identity.ownership.droneID else {
             throw TerminalSessionFailure.destinationChanged
         }
@@ -344,9 +354,7 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
                 }
             }
         }
-        if let reference = reference(sessionID: sessionID) {
-            try await client.attachTerminal(reference)
-        }
+        try await client.attachTerminal(reference())
         await client.setOutputHandler { [weak self] output in
             self?.appendOutput(output)
         }
@@ -447,6 +455,7 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     }
 
     private func reference() throws -> DroneTerminalSessionReference {
+        guard !lock.withLock({ retired }) else { throw TerminalSessionFailure.staleGeneration }
         guard let droneID = identity.ownership.droneID,
               client.droneID == droneID else {
             throw TerminalSessionFailure.destinationChanged
@@ -461,14 +470,6 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
         )
     }
 
-    private func reference(sessionID: UUID) -> DroneTerminalSessionReference? {
-        guard let droneID = identity.ownership.droneID, client.droneID == droneID else { return nil }
-        return DroneTerminalSessionReference(
-            droneID: droneID,
-            sessionID: sessionID,
-            generation: identity.generation
-        )
-    }
 }
 
 struct UnavailableTerminalSession: CockpitTerminalSession {
@@ -515,6 +516,7 @@ final class TerminalSessionProvider: @unchecked Sendable {
     private let lock = NSLock()
     private var records: [UUID: Record] = [:]
     private var generations: [UUID: UInt64] = [:]
+    private var retainedRemoteIDs: [UUID: UUID] = [:]
     private var droneClientResolver: DroneClientResolver
 
     init(droneClientResolver: @escaping DroneClientResolver = { _ in nil }) {
@@ -522,7 +524,7 @@ final class TerminalSessionProvider: @unchecked Sendable {
     }
 
     func configure(droneClientResolver: @escaping DroneClientResolver) {
-        self.droneClientResolver = droneClientResolver
+        lock.withLock { self.droneClientResolver = droneClientResolver }
     }
 
     func session(for pane: Pane) -> any CockpitTerminalSession {
@@ -549,6 +551,14 @@ final class TerminalSessionProvider: @unchecked Sendable {
                     failure: .remoteSessionConflict
                 )
             }
+            if destination.kind == .drone, let droneID = destination.droneID {
+                let resolver = lock.withLock { droneClientResolver }
+                let client = resolver(droneID)
+                let remote = record.session as? DroneTerminalSession
+                if (remote != nil && !remote!.uses(client)) || (remote == nil && client != nil) {
+                    return reconnect(pane: pane)
+                }
+            }
             return record.session
         }
         return makeSession(for: pane, destination: destination, generation: generation(for: pane.id))
@@ -559,6 +569,10 @@ final class TerminalSessionProvider: @unchecked Sendable {
         _ = lock.withLock {
             if let record = records[pane.id], record.destination.ownership != destination.ownership {
                 return record.session.identity.generation
+            }
+            if let remote = records[pane.id]?.session as? DroneTerminalSession {
+                retainedRemoteIDs[pane.id] = remote.destination.remoteSessionID
+                remote.retire()
             }
             let next = (generations[pane.id] ?? 1) + 1
             generations[pane.id] = next
@@ -578,6 +592,7 @@ final class TerminalSessionProvider: @unchecked Sendable {
     func invalidate(pane: Pane, session: any CockpitTerminalSession) {
         lock.withLock {
             guard records[pane.id]?.session.identity == session.identity else { return }
+            retainedRemoteIDs.removeValue(forKey: pane.id)
             records.removeValue(forKey: pane.id)
         }
     }
@@ -657,10 +672,11 @@ final class TerminalSessionProvider: @unchecked Sendable {
                         failure: .invalidDestination
                     )
                 }
-                if let client = droneClientResolver(droneID), client.droneID == droneID {
+                let resolver = lock.withLock { droneClientResolver }
+                if let client = resolver(droneID), client.droneID == droneID {
                     session = DroneTerminalSession(
                         identity: identity,
-                        remoteSessionID: destination.remoteSessionID,
+                        remoteSessionID: destination.remoteSessionID ?? lock.withLock { retainedRemoteIDs[pane.id] },
                         client: client
                     )
                 } else {
