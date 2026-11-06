@@ -74,9 +74,10 @@ final class DroneWorkerSupervisor {
         diagnostics.lastIssue = nil
         diagnostics.record("generation \(generation) started", at: date())
         onUpdate(droneID)
+        let candidate = generation
         runTask = Task { [weak self] in
             guard let self else { return }
-            await self.run(generation: generation)
+            await self.run(generation: candidate)
         }
     }
 
@@ -114,10 +115,11 @@ final class DroneWorkerSupervisor {
                         connection.close()
                         return
                     }
+                    // This generation owns this connection even if validation or supervision fails.
+                    defer { connection.close() }
                     try connection.peer.validate()
                     if let expected = record.verifiedIdentityFingerprint,
                        connection.peer.identityFingerprint != expected {
-                        connection.close()
                         throw DroneTransportError.identityMismatch
                     }
                     self.connection = connection
@@ -129,9 +131,9 @@ final class DroneWorkerSupervisor {
                     try await supervise(connection, generation: candidate)
                     throw DroneTransportError.disconnected
                 } catch {
-                    connection?.close()
-                    connection = nil
+                    // A retired task must never clear or close its replacement connection.
                     guard isCurrent(candidate) else { return }
+                    connection = nil
                     let issue = Self.issue(for: error)
                     diagnostics.lastIssue = issue
                     diagnostics.record("connection ended: \(issue.rawValue)", at: date())
@@ -183,7 +185,7 @@ final class DroneWorkerSupervisor {
                     let envelope = try await connection.receive()
                     try Self.validateIncoming(envelope)
                     await self?.noteActivity(generation: candidate, at: timing.now())
-                    await self?.forward(envelope)
+                    await self?.forward(envelope, generation: candidate)
                 }
             }
             group.addTask { [weak self, timing] in
@@ -213,7 +215,8 @@ final class DroneWorkerSupervisor {
         onUpdate(droneID)
     }
 
-    private func forward(_ envelope: DroneEnvelope) {
+    private func forward(_ envelope: DroneEnvelope, generation candidate: UInt64) {
+        guard isCurrent(candidate) else { return }
         onEnvelope(droneID, envelope)
     }
 
