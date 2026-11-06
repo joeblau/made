@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 extension Notification.Name {
     static let droneTerminalClientDidChange = Notification.Name("droneTerminalClientDidChange")
@@ -902,5 +903,114 @@ extension Pane {
     @MainActor
     func restoreTerminalSession() async throws -> TerminalSessionRestoration {
         try await TerminalSessionProvider.shared.restore(pane: self)
+    }
+}
+
+/// Presentation lifecycle shared by the transcript frontends. Client changes must
+/// retry the initial binding too, not only retain an already-installed callback.
+@Observable
+@MainActor
+final class DroneTerminalPresentation {
+    private(set) var contents = ""
+    private(set) var status = "Connecting…"
+    private(set) var isConnected = false
+    private(set) var isActive = false
+    @ObservationIgnored var onUpdate: (() -> Void)?
+    @ObservationIgnored private let pane: Pane
+    @ObservationIgnored private let provider: TerminalSessionProvider
+    @ObservationIgnored private var observer: (any NSObjectProtocol)?
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var generation: UInt64 = 0
+
+    init(pane: Pane, provider: TerminalSessionProvider = .shared) {
+        self.pane = pane
+        self.provider = provider
+        observer = NotificationCenter.default.addObserver(
+            forName: .droneTerminalClientDidChange, object: nil, queue: nil
+        ) { [weak self] notification in
+            guard let id = notification.object as? UUID else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.isActive, self.pane.terminalDestination.droneID == id else { return }
+                self.rebind()
+            }
+        }
+    }
+
+    func start() {
+        guard !isActive else { return }
+        isActive = true
+        rebind()
+    }
+
+    func retry() {
+        if isActive { rebind() } else { start() }
+    }
+
+    func stop() {
+        isActive = false
+        generation &+= 1
+        task?.cancel()
+        task = nil
+        isConnected = false
+        onUpdate?()
+    }
+
+    private func rebind() {
+        generation &+= 1
+        let candidate = generation
+        task?.cancel()
+        isConnected = false
+        status = "Connecting…"
+        onUpdate?()
+        task = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let restored = try await provider.restore(pane: pane)
+                guard isCurrent(candidate), provider.isCurrent(restored.identity, for: pane) else { return }
+                let session = provider.session(for: pane)
+                contents = session.visibleContents() ?? ""
+                await session.setOutputHandler { [weak self] updated in
+                    Task { @MainActor in
+                        guard let self, self.isActive, self.generation == candidate,
+                              self.provider.isCurrent(restored.identity, for: self.pane) else { return }
+                        self.contents = updated
+                        self.onUpdate?()
+                    }
+                }
+                guard isCurrent(candidate), provider.isCurrent(restored.identity, for: pane) else { return }
+                isConnected = true
+                status = "Connected"
+            } catch {
+                guard isCurrent(candidate) else { return }
+                status = "Unavailable: \(String(describing: error))"
+            }
+            if isCurrent(candidate) {
+                task = nil
+                onUpdate?()
+            }
+        }
+    }
+
+    func send(_ command: String) async -> Bool {
+        guard isActive, isConnected, !command.isEmpty else { return false }
+        let candidate = generation
+        let session = provider.session(for: pane)
+        let sent = await session.send(.literal(command))
+        let entered = sent ? await session.send(.enter) : false
+        guard isCurrent(candidate), provider.isCurrent(session.identity, for: pane) else { return false }
+        if !entered {
+            status = "Input failed"
+            onUpdate?()
+        }
+        return entered
+    }
+
+    private func isCurrent(_ candidate: UInt64) -> Bool {
+        isActive && generation == candidate && !Task.isCancelled
+    }
+
+    isolated deinit {
+        task?.cancel()
+        if let observer { NotificationCenter.default.removeObserver(observer) }
     }
 }
