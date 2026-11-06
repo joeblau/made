@@ -321,7 +321,7 @@ struct WorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private static let emptyPaneKinds: [PaneKind] = [.terminal, .browser, .device, .simulator, .android, .editor]
+    private static let emptyPaneKinds: [PaneKind] = [.terminal, .browser, .device, .simulator, .android, .editor, .agentChat]
 
     private func addPaneButtons(_ kinds: [PaneKind]) -> some View {
         ForEach(kinds, id: \.self) { kind in
@@ -331,6 +331,12 @@ struct WorkspaceView: View {
                     .help(workspace.effectiveRootPath == nil
                         ? "Set a workspace root path to open the editor"
                         : "Open a file editor with fuzzy file search")
+            } else if kind == .agentChat {
+                addPaneButton(kind)
+                    .disabled(workspace.effectiveRootPath == nil)
+                    .help(workspace.effectiveRootPath == nil
+                        ? "Set a workspace root path to chat with a coding agent"
+                        : "Chat with Claude, Codex, Kimi, or Grok in this workspace")
             } else {
                 addPaneButton(kind)
             }
@@ -862,6 +868,14 @@ struct PaneView: View {
                                isSelected: isSelected,
                                onSelect: { pane.workspace?.selectedPaneID = pane.id })
             }
+        case .agentChat:
+            AgentChatPaneView(
+                paneID: pane.id,
+                workingDirectory: pane.workspace?.effectiveRootPath,
+                isActive: isWorkspaceActive,
+                isSelected: isSelected,
+                onSelect: { pane.workspace?.selectedPaneID = pane.id }
+            )
         }
     }
 }

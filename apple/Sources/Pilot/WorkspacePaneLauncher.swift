@@ -138,6 +138,25 @@ struct WorkspacePaneLauncher: View {
         .help("Open an Android Simulator or device stream")
         .accessibilityIdentifier("workspace.android-pane-launcher")
 
+        Menu {
+            ForEach(ChatAgent.allCases) { agent in
+                Button(agent.displayName) {
+                    addAgentChatPane(agent: agent)
+                }
+            }
+        } label: {
+            launcherLabel("Agent Chat", systemImage: PaneKind.agentChat.systemImageName)
+        }
+        .menuIndicator(.hidden)
+        .launcherSlot()
+        .disabled(workspace?.effectiveRootPath == nil)
+        .help(
+            workspace?.effectiveRootPath == nil
+                ? "Set a workspace root path to chat with a coding agent"
+                : "Chat with Claude, Codex, Kimi, or Grok in this workspace"
+        )
+        .accessibilityIdentifier("workspace.agent-chat-launcher")
+
         Button {
             workspace?.addPane(kind: .editor, side: .right)
         } label: {
@@ -166,6 +185,11 @@ struct WorkspacePaneLauncher: View {
                 ? "Set a workspace root path to open it in Finder"
                 : "Open the workspace folder in Finder"
         )
+    }
+
+    private func addAgentChatPane(agent: ChatAgent) {
+        guard let pane = workspace?.addPane(kind: .agentChat, side: .right) else { return }
+        AgentChatPaneStore.setAgent(agent, for: pane.id)
     }
 
     private func addAndroidPane(target: AndroidPaneTarget) {

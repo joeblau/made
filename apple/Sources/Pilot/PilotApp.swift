@@ -894,7 +894,7 @@ struct PilotApp: App {
             case .android:
                 AndroidDeviceRegistry.shared.session(for: pane.id).copyScreenshotToClipboard()
                 return
-            case .terminal, .browser, .editor:
+            case .terminal, .browser, .editor, .agentChat:
                 break
             }
         }

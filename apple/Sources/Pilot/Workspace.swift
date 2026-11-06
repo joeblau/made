@@ -8,6 +8,7 @@ enum PaneKind: String, Codable, CaseIterable {
     case simulator
     case android
     case editor
+    case agentChat
 
     var displayName: String {
         switch self {
@@ -17,6 +18,7 @@ enum PaneKind: String, Codable, CaseIterable {
         case .simulator: "Simulator"
         case .android: "Android"
         case .editor: "Editor"
+        case .agentChat: "Agent Chat"
         }
     }
 
@@ -28,6 +30,7 @@ enum PaneKind: String, Codable, CaseIterable {
         case .simulator: "ipad.landscape.and.ipod"
         case .android: "smartphone"
         case .editor: "curlybraces"
+        case .agentChat: "bubble.left.and.text.bubble.right"
         }
     }
 }
@@ -741,14 +744,10 @@ final class Pane {
             }
         case .browser:
             self.browserState = BrowserState(engine: browserEngine)
-        case .device:
-            break
-        case .simulator:
-            break
-        case .android:
-            break
         case .editor:
             self.editorState = EditorState()
+        case .device, .simulator, .android, .agentChat:
+            break
         }
     }
 
@@ -885,6 +884,9 @@ final class Pane {
                 if isDestructive {
                     TerminalFastCommandStore.removeCommand(for: paneID)
                 }
+            case .agentChat:
+                // Workspace switches keep the agent mid-turn; only deletion stops it.
+                if isDestructive { AgentChatRegistry.shared.remove(paneID: paneID) }
             case .browser, .editor:
                 break
             }

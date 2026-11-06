@@ -70,6 +70,10 @@ struct TabItemContent: View {
                         .foregroundStyle(.secondary)
                 }
 
+                if pane.kind == .agentChat {
+                    AgentChatTabBadge(paneID: pane.id)
+                }
+
                 if pane.kind == .terminal {
                     TerminalAgentBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)
                     TerminalDirtyBadge(pane: pane, isWorkspaceActive: isWorkspaceActive)

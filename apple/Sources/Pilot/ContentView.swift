@@ -81,7 +81,7 @@ struct PaneToolbarControls: View {
                 SimulatorToolbarControls(paneID: pane.id)
             case .android:
                 AndroidToolbarControls(paneID: pane.id)
-            case .terminal, .editor:
+            case .terminal, .editor, .agentChat:
                 EmptyView()
             }
         }
