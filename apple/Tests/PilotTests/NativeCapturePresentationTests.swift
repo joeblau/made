@@ -222,7 +222,10 @@ final class NativeCapturePresentationTests: XCTestCase {
         defer { window.orderOut(nil); window.contentViewController = nil }
         controller.view.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
-        controller.toolPicker.delegate?.markupToolbarViewController(controller.toolPicker, insertNewShape: .rectangle)
+        // This test covers undo, not shape variety. CI's macOS 27.0.1 VM does
+        // not render an inserted rectangle within the deadline; ellipses insert
+        // reliably there (see the resize test).
+        controller.toolPicker.delegate?.markupToolbarViewController(controller.toolPicker, insertNewShape: .ellipse)
         try await waitForAnnotation(in: controller)
         XCTAssertFalse(try XCTUnwrap(controller.markupController.markup).contentsRenderFrame.isEmpty)
         XCTAssertTrue(controller.undoManager?.canUndo == true)

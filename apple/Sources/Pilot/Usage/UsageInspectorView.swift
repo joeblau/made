@@ -309,16 +309,8 @@ private final class NativeProviderUsageCard: NSView {
                               color: window.utilization >= 0.9 ? .systemRed : .labelColor)
             value.setContentHuggingPriority(.required, for: .horizontal)
             stack.addArrangedSubview(InspectorNativeUI.horizontal([label(window.name, weight: .medium), NSView(), value]))
-            let level = NSLevelIndicator()
-            level.levelIndicatorStyle = .continuousCapacity
-            level.minValue = 0
-            level.maxValue = 1
-            level.warningValue = 0.9
-            level.criticalValue = 0.9
-            level.doubleValue = min(max(window.utilization, 0), 1)
-            level.fillColor = account.tint
-            level.warningFillColor = .systemRed
-            level.criticalFillColor = .systemRed
+            let level = UsageProgressBar(fraction: window.utilization,
+                                         tint: window.utilization >= 0.9 ? .systemRed : account.tint)
             level.setAccessibilityLabel(window.name)
             level.setAccessibilityValue(value.stringValue)
             stack.addArrangedSubview(level)
@@ -356,5 +348,38 @@ private final class NativeProviderUsageCard: NSView {
         case .credits: "\(value.formatted(.number.grouping(.automatic).precision(.fractionLength(0...2)))) credits"
         case .currency(let code): value.formatted(.currency(code: code).precision(.fractionLength(2)))
         }
+    }
+}
+
+/// A slim capsule progress bar: a rounded track with a rounded fill.
+@MainActor
+final class UsageProgressBar: NSView {
+    static let height: CGFloat = 6
+    private let fraction: Double
+    private let tint: NSColor
+
+    init(fraction: Double, tint: NSColor) {
+        self.fraction = min(max(fraction, 0), 1)
+        self.tint = tint
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: Self.height).isActive = true
+        setAccessibilityElement(true)
+        setAccessibilityRole(.progressIndicator)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: Self.height) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let radius = bounds.height / 2
+        NSColor.quaternaryLabelColor.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
+        guard fraction > 0 else { return }
+        // Keep a visible dot for tiny values rather than a sliver.
+        let width = max(bounds.height, bounds.width * fraction)
+        tint.setFill()
+        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: width, height: bounds.height),
+                     xRadius: radius, yRadius: radius).fill()
     }
 }
