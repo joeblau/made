@@ -6,6 +6,7 @@ struct DroneToolLease: Codable, Equatable, Sendable {
     let droneID: UUID
     let jobID: DroneJobID
     let workspaceID: UUID
+    /// Seconds since the Unix epoch, shared by controller and worker.
     let expiresAt: TimeInterval
 
     func validate(
