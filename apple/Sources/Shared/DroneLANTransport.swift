@@ -257,17 +257,25 @@ final class DroneLANTransport: @unchecked Sendable {
         }
     }
 
-    func revoke(_ peerID: DronePeerID) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.revokedPeerIDs.insert(peerID)
-            for state in self.connections.values where state.peerID == peerID {
-                self.close(state, failure: nil)
+    func revoke(
+        _ peerID: DronePeerID,
+        completion: (@Sendable (Result<Void, DroneTransportFailure>) -> Void)? = nil
+    ) {
+        // Retain the transport until the caller receives a definitive storage result.
+        queue.async { [self] in
+            revokedPeerIDs.insert(peerID)
+            for state in Array(connections.values) where state.peerID == peerID {
+                close(state, failure: nil)
             }
             do {
-                try self.pairingStore.revoke(peerID)
+                try pairingStore.revoke(peerID)
+                completion?(.success(()))
             } catch {
-                self.emit(.failed(id: nil, failure: .storage))
+                if let completion {
+                    completion(.failure(.storage))
+                } else {
+                    emit(.failed(id: nil, failure: .storage))
+                }
             }
         }
     }

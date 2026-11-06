@@ -138,16 +138,19 @@ final class DroneStore {
     }
 
     func retry(id: UUID) {
+        guard !forgettingIDs.contains(id) else { return }
         supervisors[id]?.retry()
     }
 
     func forget(id: UUID) async {
         guard !forgettingIDs.contains(id), supervisors[id] != nil else { return }
         forgettingIDs.insert(id)
+        var pinRevoked = false
         supervisors[id]?.stop()
         states[id] = .forgetting
         do {
             try await transport.revoke(droneID: id)
+            pinRevoked = true
             try mutateRegistry { records in
                 guard let index = records.firstIndex(where: { $0.id == id }) else {
                     throw DroneRegistryError.missingDrone
@@ -159,9 +162,9 @@ final class DroneStore {
             diagnostics.removeValue(forKey: id)
         } catch {
             states[id] = .offline(issue: .revocationFailed, retryAttempt: nil)
-            persistenceError = error is DroneRegistryError
+            persistenceError = pinRevoked
                 ? "The Drone pin was revoked, but its metadata could not be removed. Retry Forget."
-                : nil
+                : "The Drone pin could not be revoked. Local metadata is retained. Retry Forget."
         }
         forgettingIDs.remove(id)
     }
@@ -190,6 +193,7 @@ final class DroneStore {
             }
             for id in changedIDs {
                 guard let record = records.first(where: { $0.id == id }) else { continue }
+                guard !forgettingIDs.contains(id) else { continue }
                 supervisors[id]?.updateRecord(record)
             }
         } catch {
