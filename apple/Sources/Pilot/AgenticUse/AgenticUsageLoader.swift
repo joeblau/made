@@ -605,7 +605,7 @@ actor AgenticUsageLoader {
                 provider: job.provider,
                 readOffset: readOffset,
                 byteCount: job.size - readOffset,
-                initialCommittedOffset: readOffset,
+                initialCommittedOffset: resumed?.committedOffset ?? 0,
                 state: &state
             )
             let committedRecordCount = state.records.count
@@ -668,6 +668,8 @@ actor AgenticUsageLoader {
         if readOffset > 0 { try handle.seek(toOffset: UInt64(readOffset)) }
         var remaining = byteCount
         var bytesRead = 0
+        // An append can stop before a newline; keep the previous committed
+        // boundary until a complete line arrives in the newly read region.
         var committedOffset = initialCommittedOffset
         while remaining != 0 {
             try Task.checkCancellation()
@@ -677,7 +679,7 @@ actor AgenticUsageLoader {
             bytesRead += chunk.count
             let completeByteCount = try consume(chunk, provider: provider, state: &state)
             if completeByteCount > 0 {
-                committedOffset = initialCommittedOffset + chunkOffset + completeByteCount
+                committedOffset = readOffset + chunkOffset + completeByteCount
             }
             remaining = remaining.map { $0 - chunk.count }
         }
