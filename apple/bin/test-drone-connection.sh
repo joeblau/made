@@ -26,6 +26,7 @@ xcrun swiftc \
   "$APPLE_ROOT/Sources/Pilot/Drones/DroneModels.swift" \
   "$APPLE_ROOT/Sources/Pilot/Drones/DroneTransport.swift" \
   "$APPLE_ROOT/Sources/Pilot/Drones/DroneLANTransportFactory.swift" \
+  "$APPLE_ROOT/Tests/DroneConnectionProof/FleetProof.swift" \
   "$APPLE_ROOT/Tests/DroneConnectionProof/main.swift"
 
 "$BUILD_DIR/DroneConnectionProof"
