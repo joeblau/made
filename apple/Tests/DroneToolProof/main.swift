@@ -11,6 +11,7 @@ enum DroneToolProof {
             workspaceID: UUID(),
             expiresAt: 1_000
         )
+        try verifyExpiredClientLease(lease: lease)
         try verifyReplayAuthorization(lease: lease)
         let engine = DroneFakeEngine(lease: lease, files: [
             "Sources/App.swift": Data("let value = \"before\"\n".utf8),
@@ -97,6 +98,23 @@ enum DroneToolProof {
             throw ProofError.failed("secret environment forwarded")
         } catch DroneProtocolError.unauthorized {}
         print("Drone tool proof passed: driver cycle, idempotency, resume, cancellation, leases, bounds, and adversarial inputs.")
+    }
+
+    private static func verifyExpiredClientLease(lease: DroneToolLease) throws {
+        let expired = DroneToolLease(
+            id: lease.id,
+            controllerID: lease.controllerID,
+            droneID: lease.droneID,
+            jobID: lease.jobID,
+            workspaceID: lease.workspaceID,
+            expiresAt: Date().timeIntervalSince1970 - 60
+        )
+        let engine = DroneFakeEngine(lease: expired, files: [:])
+        let transport = DroneFakeTransport(lease: expired, engine: engine)
+        do {
+            _ = try DroneToolClient(transport: transport, lease: expired)
+            throw ProofError.failed("client accepted an expired Unix-epoch lease")
+        } catch DroneProtocolError.unauthorized {}
     }
 
     private static func verifyReplayAuthorization(lease: DroneToolLease) throws {
