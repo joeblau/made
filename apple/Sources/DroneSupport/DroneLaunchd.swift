@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 protocol DroneLaunchdManaging {
-    var isLoaded: Bool { get }
+    var isLoaded: Bool { get throws }
     func bootstrap() throws
     func stop() throws
 }
@@ -10,12 +10,25 @@ protocol DroneLaunchdManaging {
 struct DroneLaunchd: DroneLaunchdManaging {
     let paths: DronePaths
     var commandTimeout: TimeInterval = 10
+    var execute: ([String], TimeInterval) throws -> Int32 = { arguments, timeout in
+        try DroneProcess.run(
+            executable: URL(fileURLWithPath: "/bin/launchctl"), arguments: arguments, timeout: timeout
+        )
+    }
 
     private var domain: String { "gui/\(getuid())" }
     private var service: String { "\(domain)/\(paths.label)" }
 
     var isLoaded: Bool {
-        (try? runLaunchd(["print", service])) == 0
+        get throws { try probe(timeout: commandTimeout) }
+    }
+
+    private func probe(timeout: TimeInterval) throws -> Bool {
+        switch try runLaunchd(["print", service], timeout: timeout) {
+        case 0: return true
+        case 113: return false // launchctl's service-not-found result
+        default: throw DroneWorkerError.launchdUnavailable
+        }
     }
 
     func bootstrap() throws {
@@ -28,7 +41,7 @@ struct DroneLaunchd: DroneLaunchdManaging {
         guard FileManager.default.fileExists(atPath: paths.launchAgent.path) else {
             throw DroneWorkerError.notInstalled
         }
-        if isLoaded {
+        if try isLoaded {
             guard try runLaunchd(["kickstart", service]) == 0 else {
                 throw DroneWorkerError.operationFailed
             }
@@ -38,17 +51,16 @@ struct DroneLaunchd: DroneLaunchdManaging {
     }
 
     func stop() throws {
-        guard isLoaded else {
-            try? FileManager.default.removeItem(at: paths.controlSocket)
-            return
-        }
-        guard try runLaunchd(["bootout", service]) == 0 else {
-            throw DroneWorkerError.operationFailed
-        }
-        let deadline = Date().addingTimeInterval(commandTimeout)
-        while isLoaded {
-            guard Date() < deadline else { throw DroneWorkerError.processTimedOut }
-            usleep(50_000)
+        guard commandTimeout.isFinite, commandTimeout > 0 else { throw DroneWorkerError.processTimedOut }
+        let deadline = ContinuousClock.now + .seconds(commandTimeout)
+        if try probe(timeout: remaining(until: deadline)) {
+            guard try runLaunchd(["bootout", service], timeout: remaining(until: deadline)) == 0 else {
+                throw DroneWorkerError.operationFailed
+            }
+            while try probe(timeout: remaining(until: deadline)) {
+                let pause = min(0.05, try remaining(until: deadline))
+                usleep(useconds_t(pause * 1_000_000))
+            }
         }
         try? FileManager.default.removeItem(at: paths.controlSocket)
     }
@@ -57,27 +69,21 @@ struct DroneLaunchd: DroneLaunchdManaging {
         guard FileManager.default.fileExists(atPath: paths.launchAgent.path) else {
             throw DroneWorkerError.notInstalled
         }
-        if isLoaded {
-            bootoutIgnoringErrors()
-        }
+        try stop()
         try bootstrap()
     }
 
-    func bootoutIgnoringErrors() {
-        _ = try? runLaunchd(["bootout", service])
-        let deadline = Date().addingTimeInterval(commandTimeout)
-        while isLoaded, Date() < deadline {
-            usleep(50_000)
-        }
+    private func remaining(until deadline: ContinuousClock.Instant) throws -> TimeInterval {
+        let duration = ContinuousClock.now.duration(to: deadline)
+        guard duration > .zero else { throw DroneWorkerError.processTimedOut }
+        let components = duration.components
+        return Double(components.seconds) + Double(components.attoseconds) / 1e18
     }
 
-    private func runLaunchd(_ arguments: [String]) throws -> Int32 {
-        try DroneProcess.run(
-            executable: URL(fileURLWithPath: "/bin/launchctl"),
-            arguments: arguments,
-            timeout: commandTimeout
-        )
+    private func runLaunchd(_ arguments: [String], timeout: TimeInterval? = nil) throws -> Int32 {
+        try execute(arguments, timeout ?? commandTimeout)
     }
+
 }
 
 struct DroneInstaller {
@@ -91,7 +97,7 @@ struct DroneInstaller {
         try DroneFileSystem.requireExecutable(sourceCLI)
         try DroneFileSystem.requireExecutable(sourceDaemon)
 
-        let previous = try DroneInstallationSnapshot(paths: paths, wasLoaded: launchd.isLoaded)
+        let previous = try DroneInstallationSnapshot(paths: paths, wasLoaded: try launchd.isLoaded)
         let release = paths.releases.appendingPathComponent(
             "\(DroneVersion.marketing)-\(UUID().uuidString)",
             isDirectory: true
