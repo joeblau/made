@@ -70,6 +70,37 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         return lease
     }
 
+    func ownerControl(_ request: DroneControlRequest) async throws -> DroneControlToolLease? {
+        try request.validate()
+        switch request.command {
+        case "grant-tools":
+            guard let controller = request.controllerID, let workspace = request.workspaceID,
+                  let names = request.permissions, let lifetime = request.lifetimeSeconds else {
+                throw DroneWorkerError.invalidArguments
+            }
+            var allowed: DroneControllerPermissions = []
+            if names.contains("files") { allowed.insert(.files) }
+            if names.contains("jobs") { allowed.insert(.jobs) }
+            if names.contains("git") { allowed.insert(.git) }
+            let lease = try issueToolLease(
+                controllerID: controller, workspaceID: workspace, permissions: allowed, lifetime: TimeInterval(lifetime)
+            )
+            return DroneControlToolLease(
+                id: lease.id, controllerID: lease.controllerID, droneID: lease.droneID,
+                jobID: .init(rawValue: lease.jobID.rawValue), workspaceID: lease.workspaceID, expiresAt: lease.expiresAt
+            )
+        case "revoke":
+            guard let controller = request.controllerID else { throw DroneWorkerError.invalidArguments }
+            try await revokeController(controller)
+            return nil
+        default: throw DroneWorkerError.invalidArguments
+        }
+    }
+
+    func connectedControllerIDs() -> [UUID] {
+        Array(Set(pairings.values)).sorted { $0.uuidString < $1.uuidString }
+    }
+
     func healthSnapshot() async -> DroneWorkerHealthSnapshot {
         var paired = false
         do {

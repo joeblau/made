@@ -92,13 +92,14 @@ enum DroneWorkerProof {
                 service: service,
                 observed: observed
             )
+            try await verifyOwnerControl(service: service, port: port, workspace: workspace)
             try await verifyRevocationAndHealth(
                 controller: controller, connectionID: connectionID, controllerID: controllerID,
                 service: service, observed: observed, port: port, pairingStorage: workerPairingStorage
             )
             controller.stop()
             await service.stop()
-            print("Drone worker authorization passed: issued leases, replay, revocation, health, shutdown, and pump isolation.")
+            print("Drone worker authorization passed: owner CLI/socket grants, issued leases, replay, revocation, health, shutdown, and pump isolation.")
             return
         }
 
@@ -183,6 +184,76 @@ enum DroneWorkerProof {
         print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
     }
 
+    private static func verifyOwnerControl(service: DroneWorkerService, port: UInt16, workspace: URL) async throws {
+        guard let index = CommandLine.arguments.firstIndex(of: "--proof-cli"),
+              CommandLine.arguments.indices.contains(index + 1) else {
+            throw ProofError.failed("CLI fixture executable missing")
+        }
+        let cli = CommandLine.arguments[index + 1]
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ctl-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = DronePaths(environment: ["BLAU_DRONE_ROOT": root.path, "BLAU_DRONE_WORKSPACE": workspace.path])
+        let daemon = try DroneDaemon(paths: paths, workerService: service)
+        try daemon.startControlListener()
+        defer { daemon.stopControlListener() }
+        var socketInfo = stat()
+        expect(lstat(paths.controlSocket.path, &socketInfo) == 0 && socketInfo.st_mode & 0o777 == 0o600,
+               "owner control socket is not private")
+        let controller = try await connectController(service: service, port: port)
+        defer { controller.transport.stop() }
+        let listed = try await runCLI(cli, arguments: ["controllers"], root: root)
+        expect(listed.status == 0 && String(decoding: listed.output, as: UTF8.self).contains(controller.controllerID.uuidString),
+               "owner cannot discover connected controller IDs")
+        let grantArgs = [
+            "grant-tools", controller.controllerID.uuidString, DroneWorkspaceIDs.default.uuidString, "files", "60",
+        ]
+        let granted = try await runCLI(cli, arguments: grantArgs, root: root)
+        expect(granted.status == 0, "owner grant CLI failed")
+        let lease = try JSONDecoder().decode(DroneToolLease.self, from: granted.output)
+        expect(lease.controllerID == controller.controllerID && lease.expiresAt > Date().timeIntervalSince1970,
+               "CLI lease did not preserve identity/expiry")
+        let id = UUID()
+        controller.transport.send(DroneEnvelope(
+            kind: .toolRead, requestID: id, lease: lease, idempotencyKey: UUID().uuidString,
+            body: .toolRead(DroneToolReadRequest(path: "main.swift", maxBytes: 1_024))
+        ), on: controller.connectionID)
+        _ = try await waitForResponse(id, kind: .toolReadResult, observed: controller.observed)
+        for invalid in [
+            ["revoke", "not-a-uuid"],
+            Array(grantArgs.dropLast()) + ["901"],
+            ["grant-tools", controller.controllerID.uuidString, DroneWorkspaceIDs.default.uuidString, "files,files", "60"],
+        ] {
+            let result = try await runCLI(cli, arguments: invalid, root: root)
+            expect(result.status == 64 && result.output.isEmpty, "invalid owner command did not fail before execution")
+        }
+        let revoked = try await runCLI(cli, arguments: ["revoke", controller.controllerID.uuidString], root: root)
+        expect(revoked.status == 0 && String(decoding: revoked.output, as: UTF8.self) == "revoked\n",
+               "owner revoke CLI did not confirm durable removal")
+        do {
+            _ = try await service.issueToolLease(controllerID: controller.controllerID, permissions: .files)
+            throw ProofError.failed("CLI revocation left controller authorized")
+        } catch DroneProtocolError.unauthorized {}
+    }
+
+    private static func runCLI(_ executable: String, arguments: [String], root: URL) async throws -> ProofCLIResult {
+        try await Task.detached {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            process.environment = [
+                "PATH": "/usr/bin:/bin", "HOME": root.path,
+                "TMPDIR": FileManager.default.temporaryDirectory.path, "BLAU_DRONE_ROOT": root.path,
+            ]
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let bytes = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return ProofCLIResult(status: process.terminationStatus, output: bytes)
+        }.value
+    }
+
     private static func verifyRevocationAndHealth(
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,
@@ -220,6 +291,8 @@ enum DroneWorkerProof {
         try await expectProcessStopped(pid)
         pairingStorage.setFailDeletes(false)
         try await service.revokeController(controllerID)
+        let recoveredIO = await service.healthSnapshot()
+        expect(!recoveredIO.storageHealthy, "transient success cleared latched storage failure without restart")
         let otherLease = try await service.issueToolLease(
             controllerID: other.controllerID, permissions: [.files, .jobs]
         )
@@ -481,6 +554,11 @@ private func runProcess(_ executable: String, _ arguments: [String], directory: 
     try process.run()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else { throw ProofError.failed("git setup failed") }
+}
+
+private struct ProofCLIResult: Sendable {
+    let status: Int32
+    let output: Data
 }
 
 private struct ProofController {
