@@ -13,16 +13,16 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     private let sendButton = NSButton(title: "Send", target: nil, action: nil)
     private let retryButton = NSButton(title: "Reconnect", target: nil, action: nil)
     private let scroll = NSScrollView()
-    private var connectionTask: Task<Void, Never>?
+    private let presentation: DroneTerminalPresentation
     private var active = false
-    private var connected = false
     private var closed = false
     private var generation = 0
-    private var latestOutput = ""
 
-    init(pane: Pane) {
+    init(pane: Pane, provider: TerminalSessionProvider = .shared) {
         self.pane = pane
+        presentation = DroneTerminalPresentation(pane: pane, provider: provider)
         super.init(nibName: nil, bundle: nil)
+        presentation.onUpdate = { [weak self] in self?.refreshPresentation() }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -99,63 +99,43 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     }
 
     func updatePresentation(isActive: Bool, isSelected: Bool) {
-        active = isActive
         guard !closed else { return }
+        if active != isActive { generation += 1 }
+        active = isActive
         if active {
             _ = view
-            if !connected, connectionTask == nil { connect() }
-            renderOutput()
+            presentation.start()
+            refreshPresentation()
             if isSelected, let window = view.window,
                window.firstResponder == nil || window.firstResponder === window.contentView {
-                window.makeFirstResponder(input)
+                focusPaneInput()
             }
+        } else {
+            presentation.stop()
         }
     }
 
     func focusPaneInput() {
         guard !closed, isViewLoaded, let window = view.window else { return }
-        TerminalPaneInputFocus.move(to: connected && input.isEnabled ? input : nil, in: window)
+        TerminalPaneInputFocus.move(to: presentation.isConnected && input.isEnabled ? input : nil, in: window)
     }
 
-    @objc private func reconnect() { connect() }
-
-    private func connect() {
+    @objc private func reconnect() {
+        guard active, !closed else { return }
         generation += 1
-        let request = generation
-        connectionTask?.cancel()
-        connected = false
-        statusLabel.stringValue = "Connecting…"
-        retryButton.isHidden = true
+        presentation.retry()
+    }
+
+    private func refreshPresentation() {
+        guard isViewLoaded, !closed else { return }
+        statusLabel.stringValue = presentation.status
+        retryButton.isHidden = presentation.status == "Connecting…" || presentation.status == "Connected"
+        if active { renderOutput() }
         updateControls()
-        connectionTask = Task { [weak self] in
-            guard let self else { return }
-            do {
-                _ = try await pane.restoreTerminalSession()
-                guard !Task.isCancelled, generation == request, !closed else { return }
-                let session = pane.terminalSession
-                latestOutput = session.visibleContents() ?? ""
-                await session.setOutputHandler { [weak self] updated in
-                    Task { @MainActor in
-                        guard let self, self.generation == request, !self.closed else { return }
-                        self.latestOutput = updated
-                        if self.active { self.renderOutput() }
-                    }
-                }
-                guard !Task.isCancelled, generation == request, !closed else { return }
-                connected = true
-                statusLabel.stringValue = "Connected"
-                if active { renderOutput() }
-            } catch {
-                guard generation == request, !closed else { return }
-                statusLabel.stringValue = "Unavailable: \(error.localizedDescription)"
-                retryButton.isHidden = false
-            }
-            if generation == request { connectionTask = nil }
-            updateControls()
-        }
     }
 
     private func renderOutput() {
+        let latestOutput = presentation.contents
         guard output.string != latestOutput else { return }
         let followsOutput = scroll.contentView.bounds.maxY >= output.bounds.maxY - 24
         let selection = output.selectedRange()
@@ -176,28 +156,24 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     }
 
     private func updateControls() {
-        input.isEnabled = connected && !closed
-        sendButton.isEnabled = connected && !input.stringValue.isEmpty && !closed
+        input.isEnabled = active && presentation.isConnected && !closed
+        sendButton.isEnabled = input.isEnabled && !input.stringValue.isEmpty
     }
 
     func controlTextDidBeginEditing(_ obj: Notification) { onSelect?() }
     func controlTextDidChange(_ obj: Notification) { updateControls() }
 
     @objc private func send() {
-        guard connected, !input.stringValue.isEmpty, !closed else { return }
+        guard active, presentation.isConnected, !input.stringValue.isEmpty, !closed else { return }
         let command = input.stringValue
         input.stringValue = ""
         updateControls()
         let request = generation
-        let session = pane.terminalSession
-        Task { [weak self] in
-            let sent = await session.send(.literal(command))
-            let entered = sent ? await session.send(.enter) : false
+        Task { [weak self, presentation] in
+            let entered = await presentation.send(command)
             guard let self, generation == request, !closed else { return }
             if !entered {
-                statusLabel.stringValue = "Input failed"
                 if input.stringValue.isEmpty { input.stringValue = command }
-                retryButton.isHidden = false
                 updateControls()
             }
         }
@@ -206,8 +182,9 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     func closePane() {
         closed = true
         generation += 1
-        connectionTask?.cancel()
-        connectionTask = nil
+        presentation.onUpdate = nil
+        presentation.stop()
+        if isViewLoaded { updateControls() }
         NotificationCenter.default.removeObserver(self)
     }
 
