@@ -1,5 +1,9 @@
 import Foundation
 
+enum DroneRemoteTerminalError: Error, Equatable {
+    case remote(code: String)
+}
+
 actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolTransport {
     let droneID: UUID
     let authenticatedControllerID: UUID
@@ -9,7 +13,11 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     private let connection: any DroneConnection
     private var requests: [UUID: CheckedContinuation<DroneEnvelope, any Error>] = [:]
     private var toolRequests: [UUID: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation] = [:]
-    private var outputHandler: (@Sendable (DroneOutputBody) -> Void)?
+    private struct Subscription {
+        let generation: UInt64
+        let handler: @Sendable (DroneOutputBody) -> Bool
+    }
+    private var subscriptions: [UUID: Subscription] = [:]
 
     init(droneID: UUID, controllerID: UUID, connection: any DroneConnection) {
         self.droneID = droneID
@@ -39,15 +47,20 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func attachTerminal(_ reference: DroneTerminalSessionReference) async throws {
+        try await attachTerminal(reference, after: .zero)
+    }
+
+    func attachTerminal(_ reference: DroneTerminalSessionReference, after cursor: DroneTerminalCursor) async throws {
+        try validate(reference)
         _ = try await request(
             kind: .attach,
             sessionID: DroneSessionID(rawValue: reference.sessionID),
-            body: .attach(DroneAttachBody(afterSequence: 0, afterOffset: 0))
+            body: .attach(cursor.attachBody)
         )
     }
 
     func sendInput(_ data: Data, to reference: DroneTerminalSessionReference) async throws {
-        guard !isClosed else { throw DroneTransportError.disconnected }
+        try validate(reference)
         try await connection.send(DroneEnvelope(
             kind: .input,
             requestID: UUID(),
@@ -57,6 +70,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func foregroundActivity(for reference: DroneTerminalSessionReference) async throws -> TerminalProcessActivity {
+        try validate(reference)
         let response = try await request(
             kind: .activity,
             sessionID: DroneSessionID(rawValue: reference.sessionID)
@@ -68,6 +82,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func currentDirectory(for reference: DroneTerminalSessionReference) async throws -> String? {
+        try validate(reference)
         let response = try await request(
             kind: .workingDirectory,
             sessionID: DroneSessionID(rawValue: reference.sessionID)
@@ -79,6 +94,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func interrupt(_ reference: DroneTerminalSessionReference) async throws {
+        try validate(reference)
         _ = try await request(
             kind: .cancel,
             sessionID: DroneSessionID(rawValue: reference.sessionID)
@@ -86,17 +102,25 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
     }
 
     func detach(_ reference: DroneTerminalSessionReference) async throws {
+        try validate(reference)
         _ = try await request(
             kind: .detach,
             sessionID: DroneSessionID(rawValue: reference.sessionID)
         )
+        if subscriptions[reference.sessionID]?.generation == reference.generation {
+            subscriptions.removeValue(forKey: reference.sessionID)
+        }
     }
 
     func close(_ reference: DroneTerminalSessionReference) async throws {
+        try validate(reference)
         _ = try await request(
             kind: .close,
             sessionID: DroneSessionID(rawValue: reference.sessionID)
         )
+        if subscriptions[reference.sessionID]?.generation == reference.generation {
+            subscriptions.removeValue(forKey: reference.sessionID)
+        }
     }
 
     func perform(
@@ -111,8 +135,23 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
         return stream
     }
 
-    func setOutputHandler(_ handler: @escaping @Sendable (DroneOutputBody) -> Void) async {
-        outputHandler = handler
+    func setOutputHandler(
+        _ handler: @escaping @Sendable (DroneOutputBody) -> Bool,
+        for reference: DroneTerminalSessionReference
+    ) async {
+        guard !isClosed, reference.droneID == droneID,
+              subscriptions[reference.sessionID] != nil || subscriptions.count < DroneLimits.maxLiveSessions,
+              (subscriptions[reference.sessionID]?.generation ?? 0) <= reference.generation
+        else { return }
+        subscriptions[reference.sessionID] = Subscription(generation: reference.generation, handler: handler)
+    }
+
+    private func validate(_ reference: DroneTerminalSessionReference) throws {
+        guard !isClosed else { throw DroneTransportError.disconnected }
+        guard reference.droneID == droneID else { throw TerminalSessionFailure.destinationChanged }
+        guard subscriptions[reference.sessionID]?.generation == reference.generation else {
+            throw TerminalSessionFailure.staleGeneration
+        }
     }
 
     func handle(_ envelope: DroneEnvelope) {
@@ -136,10 +175,12 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
             return
         }
         if envelope.kind == .output, case .output(let output) = envelope.body {
-            outputHandler?(output)
-            if let sessionID = envelope.sessionID {
+            if let sessionID = envelope.sessionID,
+               let subscription = subscriptions[sessionID.rawValue], subscription.handler(output) {
                 let cursor = DroneTerminalCursor(output: output)
                 Task {
+                    guard !isClosed,
+                          subscriptions[sessionID.rawValue]?.generation == subscription.generation else { return }
                     try? await connection.send(DroneEnvelope(
                         kind: .acknowledge,
                         requestID: UUID(),
@@ -157,7 +198,11 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
             guard let requestID = envelope.requestID,
                   let continuation = requests.removeValue(forKey: requestID)
             else { return }
-            continuation.resume(throwing: DroneTransportError.remoteRejected)
+            if case .error(let error) = envelope.body {
+                continuation.resume(throwing: DroneRemoteTerminalError.remote(code: error.code))
+            } else {
+                continuation.resume(throwing: DroneTransportError.remoteRejected)
+            }
             return
         }
         guard let requestID = envelope.requestID,
@@ -168,7 +213,7 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
 
     func closeRequests() {
         isClosed = true
-        outputHandler = nil
+        subscriptions.removeAll()
         let continuations = requests.values
         requests.removeAll()
         for continuation in continuations {
