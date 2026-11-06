@@ -110,6 +110,37 @@ struct DroneJobToolProof {
             executable: "printf", arguments: ["123456789"], outputLimit: 4
         ), context: context()))
         precondition(capped.contains { if case .output(let body) = $0 { return body.truncated }; return false })
+        let environmentOutput = try await collect(paged.run(DroneToolProcessRequest(
+            executable: "sh", arguments: ["-c", "printf '%s' \"$LANG\""],
+            environment: ["LANG": "fixture-locale", "HOME": workspace.path]
+        ), context: context()))
+        let environmentBytes = environmentOutput.reduce(into: Data()) { data, event in
+            if case .output(let body) = event { data.append(body.data) }
+        }
+        precondition(environmentBytes == Data("fixture-locale".utf8))
+        do {
+            _ = try await paged.diff(DroneToolDiffRequest(contextLines: 0), context: context())
+            fatalError("unsupported diff context silently ignored")
+        } catch DroneProtocolError.resourceLimit {}
+        do {
+            _ = try await paged.run(DroneToolProcessRequest(executable: "true", timeout: .infinity), context: context())
+            fatalError("non-finite timeout accepted")
+        } catch DroneProtocolError.resourceLimit {}
+        var gapLimits = DroneJobEngineLimits()
+        gapLimits.maximumHistoryEvents = 3
+        let gapJobs = try DroneJobEngine(
+            stateURL: root.appendingPathComponent("gap-state"),
+            workspaces: DroneWorkspaceRegistry(workspaces: [workspaceID: workspace]), limits: gapLimits
+        )
+        let gapEngine = DroneJobToolEngine(jobs: gapJobs, eventPageSize: 1)
+        let gapContext = context()
+        let gapRequest = DroneToolProcessRequest(executable: "printf", arguments: ["history"])
+        do { _ = try await collect(gapEngine.run(gapRequest, context: gapContext)) }
+        catch DroneJobError.outputGap {}
+        do {
+            _ = try await collect(gapEngine.run(gapRequest, context: gapContext))
+            fatalError("retained history gap silently completed")
+        } catch DroneJobError.outputGap {}
         print("Stream proof passed: terminal pagination replay, combined limit, truncation, offsets, cancellation schema")
         print("Drone job tool proof passed: edit validation, scope, conflict, concurrent retry, retention")
     }
