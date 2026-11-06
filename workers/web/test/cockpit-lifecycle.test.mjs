@@ -111,3 +111,42 @@ test('resource disposal releases shared GPU resources exactly once', () => {
   ].sort());
   assert.equal(scene.environment, null);
 });
+
+// Exercise Three's actual renderer disposal listener: geometry/material
+// disposal alone does not release per-instance attributes.
+test('scene disposal releases instanced buffers before disposing the renderer', async () => {
+  const { Scene, InstancedMesh, BoxGeometry, MeshBasicMaterial, Color } = await import('three');
+  const { WebGLObjects } = await import('three/src/renderers/webgl/WebGLObjects.js');
+  const scene = new Scene();
+  const geometry = new BoxGeometry();
+  const material = new MeshBasicMaterial();
+  const meshes = [new InstancedMesh(geometry, material, 2), new InstancedMesh(geometry, material, 2)];
+  const removed = [];
+  const released = [];
+  const objects = WebGLObjects(
+    { ARRAY_BUFFER: 34962 },
+    { get: (_, value) => value, update() {} },
+    { update() {}, remove: (attribute) => removed.push(attribute) },
+    { releaseStatesOfObject: (mesh) => released.push(mesh) },
+    { render: { frame: 0 } },
+  );
+  for (const mesh of meshes) {
+    mesh.setColorAt(0, new Color('red'));
+    scene.add(mesh);
+    objects.update(mesh);
+  }
+  let geometryDisposals = 0;
+  let materialDisposals = 0;
+  geometry.addEventListener('dispose', () => geometryDisposals++);
+  material.addEventListener('dispose', () => materialDisposals++);
+  disposeCockpitResources(scene, { dispose() {} }, {
+    dispose() {
+      assert.deepEqual(released, meshes);
+      assert.deepEqual(removed, meshes.flatMap((mesh) => [mesh.instanceMatrix, mesh.instanceColor]));
+      objects.dispose();
+    },
+  });
+  assert.equal(geometryDisposals, 1);
+  assert.equal(materialDisposals, 1);
+  assert.equal(scene.children.length, 0);
+});
