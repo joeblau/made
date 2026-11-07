@@ -63,7 +63,8 @@ cat > "$work/apple/bin/test-drone-protocol.sh" <<'TOOL'
 #!/bin/bash
 printf 'drone-protocol\n' >> "$CI_TEST_LOG"
 TOOL
-for proof in drone-launchd drone-revocation drone-jobs drone-job-tools drone-terminal drone-tools drone-worker; do
+for proof in drone-launchd drone-supervisor drone-revocation drone-connection drone-session \
+  drone-jobs drone-job-tools drone-terminal drone-tools drone-worker; do
   cat > "$work/apple/bin/test-$proof.sh" <<'TOOL'
 #!/bin/bash
 printf '%s\n' "${0##*/}" >> "$CI_TEST_LOG"
@@ -102,7 +103,10 @@ expect_calls 1 '^runner-model verify$'
 expect_calls 2 '^cockpit-ui-boundary$'
 expect_calls 1 '^drone-protocol$'
 expect_calls 1 '^test-drone-launchd.sh$'
+expect_calls 1 '^test-drone-supervisor.sh$'
 expect_calls 1 '^test-drone-revocation.sh$'
+expect_calls 1 '^test-drone-connection.sh$'
+expect_calls 1 '^test-drone-session.sh$'
 expect_calls 1 '^test-drone-jobs.sh$'
 expect_calls 1 '^test-drone-job-tools.sh$'
 expect_calls 1 '^test-drone-terminal.sh$'
