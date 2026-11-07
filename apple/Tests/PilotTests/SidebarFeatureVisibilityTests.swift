@@ -258,6 +258,20 @@ struct SidebarFeatureVisibilityTests {
             search.stringValue = ""
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
             #expect(sections.numberOfRows == 4)
+            // The search field shares the sidebar surface, lines up with the
+            // row selections' edges, and centers on the page title's line.
+            controller.view.layoutSubtreeIfNeeded()
+            let searchFrame = search.convert(search.bounds, to: nil)
+            let sidebarFrame = try #require(search.superview).convert(try #require(search.superview).bounds, to: nil)
+            #expect(search.superview is NSVisualEffectView, "One sidebar surface behind search and list")
+            #expect(abs(searchFrame.minX - sidebarFrame.minX - PilotSettingsViewController.sidebarInset) < 0.5)
+            #expect(abs(sidebarFrame.maxX - searchFrame.maxX - PilotSettingsViewController.sidebarInset) < 0.5)
+            let title = try #require(descendants(controller.view).compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "Sidebar" && $0.font?.pointSize ?? 0 > 18 })
+            let titleFrame = title.convert(title.bounds, to: nil)
+            #expect(abs(searchFrame.midY - titleFrame.midY) < 2, "Search \(searchFrame.midY) vs title \(titleFrame.midY)")
+            #expect(sections.enclosingScrollView?.autohidesScrollers == true)
+            #expect(sections.enclosingScrollView?.verticalScroller?.isHidden ?? true, "A short section list shows no scroll bar")
             guard let output else { continue }
             // The frame view also draws the window background and title bar.
             let frame = try #require(window.contentView?.superview)

@@ -52,6 +52,8 @@ enum NativeSettingsUI {
     static func scrolling(_ stack: NSStackView, inset: CGFloat = 24) -> NSScrollView {
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
+        // No empty track or gutter on pages that fit, even with "Always" scroll bars.
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
         let document = NativeSettingsFlippedView()
         scroll.documentView = document
