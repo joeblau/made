@@ -8,5 +8,6 @@ enum SidebarSelection: Hashable {
     case docker
     case agenticUse
     case runners
+    case mockups
     case workspace(UUID)
 }

@@ -355,7 +355,7 @@ private final class NativeProviderUsageCard: NSView {
 /// A slim capsule progress bar: a rounded track with a rounded fill.
 @MainActor
 final class UsageProgressBar: NSView {
-    static let height: CGFloat = 6
+    static let height: CGFloat = 8
     private let fraction: Double
     private let tint: NSColor
 

@@ -844,6 +844,9 @@ final class Pane {
     /// clears its preference and evicts/stops the session immediately after a
     /// successful save.
     func tearDownRuntimeResources(preservingDevicePreference: Bool = false) {
+        // A placeholder may have started discovery while browsing device lists.
+        let probedPaneID = id
+        MainActor.assumeIsolated { NewTabProbes.release(paneID: probedPaneID, keeping: nil) }
         if kind.isTerminalTool {
             let session = terminalSession
             TerminalSessionProvider.shared.invalidate(pane: self, session: session)
@@ -1383,7 +1386,7 @@ final class Workspace {
         case left, right
     }
 
-    private func inheritedDirectoryForNewTerminal() -> String {
+    func inheritedDirectoryForNewTerminal() -> String {
         if let effectiveRootPath {
             return effectiveRootPath
         }

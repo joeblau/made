@@ -7,6 +7,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/xcodebuild-ci.sh"
 python3 "$APPLE_ROOT/bin/check-cockpit-ui-boundary.py"
 "$APPLE_ROOT/bin/app-icon-tool.swift" validate
 "$APPLE_ROOT/bin/fetch-runner-model.sh" verify
+"$APPLE_ROOT/bin/fetch-mockup-models.sh" verify
 
 build() {
   local scheme="$1"
