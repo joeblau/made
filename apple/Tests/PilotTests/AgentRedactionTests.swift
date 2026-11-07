@@ -499,6 +499,8 @@ struct AgentRedactionTests {
         let text = String(repeating: line + "\n", count: 1_048_576 / (line.utf8.count + 1)) + "key"
         let clock = ContinuousClock()
         let elapsed = clock.measure { _ = redactOutput(text, maximumLines: nil) }
-        #expect(elapsed < .milliseconds(1_500), "\(line.prefix(16))… took \(elapsed)")
+        // Linear redaction of 1 MiB takes ~0.4 s locally and ~1.5 s on CI runners;
+        // the backtracking pattern this guards against ran 4-6x slower than that.
+        #expect(elapsed < .seconds(5), "\(line.prefix(16))… took \(elapsed)")
     }
 }
