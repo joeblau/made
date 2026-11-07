@@ -88,6 +88,9 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         aspectPopup.action = #selector(changeAspect)
         aspectPopup.setAccessibilityLabel("Aspect ratio")
         filters.setAccessibilityIdentifier("mockups.toolbar-controls")
+        // The toolbar group's glass capsule is the button's chrome; a bezel
+        // inside it drew a second button within the first.
+        exportButton.isBordered = false
         filters.setGroups([[kindPicker], [aspectPopup], [exportButton]])
 
         center.stage = stage
