@@ -158,3 +158,193 @@ final class DroneLifecycleTests: XCTestCase {
         )
     }
 }
+
+final class DroneInstallerTests: XCTestCase {
+    private var root: URL!
+    private var paths: DronePaths!
+    private var source: URL!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("drone-install-\(UUID())")
+        paths = DronePaths(environment: ["BLAU_DRONE_ROOT": root.appendingPathComponent("worker").path])
+        try paths.prepareInstallationDirectories()
+        source = root.appendingPathComponent("source")
+        try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+        for name in ["drone", "droned"] {
+            let executable = source.appendingPathComponent(name)
+            try Data("new executable".utf8).write(to: executable)
+            try DroneFileSystem.setMode(0o755, for: executable)
+        }
+    }
+
+    override func tearDownWithError() throws {
+        if let root { try FileManager.default.removeItem(at: root) }
+    }
+
+    func testFailedUpgradeRestoresLoadedReleasePlistAndState() throws {
+        try preparePrevious()
+        let launchd = FakeLaunchd(loaded: true, bootstrapFailures: 1)
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source)) {
+            XCTAssertEqual($0 as? DroneWorkerError, .launchdUnavailable)
+        }
+        try assertPreviousRestored()
+        XCTAssertTrue(launchd.isLoaded)
+        XCTAssertEqual(launchd.bootstrapCalls, 2)
+        XCTAssertEqual(launchd.stopCalls, 2)
+        XCTAssertEqual(try releaseNames(), ["old"])
+    }
+
+    func testFailedUpgradePreservesStoppedService() throws {
+        try preparePrevious()
+        let launchd = FakeLaunchd(loaded: false, bootstrapFailures: 1)
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source))
+        try assertPreviousRestored()
+        XCTAssertFalse(launchd.isLoaded)
+        XCTAssertEqual(launchd.bootstrapCalls, 1)
+    }
+
+    func testFailedFirstInstallRemovesNewLinkAndPlist() throws {
+        let launchd = FakeLaunchd(loaded: false, bootstrapFailures: 1)
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source))
+        XCTAssertThrowsError(try FileManager.default.destinationOfSymbolicLink(atPath: paths.current.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.launchAgent.path))
+        XCTAssertEqual(try releaseNames(), [])
+        XCTAssertFalse(launchd.isLoaded)
+    }
+
+    func testStopFailureDoesNotSwitchReleaseOrPlist() throws {
+        try preparePrevious()
+        let launchd = FakeLaunchd(loaded: true, bootstrapFailures: 0)
+        launchd.failStop = true
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source))
+        try assertPreviousRestored()
+        XCTAssertTrue(launchd.isLoaded)
+        XCTAssertEqual(launchd.bootstrapCalls, 0)
+        XCTAssertEqual(try releaseNames(), ["old"])
+    }
+
+    func testRollbackFailureRetainsReleasesAndReportsDistinctError() throws {
+        try preparePrevious()
+        let launchd = FakeLaunchd(loaded: true, bootstrapFailures: 2)
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source)) {
+            XCTAssertEqual($0 as? DroneWorkerError, .rollbackFailed)
+        }
+        try assertPreviousRestored()
+        XCTAssertEqual(try releaseNames().count, 2)
+    }
+
+    func testRemovalQueryTimeoutPreservesInstallationAndSocket() throws {
+        try assertRemovalFailurePreservesFiles(status: nil)
+    }
+
+    func testRemovalQueryErrorPreservesInstallationAndSocket() throws {
+        try assertRemovalFailurePreservesFiles(status: 5)
+    }
+
+    private func assertRemovalFailurePreservesFiles(status: Int32?) throws {
+        try preparePrevious()
+        try Data("socket fixture".utf8).write(to: paths.controlSocket)
+        var bootedOut = false
+        let launchd = DroneLaunchd(paths: paths, commandTimeout: 0.1, execute: { args, _ in
+            if args.first == "bootout" { bootedOut = true; return 0 }
+            if args.first == "print" {
+                if !bootedOut { return 0 }
+                if let status { return status }
+                throw DroneWorkerError.processTimedOut
+            }
+            return 0
+        })
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source))
+        try assertPreviousRestored()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.controlSocket.path))
+        XCTAssertEqual(try releaseNames(), ["old"])
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).uninstall())
+        try assertPreviousRestored()
+    }
+
+    func testInitialQueryErrorDoesNotMutateInstallation() throws {
+        try preparePrevious()
+        let launchd = DroneLaunchd(paths: paths, execute: { _, _ in 5 })
+        XCTAssertThrowsError(try DroneInstaller(paths: paths, launchd: launchd).install(source: source))
+        try assertPreviousRestored()
+        XCTAssertEqual(try releaseNames(), ["old"])
+    }
+
+    func testRemovalWaitsForConfirmedAbsence() throws {
+        try Data("socket fixture".utf8).write(to: paths.controlSocket)
+        var prints = 0
+        var budgets: [TimeInterval] = []
+        let launchd = DroneLaunchd(paths: paths, commandTimeout: 0.5, execute: { args, timeout in
+            budgets.append(timeout)
+            if args.first == "print" {
+                prints += 1
+                return prints < 3 ? 0 : 113
+            }
+            return 0
+        })
+        try launchd.stop()
+        XCTAssertEqual(prints, 3)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: paths.controlSocket.path))
+        XCTAssertTrue(zip(budgets, budgets.dropFirst()).allSatisfy { $0 >= $1 })
+        XCTAssertLessThan(try XCTUnwrap(budgets.last), 0.5)
+    }
+
+    func testRemovalTimeoutKeepsSocketWhileLoaded() throws {
+        try Data("socket fixture".utf8).write(to: paths.controlSocket)
+        let launchd = DroneLaunchd(paths: paths, commandTimeout: 0.05, execute: { _, _ in 0 })
+        XCTAssertThrowsError(try launchd.stop()) {
+            XCTAssertEqual($0 as? DroneWorkerError, .processTimedOut)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: paths.controlSocket.path))
+    }
+
+    private func preparePrevious() throws {
+        let old = paths.releases.appendingPathComponent("old")
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: true)
+        try Data("old executable".utf8).write(to: old.appendingPathComponent("droned"))
+        try DroneFileSystem.replaceSymbolicLink(target: "releases/old", at: paths.current)
+        try DroneFileSystem.writeAtomically(Data("old plist".utf8), to: paths.launchAgent, mode: 0o600)
+        try Data("retained state".utf8).write(to: paths.state.appendingPathComponent("fixture"))
+    }
+
+    private func assertPreviousRestored() throws {
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: paths.current.path), "releases/old")
+        XCTAssertEqual(try Data(contentsOf: paths.launchAgent), Data("old plist".utf8))
+        XCTAssertTrue(DroneFileSystem.hasMode(paths.launchAgent, mode: 0o600))
+        XCTAssertEqual(try Data(contentsOf: paths.installedDaemon), Data("old executable".utf8))
+        XCTAssertEqual(try Data(contentsOf: paths.state.appendingPathComponent("fixture")), Data("retained state".utf8))
+    }
+
+    private func releaseNames() throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: paths.releases.path).sorted()
+    }
+}
+
+private final class FakeLaunchd: DroneLaunchdManaging {
+    var isLoaded: Bool
+    var bootstrapFailures: Int
+    var bootstrapCalls = 0
+    var stopCalls = 0
+    var failStop = false
+
+    init(loaded: Bool, bootstrapFailures: Int) {
+        isLoaded = loaded
+        self.bootstrapFailures = bootstrapFailures
+    }
+
+    func bootstrap() throws {
+        bootstrapCalls += 1
+        // Model launchctl loading a job even when bootstrap reports failure.
+        isLoaded = true
+        if bootstrapFailures > 0 {
+            bootstrapFailures -= 1
+            throw DroneWorkerError.launchdUnavailable
+        }
+    }
+
+    func stop() throws {
+        stopCalls += 1
+        if failStop { throw DroneWorkerError.operationFailed }
+        isLoaded = false
+    }
+}

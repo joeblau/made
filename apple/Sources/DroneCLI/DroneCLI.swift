@@ -8,6 +8,11 @@ enum DroneCLIMain {
         } catch let error as DroneCLIUsageError {
             FileHandle.standardError.write(Data("drone: \(error.rawValue)\n\(DroneCLI.usage)\n".utf8))
             exit(64)
+        } catch DroneWorkerError.rollbackFailed {
+            FileHandle.standardError.write(Data(
+                "drone: install failed and rollback could not complete; releases retained; run drone doctor\n".utf8
+            ))
+            exit(1)
         } catch DroneWorkerError.notInstalled {
             FileHandle.standardError.write(Data("drone: worker is not installed\n".utf8))
             exit(1)
@@ -99,13 +104,13 @@ struct DroneCLI {
 
     private func status(launchd: DroneLaunchd) -> DroneStatusReport {
         let response = try? DroneControlClient(paths: paths).status()
-        let loaded = launchd.isLoaded
-        let state = DroneStatusEvaluator.state(response: response, launchdLoaded: loaded)
+        let loaded = try? launchd.isLoaded
+        let state = loaded.map { DroneStatusEvaluator.state(response: response, launchdLoaded: $0) } ?? .unhealthy
         return DroneStatusReport(
             state: state,
             response: response,
             installed: FileManager.default.fileExists(atPath: paths.launchAgent.path),
-            launchdLoaded: loaded
+            launchdLoaded: loaded ?? false
         )
     }
 
