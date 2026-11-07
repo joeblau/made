@@ -330,7 +330,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         let generation = observedGeneration
         withObservationTracking {
             _ = store.changeCount; _ = store.selectedWorkspaceID
-            _ = store.isNotesMode; _ = store.isRemoteDesktopMode; _ = store.isDockerMode; _ = store.isAgenticUseMode; _ = store.isRunnersMode
+            _ = store.isNotesMode; _ = store.isRemoteDesktopMode; _ = store.isDockerMode; _ = store.isAgenticUseMode; _ = store.isRunnersMode; _ = store.isMockupsMode
             _ = extensionController.selectedSourceID
             _ = CockpitUIZoomController.shared.factor
             for workspace in store.workspaces + extensionController.mountedWorkspaces.map(\.workspace) {

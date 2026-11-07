@@ -52,6 +52,10 @@ cat > "$work/apple/bin/fetch-runner-model.sh" <<'TOOL'
 #!/bin/bash
 printf 'runner-model %s\n' "$*" >> "$CI_TEST_LOG"
 TOOL
+cat > "$work/apple/bin/fetch-mockup-models.sh" <<'TOOL'
+#!/bin/bash
+printf 'mockup-models %s\n' "$*" >> "$CI_TEST_LOG"
+TOOL
 cat > "$work/apple/bin/check-cockpit-ui-boundary.py" <<'TOOL'
 import os
 from pathlib import Path
@@ -100,6 +104,7 @@ reset_log
 "$work/apple/bin/test.sh" all
 expect_calls 1 '^icons validate$'
 expect_calls 1 '^runner-model verify$'
+expect_calls 1 '^mockup-models verify$'
 expect_calls 2 '^cockpit-ui-boundary$'
 expect_calls 1 '^drone-protocol$'
 expect_calls 1 '^test-drone-launchd.sh$'

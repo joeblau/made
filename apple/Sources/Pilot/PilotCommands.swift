@@ -195,7 +195,7 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
         case .notes: ("0", .command)
         case .remoteDesktop: ("0", [.command, .shift])
         case .docker: ("0", [.command, .control])
-        case .agenticUse, .runners: ("", .command)
+        case .agenticUse, .runners, .mockups: ("", .command)
         }
     }
 

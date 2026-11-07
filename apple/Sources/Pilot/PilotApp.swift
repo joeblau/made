@@ -270,6 +270,7 @@ final class PilotApp {
         case .docker: controller = DockerViewController(store: DockerStore(defaults: preferences), isLive: !isIsolated)
         case .agenticUse: controller = AgenticUseViewController(store: agenticUseStore, isLive: !isIsolated)
         case .runners: controller = RunnersViewController(store: runnersStore, defaults: preferences, isLive: !isIsolated)
+        case .mockups: controller = MockupsViewController(defaults: preferences)
         case .workspace: return nil
         }
         globalControllers[selection] = controller

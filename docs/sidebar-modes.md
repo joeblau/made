@@ -1,7 +1,7 @@
 # Sidebar global modes
 
 Cockpit's sidebar lists full-detail global modes above the workspaces: Notes,
-Remote Desktop, Docker, Agentic Use, and Runners. At most one mode fills the
+Remote Desktop, Docker, Agentic Use, Runners, and Mock-ups. At most one mode fills the
 detail area at a time; leaving a mode returns to the selected workspace.
 
 ## Showing and hiding modes
