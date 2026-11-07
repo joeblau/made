@@ -146,6 +146,16 @@ actor DroneJobToolEngine: DroneToolEngine {
         _ = try jobs.cancelJob(id: entry.jobID, controllerID: context.lease.controllerID)
     }
 
+    /// Trusted worker-owner cancellation. Unlike remote tool calls, local
+    /// revocation remains authoritative after a granted lease expires.
+    func cancelOwnedOperation(lease: DroneToolLease, operationRequestID: UUID) throws {
+        let key = try operationKey(lease: lease, requestID: operationRequestID)
+        guard let entry = operations[key], entry.lease == lease else {
+            throw DroneProtocolError.invalidIdentifier
+        }
+        _ = try jobs.cancelJob(id: entry.jobID, controllerID: entry.lease.controllerID)
+    }
+
     private func operationKey(lease: DroneToolLease, requestID: UUID) throws -> String {
         try Self.fingerprint(lease) + requestID.uuidString
     }

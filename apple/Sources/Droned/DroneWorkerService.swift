@@ -1,14 +1,22 @@
 import Foundation
 
-actor DroneWorkerService {
+actor DroneWorkerService: DroneWorkerHealthReporting {
     private let transport: DroneLANTransport
     private let terminals: DroneTerminalEngine
     private let jobs: DroneJobEngine
     private let tools: DroneJobToolEngine
+    private let pairingStore: DronePairingStore
+    private let healthProbeDirectory: URL
+    private var listenerReady = false
+    private var storageHealthy = true
+    private var stopping = false
+    private var revokedControllers = Set<UUID>()
     private let permissions: DroneControllerPermissions
+    private var toolLeases: DroneToolLeaseRegistry
     private var pairings: [DroneConnectionID: UUID] = [:]
     private var approvals: [UUID: DronePairingRequest] = [:]
-    private var outputTasks: [DroneConnectionID: Task<Void, Never>] = [:]
+    private var outputPumps = DroneWorkerTerminalPumps()
+    private var toolOperations: [UUID: DroneEnvelope] = [:]
     private var toolHistories: [UUID: [DroneEnvelope]] = [:]
     private var toolHistoryOrder: [UUID] = []
     var onListening: (@Sendable (UInt16) -> Void)?
@@ -18,11 +26,18 @@ actor DroneWorkerService {
         workspace: URL,
         stateDirectory: URL,
         transport: DroneLANTransport? = nil,
+        workerID: UUID? = nil,
+        pairingStore: DronePairingStore? = nil,
         permissions: DroneControllerPermissions = [],
         onAudit: (@Sendable (String) -> Void)? = nil
     ) throws {
         self.transport = transport ?? DroneLANTransport(role: .worker)
+        self.pairingStore = pairingStore ?? DronePairingStore(role: .worker)
+        healthProbeDirectory = stateDirectory
         self.permissions = permissions
+        toolLeases = DroneToolLeaseRegistry(
+            droneID: try workerID ?? DroneIdentityStore(role: .worker).loadOrCreatePeerID().rawValue
+        )
         self.onAudit = onAudit
         let workspaceID = DroneWorkspaceIDs.default
         terminals = try DroneTerminalEngine(
@@ -36,11 +51,127 @@ actor DroneWorkerService {
         tools = DroneJobToolEngine(jobs: jobs)
     }
 
+    /// Trusted local control API, never invoked by a remote tool request.
+    func issueToolLease(
+        controllerID: UUID,
+        workspaceID: UUID = DroneWorkspaceIDs.default,
+        permissions requested: DroneControllerPermissions,
+        lifetime: TimeInterval = 300
+    ) throws -> DroneToolLease {
+        guard !stopping, !revokedControllers.contains(controllerID),
+              pairings.values.contains(controllerID), workspaceID == DroneWorkspaceIDs.default,
+              requested.isSubset(of: permissions)
+        else { throw DroneProtocolError.unauthorized }
+        let lease = try toolLeases.issue(
+            controllerID: controllerID, workspaceID: workspaceID,
+            permissions: requested, lifetime: lifetime, now: Date().timeIntervalSince1970
+        )
+        onAudit?("toolLease.issued")
+        return lease
+    }
+
+    func ownerControl(_ request: DroneControlRequest) async throws -> DroneControlToolLease? {
+        try request.validate()
+        switch request.command {
+        case "grant-tools":
+            guard let controller = request.controllerID, let workspace = request.workspaceID,
+                  let names = request.permissions, let lifetime = request.lifetimeSeconds else {
+                throw DroneWorkerError.invalidArguments
+            }
+            var allowed: DroneControllerPermissions = []
+            if names.contains("files") { allowed.insert(.files) }
+            if names.contains("jobs") { allowed.insert(.jobs) }
+            if names.contains("git") { allowed.insert(.git) }
+            let lease = try issueToolLease(
+                controllerID: controller, workspaceID: workspace, permissions: allowed, lifetime: TimeInterval(lifetime)
+            )
+            return DroneControlToolLease(
+                id: lease.id, controllerID: lease.controllerID, droneID: lease.droneID,
+                jobID: .init(rawValue: lease.jobID.rawValue), workspaceID: lease.workspaceID, expiresAt: lease.expiresAt
+            )
+        case "revoke":
+            guard let controller = request.controllerID else { throw DroneWorkerError.invalidArguments }
+            try await revokeController(controller)
+            return nil
+        default: throw DroneWorkerError.invalidArguments
+        }
+    }
+
+    func connectedControllerIDs() -> [UUID] {
+        Array(Set(pairings.values)).sorted { $0.uuidString < $1.uuidString }
+    }
+
+    func healthSnapshot() async -> DroneWorkerHealthSnapshot {
+        var paired = false
+        do {
+            for id in try pairingStore.pairedPeerIDs() {
+                if try pairingStore.pinnedKey(for: id) != nil { paired = true }
+            }
+            let probe = healthProbeDirectory.appendingPathComponent(".health-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: probe) }
+            try Data([0]).write(to: probe, options: .atomic)
+        } catch {
+            storageHealthy = false
+        }
+        return DroneWorkerHealthSnapshot(
+            listenerReady: listenerReady && !stopping, paired: paired, storageHealthy: storageHealthy
+        )
+    }
+
+    /// Revoke locally before any suspension; accepted edits retain their durable outcome.
+    /// Running tool processes are cancelled; detached user terminals are not terminated.
+    func revokeController(_ controllerID: UUID) async throws {
+        revokedControllers.insert(controllerID)
+        toolLeases.revoke(controllerID: controllerID)
+        let connections = pairings.filter { $0.value == controllerID }.map(\.key)
+        for connection in connections {
+            pairings.removeValue(forKey: connection)
+            outputPumps.cancel(connectionID: connection)
+        }
+        let operations = toolOperations.values.filter { $0.lease?.controllerID == controllerID }
+        toolHistories = toolHistories.filter { $0.value.first?.lease?.controllerID != controllerID }
+        toolHistoryOrder.removeAll { toolHistories[$0] == nil }
+        onAudit?("controller.revoked")
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                transport.revoke(DronePeerID(rawValue: controllerID)) { result in
+                    continuation.resume(with: result.mapError { $0 as any Error })
+                }
+            }
+        } catch {
+            storageHealthy = false
+            onAudit?("revocation.storageFailed")
+            // Local denial remains active even when persistent pin removal failed.
+            await cancelRevokedOperations(operations)
+            for connection in connections {
+                await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
+            }
+            throw error
+        }
+        await cancelRevokedOperations(operations)
+        for connection in connections {
+            await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
+        }
+    }
+
+    private func cancelRevokedOperations(_ operations: [DroneEnvelope]) async {
+        for operation in operations {
+            guard let lease = operation.lease, let id = operation.requestID else { continue }
+            do {
+                try await tools.cancelOwnedOperation(lease: lease, operationRequestID: id)
+            } catch {
+                onAudit?("revocation.cancelIncomplete")
+            }
+        }
+    }
+
     func setOnListening(_ handler: @escaping @Sendable (UInt16) -> Void) {
         onListening = handler
     }
 
     func start(bonjourInstanceID: String) {
+        guard !stopping else { return }
+        listenerReady = false
         transport.onEvent = { [weak self] event in
             Task { await self?.handle(event) }
         }
@@ -48,14 +179,22 @@ actor DroneWorkerService {
     }
 
     func stop() async {
-        for task in outputTasks.values { task.cancel() }
-        outputTasks.removeAll()
+        stopping = true
+        listenerReady = false
+        for controller in Set(pairings.values) { toolLeases.revoke(controllerID: controller) }
+        pairings.removeAll()
+        if !(await jobs.shutdown()) {
+            storageHealthy = false
+            onAudit?("shutdown.incomplete")
+        }
+        outputPumps.cancelAll()
         transport.stop()
         await terminals.shutdown()
     }
 
-    func approvalSummaries() -> [DroneApprovalSummary] {
-        approvals.values.map {
+    func approvalSummaries() async -> [DroneApprovalSummary] {
+        await retireEndedApprovals()
+        return approvals.values.map {
             DroneApprovalSummary(
                 requestID: $0.id,
                 verificationCode: $0.verificationCode,
@@ -64,39 +203,64 @@ actor DroneWorkerService {
         }.sorted { $0.requestID.uuidString < $1.requestID.uuidString }
     }
 
+    private func retireEndedApprovals() async {
+        // Only examine prompts present before suspension. A newer request may
+        // arrive while the transport snapshot is in flight and must survive.
+        let candidates = Set(approvals.keys)
+        let pending = await transport.pendingPairingRequestIDs()
+        for id in candidates.subtracting(pending) { approvals.removeValue(forKey: id) }
+    }
+
     func resolvePairing(requestID: UUID, approved: Bool) {
-        approvals.removeValue(forKey: requestID)
+        if let request = approvals.removeValue(forKey: requestID), approved {
+            revokedControllers.remove(request.peerID.rawValue)
+        }
         onAudit?(approved ? "pairing.approved" : "pairing.rejected")
         transport.resolvePairing(requestID: requestID, approved: approved)
     }
 
-    private func handle(_ event: DroneTransportEvent) {
+    private func handle(_ event: DroneTransportEvent) async {
         switch event {
         case .listening(let port):
+            guard !stopping else { return }
+            listenerReady = true
             onListening?(port)
         case .connecting:
             break
         case .connected(let id, let peerID, _):
+            guard !stopping, !revokedControllers.contains(peerID.rawValue) else {
+                transport.disconnect(id)
+                return
+            }
             pairings[id] = peerID.rawValue
         case .pairingRequired(let request):
             approvals[request.id] = request
         case .envelope(let id, _, let envelope):
             Task { await self.handle(envelope, connectionID: id) }
         case .disconnected(let id, _):
+            await retireEndedApprovals()
             if let pairingID = pairings.removeValue(forKey: id) {
-                outputTasks.removeValue(forKey: id)?.cancel()
+                outputPumps.cancel(connectionID: id)
                 Task { await terminals.disconnect(pairingID: pairingID, connectionID: id.rawValue) }
             }
-        case .failed(let id, _):
+        case .failed(let id, let failure):
+            await retireEndedApprovals()
+            // Nil IDs also describe rejected owner requests and admission
+            // limits; only listener startup/failure events invalidate readiness.
+            if id == nil && [.disconnected, .invalidRole, .invalidBonjourInstance].contains(failure) {
+                listenerReady = false
+            }
+            if failure == .storage { storageHealthy = false }
             if let id, let pairingID = pairings.removeValue(forKey: id) {
-                outputTasks.removeValue(forKey: id)?.cancel()
+                outputPumps.cancel(connectionID: id)
                 Task { await terminals.disconnect(pairingID: pairingID, connectionID: id.rawValue) }
             }
         }
     }
 
     private func handle(_ envelope: DroneEnvelope, connectionID: DroneConnectionID) async {
-        guard let pairingID = pairings[connectionID] else { return }
+        guard !stopping, let pairingID = pairings[connectionID],
+              !revokedControllers.contains(pairingID) else { return }
         do {
             if envelope.kind == .heartbeat { return }
             if envelope.kind.isTool {
@@ -167,12 +331,12 @@ actor DroneWorkerService {
             case .detach:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
                 try await terminals.detach(sessionID, pairingID: pairingID, connectionID: connectionID.rawValue)
-                outputTasks.removeValue(forKey: connectionID)?.cancel()
+                outputPumps.cancel(connectionID: connectionID, sessionID: sessionID)
                 try await send(DroneEnvelope(kind: .detached, requestID: envelope.requestID, sessionID: sessionID), on: connectionID)
             case .close:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
                 try await terminals.close(sessionID, pairingID: pairingID, connectionID: connectionID.rawValue)
-                outputTasks.removeValue(forKey: connectionID)?.cancel()
+                outputPumps.cancel(connectionID: connectionID, sessionID: sessionID)
                 try await send(DroneEnvelope(kind: .closed, requestID: envelope.requestID, sessionID: sessionID), on: connectionID)
             case .cancel:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
@@ -221,6 +385,10 @@ actor DroneWorkerService {
                 throw DroneProtocolError.malformedMessage
             }
         } catch {
+            if (error as? DroneProtocolError) == .unauthorized || (error as? DroneJobError) == .unauthorized {
+                onAudit?("authorization.failed")
+            }
+            if (error as? DroneJobError) == .storeCorrupted { storageHealthy = false }
             try? await send(DroneEnvelope(
                 kind: .error,
                 requestID: envelope.requestID,
@@ -239,28 +407,14 @@ actor DroneWorkerService {
         guard let lease = envelope.lease, let requestID = envelope.requestID,
               let idempotencyKey = envelope.idempotencyKey
         else { throw DroneProtocolError.malformedMessage }
-        try DroneToolWorkerAuthorization.authorize(
-            envelope,
-            authenticatedControllerID: pairingID,
-            authenticatedDroneID: lease.droneID,
-            approvedLease: lease,
-            now: Date().timeIntervalSince1970
+        try toolLeases.authorize(
+            envelope, controllerID: pairingID, now: Date().timeIntervalSince1970
         )
         let context = DroneToolRequestContext(
             lease: lease,
             requestID: requestID,
             idempotencyKey: idempotencyKey
         )
-        switch envelope.kind {
-        case .toolRead, .toolEdit:
-            try require(.files)
-        case .toolRun, .toolAttach, .toolCancel:
-            try require(.jobs)
-        case .toolDiff:
-            try require(.git)
-        default:
-            throw DroneProtocolError.malformedMessage
-        }
         switch envelope.kind {
         case .toolRead:
             guard case .toolRead(let request) = envelope.body else { throw DroneProtocolError.malformedMessage }
@@ -284,17 +438,37 @@ actor DroneWorkerService {
             ), on: connectionID)
         case .toolRun:
             guard case .toolRun(let request) = envelope.body else { throw DroneProtocolError.malformedMessage }
-            let stream = try await tools.run(request, context: context)
+            try registerToolOperation(envelope)
+            let stream: AsyncThrowingStream<DroneToolEvent, Error>
+            do {
+                stream = try await tools.run(request, context: context)
+            } catch {
+                toolOperations.removeValue(forKey: requestID)
+                throw error
+            }
+            // Execution ownership outlives delivery to this connection.
             try await streamTool(stream, envelope: envelope, connectionID: connectionID)
         case .toolDiff:
             guard case .toolDiff(let request) = envelope.body else { throw DroneProtocolError.malformedMessage }
-            let stream = try await tools.diff(request, context: context)
+            try registerToolOperation(envelope)
+            let stream: AsyncThrowingStream<DroneToolEvent, Error>
+            do {
+                stream = try await tools.diff(request, context: context)
+            } catch {
+                toolOperations.removeValue(forKey: requestID)
+                throw error
+            }
+            // Execution ownership outlives delivery to this connection.
             try await streamTool(stream, envelope: envelope, connectionID: connectionID)
         case .toolAttach:
             guard case .toolAttach(let attach) = envelope.body,
                   let history = toolHistories[attach.originalRequestID],
                   attach.nextSequence <= UInt64(history.count)
             else { throw DroneProtocolError.invalidIdentifier }
+            try DroneToolWorkerAuthorization.authorizeReplay(
+                storedLease: history.first?.lease,
+                requestingLease: lease
+            )
             var offsets = DroneToolStreamOffsets()
             for event in history.prefix(Int(attach.nextSequence)) {
                 guard case .toolOutput(let output) = event.body else { throw DroneProtocolError.malformedMessage }
@@ -312,6 +486,10 @@ actor DroneWorkerService {
             }
         case .toolCancel:
             guard case .toolCancel(let cancel) = envelope.body else { throw DroneProtocolError.malformedMessage }
+            try DroneToolWorkerAuthorization.authorizeReplay(
+                storedLease: toolOperations[cancel.operationRequestID]?.lease,
+                requestingLease: lease
+            )
             try await tools.cancel(context: context, operationRequestID: cancel.operationRequestID)
             onAudit?("job.cancelled")
             try await send(DroneEnvelope(
@@ -325,6 +503,21 @@ actor DroneWorkerService {
         }
     }
 
+    private func registerToolOperation(_ envelope: DroneEnvelope) throws {
+        guard let id = envelope.requestID else { throw DroneProtocolError.malformedMessage }
+        if let existing = toolOperations[id] {
+            guard existing == envelope else { throw DroneProtocolError.idempotencyConflict }
+            return
+        }
+        if toolOperations.count >= 128, let completed = toolHistoryOrder.first {
+            toolHistoryOrder.removeFirst()
+            toolHistories.removeValue(forKey: completed)
+            toolOperations.removeValue(forKey: completed)
+        }
+        guard toolOperations.count < 128 else { throw DroneProtocolError.resourceLimit }
+        toolOperations[id] = envelope
+    }
+
     private func streamTool(
         _ stream: AsyncThrowingStream<DroneToolEvent, Error>,
         envelope: DroneEnvelope,
@@ -334,7 +527,7 @@ actor DroneWorkerService {
               let key = envelope.idempotencyKey
         else { throw DroneProtocolError.malformedMessage }
         onAudit?("job.accepted")
-        try await send(DroneEnvelope(
+        try await deliverTool(DroneEnvelope(
             kind: .toolAccepted,
             requestID: requestID,
             lease: lease,
@@ -342,6 +535,7 @@ actor DroneWorkerService {
         ), on: connectionID)
         var history: [DroneEnvelope] = []
         for try await event in stream {
+            guard !revokedControllers.contains(lease.controllerID) else { continue }
             let response: DroneEnvelope
             switch event {
             case .output(let output):
@@ -362,13 +556,27 @@ actor DroneWorkerService {
                 )
             }
             history.append(response)
-            try await send(response, on: connectionID)
+            try await deliverTool(response, on: connectionID)
+        }
+        guard !revokedControllers.contains(lease.controllerID) else {
+            toolOperations.removeValue(forKey: requestID)
+            return
         }
         toolHistories[requestID] = history
         toolHistoryOrder.append(requestID)
         if toolHistoryOrder.count > 128, let expired = toolHistoryOrder.first {
             toolHistoryOrder.removeFirst()
             toolHistories.removeValue(forKey: expired)
+            toolOperations.removeValue(forKey: expired)
+        }
+    }
+
+    private func deliverTool(_ envelope: DroneEnvelope, on connectionID: DroneConnectionID) async throws {
+        do {
+            try await send(envelope, on: connectionID)
+        } catch DroneProtocolError.disconnected {
+            // Keep draining the bounded observer to terminal state and retaining
+            // owner cancellation authority, even when its subscriber goes away.
         }
     }
 
@@ -377,8 +585,11 @@ actor DroneWorkerService {
         sessionID: DroneSessionID,
         pairingID: UUID
     ) {
-        guard outputTasks[connectionID] == nil else { return }
-        outputTasks[connectionID] = Task {
+        let key = DroneWorkerTerminalPumps.Key(connectionID: connectionID, sessionID: sessionID)
+        guard !outputPumps.contains(key) else { return }
+        let generation = UUID()
+        let task = Task {
+            defer { outputPumps.finish(key, generation: generation) }
             while !Task.isCancelled {
                 do {
                     let page = try await terminals.readOutput(
@@ -387,6 +598,7 @@ actor DroneWorkerService {
                         connectionID: connectionID.rawValue,
                         maximumChunks: 32
                     )
+                    guard !Task.isCancelled else { return }
                     for output in page.chunks {
                         try await send(
                             DroneEnvelope(kind: .output, sessionID: sessionID, body: .output(output)),
@@ -400,6 +612,7 @@ actor DroneWorkerService {
                 }
             }
         }
+        outputPumps.insert(task, key: key, generation: generation)
     }
 
     private func require(_ permission: DroneControllerPermissions) throws {
@@ -410,12 +623,57 @@ actor DroneWorkerService {
     }
 
     private static func errorCode(_ error: any Error) -> String {
-        let code = String(describing: error).filter { $0.isLetter || $0.isNumber || $0 == "_" }
-        return code.isEmpty ? "remoteRejected" : String(code.prefix(64))
+        // Only payload-free protocol/job enums may be reflected onto the wire.
+        if let code = error as? DroneProtocolError { return String(describing: code) }
+        if let code = error as? DroneJobError { return String(describing: code) }
+        return "remoteRejected"
     }
 
     private func send(_ envelope: DroneEnvelope, on connectionID: DroneConnectionID) async throws {
+        guard !stopping, let controller = pairings[connectionID],
+              !revokedControllers.contains(controller) else { throw DroneProtocolError.disconnected }
         try envelope.validate()
         transport.send(envelope, on: connectionID)
+    }
+}
+
+/// Actor-owned pump bookkeeping; a connection may attach several independent sessions.
+struct DroneWorkerTerminalPumps {
+    struct Key: Hashable {
+        let connectionID: DroneConnectionID
+        let sessionID: DroneSessionID
+    }
+
+    private struct Entry {
+        let generation: UUID
+        let task: Task<Void, Never>
+    }
+
+    private var entries: [Key: Entry] = [:]
+
+    func contains(_ key: Key) -> Bool { entries[key] != nil }
+
+    mutating func insert(_ task: Task<Void, Never>, key: Key, generation: UUID) {
+        entries.removeValue(forKey: key)?.task.cancel()
+        entries[key] = Entry(generation: generation, task: task)
+    }
+
+    mutating func finish(_ key: Key, generation: UUID) {
+        guard entries[key]?.generation == generation else { return }
+        entries.removeValue(forKey: key)
+    }
+
+    mutating func cancel(connectionID: DroneConnectionID, sessionID: DroneSessionID) {
+        entries.removeValue(forKey: Key(connectionID: connectionID, sessionID: sessionID))?.task.cancel()
+    }
+
+    mutating func cancel(connectionID: DroneConnectionID) {
+        let keys = entries.keys.filter { $0.connectionID == connectionID }
+        for key in keys { entries.removeValue(forKey: key)?.task.cancel() }
+    }
+
+    mutating func cancelAll() {
+        for entry in entries.values { entry.task.cancel() }
+        entries.removeAll()
     }
 }

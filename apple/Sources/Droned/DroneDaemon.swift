@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 
+#if !DRONE_PROOF
 @main
 enum DroneDaemonMain {
     static func main() {
@@ -23,21 +24,25 @@ enum DroneDaemonMain {
     }
 }
 
+#endif
+
 final class DroneDaemon {
     private let paths: DronePaths
     private let log: DroneLog
     private var listener: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var signalSources: [DispatchSourceSignal] = []
-    private var shuttingDown = false
     private let workerService: DroneWorkerService?
+    private var isStopping = false
 
-    init(paths: DronePaths = DronePaths()) throws {
+    init(paths: DronePaths = DronePaths(), workerService suppliedService: DroneWorkerService? = nil) throws {
         self.paths = paths
         log = DroneLog(paths: paths)
         try paths.prepareWorkerDirectories()
         try paths.validateSocketPath()
-        if let workspace = paths.workspace {
+        if let suppliedService {
+            workerService = suppliedService
+        } else if let workspace = paths.workspace {
             workerService = try DroneWorkerService(
                 workspace: workspace,
                 stateDirectory: paths.state.appendingPathComponent("execution", isDirectory: true),
@@ -50,7 +55,7 @@ final class DroneDaemon {
     }
 
     func run() throws {
-        try startListener()
+        try startControlListener()
         let bonjourID = try bonjourInstanceID()
         Task { [workerService] in await workerService?.start(bonjourInstanceID: bonjourID) }
         installSignalHandlers()
@@ -58,7 +63,7 @@ final class DroneDaemon {
         CFRunLoopRun()
     }
 
-    private func startListener() throws {
+    func startControlListener() throws {
         if FileManager.default.fileExists(atPath: paths.controlSocket.path) {
             var info = stat()
             guard lstat(paths.controlSocket.path, &info) == 0,
@@ -123,20 +128,28 @@ final class DroneDaemon {
             do {
                 let data = try DroneUnixSocket.readLine(from: client, maximum: DroneControlCodec.maximumBytes)
                 let request = try JSONDecoder().decode(DroneControlRequest.self, from: data)
-                guard request.version == DroneVersion.control else { throw DroneWorkerError.invalidResponse }
-                if request.command != "status" {
-                    guard ["approve", "reject"].contains(request.command),
-                          let requestID = request.requestID,
-                          let workerService
-                    else { throw DroneWorkerError.invalidResponse }
-                    await workerService.resolvePairing(
-                        requestID: requestID,
-                        approved: request.command == "approve"
-                    )
+                try request.validate()
+                var lease: DroneControlToolLease?
+                switch request.command {
+                case "status", "controllers": break
+                case "approve", "reject":
+                    guard let requestID = request.requestID, let workerService else {
+                        throw DroneWorkerError.invalidResponse
+                    }
+                    await workerService.resolvePairing(requestID: requestID, approved: request.command == "approve")
+                case "grant-tools", "revoke":
+                    guard let workerService else { throw DroneWorkerError.invalidResponse }
+                    lease = try await workerService.ownerControl(request)
+                default: throw DroneWorkerError.invalidResponse
                 }
-                var status = DroneControlResponse(paths: paths)
+                let health = await workerService?.healthSnapshot()
+                var status = DroneControlResponse(paths: paths, workerHealth: health)
+                status.toolLease = lease
                 if let workerService {
                     status.approvals = await workerService.approvalSummaries()
+                    if request.command == "controllers" {
+                        status.controllers = await workerService.connectedControllerIDs()
+                    }
                 }
                 var response = try DroneControlCodec.encode(status)
                 response.append(0x0A)
@@ -170,12 +183,17 @@ final class DroneDaemon {
         return permissions
     }
 
-    private func shutDown() {
-        guard !shuttingDown else { return }
-        shuttingDown = true
-        log.record("daemon.stopping")
+    func stopControlListener() {
         acceptSource?.cancel()
         acceptSource = nil
+        try? FileManager.default.removeItem(at: paths.controlSocket)
+    }
+
+    private func shutDown() {
+        guard !isStopping else { return }
+        isStopping = true
+        log.record("daemon.stopping")
+        stopControlListener()
         signalSources.forEach { $0.cancel() }
         signalSources.removeAll()
         try? FileManager.default.removeItem(at: paths.controlSocket)

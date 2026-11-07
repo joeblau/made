@@ -185,6 +185,16 @@ final class DroneLANTransport: @unchecked Sendable {
         )
     }
 
+    /// Local lifecycle query used to retire owner approval prompts after a
+    /// handshake closes. Never exposes pins, keys, or remote execution payloads.
+    func pendingPairingRequestIDs() async -> Set<UUID> {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                continuation.resume(returning: Set(requests.keys))
+            }
+        }
+    }
+
     func resolvePairing(requestID: UUID, approved: Bool) {
         queue.async { [weak self] in
             guard let self, let id = self.requests.removeValue(forKey: requestID),
@@ -214,6 +224,7 @@ final class DroneLANTransport: @unchecked Sendable {
                         for: request.peerID,
                         replacing: nil
                     )
+                    self.revokedPeerIDs.remove(request.peerID)
                     state.peerID = request.peerID
                     if let pendingNoise {
                         try self.acceptWorkerNoise(
@@ -257,17 +268,25 @@ final class DroneLANTransport: @unchecked Sendable {
         }
     }
 
-    func revoke(_ peerID: DronePeerID) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.revokedPeerIDs.insert(peerID)
-            for state in self.connections.values where state.peerID == peerID {
-                self.close(state, failure: nil)
+    func revoke(
+        _ peerID: DronePeerID,
+        completion: (@Sendable (Result<Void, DroneTransportFailure>) -> Void)? = nil
+    ) {
+        // Retain the transport until the caller receives a definitive storage result.
+        queue.async { [self] in
+            revokedPeerIDs.insert(peerID)
+            for state in Array(connections.values) where state.peerID == peerID {
+                close(state, failure: nil)
             }
             do {
-                try self.pairingStore.revoke(peerID)
+                try pairingStore.revoke(peerID)
+                completion?(.success(()))
             } catch {
-                self.emit(.failed(id: nil, failure: .storage))
+                if let completion {
+                    completion(.failure(.storage))
+                } else {
+                    emit(.failed(id: nil, failure: .storage))
+                }
             }
         }
     }

@@ -89,9 +89,9 @@ worker_pid() {
   status_output | awk -F= '$1 == "pid" { print $2 }'
 }
 
-[[ "$("$DRONE" --version)" == *"protocol 1; execution disabled"* ]]
+[[ "$("$DRONE" --version)" == *"protocol 1; execution opt-in"* ]]
 "$DRONE" install
-wait_for_state listening >/dev/null
+wait_for_state disabled >/dev/null
 first_pid="$(worker_pid)"
 [[ -n "$first_pid" ]]
 kill -0 "$first_pid"
@@ -99,15 +99,15 @@ kill -0 "$first_pid"
 mkdir -p "$ROOT/state/pairings"
 printf '%s' "$SECRET" > "$ROOT/state/pairings/test-peer"
 chmod 600 "$ROOT/state/pairings/test-peer"
-paired_status="$(wait_for_state paired)"
+paired_status="$(wait_for_state disabled)"
 [[ "$paired_status" != *"$SECRET"* ]]
 [[ "$paired_status" != *"test-peer"* ]]
 "$DRONE" doctor >/dev/null
 
 "$DRONE" install
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 "$DRONE" install
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 [[ "$(< "$ROOT/state/pairings/test-peer")" == "$SECRET" ]]
 [[ "$(stat -f %Lp "$ROOT/state/pairings/test-peer")" == 600 ]]
 
@@ -132,7 +132,7 @@ for _ in {1..200}; do
 done
 [[ -n "$recovered_pid" ]]
 kill -0 "$recovered_pid"
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 
 "$DRONE" stop
 wait_for_state stopped >/dev/null
@@ -143,7 +143,7 @@ fi
 [[ ! -e "$ROOT/run/control.sock" ]]
 
 "$DRONE" start
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 running_pid="$(worker_pid)"
 "$DRONE" doctor >/dev/null
 log_bytes=0
