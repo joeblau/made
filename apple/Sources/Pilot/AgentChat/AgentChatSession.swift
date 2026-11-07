@@ -104,7 +104,8 @@ final class AgentChatSession {
     @ObservationIgnored private let resolveLaunch: LaunchResolver
     @ObservationIgnored private let attachmentDirectory: URL
     @ObservationIgnored private var attachmentImportTask: Task<Void, Never>?
-    @ObservationIgnored private let now: @Sendable () -> Date
+    /// The injected clock (presentation reads it for live durations).
+    @ObservationIgnored let now: @Sendable () -> Date
     /// The last text and attachments sent with `session/prompt`.
     @ObservationIgnored private var lastSubmission: (text: String, media: [AgentChatAttachment])?
     /// True from a prompt's submission until `finishTurn` ran for it.
@@ -476,7 +477,7 @@ final class AgentChatSession {
         Task {
             let outcome: ACPSteerOutcome
             do {
-                outcome = Self.steerOutcome(try await connection.request(
+                outcome = ACPSteerOutcome(try await connection.request(
                     ACP.Method.steer, params: ACP.steerParams(sessionID: rootSessionID, text: text), timeout: timeout
                 ))
             } catch ACPConnectionError.timedOut {
@@ -576,9 +577,7 @@ final class AgentChatSession {
             let initialized = try await connection.request(
                 ACP.Method.initialize, params: ACP.initializeParams(clientVersion: Self.clientVersion), timeout: .seconds(30)
             )
-            var info = ACPAgentInfo(initialized)
-            // `_meta.steering.supported`, as ACPAgentInfo reads it; harmless where it already does.
-            info.supportsSteering = info.supportsSteering || initialized["_meta"]?["steering"]?["supported"]?.boolValue == true
+            let info = ACPAgentInfo(initialized)
             guard generation == self.generation else { return }
             agentInfo = info
 

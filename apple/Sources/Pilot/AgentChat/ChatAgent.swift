@@ -336,15 +336,6 @@ final class AgentChatRegistry {
 // MARK: - Session result mapping
 
 extension AgentChatSession {
-    /// Reads a `_session/steering` result. Unknown outcomes are failures.
-    static func steerOutcome(_ result: JSONValue) -> ACPSteerOutcome {
-        switch result["outcome"]?.stringValue {
-        case "injected": .injected
-        case "promptRequired": .promptRequired
-        default: ACPSteerOutcome(result)
-        }
-    }
-
     static func stopNotice(_ stopReason: String?) -> String? {
         switch stopReason {
         case "max_tokens": "Stopped: the response reached the model's output limit."
