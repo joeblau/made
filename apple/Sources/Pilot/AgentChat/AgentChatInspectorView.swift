@@ -543,7 +543,8 @@ final class AgentInspectorViewController: NSViewController, NSMenuDelegate {
     }
     /// Refreshes the open subject in place (streaming output, settled times).
     func update(_ content: AgentInspectorContent) {
-        guard isPresented, content.subject == subject else { return }
+        // Unchanged content re-renders only Meta (live durations): renders must not re-redact the page every frame.
+        guard isPresented, content.subject == subject, content != self.content || selectedTab == .meta else { return }
         apply(content, requested: nil, keepTab: true)
     }
     func dismiss() {

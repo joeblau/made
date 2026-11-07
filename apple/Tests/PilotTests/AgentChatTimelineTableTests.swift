@@ -166,6 +166,51 @@ struct AgentChatTimelineTableTests {
         #expect(timeline.tableView.rect(ofRow: 1).height > expanded)
     }
 
+    @Test("A message over 64 KiB redacts off the main actor: never raw text, then the redacted rendering and its height")
+    func largeProseRedactsOffTheMainActor() async throws {
+        let (timeline, scroll, window) = makeTimeline()
+        defer { window.close() }
+        let secret = "ghp_" + String(repeating: "A1b2C3d4", count: 5)
+        let body = (0..<1_500).map { "Line \($0) of a long streamed answer that keeps going." }.joined(separator: "\n")
+        let text = body + "\nexport GITHUB_TOKEN=\(secret)\n" + "Done."
+        #expect(text.utf8.count > AgentRedactionPolicy.offMainThresholdBytes)
+        let rows: [AgentTimelineRow] = [.user(user(0)), .prose(AgentChatItem(id: "big", content: .assistant(text), revision: 77_001))]
+        timeline.applyRows(rows, now: Self.origin)
+        settle(scroll)
+        let cell = try #require(timeline.tableView.view(atColumn: 0, row: 1, makeIfNecessary: true) as? ProseCellView)
+        #expect(!cell.textView.string.contains(secret), "Raw text never reaches the cell while it redacts")
+        let placeholderHeight = timeline.tableView.rect(ofRow: 1).height
+        func shownText() -> String {
+            (timeline.tableView.view(atColumn: 0, row: 1, makeIfNecessary: true) as? ProseCellView)?.textView.string ?? ""
+        }
+        let deadline = ContinuousClock.now + .seconds(10)
+        while !shownText().contains("Done."), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        settle(scroll)
+        let shown = try #require(timeline.tableView.view(atColumn: 0, row: 1, makeIfNecessary: true) as? ProseCellView)
+        #expect(shown.textView.string.contains("Done."))
+        #expect(!shown.textView.string.contains(secret))
+        #expect(timeline.tableView.rect(ofRow: 1).height > placeholderHeight, "The row is remeasured for the redacted text")
+    }
+
+    @Test("User bubbles carry a steer caption that changes their height")
+    func steerCaptionsResizeTheBubble() throws {
+        let (timeline, scroll, window) = makeTimeline()
+        defer { window.close() }
+        let rows = conversation(pairs: 2)
+        timeline.applyRows(rows, now: Self.origin)
+        settle(scroll)
+        let plain = timeline.tableView.rect(ofRow: 2).height
+        timeline.userCaptions = [user(1).key: "Sent to running turn"]
+        settle(scroll)
+        let cell = try #require(timeline.tableView.view(atColumn: 0, row: 2, makeIfNecessary: false) as? UserBubbleCellView)
+        #expect(cell.captionLabel.stringValue == "Sent to running turn" && !cell.captionLabel.isHidden)
+        #expect(timeline.tableView.rect(ofRow: 2).height > plain)
+        timeline.userCaptions = [:]
+        settle(scroll)
+        #expect(cell.captionLabel.isHidden)
+        #expect(abs(timeline.tableView.rect(ofRow: 2).height - plain) < 0.5)
+    }
+
     // MARK: - Fixtures
 
     private func makeTimeline() -> (AgentChatTimelineTable, NSScrollView, NSWindow) {

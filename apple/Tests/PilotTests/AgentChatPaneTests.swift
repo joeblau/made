@@ -16,7 +16,7 @@ struct AgentChatPaneTests {
         update '{"sessionUpdate":"tool_call","toolCallId":"t1","title":"Run tests","kind":"execute","status":"in_progress","rawInput":{"command":"bun test"}}'
         while read -r r; do
           case "$r" in
-            *_session/steering*) id=$(printf '%s' "$r" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'); printf '{"jsonrpc":"2.0","id":%s,"result":{"outcome":"injected"}}\n' "$id" ;;
+            *_session/steering*) id=$(printf '%s' "$r" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'); sleep 0.4; printf '{"jsonrpc":"2.0","id":%s,"result":{"outcome":"injected"}}\n' "$id" ;;
             *session/cancel*) printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}'; break ;;
           esac
         done
@@ -42,8 +42,20 @@ struct AgentChatPaneTests {
         #expect(send.isEnabled)
         harness.composer.keyDown(with: try key(36, "\r"))
         if steering {
+            // A pending bubble until the agent answers, then the delivered message marked as a steer.
+            try await harness.waitUntil {
+                if case .user(let item)? = controller.timeline.rows.last { item.id == AgentChatPaneViewController.pendingSteerID } else { false }
+            }
+            #expect(controller.timeline.userCaptions.values.contains("Sending to running turn…"))
             try await harness.waitUntil { harness.session.transcript.items.contains { $0.content == .user("Also check lint") } }
             #expect(harness.session.isTurnRunning, "A steer joins the running turn")
+            try await harness.waitUntil { !controller.timeline.rows.contains { $0.id.hasSuffix(AgentChatPaneViewController.pendingSteerID) } }
+            harness.layout()
+            let steered = try #require(controller.timeline.rows.lastIndex {
+                if case .user(let item) = $0 { item.content == .user("Also check lint") } else { false }
+            })
+            let bubble = try #require(controller.table.view(atColumn: 0, row: steered, makeIfNecessary: true) as? UserBubbleCellView)
+            #expect(bubble.captionLabel.stringValue == "Sent to running turn" && !bubble.captionLabel.isHidden)
         } else {
             try await harness.waitUntil { harness.session.queuedPrompt == "Also check lint" }
             harness.layout()
@@ -101,8 +113,12 @@ struct AgentChatPaneTests {
         harness.layout()
         #expect(card.titleLabel.stringValue == "Delete build output")
         #expect(!card.headerLabel.stringValue.contains("more"))
+        // Explicit focus (a click) arms the card; once it hides, focus returns to the composer.
+        harness.window.makeFirstResponder(card)
+        #expect(card.isArmedForReturn)
         card.cancelButton.performClick(nil)
         try await harness.waitUntil { harness.session.phase == .ready && card.isHidden }
+        #expect(harness.window.firstResponder === harness.composer, "A hidden approval card doesn't keep keyboard focus")
         let records = harness.controller.timeline.rows.compactMap { row -> AgentChatItem.Approval? in
             if case .approvalRecord(let item) = row, case .approval(let approval) = item.content { approval } else { nil }
         }

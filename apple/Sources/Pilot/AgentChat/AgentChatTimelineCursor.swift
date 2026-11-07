@@ -131,7 +131,10 @@ final class AgentChatTimelineCursor {
     }
 
     /// Rows changed: drop a stop that no longer exists and move the ring.
+    /// Unfocused, nothing is drawn and `move` ignores a stale stop, so the
+    /// full stop list (a layout per group) isn't rebuilt on every render.
     func rowsChanged() {
+        guard isFocused else { return }
         if let stop, !stops().contains(where: { $0.stop == stop }) { self.stop = nil }
         updateRing()
     }

@@ -507,11 +507,23 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         if timeline.acknowledgeSettles(in: rows) { rows = project() }
         if session.isTurnRunning, case .prose(let item)? = rows.last { timeline.streamingKey = item.key } else { timeline.streamingKey = nil }
         timeline.sendAgainNoticeKey = session.canSendAgain ? session.sendAgainNoticeKey : nil
+        // A steer shows as a pending bubble until the agent answers, then as
+        // the delivered user message marked "Sent to running turn" (§1.3).
+        var captions: [String: String] = [:]
+        for key in session.steeredItemKeys { captions[key] = "Sent to running turn" }
+        if let pending = session.pendingSteer {
+            let item = AgentChatItem(id: Self.pendingSteerID, content: .user(pending))
+            rows.append(.user(item))
+            captions[item.key] = "Sending to running turn…"
+        }
+        timeline.userCaptions = captions
         timeline.applyRows(rows, now: now)
         if inspector.isPresented, let subject = inspector.subject {
             inspector.update(AgentChatPaneContent.content(for: subject, session: session, rows: rows, now: now))
         }
     }
+
+    static let pendingSteerID = "pending-steer"
 
     private func renderPhase() {
         guard previousPhase != session.phase else { return }
@@ -556,6 +568,10 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         previousPermission = request
         previousQueuedPermissions = queued
         guard let request else {
+            // A hidden card must not keep keyboard focus: hand it to the composer.
+            if let window = view.window, let responder = window.firstResponder as? NSView, responder.isDescendant(of: approvalCard) {
+                if !focusComposer() { window.makeFirstResponder(nil) }
+            }
             approvalCard.isHidden = true
             approvalHeight?.constant = 0
             return
@@ -680,6 +696,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         agentMenu.font = CockpitTypography.font(size: 13, weight: .semibold)
         previousPhase = nil
         renderPhase()
+        updateRunControls()
         renderApproval(force: true)
         timeline.reloadAll()
         updateComposerLayout()

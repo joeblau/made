@@ -8,6 +8,12 @@ extension NSAttributedString.Key {
     static let agentChatCodeBlock = NSAttributedString.Key("agentChatCodeBlock")
 }
 
+extension Notification.Name {
+    /// A prose message over the off-main threshold finished redacting; the
+    /// `object` is the item key. Its cached height and cell are stale.
+    static let agentProseDidRender = Notification.Name("agentProseDidRender")
+}
+
 /// Agent prose Markdown: fenced code blocks (keeping the fence language) and
 /// inline Markdown. An unterminated fence (mid-stream) renders as code so text
 /// doesn't jump when it closes. Only http, https, and mailto links survive.
@@ -33,16 +39,53 @@ enum AgentProseRenderer {
     static let blockPadding: CGFloat = 6
 
     private static var cache: [String: Rendered] = [:]
+    /// Off-main renders: the newest finished rendering per item key (shown
+    /// while a newer revision redacts), the newest revision still wanted, and
+    /// the keys with a redaction in flight.
+    private static var latest: [String: Rendered] = [:]
+    private static var wanted: [String: (cacheKey: String, raw: String)] = [:]
+    private static var inFlight: Set<String> = []
 
     /// Rendering for an assistant item, cached by (key, revision, zoom).
+    /// Text over `AgentRedactionPolicy.offMainThresholdBytes` is redacted off
+    /// the main actor (§2.4): until it lands, the previous redacted rendering
+    /// of the same message (or a placeholder) is returned, never raw text, and
+    /// `.agentProseDidRender` is posted when the new rendering is cached.
     static func rendered(for item: AgentChatItem) -> Rendered {
         guard case .assistant(let raw) = item.content else { return Rendered(text: NSAttributedString(), copyText: "", blocks: []) }
         let key = "\(item.key)#\(item.revision)#\(CockpitUIZoomController.shared.factor)#\(raw.utf16.count)"
         if let cached = cache[key] { return cached }
-        let result = render(raw)
+        guard raw.utf8.count > AgentRedactionPolicy.offMainThresholdBytes else {
+            let result = render(raw)
+            store(result, cacheKey: key)
+            return result
+        }
+        wanted[item.key] = (key, raw)
+        redactInBackground(item.key)
+        return latest[item.key] ?? Rendered(text: proseText("Redacting…", spacedAfterCode: false), copyText: "", blocks: [])
+    }
+
+    private static func store(_ result: Rendered, cacheKey: String) {
         if cache.count > 256 { cache.removeAll(keepingCapacity: true) }
-        cache[key] = result
-        return result
+        cache[cacheKey] = result
+    }
+
+    /// One redaction per message at a time; revisions that arrive meanwhile
+    /// collapse into a single rerun of the newest text.
+    private static func redactInBackground(_ itemKey: String) {
+        guard !inFlight.contains(itemKey), let job = wanted.removeValue(forKey: itemKey) else { return }
+        inFlight.insert(itemKey)
+        Task { @MainActor in
+            let raw = job.raw
+            let source = await Task.detached(priority: .userInitiated) { redactProse(raw) }.value
+            inFlight.remove(itemKey)
+            let result = build(source)
+            store(result, cacheKey: job.cacheKey)
+            if latest.count > 64 { latest.removeAll(keepingCapacity: true) }
+            latest[itemKey] = result
+            NotificationCenter.default.post(name: .agentProseDidRender, object: itemKey)
+            redactInBackground(itemKey)
+        }
     }
 
     static func segments(_ text: String) -> [Segment] {
@@ -87,7 +130,11 @@ enum AgentProseRenderer {
     /// Redacts `raw` (prose policy: known-secret shapes only, layout kept),
     /// then renders it.
     static func render(_ raw: String) -> Rendered {
-        let source = redactProse(raw)
+        build(redactProse(raw))
+    }
+
+    /// Renders already-redacted Markdown.
+    private static func build(_ source: String) -> Rendered {
         let output = NSMutableAttributedString()
         var blocks: [String] = []
         var previousWasCode = false
@@ -476,7 +523,8 @@ final class ProseCellView: NSTableCellView {
 // MARK: - User bubble
 
 /// User message: right-aligned bubble ≤ 75% width, accent-tinted surface,
-/// attachments, no copy icon.
+/// attachments, no copy icon. An optional muted caption beneath the bubble
+/// marks steers ("Sending to running turn…" / "Sent to running turn").
 final class UserBubbleCellView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.user")
     static let maximumWidthFraction: CGFloat = 0.75
@@ -489,8 +537,12 @@ final class UserBubbleCellView: NSTableCellView {
 
     let bubble = AgentChatSurfaceView(fill: .userBubble, cornerRadius: 12)
     let messageLabel = AgentChatText.makeLabel(wrapping: true, selectable: true)
+    let captionLabel = AgentChatText.makeLabel()
     private var attachmentViews: [(image: NSImageView, name: NSTextField)] = []
     private var item: AgentChatItem?
+    private var caption: String?
+
+    static var captionFont: NSFont { AgentChatText.font(12) }
 
     init() {
         super.init(frame: .zero)
@@ -498,6 +550,8 @@ final class UserBubbleCellView: NSTableCellView {
         setAccessibilityIdentifier(Self.reuseIdentifier.rawValue)
         addSubview(bubble)
         bubble.addSubview(messageLabel)
+        captionLabel.isHidden = true
+        addSubview(captionLabel)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -508,6 +562,7 @@ final class UserBubbleCellView: NSTableCellView {
         var bubble: NSRect
         var attachments: [(image: NSRect?, name: NSRect)]
         var message: NSRect?
+        var caption: NSRect?
         var height: CGFloat
     }
 
@@ -520,7 +575,7 @@ final class UserBubbleCellView: NSTableCellView {
         redactInline(String(attachment.name.prefix(256)))
     }
 
-    private static func layout(item: AgentChatItem, width: CGFloat) -> Layout {
+    private static func layout(item: AgentChatItem, width: CGFloat, caption: String?) -> Layout {
         let font = AgentChatText.font(AgentProseRenderer.bodySize)
         let nameFont = AgentChatText.font(12)
         let maximumContent = max(1, floor((width - sideInset * 2) * maximumWidthFraction) - horizontalPadding * 2)
@@ -557,12 +612,25 @@ final class UserBubbleCellView: NSTableCellView {
         let bubbleHeight = y + verticalPadding
         let bubbleFrame = NSRect(x: max(sideInset, width - sideInset - bubbleWidth), y: verticalInset,
                                  width: bubbleWidth, height: bubbleHeight)
-        return Layout(bubble: bubbleFrame, attachments: attachments, message: messageFrame, height: bubbleHeight + verticalInset * 2)
+        var height = bubbleHeight + verticalInset * 2
+        var captionFrame: NSRect?
+        if let caption, !caption.isEmpty {
+            let lineHeight = AgentChatText.lineHeight(captionFont)
+            let available = max(1, width - sideInset * 2)
+            let captionWidth = min(available, ceil(AgentChatText.width(caption, font: captionFont)) + 2)
+            captionFrame = NSRect(x: width - sideInset - captionWidth, y: bubbleFrame.maxY + 2, width: captionWidth, height: lineHeight)
+            height += lineHeight + 2
+        }
+        return Layout(bubble: bubbleFrame, attachments: attachments, message: messageFrame, caption: captionFrame, height: height)
     }
 
     /// `item.content` is `.user`; attachments come from `item.attachments`.
-    func configure(item: AgentChatItem, actions: AgentChatRowActions) {
+    /// `caption` (muted, beneath the bubble) marks a pending or delivered steer.
+    func configure(item: AgentChatItem, actions: AgentChatRowActions, caption: String? = nil) {
         self.item = item
+        self.caption = caption
+        AgentChatText.apply(captionLabel, text: caption ?? "", font: Self.captionFont, color: .textMuted)
+        captionLabel.isHidden = (caption ?? "").isEmpty
         let message = Self.text(item)
         AgentChatText.apply(messageLabel, text: message, font: AgentChatText.font(AgentProseRenderer.bodySize), color: .textPrimary)
         messageLabel.isHidden = message.isEmpty
@@ -585,18 +653,19 @@ final class UserBubbleCellView: NSTableCellView {
             AgentChatText.apply(views.name, text: Self.attachmentName(attachment), font: AgentChatText.font(12), color: .textMuted)
             views.name.toolTip = Self.attachmentName(attachment)
         }
-        setAccessibilityLabel("You: " + redactInline(String(message.prefix(400))))
+        setAccessibilityLabel("You: " + redactInline(String(message.prefix(400))) + (caption.map { ". " + $0 } ?? ""))
         needsLayout = true
     }
 
-    static func height(item: AgentChatItem, width: CGFloat) -> CGFloat {
-        layout(item: item, width: width).height
+    static func height(item: AgentChatItem, width: CGFloat, caption: String? = nil) -> CGFloat {
+        layout(item: item, width: width, caption: caption).height
     }
 
     override func layout() {
         super.layout()
         guard let item else { return }
-        let layout = Self.layout(item: item, width: bounds.width)
+        let layout = Self.layout(item: item, width: bounds.width, caption: caption)
+        captionLabel.frame = layout.caption ?? .zero
         bubble.frame = layout.bubble
         for (frames, views) in zip(layout.attachments, attachmentViews) {
             views.image.frame = frames.image ?? .zero

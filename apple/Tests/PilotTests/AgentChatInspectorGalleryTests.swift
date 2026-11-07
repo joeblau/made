@@ -111,6 +111,23 @@ struct AgentChatInspectorGalleryTests {
         #expect(pasteboard.string(forType: .string) == Self.secret)
     }
 
+    @Test("Pane refreshes with unchanged content don't re-redact the page; changed content still refreshes")
+    func unchangedRefreshSkipsRedaction() {
+        final class Counter: @unchecked Sendable { var outputs = 0 }
+        let counter = Counter()
+        let inspector = AgentInspectorViewController(allowsReasoningExport: { false })
+        inspector.redactor = AgentInspectorRedactor(output: { counter.outputs += 1; return redactOutput($0, maximumLines: $1) },
+                                                    json: { redactJSON($0) }, inline: { redactInline($0) })
+        let content = stepContent(output: "line 1")
+        inspector.present(content, tab: .output)
+        let presented = counter.outputs
+        for _ in 0..<5 { inspector.update(content) }
+        #expect(counter.outputs == presented, "Identical content is not redacted again")
+        inspector.update(stepContent(output: "line 1\nline 2"))
+        #expect(counter.outputs > presented)
+        #expect(inspector.textView.string.hasSuffix("line 2"))
+    }
+
     @Test("Default redaction routes every Inspector sink through the policy functions")
     func defaultRedactorRouting() {
         let inspector = AgentInspectorViewController(allowsReasoningExport: { false })

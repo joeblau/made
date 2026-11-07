@@ -119,6 +119,14 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     var sendAgainNoticeKey: String? {
         didSet { if oldValue != sendAgainNoticeKey { refresh(ids: [oldValue, sendAgainNoticeKey]) } }
     }
+    /// Captions beneath user bubbles by item key: a pending or delivered steer.
+    var userCaptions: [String: String] = [:] {
+        didSet {
+            guard oldValue != userCaptions else { return }
+            let keys = Set(oldValue.keys).union(userCaptions.keys).filter { oldValue[$0] != userCaptions[$0] }
+            refresh(ids: Array(keys))
+        }
+    }
     /// An inactive pane never ticks.
     var isPaused = false {
         didSet { if oldValue != isPaused { updateTimer() } }
@@ -168,13 +176,28 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         let click = NSClickGestureRecognizer(target: self, action: #selector(clicked(_:)))
         click.delaysPrimaryMouseButtonEvents = false
         tableView.addGestureRecognizer(click)
+        NotificationCenter.default.addObserver(self, selector: #selector(proseRendered(_:)), name: .agentProseDidRender, object: nil)
+    }
+
+    /// A long message finished redacting off the main actor: its cached
+    /// height measured the previous rendering.
+    @objc private func proseRendered(_ notification: Notification) {
+        guard let key = notification.object as? String, let index = rows.firstIndex(where: { $0.id == key }) else { return }
+        let follow = followsOutput
+        heights[key] = nil
+        applyingFollow = follow
+        refresh(rows: [index], animated: false)
+        applyingFollow = nil
+        if follow { scrollToEnd() }
     }
 
     @objc private func clicked(_ recognizer: NSClickGestureRecognizer) {
         onSelect()
         guard let window = tableView.window else { return }
-        // Selecting prose keeps its text view as first responder.
-        if let text = window.firstResponder as? NSTextView, text.isDescendant(of: tableView) { return }
+        // Selecting prose keeps its text view as first responder; a click
+        // elsewhere (a step after a selection) still focuses the table.
+        if let text = window.firstResponder as? NSTextView, text.isDescendant(of: tableView),
+           text.visibleRect.contains(text.convert(recognizer.location(in: nil), from: nil)) { return }
         if window.firstResponder !== tableView { window.makeFirstResponder(tableView) }
         cursor.select(at: recognizer.location(in: tableView))
     }
@@ -332,7 +355,13 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     }
 
     private func finishApply(follow: Bool) {
-        if follow, !rows.isEmpty, let scroll = tableView.enclosingScrollView {
+        if follow { scrollToEnd() }
+        updateTimer()
+        cursor.rowsChanged()
+    }
+
+    private func scrollToEnd() {
+        if !rows.isEmpty, let scroll = tableView.enclosingScrollView {
             tableView.layoutSubtreeIfNeeded()
             // A capped message row can still be taller than the viewport;
             // scrollRowToVisible may align its top instead of the newest text.
@@ -342,8 +371,6 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
             // Visible cells already received the follow flag in configure.
             tableView.view(atColumn: 0, row: rows.count - 1, makeIfNecessary: false)?.layoutSubtreeIfNeeded()
         }
-        updateTimer()
-        cursor.rowsChanged()
     }
 
     private func noteHeights(_ indexes: IndexSet, animated: Bool) {
@@ -448,11 +475,14 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         let actions = rowActions
         switch rows[row] {
         case .user(let item):
-            (view as? UserBubbleCellView)?.configure(item: item, actions: actions)
+            (view as? UserBubbleCellView)?.configure(item: item, actions: actions, caption: userCaptions[item.key])
         case .prose(let item):
             let follows = applyingFollow ?? followsOutput
+            // The streaming message follows even while a pending steer
+            // bubble sits below it.
             (view as? ProseCellView)?.configure(item: item, isStreaming: item.key == streamingKey,
-                                                followStreamingOutput: follows && row == rows.count - 1, actions: actions)
+                                                followStreamingOutput: follows && (row == rows.count - 1 || item.key == streamingKey),
+                                                actions: actions)
         case .activity(let group):
             (view as? ActivityCardView)?.configure(
                 group: group, expandedOverride: expandedOverrides[group.id], showAll: showAllGroups.contains(group.id),
@@ -503,8 +533,12 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
             return HeightKey(revision: item.revision, width: width, zoom: zoom, expanded: nil, state: nil, showAll: false, extra: length)
         case .user(let item):
             let length = if case .user(let text) = item.content { text.utf16.count } else { 0 }
+            var hasher = Hasher()
+            hasher.combine(length)
+            hasher.combine(item.attachments.count)
+            hasher.combine(userCaptions[item.key])
             return HeightKey(revision: item.revision, width: width, zoom: zoom, expanded: nil, state: nil, showAll: false,
-                             extra: length &* 31 &+ item.attachments.count)
+                             extra: hasher.finalize())
         case .notice(let item):
             return HeightKey(revision: item.revision, width: width, zoom: zoom, expanded: nil, state: nil, showAll: false,
                              extra: item.key == sendAgainNoticeKey ? 1 : 0)
@@ -515,7 +549,7 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
 
     private func measure(_ row: AgentTimelineRow, width: CGFloat) -> CGFloat {
         switch row {
-        case .user(let item): UserBubbleCellView.height(item: item, width: width)
+        case .user(let item): UserBubbleCellView.height(item: item, width: width, caption: userCaptions[item.key])
         case .prose(let item): ProseCellView.height(item: item, width: width)
         case .activity(let group):
             ActivityCardView.height(group: group, expandedOverride: expandedOverrides[group.id], showAll: showAllGroups.contains(group.id),

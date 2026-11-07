@@ -43,7 +43,10 @@ enum AgentChatPaneContent {
             content.item = item
             content.detail = transcript.stepDetails[key]
             switch item?.content {
-            case .tool(let tool)?: content.title = verbForTool(tool, input: content.detail?.rawInput?.value).settled
+            // Labels only: the title never needs the redacted exact input,
+            // and this runs on every render while the Inspector is open.
+            case .tool(let tool)?:
+                content.title = verbForTool(tool, input: content.detail?.rawInput?.value, includeExactInput: false).settled
             case .thought(let thought)?: content.title = verbForThought(thought, now: now).settled
             case .plan?: content.title = "Plan"
             default: content.title = "Step"
