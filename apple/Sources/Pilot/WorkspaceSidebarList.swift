@@ -14,7 +14,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     private enum RowContent: Equatable {
         case fixed
         case disclosure(String, Bool)
-        case workspace(String, String?, Int)
+        case workspace(String, String?, Int, Int)
     }
 
     let store: WorkspaceStore
@@ -138,7 +138,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             switch row {
             case .workspace(let id, _):
                 guard let workspace = workspacesByID[id] else { return .fixed }
-                return .workspace(workspace.name, branches.branches[id], workspace.badgeCount)
+                return .workspace(workspace.name, branches.branches[id], workspace.badgeCount, store.openTaskCounts[id] ?? 0)
             case .group(let id):
                 guard let group = store.workspaceGroups.group(id) else { return .fixed }
                 return .disclosure(group.name, group.isExpanded)
@@ -175,6 +175,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             _ = store.isWorkspaceDetailVisible
             _ = store.sidebarVisibility.hidden
             _ = store.workspaceGroups.groups
+            _ = store.openTaskCounts
             _ = branches.branches
             for workspace in store.workspaces { _ = workspace.name; _ = workspace.badgeCount; _ = workspace.isPinned; _ = workspace.effectiveRootPath }
         } onChange: { [weak self] in
@@ -280,7 +281,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             guard let workspace = store.workspaces.first(where: { $0.id == id }) else { return nil }
             let cell = (table.makeView(withIdentifier: NSUserInterfaceItemIdentifier("workspace.cell"), owner: self) as? WorkspaceSidebarCell) ?? WorkspaceSidebarCell()
             cell.identifier = NSUserInterfaceItemIdentifier("workspace.cell")
-            cell.configure(workspace: workspace, branch: branches.branches[id], indentation: group == nil ? 0 : 16, store: store)
+            cell.configure(workspace: workspace, branch: branches.branches[id], openTaskCount: store.openTaskCounts[id] ?? 0,
+                           indentation: group == nil ? 0 : 16, store: store)
             return cell
         case .mode(let mode):
             let (title, symbol) = Self.presentation(mode)
@@ -411,6 +413,7 @@ private final class WorkspaceSidebarCell: NSTableCellView {
     private let name = shellLabel("")
     private let branch = shellLabel("", secondary: true)
     private let gauge = WorkspaceGaugeView(frame: .zero)
+    private let taskBadge = WorkspaceOpenTaskBadgeView(frame: .zero)
     private var coldTicks = 2
     private var workspaceID: UUID?
     private var runningPaneIDs: Set<UUID> = []
@@ -421,7 +424,7 @@ private final class WorkspaceSidebarCell: NSTableCellView {
         branch.font = .systemFont(ofSize: 10)
         name.font = .systemFont(ofSize: 12)
         let labels = shellStack([name, branch], spacing: 2)
-        let row = shellStack([labels, gauge], orientation: .horizontal, spacing: 6)
+        let row = shellStack([labels, gauge, taskBadge], orientation: .horizontal, spacing: 6)
         row.distribution = .fill
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
@@ -437,11 +440,13 @@ private final class WorkspaceSidebarCell: NSTableCellView {
         ])
         gauge.widthAnchor.constraint(equalToConstant: 26).isActive = true
         gauge.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        taskBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 20).isActive = true
+        taskBadge.heightAnchor.constraint(equalToConstant: 18).isActive = true
         labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
     required init?(coder: NSCoder) { nil }
 
-    func configure(workspace: Workspace, branch: String?, indentation: CGFloat, store: WorkspaceStore) {
+    func configure(workspace: Workspace, branch: String?, openTaskCount: Int, indentation: CGFloat, store: WorkspaceStore) {
         if workspaceID != workspace.id { coldTicks = 2; workspaceID = workspace.id; gauge.started = 0; gauge.running = 0 }
         name.font = CockpitTypography.font(size: 12)
         self.branch.font = CockpitTypography.font(size: 10)
@@ -450,6 +455,13 @@ private final class WorkspaceSidebarCell: NSTableCellView {
         self.branch.stringValue = branch.map { "⑂ \($0)" } ?? ""
         self.branch.isHidden = branch == nil
         setAccessibilityLabel(workspace.name + (branch.map { ", branch \($0)" } ?? ""))
+        taskBadge.count = openTaskCount
+        taskBadge.onOpen = { [weak store, weak workspace] in
+            guard let store, let workspace else { return }
+            store.selectWorkspace(workspace.id)
+            workspace.setInspectorTab(.tasks)
+            workspace.setInspectorPresented(true)
+        }
         refreshStatus(workspace: workspace, store: store)
     }
 

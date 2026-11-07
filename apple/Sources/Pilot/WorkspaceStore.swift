@@ -11,6 +11,7 @@ final class WorkspaceStore {
     /// Which global modes the sidebar lists. A hidden mode cannot be entered.
     let sidebarVisibility: SidebarFeatureVisibility
     var changeCount: Int = 0
+    var openTaskCounts: [UUID: Int] = [:]
     var selectedWorkspaceID: UUID? {
         didSet {
             if let id = selectedWorkspaceID {

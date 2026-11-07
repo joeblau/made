@@ -59,3 +59,37 @@ final class WorkspaceGaugeView: NSButton {
         text.draw(at: NSPoint(x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2), withAttributes: attributes)
     }
 }
+
+@MainActor
+final class WorkspaceOpenTaskBadgeView: NSButton {
+    var count = 0 { didSet { update() } }
+    var onOpen: (() -> Void)?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        bezelStyle = .badge
+        controlSize = .small
+        if #available(macOS 26.0, *) { borderShape = .capsule }
+        target = self
+        action = #selector(openTasks)
+        setAccessibilityIdentifier("workspace.open-tasks")
+        update()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func openTasks() { onOpen?() }
+
+    private func update() {
+        let value = max(0, count)
+        attributedTitle = NSAttributedString(string: value > 99 ? "99+" : "\(value)", attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium),
+            .foregroundColor: NSColor.secondaryLabelColor,
+        ])
+        isHidden = value == 0
+        isEnabled = value > 0
+        let description = "\(value) open \(value == 1 ? "task" : "tasks")"
+        toolTip = description
+        setAccessibilityLabel(description)
+    }
+}

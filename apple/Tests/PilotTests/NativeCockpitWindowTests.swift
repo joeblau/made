@@ -91,6 +91,38 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceOpenTaskBadgeUpdatesAndOpensTasks() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkspace()
+        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        fixture.store.openTaskCounts[workspace.id] = 3
+        let sidebar = WorkspaceSidebarViewController(store: fixture.store, defaults: fixture.defaults, isLive: false)
+        let table = try XCTUnwrap(descendants(sidebar.view).compactMap { $0 as? NSTableView }.first)
+        let row = table.numberOfRows - 1
+        let cell = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: row))
+        let badge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceOpenTaskBadgeView }.first)
+        let gauge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceGaugeView }.first)
+        XCTAssertEqual(badge.title, "3")
+        XCTAssertEqual(badge.accessibilityLabel(), "3 open tasks")
+        XCTAssertFalse(badge.isHidden)
+        cell.frame = NSRect(x: 0, y: 0, width: 240, height: 44)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThanOrEqual(badge.frame.minX, gauge.frame.maxX)
+        badge.performClick(nil)
+        XCTAssertEqual(fixture.store.selectedWorkspaceID, workspace.id)
+        XCTAssertEqual(workspace.inspectorTab, .tasks)
+        XCTAssertTrue(workspace.isInspectorPresented)
+
+        fixture.store.openTaskCounts[workspace.id] = 0
+        sidebar.refresh()
+        let updated = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: row))
+        let updatedBadge = try XCTUnwrap(descendants(updated).compactMap { $0 as? WorkspaceOpenTaskBadgeView }.first)
+        XCTAssertTrue(updatedBadge.isHidden)
+        XCTAssertFalse(updatedBadge.isEnabled)
+    }
+
+    @MainActor
     func testCachedGlobalPageKeepsItsViewAndRelinquishesKeyboardFocusWhileHidden() throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
