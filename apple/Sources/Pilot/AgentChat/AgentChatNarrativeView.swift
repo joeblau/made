@@ -84,9 +84,10 @@ enum AgentProseRenderer {
         return segments
     }
 
-    /// Redacts `raw` (known-secret patterns, no truncation), then renders it.
+    /// Redacts `raw` (prose policy: known-secret shapes only, layout kept),
+    /// then renders it.
     static func render(_ raw: String) -> Rendered {
-        let source = redactOutput(raw, maximumLines: nil).text
+        let source = redactProse(raw)
         let output = NSMutableAttributedString()
         var blocks: [String] = []
         var previousWasCode = false
@@ -512,7 +513,7 @@ final class UserBubbleCellView: NSTableCellView {
 
     private static func text(_ item: AgentChatItem) -> String {
         guard case .user(let value) = item.content else { return "" }
-        return redactOutput(value, maximumLines: nil).text
+        return redactProse(value)
     }
 
     private static func attachmentName(_ attachment: AgentChatAttachment) -> String {
@@ -633,7 +634,7 @@ final class NoticeCellView: NSTableCellView {
 
     private static func text(_ item: AgentChatItem) -> String {
         guard case .notice(let value) = item.content else { return "" }
-        return redactOutput(value, maximumLines: 40).text
+        return redactProse(value.split(separator: "\n", maxSplits: 40, omittingEmptySubsequences: false).prefix(40).joined(separator: "\n"))
     }
 
     /// `item.content` is `.notice`. "Send again" calls `actions.sendAgain`.

@@ -453,6 +453,7 @@ struct AgentTimelineTests {
             case .member(let member): member.id
             case .showMore(let count): "more \(count)"
             case .earlier(let count): "earlier \(count)"
+            case .earlierFailures(let count): "failures \(count)"
             }
         }
         #expect(ids == ["root/tool-0", "root/tool-1", "more 16", "root/tool-18", "root/tool-19"])

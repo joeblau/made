@@ -1,26 +1,8 @@
 import AppKit
 
-/// One visible row of an activity card.
-enum ActivityCardRow: Equatable {
-    case member(AgentActivityMember)
-    /// Live groups past 15 members: "N earlier" (opens the group in the Inspector).
-    case earlier(Int)
-    /// Expanded settled groups past 15 members: "Show N more".
-    case showMore(Int)
-    /// Collapsed groups with more than 6 failed steps: "N earlier failures"
-    /// (opens the group in the Inspector), so an agent that fails hundreds of
-    /// steps cannot grow one row without bound.
-    case earlierFailures(Int)
-
-    var id: String {
-        switch self {
-        case .member(let member): member.id
-        case .earlier: "earlier"
-        case .showMore: "show-more"
-        case .earlierFailures: "earlier-failures"
-        }
-    }
-}
+/// One visible row of an activity card: WP3's layout entry (the single
+/// source of truth for paging, inline weight, and the collapsed failure cap).
+typealias ActivityCardRow = AgentActivityLayout.Entry
 
 /// What an activity card shows for a group, derived purely from its state.
 struct ActivityCardPresentation: Equatable {
@@ -60,9 +42,6 @@ final class ActivityCardView: NSTableCellView {
     static let outerInset = NSSize(width: 8, height: 2)
     static let padding = NSSize(width: 6, height: 6)
     static let rowSpacing: CGFloat = 2
-    static let liveThreshold = 15
-    static let liveTail = 6
-    static let settledEdge = 2
 
     let chrome = AgentChatSurfaceView(fill: .card, border: .cardBorder, cornerRadius: 8)
     let header = ActivityHeaderView()
@@ -107,39 +86,12 @@ final class ActivityCardView: NSTableCellView {
 
     // MARK: Pure presentation
 
-    static func isFailed(_ member: AgentActivityMember) -> Bool {
-        guard case .step(let item) = member, case .tool(let tool) = item.content else { return false }
-        return AgentStatusDotView.Status(tool) == .failed
-    }
-
+    /// Driven entirely by `AgentActivityGroup.layout(expandedOverride:showAll:)`.
     static func presentation(group: AgentActivityGroup, expandedOverride: Bool?, showAll: Bool) -> ActivityCardPresentation {
-        let members = group.members
-        let hasAgents = members.contains { if case .agents = $0 { true } else { false } }
-        let live = group.state == .idle || group.state == .live
-        let settled = group.state == .settled || group.state == .settling
-        let inline = settled && group.failedCount == 0 && !members.contains(where: isFailed) && !hasAgents
-            && members.count <= 3 && group.stepCount <= 3 && !group.hasPendingApproval
-        if inline {
-            return ActivityCardPresentation(inline: true, expanded: true, live: false, showsLiveLine: false,
-                                            rows: members.map(ActivityCardRow.member))
-        }
-        let expanded = expandedOverride ?? live
-        var rows: [ActivityCardRow]
-        if !expanded {
-            let failed = members.filter(isFailed)
-            rows = failed.count > liveTail
-                ? [.earlierFailures(failed.count - liveTail)] + failed.suffix(liveTail).map(ActivityCardRow.member)
-                : failed.map(ActivityCardRow.member)
-        } else if live, members.count > liveThreshold {
-            rows = [.earlier(members.count - liveTail)] + members.suffix(liveTail).map(ActivityCardRow.member)
-        } else if !live, members.count > liveThreshold, !showAll {
-            rows = members.prefix(settledEdge).map(ActivityCardRow.member)
-                + [.showMore(members.count - settledEdge * 2)]
-                + members.suffix(settledEdge).map(ActivityCardRow.member)
-        } else {
-            rows = members.map(ActivityCardRow.member)
-        }
-        return ActivityCardPresentation(inline: false, expanded: expanded, live: live, showsLiveLine: live, rows: rows)
+        let layout = group.layout(expandedOverride: expandedOverride, showAll: showAll)
+        let inline = !layout.showsCardChrome
+        return ActivityCardPresentation(inline: inline, expanded: layout.isExpanded, live: group.isLive,
+                                        showsLiveLine: group.isLive && !inline, rows: layout.entries)
     }
 
     static func headerParts(group: AgentActivityGroup, now: Date) -> ActivityHeaderParts {
@@ -156,9 +108,12 @@ final class ActivityCardView: NSTableCellView {
         )
     }
 
+    /// The live line; the turn's plan progress follows it ("· Plan · 3/7 done").
     static func liveText(_ group: AgentActivityGroup) -> String {
-        if let status = group.liveStatus, !status.isEmpty { return redactInline(status) }
-        return group.hasPendingApproval ? "Waiting for approval" : "Working…"
+        var text = group.liveStatus.flatMap { $0.isEmpty ? nil : redactInline($0) }
+            ?? (group.hasPendingApproval ? "Waiting for approval" : "Working…")
+        if let plan = group.plan { text += " · " + plan.label }
+        return text
     }
 
     static func verb(for item: AgentChatItem, verbs: [String: AgentToolVerb], now: Date) -> AgentToolVerb {

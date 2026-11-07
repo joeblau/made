@@ -75,7 +75,9 @@ import Foundation
 // Integration (WP6) — AgentChatTimelineTable.swift:
 // - AgentChatTimelineTableView (NSTableView subclass, step cursor, keys),
 //   AgentChatTimelineTable (data source/delegate) — init(tableView:),
-//   applyRows(_:now:), rows, actions, lastApplyPath.
+//   applyRows(_:now:), rows, actions, lastApplyPath; disclosure state and the 1 Hz tick.
+//   AgentChatTimelineCursor.swift (step cursor, focus ring); AgentChatPaneSupport.swift
+//   (AgentChatPaneContent for Inspector/approval inputs, AgentChatAgentMenu, AgentChatFormat).
 
 /// One row of the redesigned transcript.
 enum AgentTimelineRow: Equatable, Identifiable, Sendable {
@@ -724,6 +726,17 @@ struct AgentActivityLayout: Equatable, Sendable {
         /// Settled and expanded, > 15 rows: "Show N more" between the first 2
         /// and last 2.
         case showMore(count: Int)
+        /// Collapsed, > 6 failed members: "N earlier failures" above the last 6.
+        case earlierFailures(count: Int)
+
+        var id: String {
+            switch self {
+            case .member(let member): member.id
+            case .earlier: "earlier"
+            case .showMore: "show-more"
+            case .earlierFailures: "earlier-failures"
+            }
+        }
     }
 
     var entries: [Entry]
@@ -815,7 +828,11 @@ extension AgentActivityGroup {
         }
         let expanded = expandedOverride ?? isExpandedByDefault
         guard expanded else {
-            return AgentActivityLayout(entries: failedMembers.map { .member($0) }, showsCardChrome: true, isExpanded: false)
+            // Bounded: an agent failing hundreds of steps can't grow one row without limit.
+            let failed = failedMembers, hidden = failed.count - Self.liveTailCount
+            let entries: [AgentActivityLayout.Entry] = failed.suffix(Self.liveTailCount).map { .member($0) }
+            return AgentActivityLayout(entries: hidden > 0 ? [.earlierFailures(count: hidden)] + entries : entries,
+                                       showsCardChrome: true, isExpanded: false)
         }
         let rows = rowCount
         let entries: [AgentActivityLayout.Entry]

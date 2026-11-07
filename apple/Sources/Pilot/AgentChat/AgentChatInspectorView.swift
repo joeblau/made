@@ -45,16 +45,10 @@ struct AgentInspectorRedactor: Sendable {
     var output: @Sendable (String, Int?) -> AgentRedaction
     var json: @Sendable (JSONValue) -> (value: JSONValue, redacted: Bool)
     var inline: @Sendable (String) -> String
-    /// §2.4 whole-content mask for secret files. Integrator: once WP3 lands, point this at its `isSecretLikePath`.
-    var secretPath: @Sendable (String) -> Bool = { AgentInspectorRedactor.isSecretFileName($0) }
+    /// §2.4 whole-content mask for secret files (WP3's `isSecretLikePath`, the one policy source).
+    var secretPath: @Sendable (String) -> Bool = { isSecretLikePath($0) }
     static let standard = Self(output: { redactOutput($0, maximumLines: $1) }, json: { redactJSON($0) }, inline: { redactInline($0) })
     static let mask = "••••"
-    /// `.env*`, `*.pem`, `id_rsa*`, `id_ed25519*`, `.netrc`, `.npmrc`, `credentials*`.
-    static func isSecretFileName(_ path: String) -> Bool {
-        let name = (path as NSString).lastPathComponent.lowercased()
-        return name.hasPrefix(".env") || name.hasSuffix(".pem") || [".netrc", ".npmrc"].contains(name)
-            || ["id_rsa", "id_ed25519", "credentials"].contains { name.hasPrefix($0) }
-    }
     /// True when a step reads or writes a file whose whole content is masked.
     func touchesSecretFile(_ tool: AgentChatItem.ToolCall, detail: AgentStepDetail?) -> Bool {
         var paths = tool.locations.prefix(64).map(\.path) + tool.edits.prefix(64).map(\.path) + [tool.subject].compactMap { $0 }
