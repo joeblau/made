@@ -78,7 +78,9 @@ struct AgentChatTests {
          {"type":"content","content":{"type":"text","text":"done"}}]}}
         """#)))
         #expect(tool.update == .toolCall(ACPToolCallFields(
-            toolCallID: "t", title: "Edit a.swift", kind: .edit, status: .inProgress, content: "Edited a.swift\ndone"
+            toolCallID: "t", title: "Edit a.swift", kind: .edit, rawKind: "edit", status: .inProgress,
+            content: "Edited a.swift\ndone",
+            blocks: [.diff(path: "a.swift", oldText: "x", newText: "y"), .text("done")]
         )))
 
         let usage = try #require(ACP.parseSessionUpdate(json(#"""
@@ -99,7 +101,7 @@ struct AgentChatTests {
         """#)))
         #expect(running.update == .subagent(ACPSubagentState(
             childSessionID: "child", title: "Count .txt files in notes/", detail: "Explore",
-            state: "running", stopReason: nil, error: nil
+            state: "running", stopReason: nil, error: nil, hasStateObject: true
         )))
     }
 
@@ -205,12 +207,16 @@ struct AgentChatTests {
         transcript.apply(note("root", .toolCallUpdate(fields("t1", status: .completed, content: "a b"))), rootSessionID: "root")
         transcript.apply(note("root", .agentMessage("2 files.")), rootSessionID: "root")
 
-        #expect(transcript.items.map(\.content) == [
-            .user("Count files"),
-            .assistant("I'll look."),
-            .tool(.init(title: "ls", kind: nil, status: .completed, content: "a b")),
-            .assistant("2 files."),
-        ])
+        #expect(transcript.items.count == 4)
+        #expect(transcript.items.first?.content == .user("Count files"))
+        #expect(transcript.items[1].content == .assistant("I'll look."))
+        guard case .tool(let tool) = transcript.items[2].content else {
+            Issue.record("expected a tool call")
+            return
+        }
+        #expect(tool.title == "ls" && tool.status == .completed && tool.content == "a b")
+        #expect(tool.toolCallID == "t1" && tool.outcome == .completed)
+        #expect(transcript.items.last?.content == .assistant("2 files."))
     }
 
     /// Claude and Codex announce children with subagent_update (the RFD).
@@ -261,14 +267,15 @@ struct AgentChatTests {
         #expect(!finished.isRunning)
     }
 
+    /// Over the cap the oldest 10% go in one chunk, so trimming is amortized.
     @Test
     func transcriptIsBounded() {
         var transcript = AgentTranscript()
         for index in 0..<(AgentTranscript.maximumItemsPerSession + 10) {
             transcript.appendUser("message \(index)")
         }
-        #expect(transcript.items.count == AgentTranscript.maximumItemsPerSession)
-        #expect(transcript.items.first?.content == .user("message 10"))
+        #expect(transcript.items.count == 1_809)
+        #expect(transcript.items.first?.content == .user("message 201"))
     }
 
     // MARK: - Launching
@@ -476,9 +483,11 @@ struct AgentChatTests {
 
         try await waitUntil {
             session.phase == .ready && session.lastTurnUsage != nil && session.context != nil
-                && session.transcript.items.contains { $0.content == .tool(.init(
-                    title: "Read README.md", kind: .read, status: .completed, content: ""
-                )) }
+                && session.transcript.items.contains { item in
+                    guard case .tool(let tool) = item.content else { return false }
+                    return tool.title == "Read README.md" && tool.kind == .read && tool.status == .completed
+                        && tool.content.isEmpty && tool.outcome == .completed
+                }
         }
         #expect(session.transcript.items.first?.content == .user("Summarize the README"))
         #expect(session.transcript.items.contains { $0.content == .assistant("Hello") })
