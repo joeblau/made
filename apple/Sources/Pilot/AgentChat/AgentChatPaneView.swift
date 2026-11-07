@@ -840,10 +840,10 @@ struct AgentChatRenderedRow {
             copyText = value
             expandable = false
             tint = nil
-        case .thought(let value):
+        case .thought(let thought):
             header = "Thinking"
-            text = row.expanded ? AgentChatNativeMarkdown.plain(value, color: .secondaryLabelColor) : NSAttributedString()
-            copyText = value
+            text = row.expanded ? AgentChatNativeMarkdown.plain(thought.text, color: .secondaryLabelColor) : NSAttributedString()
+            copyText = thought.text
             expandable = true
             tint = nil
         case .tool(let tool):
@@ -884,6 +884,13 @@ struct AgentChatRenderedRow {
             header = nil
             text = AgentChatNativeMarkdown.plain(value, color: .secondaryLabelColor)
             copyText = value
+            expandable = false
+            tint = nil
+        case .approval(let approval):
+            // WP6: implement (ApprovalRecordView replaces this row)
+            header = nil
+            text = AgentChatNativeMarkdown.plain(approval.title, color: .secondaryLabelColor)
+            copyText = approval.title
             expandable = false
             tint = nil
         }

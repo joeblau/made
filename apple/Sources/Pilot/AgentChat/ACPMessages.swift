@@ -17,6 +17,8 @@ enum ACP {
         static let requestPermission = "session/request_permission"
         static let setConfigOption = "session/set_config_option"
         static let setModel = "session/set_model"
+        static let steer = "_session/steering"
+        static let cancelRequest = "$/cancel_request"
     }
 
     // MARK: Requests
@@ -62,6 +64,28 @@ enum ACP {
         guard let optionID else { return ["outcome": ["outcome": "cancelled"]] }
         return ["outcome": ["outcome": "selected", "optionId": .string(optionID)]]
     }
+
+    /// Injects text into the running turn. `promptRequired` asks the agent to
+    /// report an idle session instead of starting a new turn from the text.
+    static func steerParams(sessionID: String, text: String) -> JSONValue {
+        [
+            "sessionId": .string(sessionID),
+            "prompt": [["type": "text", "text": .string(text)]],
+            "_meta": ["steering": ["idleBehavior": "promptRequired"]],
+        ]
+    }
+}
+
+/// The agent's answer to `_session/steering`. Anything unrecognized is a failure.
+enum ACPSteerOutcome: Equatable, Sendable {
+    case injected
+    case promptRequired
+    case failed(String)
+
+    init(_ result: JSONValue) {
+        // WP1: implement
+        self = .failed("Steering is not supported yet.")
+    }
 }
 
 // MARK: - Initialize / session results
@@ -81,6 +105,8 @@ struct ACPAgentInfo: Equatable, Sendable {
     /// An auth method the agent can complete without UI, such as Grok's
     /// cached token. Nil when signing in needs a terminal or browser.
     var silentAuthMethodID: String?
+    /// `_meta.steering.supported == true` in the initialize result.
+    var supportsSteering = false
 
     init(_ result: JSONValue) {
         name = result["agentInfo"]?["title"]?.stringValue ?? result["agentInfo"]?["name"]?.stringValue
@@ -190,13 +216,61 @@ enum ACPToolStatus: String, Sendable {
     case failed
 }
 
+/// A file a tool call touches. `path` is bounded to 4 KiB.
+struct ACPToolLocation: Equatable, Sendable {
+    var path: String
+    var line: Int?
+}
+
+/// One structured `content` block of a tool call.
+enum ACPToolContent: Equatable, Sendable {
+    case text(String)
+    case diff(path: String, oldText: String?, newText: String)
+    case terminal(id: String)
+    case other(type: String)
+}
+
+/// Bounded untrusted JSON. Size is measured by an early-exit tree walk (no
+/// serialization). Over the cap, `value` is nil and `prefixText` keeps a
+/// bounded text rendering (≤ 256 KiB) with the dropped size in `truncatedBytes`.
+struct ACPBoundedJSON: Equatable, Sendable {
+    static let maximumBytes = 256 * 1_024
+
+    var value: JSONValue?
+    var prefixText: String?
+    var truncatedBytes: Int?
+
+    init(_ value: JSONValue?) {
+        // WP1: implement
+        self.value = value
+        prefixText = nil
+        truncatedBytes = nil
+    }
+}
+
 struct ACPToolCallFields: Equatable, Sendable {
     var toolCallID: String
     var title: String?
     var kind: ACPToolKind?
+    /// The agent's `kind` string, kept even when it is not a known ACPToolKind.
+    var rawKind: String? = nil
     var status: ACPToolStatus?
     /// Text and diff summaries from `content`; nil when the update carried none.
+    /// Kept for compatibility; capped at 512 KiB.
     var content: String?
+    /// Structured `content` blocks: ≤ 64 blocks, aggregate text ≤ 512 KiB.
+    var blocks: [ACPToolContent]? = nil
+    /// ≤ 64 locations.
+    var locations: [ACPToolLocation]? = nil
+    /// `update.name ?? _meta.claudeCode.toolName ?? _meta["x.ai/tool"].name` (≤ 256 B).
+    var toolName: String? = nil
+    /// `_meta.claudeCode.nonExecutionKind` (interrupted, cancelled, rejected…).
+    var nonExecutionKind: String? = nil
+    /// Codex `_meta.terminal_output_delta.data`, bounded; appended by the transcript.
+    var terminalOutputDelta: String? = nil
+    var exitCode: Int? = nil
+    var rawInput: ACPBoundedJSON? = nil
+    var rawOutput: ACPBoundedJSON? = nil
 }
 
 struct ACPPlanEntry: Equatable, Sendable {
@@ -219,11 +293,15 @@ struct ACPSubagentState: Equatable, Sendable {
     var state: String?
     var stopReason: String?
     var error: String?
+    /// True when `state` arrived as an object (the RFD shape) rather than a bare string.
+    var hasStateObject = false
+    var canCancel: Bool? = nil
 }
 
 enum ACPUpdate: Equatable, Sendable {
     case agentMessage(String)
-    case agentThought(String)
+    /// `messageID` changes when the agent starts a new reasoning block.
+    case agentThought(text: String, messageID: String?)
     case userMessage(String)
     case toolCall(ACPToolCallFields)
     case toolCallUpdate(ACPToolCallFields)
@@ -255,7 +333,8 @@ extension ACP {
         case "agent_message_chunk":
             parsed = .agentMessage(contentText(update["content"]) ?? "")
         case "agent_thought_chunk":
-            parsed = .agentThought(contentText(update["content"]) ?? "")
+            // WP1: parse messageId
+            parsed = .agentThought(text: contentText(update["content"]) ?? "", messageID: nil)
         case "user_message_chunk":
             parsed = .userMessage(contentText(update["content"]) ?? "")
         case "tool_call":
@@ -345,7 +424,11 @@ struct ACPPermissionRequest: Identifiable, Equatable, Sendable {
     var sessionID: String
     var title: String
     var toolKind: ACPToolKind?
+    /// Bounded to 16 options; `requestID` is only a string or number.
     var options: [Option]
+    var toolCallID: String?
+    var rawInput: ACPBoundedJSON?
+    var locations: [ACPToolLocation] = []
 
     var id: JSONValue { requestID }
 

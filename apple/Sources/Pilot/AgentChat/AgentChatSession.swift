@@ -58,6 +58,11 @@ final class AgentChatSession {
     private(set) var context: ACPContextUsage?
     private(set) var lastTurnUsage: NormalizedTurnUsage?
     private(set) var sessionUsage: NormalizedTurnUsage?
+    /// One editable, removable slot sent after the turn ends with end_turn.
+    private(set) var queuedPrompt: String?
+    /// Diagnostics and tests: the latest transcript events and their count.
+    @ObservationIgnored private(set) var recentEvents: [AgentActivityEvent] = []
+    private(set) var eventSequence = 0
     var draft = ""
 
     @ObservationIgnored private var connection: ACPConnection?
@@ -69,6 +74,7 @@ final class AgentChatSession {
     @ObservationIgnored private let resolveLaunch: LaunchResolver
     @ObservationIgnored private let attachmentDirectory: URL
     @ObservationIgnored private var attachmentImportTask: Task<Void, Never>?
+    @ObservationIgnored private let now: @Sendable () -> Date
 
     init(
         paneID: UUID,
@@ -76,7 +82,8 @@ final class AgentChatSession {
         workingDirectory: String?,
         defaults: UserDefaults = .standard,
         resolveLaunch: @escaping LaunchResolver = AgentChatSession.loginShellLaunchResolver,
-        attachmentDirectory: URL? = nil
+        attachmentDirectory: URL? = nil,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.paneID = paneID
         self.agent = agent
@@ -84,6 +91,7 @@ final class AgentChatSession {
         self.defaults = defaults
         self.resolveLaunch = resolveLaunch
         self.attachmentDirectory = attachmentDirectory ?? AgentChatAttachmentStore.directory(paneID: paneID)
+        self.now = now
     }
 
     var pendingPermission: ACPPermissionRequest? { permissionQueue.first }
@@ -92,6 +100,16 @@ final class AgentChatSession {
         phase == .ready && !isChangingModel && !isImportingAttachments && !isPreparingPrompt
             && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
+
+    var isTurnRunning: Bool { phase == .prompting }
+
+    /// Subagents the agent keeps running after the root turn ended.
+    var hasBackgroundAgents: Bool {
+        // WP2: implement
+        false
+    }
+
+    var canSteer: Bool { isTurnRunning && agentInfo?.supportsSteering == true }
 
     // MARK: - Lifecycle
 
@@ -321,6 +339,42 @@ final class AgentChatSession {
         permissionQueue.removeAll { $0.requestID == request.requestID }
         let connection = connection
         Task { await connection?.respond(to: request.requestID, result: ACP.permissionResult(optionID: optionID)) }
+    }
+
+    /// Injects `text` into the running turn (`_session/steering`). Injected →
+    /// "Sent to running turn"; promptRequired → queued; failure, a 15 s
+    /// timeout, or an error returns the text to the draft with a composerError.
+    /// Attachments are not sent while steering.
+    func steer(_ text: String) {
+        // WP2: implement
+    }
+
+    /// Fills the single queued slot; sent only after stopReason end_turn,
+    /// otherwise restored to the draft. Cleared on shutDown, switchAgent, and
+    /// a new conversation.
+    func queueForNextTurn(_ text: String) {
+        // WP2: implement
+    }
+
+    /// "Ask to retry…": pre-fills the draft (redacted) for the failed step; never sends.
+    func prefillAskToRetry(stepKey: String) {
+        // WP2: implement
+    }
+
+    /// "Ask to continue…": pre-fills the draft (redacted) for the failed agent; never sends.
+    func prefillAskToContinue(childSessionID: String) {
+        // WP2: implement
+    }
+
+    /// Resends the last prompt's text and attachments; offered on a failed-turn notice.
+    func sendAgain() {
+        // WP2: implement
+    }
+
+    /// "Cancel Request": answers `cancelled` and records `.cancelledByUser`.
+    func dismissPermission(_ request: ACPPermissionRequest) {
+        // WP2: implement (record .cancelledByUser after respond succeeds)
+        answerPermission(request, optionID: nil)
     }
 
     // MARK: - Internals
