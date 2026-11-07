@@ -36,6 +36,7 @@
 		088BBF6C8DBC124DF348B85B /* DronePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68441D2A13F39E44D91BAD65 /* DronePaths.swift */; };
 		08CA454023B86BFAC8BC7CE1 /* PilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = B802877FCCBEB9F318728CDD /* PilotApp.swift */; };
 		08DD49F5AAEFF7B638031970 /* SecurePairingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC83FF167DBBFACAD5142B92 /* SecurePairingStore.swift */; };
+		093213450C3467FF62413FFA /* AgentModelPickerIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F0AB2004F960BF6D29D999E /* AgentModelPickerIntegrationTests.swift */; };
 		09330D2A5DDB7E981084600B /* DroneRemoteTerminalClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A987929F39225C2CFFCED57 /* DroneRemoteTerminalClient.swift */; };
 		094EF307CA9081D03EE059EC /* SetupPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA88105961B3F738C76B55DB /* SetupPresentationTests.swift */; };
 		0A48AE7E34524871F0A92274 /* CursorUsageHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */; };
@@ -282,6 +283,7 @@
 		617D1D3C2E6AEFA720CEE80B /* TerminalAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA05E246368E9655194D3F73 /* TerminalAgent.swift */; };
 		620624BE841EF9BEC841BBF7 /* BuildElapsedTime.swift in Sources */ = {isa = PBXBuildFile; fileRef = B987ABD2F97F5D5DA70271D2 /* BuildElapsedTime.swift */; };
 		6356DA38E09145518B9A6886 /* DockerSocketTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 176DF1F870EDAF255D2D908C /* DockerSocketTransport.swift */; };
+		637915089812849FE8650E12 /* AgentModelPickerController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7900EB64D753A8891A4B351A /* AgentModelPickerController.swift */; };
 		648566C69FBA74C2E0F0289D /* KimiUsageAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6307EEAE97190468F55B3C26 /* KimiUsageAdapter.swift */; };
 		6526D8D5DEE0251E2245BF94 /* DroneRegistryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D9F2CCBA1890E01988BAD33 /* DroneRegistryTests.swift */; };
 		6541385F4ADCC078F2A2083E /* DashboardColors.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2BD3D08B6AB43D26076EFF9F /* DashboardColors.xcassets */; };
@@ -1095,6 +1097,7 @@
 		779D10CE98783ECA02B8C4A4 /* SidebarSelection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarSelection.swift; sourceTree = "<group>"; };
 		7877E029BC589303CAAA1399 /* AndroidGestureClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidGestureClassifier.swift; sourceTree = "<group>"; };
 		78F894A09A33E9EAE02EB8CF /* Workspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Workspace.swift; sourceTree = "<group>"; };
+		7900EB64D753A8891A4B351A /* AgentModelPickerController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentModelPickerController.swift; sourceTree = "<group>"; };
 		7948D4B8A588730E26B022EF /* PlotterWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = PlotterWidgets.entitlements; sourceTree = "<group>"; };
 		79CEFD94E2A0ED7B5C0B4F08 /* DroneControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneControl.swift; sourceTree = "<group>"; };
 		79E505DC2441458F64FFEA45 /* DockerStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerStore.swift; sourceTree = "<group>"; };
@@ -1114,6 +1117,7 @@
 		7E481F4BD26CED8F01CDF8E6 /* Runner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Runner.swift; sourceTree = "<group>"; };
 		7E9CE6A40937B1C93B916C57 /* NotesSecurityBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesSecurityBoundaryTests.swift; sourceTree = "<group>"; };
 		7EDB2B1A2C505CE8D10B7FC4 /* CopilotDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotDeepLink.swift; sourceTree = "<group>"; };
+		7F0AB2004F960BF6D29D999E /* AgentModelPickerIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentModelPickerIntegrationTests.swift; sourceTree = "<group>"; };
 		7F18ABBB7169768D48E2E063 /* AndroidPaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidPaneView.swift; sourceTree = "<group>"; };
 		7F5C475300C597A18AC0E0D1 /* AirPlayVideoRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayVideoRenderer.swift; sourceTree = "<group>"; };
 		8001D07A7633ECBCC2CF5328 /* NativePaneLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePaneLifecycleTests.swift; sourceTree = "<group>"; };
@@ -1465,6 +1469,7 @@
 				D231D4DF023135D097210E8F /* AgenticUseNativePresentationTests.swift */,
 				6D6A5584C48A7FFE82A204D3 /* AgentModelCatalogTests.swift */,
 				5E744D0C0A34270A77E0F33E /* AgentModelPickerGalleryTests.swift */,
+				7F0AB2004F960BF6D29D999E /* AgentModelPickerIntegrationTests.swift */,
 				E33FA29BC4ADE865A2AC83E2 /* AgentRedactionTests.swift */,
 				7B3A22F9CB9941553FE6D207 /* AgentSessionConfigTests.swift */,
 				1B344003E285918DB41F1945 /* AgentTimelineTests.swift */,
@@ -1761,6 +1766,7 @@
 				CAE42DD2A0D6ED7CEEA7859D /* AgentChatTimelineCursor.swift */,
 				CFC59A561FA742849B9A4456 /* AgentChatTimelineTable.swift */,
 				B146FEA1619C4BDD88B56B5D /* AgentModelCatalog.swift */,
+				7900EB64D753A8891A4B351A /* AgentModelPickerController.swift */,
 				356DB5D9AD88C5E85038A93F /* AgentModelPickerRows.swift */,
 				9043388EC6B1D783F76C9612 /* AgentModelPickerView.swift */,
 				1A3884C444FFBF5B8AA376AD /* AgentOutputRedaction.swift */,
@@ -3021,6 +3027,7 @@
 				9EC1B194C52BE8EE670AE7B3 /* AgentChatTimelineCursor.swift in Sources */,
 				6AD0D4760C24022AB27CAABE /* AgentChatTimelineTable.swift in Sources */,
 				592595E599BF19324FB7A87F /* AgentModelCatalog.swift in Sources */,
+				637915089812849FE8650E12 /* AgentModelPickerController.swift in Sources */,
 				A470EDBAD025928A160C49AC /* AgentModelPickerRows.swift in Sources */,
 				4F63FB65FABA84A3E0E4E8BD /* AgentModelPickerView.swift in Sources */,
 				012430794834D02744390E51 /* AgentOutputRedaction.swift in Sources */,
@@ -3500,6 +3507,7 @@
 				2BF1CA3FA58D36C630E0C393 /* AgentChatTimelineTableTests.swift in Sources */,
 				1BF46125023F588BA935E5EC /* AgentModelCatalogTests.swift in Sources */,
 				93F1D9889A11D0AB73A19C48 /* AgentModelPickerGalleryTests.swift in Sources */,
+				093213450C3467FF62413FFA /* AgentModelPickerIntegrationTests.swift in Sources */,
 				495E400DAF1FB07C1ED441AD /* AgentRedactionTests.swift in Sources */,
 				CC9CC8A9953AF05F0EC91D83 /* AgentSessionConfigTests.swift in Sources */,
 				EB1A242A1D586F18F7683E2F /* AgentTimelineTests.swift in Sources */,

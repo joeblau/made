@@ -87,8 +87,9 @@ keeps one long-lived agent process per session, passes no extra MCP servers
 (the agent keeps its configured ones, and with them its cacheable prompt
 prefix), and adds nothing to the system prompt.
 
-Usage appears in two places only: a disabled item at the end of the agent
-menu's Conversation submenu ("Context 58.1k / 258.4k · Cache 97%") and the
+Usage appears in two places only: a disabled item at the end of the
+Conversation menu (the ⋯ button left of the model trigger; "Context 58.1k /
+258.4k · Cache 97%") and the
 Inspector's Meta tab for the run, which **Show Run Usage** in the Inspector's
 Actions menu opens from any subject (never per step or per subagent: agents
 report usage only for the root session). The composer shows no meter. Usage is normalized because agents disagree on what
@@ -464,13 +465,73 @@ as native video prompt content. Copies live in Application Support under
 `app.blau.pilot/ChatAttachments/<pane UUID>` and are removed when the pane is
 deleted. Removing an unsent chip also removes its copy.
 
-The model menu displays the active agent's advertised models, including grouped
-options. It prefers `configOptions` with the `model` category and switches through
-`session/set_config_option`; older adapters advertising `models.availableModels`
-use `session/set_model`. A selection is shown only after acknowledgement or an
-agent configuration update. Rejected changes preserve the previous model and
-draft. Providers and conversation actions are separate submenus. Cockpit does
-not maintain a hard-coded catalog or modify authentication to select a model.
+### Model picker
+
+The composer's model trigger (`agent-chat.agent`, "Model and provider") reads
+`{provider mark} {model} {reasoning level}`, for example "6.1 Sol Low"; the
+reasoning part is omitted when the agent has no `thought_level` option, and
+compact composers show the provider mark alone. It opens a transient popover
+above itself with:
+
+- a rail with a Favorites tab and one tab per agent, starting on the running
+  agent;
+- a searchable model list (case- and diacritic-insensitive, on name and ID)
+  showing four rows with ⌘1–⌘4 until **Show more**, grouped options under
+  section headers, and a ☆/★ favorite toggle on hover or in the context menu;
+- a Reasoning column for the running agent's `thought_level` option;
+- a footer with Standard | Fast (a `model_config` on/off option named "fast")
+  and the session mode menu. Both are hidden when the agent does not advertise
+  them, and the reasoning column and footer appear only on the running agent's
+  tab.
+
+Typing searches, ↑/↓ and Return pick a row, Tab moves from the list to the
+reasoning column and the footer, and Esc closes the popover. Closing returns
+focus to the composer unless a click moved it out of the pane. A reasoning
+choice or a model on another provider closes the popover; a model choice on
+the running agent keeps it open when a reasoning column follows it, because
+Codex re-advertises reasoning levels per model.
+
+Every option comes from the agent. Cockpit prefers `configOptions` (model,
+`thought_level`, `mode`, `model_config` categories) and changes them through
+`session/set_config_option`, applying the full option list the reply carries;
+older adapters advertising `models` or `modes` lists use `session/set_model`
+and `session/set_mode`. `config_option_update` (full list or a bare
+`currentModelId`) and `current_mode_update` are displayed as reported. A
+selection is shown only after acknowledgement or an agent update; a rejected
+change keeps the previous value and draft and shows the failure under the
+composer. Advertised names and descriptions are bounded and stripped of
+control and bidi formatting characters before they are kept; `xhigh` reads
+"Extra High", and a repeated option-name prefix ("Thinking Low") is dropped.
+
+Picking a model on another provider switches the pane to that agent (as a
+provider switch always did) and selects the model once the new session is
+ready, if it still advertises it; otherwise the composer says it is no longer
+offered. A provider that has never run shows one row, "Start <Provider> to see
+its models", which switches to it.
+
+**Mode safety.** A mode whose ID or name marks it unrestricted (Claude
+`bypassPermissions`, Codex `agent-full-access`, Kimi `yolo`, or any name with
+"bypass", "full access", "yolo", or "danger") is sent only after the user
+confirms a sheet on the pane's window, "Allow <Agent> to run without
+asking?", whose default button is Cancel. The popover closes first. Cockpit
+never selects such a mode by itself, including on restore; a mode the agent
+switches to on its own is only displayed. Configuration changes, mode
+included, require an idle session.
+
+**Catalog cache and favorites.** Each agent's last advertised model list and
+reasoning levels are cached in `UserDefaults` under
+`agentChat.modelCatalog.<agent>` (at most 200 models and 64 KiB, descriptions
+dropped first; corrupt or oversized data is ignored) so other providers' tabs
+can list models without launching them. The cache stores only what the agent
+advertised; Cockpit does not maintain a hard-coded catalog or modify
+authentication to select a model, and the agent may still refuse a cached
+model. Favorites live under `agentChat.favoriteModels` as an ordered list of
+`{agent, model}` (at most 50) and show with each agent's cached name, falling
+back to the model ID.
+
+**Conversation menu.** New Conversation, Restart Agent, and the disabled
+context item (`agent-chat.context`) live in the borderless ⋯ button
+(`agent-chat.conversation-menu`) immediately left of the model trigger.
 
 The pane kind is stored in SwiftData as a raw string, so adding it needed no
 schema migration. The selected agent and each agent's ACP session ID live in
@@ -483,6 +544,6 @@ says so.
 
 - Agents are stopped when their pane is deleted. On quit, closing stdin is what
   ends them; adapters exit on EOF.
-- Slash commands and session modes are not exposed yet.
+- Slash commands are not exposed yet.
 - Kimi's cache figures exist only in its local session logs and are not read.
 - Markdown rendering covers inline styles and fenced code blocks only.
