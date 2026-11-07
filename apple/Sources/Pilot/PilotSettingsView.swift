@@ -32,6 +32,10 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
     private var currentController: NSViewController?
     private var controllers: [String: NSViewController] = [:]
     private var defaultsObserver: NSObjectProtocol?
+    private var searchTop: NSLayoutConstraint?
+    /// Row selections sit this far in from the sidebar's edges; the search
+    /// field uses the same inset so their left and right edges line up.
+    static let sidebarInset: CGFloat = 10
 
     init(updater: SPUUpdater, droneStore: DroneStore, identity: SecureIdentity,
          onOpenSetup: @escaping () -> Void, onOpenMessaging: @escaping () -> Void,
@@ -66,20 +70,36 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
         table.setAccessibilityLabel("Settings sections")
         refreshTypography()
         NotificationCenter.default.addObserver(self, selector: #selector(refreshTypography), name: .cockpitUIZoomDidChange, object: nil)
+        table.backgroundColor = .clear
         let scroll = NSScrollView()
         scroll.documentView = table
         scroll.hasVerticalScroller = true
+        // A short list never shows a track, even with "Show scroll bars: Always".
+        scroll.autohidesScrollers = true
         scroll.drawsBackground = false
-        let sidebar = NSView()
-        [search, scroll, noResults].forEach {
+        // One sidebar surface behind the search field and the list, so the
+        // search doesn't sit on a separate band above the source list.
+        let sidebar = NSVisualEffectView()
+        sidebar.material = .sidebar
+        sidebar.blendingMode = .behindWindow
+        sidebar.state = .followsWindowActiveState
+        let divider = NSBox()
+        divider.boxType = .separator
+        [search, scroll, noResults, divider].forEach {
             $0.translatesAutoresizingMaskIntoConstraints = false
             sidebar.addSubview($0)
         }
+        let searchTop = search.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 24)
+        self.searchTop = searchTop
         NSLayoutConstraint.activate([
             sidebar.widthAnchor.constraint(equalToConstant: 220),
-            search.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 12),
-            search.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -12),
-            search.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 16),
+            search.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: Self.sidebarInset),
+            search.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -Self.sidebarInset),
+            searchTop,
+            divider.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            divider.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+            divider.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            divider.widthAnchor.constraint(equalToConstant: 1),
             scroll.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
             scroll.topAnchor.constraint(equalTo: search.bottomAnchor, constant: 12),
@@ -96,6 +116,7 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
         NativeSettingsUI.pin(split, to: view)
         sidebar.heightAnchor.constraint(equalTo: split.heightAnchor).isActive = true
         detail.heightAnchor.constraint(equalTo: split.heightAnchor).isActive = true
+        refreshTypography()
         updateFilter()
         select(section: defaults.string(forKey: SettingsTab.storageKey) ?? SettingsTab.general)
     }
@@ -175,7 +196,14 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
         search.currentEditor()?.font = search.font
         search.invalidateIntrinsicContentSize()
         table.rowHeight = max(32, CockpitTypography.font(size: 13).ascender - CockpitTypography.font(size: 13).descender + 16)
+        // Center the search field on the page title's line (pages inset 24pt).
+        let title = NativeSettingsUI.pageTitle("Title")
+        let titleHeight = title.intrinsicContentSize.height
+        searchTop?.constant = max(12, Self.pageTopInset + (titleHeight - search.intrinsicContentSize.height) / 2)
     }
+
+    /// The detail pages' top inset (`NativeSettingsUI.scrolling`).
+    static let pageTopInset: CGFloat = 24
 
     private func updateFilter() {
         let query = search.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
