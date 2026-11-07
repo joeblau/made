@@ -168,7 +168,9 @@ enum AgentRunTrace {
     }
     private static func times(_ start: Date?, _ end: Date?) -> Fields {
         ["startedAt": start.map { .string($0.formatted(.iso8601)) }, "endedAt": end.map { .string($0.formatted(.iso8601)) },
-         "durationSeconds": start.flatMap { start in end.map { .number(max(0, $0.timeIntervalSince(start))) } }]
+         // Milliseconds: a raw sub-microsecond interval doesn't survive a JSON
+         // round trip exactly, which made exports compare unequal at random.
+         "durationSeconds": start.flatMap { start in end.map { .number((max(0, $0.timeIntervalSince(start)) * 1000).rounded() / 1000) } }]
     }
     private static func number(_ value: Int?) -> JSONValue? { value.map { .number(Double($0)) } }
     private static func decision(_ decision: AgentChatItem.Approval.Decision) -> String {

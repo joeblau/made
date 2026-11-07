@@ -16,7 +16,7 @@ final class NativeCapturePresentationTests: XCTestCase {
         session.suspend()
         session.bootableAVDs = ["Medium_Phone_API_35"]
         defer { registry.remove(paneID: pane.id); pane.isChoosingMode = false }
-        CockpitPaneModePicker(pane: pane).selectMode(at: 1)
+        XCTAssertTrue(pane.applyOpeningChoice(.pane(.android, .device)))
         XCTAssertEqual(pane.androidTarget, .device)
         XCTAssertEqual(session.target, .device)
         XCTAssertTrue(session.bootableAVDs.isEmpty)

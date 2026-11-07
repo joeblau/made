@@ -20,20 +20,21 @@ struct PilotSchemaMigrationTests {
             workspace.panes = []
             container.mainContext.insert(workspace)
             var saved: [UUID: (PaneKind, BrowserEngine?, AndroidPaneTarget)] = [:]
-            for kind: PaneKind in [.terminal, .browser, .simulator, .android] {
-                for index in 0...1 {
-                    if kind == .browser && index == 1 && !ChromiumBrowserCreationPolicy.isCreationEnabled { continue }
-                    let pane = workspace.addPane(kind: kind, side: .right, chooseModeOnOpen: true)
-                    #expect(workspace.selectedPane?.isChoosingMode == true)
-                    let picker = CockpitPaneModePicker(pane: pane)
-                    picker.selectMode(at: index)
-                    #expect(!pane.isChoosingMode)
-                    if kind == .terminal { #expect(pane.kind == (index == 0 ? .terminal : .agentChat)) }
-                    if kind == .simulator { #expect(pane.kind == (index == 0 ? .simulator : .device)) }
-                    if kind == .android { #expect(pane.androidTarget == (index == 0 ? .simulator : .device)) }
-                    if kind == .browser { #expect(pane.browserState?.engine == (index == 0 ? .webKit : .chromium)) }
-                    saved[pane.id] = (pane.kind, pane.browserState?.engine, pane.androidTarget)
-                }
+            var choices: [(PaneKind, NewTabChoice)] = [
+                (.terminal, .terminal), (.terminal, .agenticTerminal), (.terminal, .browser(.webKit, nil)),
+                (.simulator, .pane(.device, nil)), (.terminal, .pane(.android, .simulator)), (.terminal, .pane(.android, .device)),
+            ]
+            if ChromiumBrowserCreationPolicy.isCreationEnabled { choices.append((.terminal, .browser(.chromium, nil))) }
+            for (start, choice) in choices {
+                let pane = workspace.addPane(kind: start, side: .right, chooseModeOnOpen: true)
+                #expect(workspace.selectedPane?.isChoosingMode == true)
+                #expect(pane.applyOpeningChoice(choice))
+                #expect(!pane.isChoosingMode)
+                #expect(pane.kind == choice.kind)
+                if case .pane(.android, let target?) = choice { #expect(pane.androidTarget == target) }
+                if case .browser(let engine, _) = choice { #expect(pane.browserState?.engine == engine) }
+                saved[pane.id] = (pane.kind, pane.browserState?.engine, pane.androidTarget)
+                AndroidDeviceRegistry.shared.remove(paneID: pane.id)
             }
             try container.mainContext.save()
             return saved

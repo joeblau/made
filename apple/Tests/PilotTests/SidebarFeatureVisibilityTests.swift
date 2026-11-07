@@ -19,7 +19,7 @@ struct SidebarFeatureVisibilityTests {
         let visibility = SidebarFeatureVisibility(defaults: fixture.defaults)
         #expect(visibility.hidden.isEmpty)
         #expect(visibility.visibleFeatures == SidebarFeature.allCases)
-        #expect(SidebarFeature.allCases.map(\.title) == ["Notes", "Remote Desktop", "Docker", "Agentic Use", "Runners"])
+        #expect(SidebarFeature.allCases.map(\.title) == ["Notes", "Remote Desktop", "Docker", "Agentic Use", "Runners", "Mock-ups"])
         for feature in SidebarFeature.allCases {
             #expect(SidebarFeature(feature.selection) == feature)
             #expect(NSImage(systemSymbolName: feature.symbolName, accessibilityDescription: nil) != nil)
@@ -37,7 +37,7 @@ struct SidebarFeatureVisibilityTests {
         #expect(fixture.defaults.stringArray(forKey: SidebarFeatureVisibility.defaultsKey) == ["notes", "runners"])
         let reloaded = SidebarFeatureVisibility(defaults: fixture.defaults)
         #expect(reloaded.hidden == [.notes, .runners])
-        #expect(reloaded.visibleFeatures == [.remoteDesktop, .docker, .agenticUse])
+        #expect(reloaded.visibleFeatures == [.remoteDesktop, .docker, .agenticUse, .mockups])
         reloaded.setVisible(true, for: .notes)
         reloaded.setVisible(true, for: .runners)
         #expect(fixture.defaults.object(forKey: SidebarFeatureVisibility.defaultsKey) == nil)
@@ -47,11 +47,11 @@ struct SidebarFeatureVisibilityTests {
     func toleratesUnknownValues() throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
-        fixture.defaults.set(["mockups", "docker", 42, "retired"], forKey: SidebarFeatureVisibility.defaultsKey)
+        fixture.defaults.set(["hologram", "docker", 42, "retired"], forKey: SidebarFeatureVisibility.defaultsKey)
         let visibility = SidebarFeatureVisibility(defaults: fixture.defaults)
         #expect(visibility.hidden == [.docker])
         visibility.setVisible(false, for: .notes)
-        #expect(fixture.defaults.stringArray(forKey: SidebarFeatureVisibility.defaultsKey) == ["notes", "docker", "mockups", "retired"])
+        #expect(fixture.defaults.stringArray(forKey: SidebarFeatureVisibility.defaultsKey) == ["notes", "docker", "hologram", "retired"])
         fixture.defaults.set("docker", forKey: SidebarFeatureVisibility.defaultsKey)
         #expect(SidebarFeatureVisibility(defaults: fixture.defaults).hidden.isEmpty)
     }
@@ -161,11 +161,11 @@ struct SidebarFeatureVisibilityTests {
                 sidebar.tableView(table, viewFor: table.tableColumns[0], row: $0)?.accessibilityIdentifier()
             }.filter { $0.hasPrefix("sidebar.mode.") }
         }
-        #expect(modeRows() == ["sidebar.mode.notes", "sidebar.mode.remoteDesktop", "sidebar.mode.docker", "sidebar.mode.runners"])
+        #expect(modeRows() == ["sidebar.mode.notes", "sidebar.mode.remoteDesktop", "sidebar.mode.docker", "sidebar.mode.runners", "sidebar.mode.mockups"])
         fixture.store.sidebarVisibility.setVisible(false, for: .notes)
-        #expect(await eventually { modeRows() == ["sidebar.mode.remoteDesktop", "sidebar.mode.docker", "sidebar.mode.runners"] })
+        #expect(await eventually { modeRows() == ["sidebar.mode.remoteDesktop", "sidebar.mode.docker", "sidebar.mode.runners", "sidebar.mode.mockups"] })
         fixture.store.sidebarVisibility.setVisible(true, for: .agenticUse)
-        #expect(await eventually { modeRows().count == 4 && modeRows()[2] == "sidebar.mode.agenticUse" })
+        #expect(await eventually { modeRows().count == 5 && modeRows()[2] == "sidebar.mode.agenticUse" })
         #expect(fixture.store.activeSidebarFeature == nil)
     }
 
@@ -211,7 +211,7 @@ struct SidebarFeatureVisibilityTests {
         let switches = descendants(root).compactMap { $0 as? NSSwitch }
         #expect(switches.map { $0.identifier?.rawValue } == SidebarFeature.allCases.map { "sidebar.visibility.\($0.rawValue)" })
         #expect(switches.map { $0.accessibilityLabel() } == SidebarFeature.allCases.map { "Show \($0.title) in Sidebar" })
-        #expect(switches.map(\.state) == [.on, .on, .on, .on, .off])
+        #expect(switches.map(\.state) == [.on, .on, .on, .on, .off, .on])
         #expect(descendants(root).compactMap { $0 as? NSImageView }.count == SidebarFeature.allCases.count)
         fixture.store.enterDockerMode()
         switches[2].performClick(nil)
@@ -258,6 +258,20 @@ struct SidebarFeatureVisibilityTests {
             search.stringValue = ""
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
             #expect(sections.numberOfRows == 4)
+            // The search field shares the sidebar surface, lines up with the
+            // row selections' edges, and centers on the page title's line.
+            controller.view.layoutSubtreeIfNeeded()
+            let searchFrame = search.convert(search.bounds, to: nil)
+            let sidebarFrame = try #require(search.superview).convert(try #require(search.superview).bounds, to: nil)
+            #expect(search.superview is NSVisualEffectView, "One sidebar surface behind search and list")
+            #expect(abs(searchFrame.minX - sidebarFrame.minX - PilotSettingsViewController.sidebarInset) < 0.5)
+            #expect(abs(sidebarFrame.maxX - searchFrame.maxX - PilotSettingsViewController.sidebarInset) < 0.5)
+            let title = try #require(descendants(controller.view).compactMap { $0 as? NSTextField }
+                .first { $0.stringValue == "Sidebar" && $0.font?.pointSize ?? 0 > 18 })
+            let titleFrame = title.convert(title.bounds, to: nil)
+            #expect(abs(searchFrame.midY - titleFrame.midY) < 2, "Search \(searchFrame.midY) vs title \(titleFrame.midY)")
+            #expect(sections.enclosingScrollView?.autohidesScrollers == true)
+            #expect(sections.enclosingScrollView?.verticalScroller?.isHidden ?? true, "A short section list shows no scroll bar")
             guard let output else { continue }
             // The frame view also draws the window background and title bar.
             let frame = try #require(window.contentView?.superview)
