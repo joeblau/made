@@ -6,7 +6,7 @@ import Observation
 /// rows, the View menu toggles, and the Sidebar settings page all derive from
 /// `allCases`, so a new mode is one case here plus its store flag.
 enum SidebarFeature: String, CaseIterable, Sendable {
-    case notes, remoteDesktop, docker, agenticUse, runners
+    case notes, remoteDesktop, docker, agenticUse, runners, mockups
 
     var selection: SidebarSelection {
         switch self {
@@ -15,6 +15,7 @@ enum SidebarFeature: String, CaseIterable, Sendable {
         case .docker: .docker
         case .agenticUse: .agenticUse
         case .runners: .runners
+        case .mockups: .mockups
         }
     }
 
@@ -25,6 +26,7 @@ enum SidebarFeature: String, CaseIterable, Sendable {
         case .docker: self = .docker
         case .agenticUse: self = .agenticUse
         case .runners: self = .runners
+        case .mockups: self = .mockups
         case .workspace: return nil
         }
     }
@@ -36,6 +38,7 @@ enum SidebarFeature: String, CaseIterable, Sendable {
         case .docker: "Docker"
         case .agenticUse: "Agentic Use"
         case .runners: "Runners"
+        case .mockups: "Mock-ups"
         }
     }
 
@@ -46,6 +49,7 @@ enum SidebarFeature: String, CaseIterable, Sendable {
         case .docker: "shippingbox"
         case .agenticUse: "chart.bar.xaxis"
         case .runners: "server.rack"
+        case .mockups: "ipad.and.iphone"
         }
     }
 }
@@ -101,6 +105,7 @@ extension WorkspaceStore {
         case .docker: isDockerMode
         case .agenticUse: isAgenticUseMode
         case .runners: isRunnersMode
+        case .mockups: isMockupsMode
         }
     }
 
@@ -115,6 +120,7 @@ extension WorkspaceStore {
         case .docker: enterDockerMode()
         case .agenticUse: enterAgenticUseMode()
         case .runners: enterRunnersMode()
+        case .mockups: enterMockupsMode()
         }
     }
 
@@ -134,6 +140,7 @@ extension WorkspaceStore {
         case .docker: isDockerMode = false
         case .agenticUse: isAgenticUseMode = false
         case .runners: isRunnersMode = false
+        case .mockups: isMockupsMode = false
         }
     }
 

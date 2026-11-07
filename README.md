@@ -5,8 +5,9 @@ development environment: four companion apps, a public website, and an optional
 rendezvous relay.
 
 - **Cockpit** (macOS, internal target `Pilot`) combines terminals, editing, browser previews, GitHub work,
-  device capture, simulators, remote screens, and local container control (see
-  [the Docker section](docs/docker-section.md)).
+  device capture, simulators, remote screens, local container control (see
+  [the Docker section](docs/docker-section.md)), and device mock-ups (see
+  [the Mock-ups section](docs/mockups.md)).
 - **Walkie** (iOS, internal target `Copilot`) supplies a trackpad, voice transcription, settings, and
   secure peer messaging.
 - **Kneeboard** (iPadOS, internal target `Plotter`) mirrors a Cockpit window with low-latency HEVC and sends

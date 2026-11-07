@@ -43,6 +43,7 @@ final class WorkspaceStore {
                 isDockerMode = false
                 isAgenticUseMode = false
                 isRunnersMode = false
+                isMockupsMode = false
             }
         }
     }
@@ -58,6 +59,7 @@ final class WorkspaceStore {
                 isDockerMode = false
                 isAgenticUseMode = false
                 isRunnersMode = false
+                isMockupsMode = false
             }
         }
     }
@@ -73,6 +75,7 @@ final class WorkspaceStore {
                 isRemoteDesktopMode = false
                 isAgenticUseMode = false
                 isRunnersMode = false
+                isMockupsMode = false
             }
         }
     }
@@ -88,6 +91,7 @@ final class WorkspaceStore {
                 isRemoteDesktopMode = false
                 isDockerMode = false
                 isRunnersMode = false
+                isMockupsMode = false
             }
         }
     }
@@ -101,6 +105,23 @@ final class WorkspaceStore {
                 isRemoteDesktopMode = false
                 isDockerMode = false
                 isAgenticUseMode = false
+                isMockupsMode = false
+            }
+        }
+    }
+
+    /// True while the global Mock-ups studio is showing in the detail area.
+    /// Mutually exclusive with the other global modes.
+    var isMockupsMode: Bool = false {
+        didSet {
+            guard oldValue != isMockupsMode else { return }
+            defaults.set(isMockupsMode, forKey: "mockupsMode")
+            if isMockupsMode {
+                isNotesMode = false
+                isRemoteDesktopMode = false
+                isDockerMode = false
+                isAgenticUseMode = false
+                isRunnersMode = false
             }
         }
     }
@@ -110,7 +131,7 @@ final class WorkspaceStore {
     /// (pane activation, the ink overlay, ⌘W) keys off this rather than
     /// re-listing the modes.
     var isWorkspaceDetailVisible: Bool {
-        !isNotesMode && !isRemoteDesktopMode && !isDockerMode && !isAgenticUseMode && !isRunnersMode
+        !isNotesMode && !isRemoteDesktopMode && !isDockerMode && !isAgenticUseMode && !isRunnersMode && !isMockupsMode
     }
 
     var selectedRemoteConnectionID: UUID? {
@@ -321,6 +342,7 @@ final class WorkspaceStore {
         if isDockerMode { isDockerMode = false }
         if isAgenticUseMode { isAgenticUseMode = false }
         if isRunnersMode { isRunnersMode = false }
+        if isMockupsMode { isMockupsMode = false }
         if selectedWorkspaceID != workspaceID {
             selectedWorkspaceID = workspaceID
         }
@@ -476,6 +498,13 @@ final class WorkspaceStore {
     }
 
     @discardableResult
+    func enterMockupsMode() -> Bool {
+        guard isSidebarFeatureVisible(.mockups) else { return false }
+        isMockupsMode = true
+        return true
+    }
+
+    @discardableResult
     func addRemoteConnection(host: String, port: Int = 5900, nickname: String = "", username: String = "") -> RemoteDesktopConnection {
         let maxOrder = remoteConnections.map(\.sortOrder).max() ?? -1
         let connection = RemoteDesktopConnection(
@@ -589,6 +618,7 @@ final class WorkspaceStore {
         self.isDockerMode = defaults.bool(forKey: "dockerMode")
         self.isAgenticUseMode = defaults.bool(forKey: "agenticUseMode")
         self.isRunnersMode = defaults.bool(forKey: "runnersMode")
+        self.isMockupsMode = defaults.bool(forKey: "mockupsMode")
         cleanupBadDirectories()
         if let selectedWorkspaceID, !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
             self.selectedWorkspaceID = workspaces.first?.id

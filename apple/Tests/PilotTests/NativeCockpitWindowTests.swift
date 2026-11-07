@@ -79,8 +79,9 @@ final class NativeCockpitWindowTests: XCTestCase {
         fixture.store.addWorkspace()
         let sidebar = WorkspaceSidebarViewController(store: fixture.store, defaults: fixture.defaults, isLive: false)
         let table = try XCTUnwrap(descendants(sidebar.view).compactMap { $0 as? NSTableView }.first)
-        XCTAssertEqual(table.numberOfRows, 9, "Both sections remain expanded even with old collapsed preferences")
-        for row in [5, 7] {
+        // Six global modes (Notes … Mock-ups), then Pinned + 1, Workspaces + 1.
+        XCTAssertEqual(table.numberOfRows, 10, "Both sections remain expanded even with old collapsed preferences")
+        for row in [6, 8] {
             XCTAssertTrue(sidebar.tableView(table, isGroupRow: row))
             XCTAssertFalse(sidebar.tableView(table, shouldSelectRow: row))
             let view = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: row))
