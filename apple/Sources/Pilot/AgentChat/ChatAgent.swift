@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// A coding agent the chat pane can drive over the Agent Client Protocol.
 ///
@@ -236,5 +237,121 @@ actor LoginShellEnvironment {
             environment[String(entry[..<equals])] = String(entry[entry.index(after: equals)...])
         }
         return environment.isEmpty ? nil : environment
+    }
+}
+
+// MARK: - Persistence
+
+/// Per-pane agent choice and ACP session IDs. Like `TerminalFastCommandStore`,
+/// this is UI state kept in UUID-keyed preferences so adding it does not
+/// migrate the versioned SwiftData store.
+enum AgentChatPaneStore {
+    private static let agentPrefix = "agentChat.agent."
+    private static let sessionPrefix = "agentChat.session."
+    static let lastAgentKey = "agentChat.lastAgent"
+
+    static func agent(for paneID: UUID, defaults: UserDefaults = .standard) -> ChatAgent {
+        defaults.string(forKey: agentPrefix + key(paneID)).flatMap(ChatAgent.init(rawValue:))
+            ?? lastUsedAgent(defaults: defaults)
+    }
+
+    static func lastUsedAgent(defaults: UserDefaults = .standard) -> ChatAgent {
+        defaults.string(forKey: lastAgentKey).flatMap(ChatAgent.init(rawValue:)) ?? .claude
+    }
+
+    static func setAgent(_ agent: ChatAgent, for paneID: UUID, defaults: UserDefaults = .standard) {
+        defaults.set(agent.rawValue, forKey: agentPrefix + key(paneID))
+        defaults.set(agent.rawValue, forKey: lastAgentKey)
+    }
+
+    static func sessionID(for paneID: UUID, agent: ChatAgent, defaults: UserDefaults = .standard) -> String? {
+        defaults.string(forKey: sessionKey(paneID, agent))
+    }
+
+    static func setSessionID(_ sessionID: String?, for paneID: UUID, agent: ChatAgent, defaults: UserDefaults = .standard) {
+        if let sessionID {
+            defaults.set(sessionID, forKey: sessionKey(paneID, agent))
+        } else {
+            defaults.removeObject(forKey: sessionKey(paneID, agent))
+        }
+    }
+
+    static func remove(paneID: UUID, defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: agentPrefix + key(paneID))
+        for agent in ChatAgent.allCases {
+            defaults.removeObject(forKey: sessionKey(paneID, agent))
+        }
+    }
+
+    private static func key(_ paneID: UUID) -> String { paneID.uuidString.lowercased() }
+
+    private static func sessionKey(_ paneID: UUID, _ agent: ChatAgent) -> String {
+        sessionPrefix + agent.rawValue + "." + key(paneID)
+    }
+}
+
+// MARK: - Registry
+
+/// Owns each agent chat pane's session for the life of the pane, so switching
+/// workspaces or tabs never restarts an agent mid-turn.
+@MainActor
+@Observable
+final class AgentChatRegistry {
+    static let shared = AgentChatRegistry()
+
+    private var sessions: [UUID: AgentChatSession] = [:]
+
+    /// Safe to call from a view body: it never mutates an existing session.
+    /// The pane applies root-folder changes from its `.task`.
+    func session(for paneID: UUID, workingDirectory: String?) -> AgentChatSession {
+        if let existing = sessions[paneID] { return existing }
+        let session = AgentChatSession(
+            paneID: paneID,
+            agent: AgentChatPaneStore.agent(for: paneID),
+            workingDirectory: workingDirectory
+        )
+        sessions[paneID] = session
+        return session
+    }
+
+    func existingSession(for paneID: UUID) -> AgentChatSession? {
+        sessions[paneID]
+    }
+
+    /// Called when the pane is deleted: stops the agent and forgets the
+    /// pane's preferences. The agent's own session history is left alone.
+    func remove(paneID: UUID) {
+        let session = sessions.removeValue(forKey: paneID)
+        session?.shutDown()
+        if let session {
+            session.removeAttachmentStorage()
+        } else {
+            let directory = AgentChatAttachmentStore.directory(paneID: paneID)
+            Task.detached { try? FileManager.default.removeItem(at: directory) }
+        }
+        AgentChatPaneStore.remove(paneID: paneID)
+    }
+}
+
+// MARK: - Session result mapping
+
+extension AgentChatSession {
+    /// Reads a `_session/steering` result. Unknown outcomes are failures.
+    static func steerOutcome(_ result: JSONValue) -> ACPSteerOutcome {
+        switch result["outcome"]?.stringValue {
+        case "injected": .injected
+        case "promptRequired": .promptRequired
+        default: ACPSteerOutcome(result)
+        }
+    }
+
+    static func stopNotice(_ stopReason: String?) -> String? {
+        switch stopReason {
+        case "max_tokens": "Stopped: the response reached the model's output limit."
+        case "max_turn_requests": "Stopped: the turn reached its request limit."
+        case "refusal": "The agent declined to continue."
+        case "cancelled": "Stopped."
+        default: nil
+        }
     }
 }

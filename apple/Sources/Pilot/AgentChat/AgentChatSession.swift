@@ -10,6 +10,11 @@ extension ChatAgentSetupIssue: Error {}
 /// new prompt, so the agent's own prompt caching, compaction, and subagents
 /// work exactly as in its TUI. `generation` fences every async callback so a
 /// stopped or replaced agent can never write into the current one's state.
+///
+/// Ordering: a `session/load` or `session/prompt` response can overtake the
+/// notifications sent before it, so both carry a barrier token and the session
+/// acts on completion (ready, `finishTurn`, the queued prompt) only once the
+/// event loop reaches that barrier, after every earlier notification.
 @MainActor
 @Observable
 final class AgentChatSession {
@@ -24,8 +29,22 @@ final class AgentChatSession {
         var isRunning: Bool { self == .starting || self == .ready || self == .prompting }
     }
 
+    /// Session milestones kept (bounded) for diagnostics and tests.
+    enum Diagnostic: Equatable, Sendable {
+        case barrierReached(token: Int)
+        case turnFinished(stopReason: String?)
+        case approvalRecorded(requestID: JSONValue, agentName: String)
+        case approvalResolved(requestID: JSONValue, decision: AgentChatItem.Approval.Decision)
+    }
+
+    typealias Decision = AgentChatItem.Approval.Decision
+
     /// Requests beyond this are answered `cancelled` rather than queued.
     static let maximumPendingPermissions = 32
+    /// Ring-buffer sizes for `recentEvents` and `diagnostics`.
+    static let maximumRecentEvents = 256
+    /// Names a permission request from a session no subagent card claims.
+    static let untrackedSubagentName = "untracked subagent"
 
     /// Resolves how to launch an agent in a working directory. Injected so
     /// tests can drive a scripted agent without the user's login shell.
@@ -60,9 +79,20 @@ final class AgentChatSession {
     private(set) var sessionUsage: NormalizedTurnUsage?
     /// One editable, removable slot sent after the turn ends with end_turn.
     private(set) var queuedPrompt: String?
+    /// Text sent with `_session/steering` and not answered yet: the pending
+    /// user bubble. Cleared when the agent answers.
+    private(set) var pendingSteer: String?
+    /// Keys of user items the agent accepted into a running turn ("Sent to
+    /// running turn"); the agent does not echo steered text itself.
+    private(set) var steeredItemKeys: Set<String> = []
+    /// The notice of the latest failed turn, which offers "Send again".
+    private(set) var sendAgainNoticeKey: String?
     /// Diagnostics and tests: the latest transcript events and their count.
     @ObservationIgnored private(set) var recentEvents: [AgentActivityEvent] = []
     private(set) var eventSequence = 0
+    @ObservationIgnored private(set) var diagnostics: [Diagnostic] = []
+    /// How long `steer(_:)` waits for the agent; injectable for tests.
+    @ObservationIgnored var steerTimeout: Duration = .seconds(15)
     var draft = ""
 
     @ObservationIgnored private var connection: ACPConnection?
@@ -75,6 +105,16 @@ final class AgentChatSession {
     @ObservationIgnored private let attachmentDirectory: URL
     @ObservationIgnored private var attachmentImportTask: Task<Void, Never>?
     @ObservationIgnored private let now: @Sendable () -> Date
+    /// The last text and attachments sent with `session/prompt`.
+    @ObservationIgnored private var lastSubmission: (text: String, media: [AgentChatAttachment])?
+    /// True from a prompt's submission until `finishTurn` ran for it.
+    @ObservationIgnored private var isTurnOpen = false
+    /// How the latest turn ended; only `end_turn` lets held text auto-send.
+    @ObservationIgnored private var lastStopReason: String?
+    /// Recorded approvals not yet resolved (queued or being answered): the
+    /// asking session by JSON-RPC id.
+    @ObservationIgnored private var openApprovals: [JSONValue: String] = [:]
+    @ObservationIgnored private let barriers = ACPBarrierGate()
 
     init(
         paneID: UUID,
@@ -105,17 +145,18 @@ final class AgentChatSession {
 
     /// Subagents the agent keeps running after the root turn ended.
     var hasBackgroundAgents: Bool {
-        // WP2: implement
-        false
+        guard phase == .ready else { return false }
+        return firstSubagent { $0.lifecycle == .background || $0.lifecycle == .running } != nil
     }
 
     var canSteer: Bool { isTurnRunning && agentInfo?.supportsSteering == true }
 
+    /// "Send again" is available once a prompt was sent and the agent is idle.
+    var canSendAgain: Bool { phase == .ready && lastSubmission != nil && !isChangingModel && !isPreparingPrompt }
+
     // MARK: - Lifecycle
 
-    func startIfNeeded() {
-        if phase == .idle { start() }
-    }
+    func startIfNeeded() { if phase == .idle { start() } }
 
     func setWorkingDirectory(_ directory: String?) {
         guard directory != workingDirectory, !phase.isRunning else { return }
@@ -138,16 +179,21 @@ final class AgentChatSession {
     }
 
     /// Stops the agent process. The transcript stays visible and the session
-    /// ID stays saved, so `start()` can pick the conversation back up.
+    /// ID stays saved, so `start()` can pick the conversation back up. An
+    /// open turn ends as cancelled, open approvals as `.agentStopped`, and
+    /// unsent steer or queued text returns to the draft.
     func shutDown() {
         isChangingModel = false
         isPreparingPrompt = false
+        finishOpenTurn(stopReason: "cancelled")
+        stopOpenApprovals()
+        returnUnsentTextToDraft()
         generation += 1
         lifecycleTask?.cancel()
         eventTask?.cancel()
         lifecycleTask = nil
         eventTask = nil
-        permissionQueue.removeAll()
+        barriers.close()
         rootSessionID = nil
         let connection = connection
         self.connection = nil
@@ -212,7 +258,7 @@ final class AgentChatSession {
                 return
             }
             attachments.append(contentsOf: imported)
-            composerError = errors.isEmpty ? nil : errors.joined(separator: "\n")
+            composerError = errors.isEmpty ? nil : errors.map(redactInline).joined(separator: "\n")
             isImportingAttachments = false
             attachmentImportTask = nil
         }
@@ -257,7 +303,7 @@ final class AgentChatSession {
                 } else { composerError = "The agent did not confirm the selected model. Please try again." }
             } catch {
                 guard generation == self.generation else { return }
-                composerError = "Could not change model: \(error.localizedDescription)"
+                composerError = "Could not change model: " + redactInline(error.localizedDescription)
             }
             if generation == self.generation { isChangingModel = false }
         }
@@ -266,8 +312,19 @@ final class AgentChatSession {
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard canSend, connection != nil, rootSessionID != nil else { return }
-        let media = attachments
-        guard !media.isEmpty else { submit(text: text, media: [], blocks: []); return }
+        prepareAndSubmit(text: text, media: attachments, fromComposer: true)
+    }
+
+    /// Resends the last prompt's text and attachments; offered on a failed-turn notice.
+    func sendAgain() {
+        guard canSendAgain, connection != nil, let last = lastSubmission else { return }
+        prepareAndSubmit(text: last.text, media: last.media, fromComposer: false)
+    }
+
+    /// Encodes attachments off the main actor, then submits. A composer send
+    /// clears the draft and attachments; a resend leaves them alone.
+    private func prepareAndSubmit(text: String, media: [AgentChatAttachment], fromComposer: Bool) {
+        guard !media.isEmpty else { submit(text: text, media: [], blocks: [], fromComposer: fromComposer); return }
         let supportsImages = agentInfo?.supportsImages == true
         let generation = generation
         isPreparingPrompt = true
@@ -279,53 +336,88 @@ final class AgentChatSession {
                 }.value
                 guard generation == self.generation else { return }
                 isPreparingPrompt = false
-                submit(text: text, media: media, blocks: blocks)
+                submit(text: text, media: media, blocks: blocks, fromComposer: fromComposer)
             } catch {
                 guard generation == self.generation else { return }
                 isPreparingPrompt = false
-                composerError = "Could not prepare attachments: \(error.localizedDescription)"
+                composerError = "Could not prepare attachments: " + redactInline(error.localizedDescription)
             }
         }
     }
 
-    private func submit(text: String, media: [AgentChatAttachment], blocks: [JSONValue]) {
+    private func submit(text: String, media: [AgentChatAttachment], blocks: [JSONValue], fromComposer: Bool) {
         guard phase == .ready, let connection, let rootSessionID else { return }
-        draft = ""
-        attachments = []
+        if fromComposer {
+            draft = ""
+            attachments = []
+        }
         composerError = nil
+        sendAgainNoticeKey = nil
+        // The first prompt after session/load ends the replay window.
+        transcript.isReplaying = false
         transcript.appendUser(text, attachments: media)
+        lastSubmission = (text, media)
         phase = .prompting
+        isTurnOpen = true
+        let barrier = barriers.makeToken()
         let generation = generation
         let agent = agent
         Task {
             do {
                 let result = try await connection.request(
                     ACP.Method.prompt,
-                    params: ACP.promptParams(sessionID: rootSessionID, text: text, attachments: blocks)
+                    params: ACP.promptParams(sessionID: rootSessionID, text: text, attachments: blocks),
+                    barrier: barrier
                 )
-                guard generation == self.generation else { return }
+                guard generation == self.generation, await barriers.wait(for: barrier), generation == self.generation
+                else { return }
                 recordUsage(result, agent: agent)
-                if let notice = Self.stopNotice(result["stopReason"]?.stringValue) {
-                    transcript.appendNotice(notice)
-                }
+                let stopReason = result["stopReason"]?.stringValue.map { String($0.prefix(64)) }
+                completeTurn(stopReason: stopReason, notice: Self.stopNotice(stopReason), failed: false)
+            } catch let error as ACPRemoteError {
+                guard generation == self.generation, await barriers.wait(for: barrier), generation == self.generation
+                else { return }
+                completeTurn(stopReason: nil, notice: redactInline(error.localizedDescription), failed: true)
             } catch {
                 guard generation == self.generation else { return }
-                // A closed connection is reported once, by `connectionEnded`.
-                if !(error is ACPConnectionError) { transcript.appendNotice(error.localizedDescription) }
-            }
-            if generation == self.generation, phase == .prompting {
-                transcript.finishUnreportedSubagents()
-                phase = .ready
+                // A closed connection is reported once, by `connectionEnded`,
+                // which runs after the event loop drained every notification
+                // the agent sent before it went away.
+                if error is ACPConnectionError, await connection.closeReason != nil { return }
+                guard generation == self.generation else { return }
+                let notice = error is ACPConnectionError ? nil : redactInline(error.localizedDescription)
+                completeTurn(stopReason: nil, notice: notice, failed: notice != nil)
             }
         }
     }
 
+    /// Runs once the prompt's barrier was reached: every notification the
+    /// agent sent before its response is already in the transcript.
+    private func completeTurn(stopReason: String?, notice: String?, failed: Bool) {
+        guard phase == .prompting else { return }
+        if let notice {
+            transcript.appendNotice(notice)
+            if failed { sendAgainNoticeKey = transcript.items.last?.key }
+        }
+        finishOpenTurn(stopReason: stopReason)
+        phase = .ready
+        guard let queued = queuedPrompt else { return }
+        queuedPrompt = nil
+        if stopReason == "end_turn" {
+            submit(text: queued, media: [], blocks: [], fromComposer: false)
+        } else {
+            restoreToDraft(queued)
+        }
+    }
+
     /// Asks the agent to stop the current turn. ACP requires answering any
-    /// open permission request with `cancelled` first.
+    /// open permission request with `cancelled` first; those records end as
+    /// `.agentStopped`.
     func cancelTurn() {
         guard phase == .prompting, let connection, let rootSessionID else { return }
         let open = permissionQueue
         permissionQueue.removeAll()
+        for request in open { resolveApproval(request.requestID, .agentStopped) }
         Task {
             for request in open {
                 await connection.respond(to: request.requestID, result: ACP.permissionResult(optionID: nil))
@@ -334,47 +426,124 @@ final class AgentChatSession {
         }
     }
 
+    /// Answers with the agent's option. The record is resolved only once the
+    /// answer was written to a live connection; `nil` is "Cancel Request".
     func answerPermission(_ request: ACPPermissionRequest, optionID: String?) {
-        guard permissionQueue.contains(request) else { return }
-        permissionQueue.removeAll { $0.requestID == request.requestID }
-        let connection = connection
-        Task { await connection?.respond(to: request.requestID, result: ACP.permissionResult(optionID: optionID)) }
-    }
-
-    /// Injects `text` into the running turn (`_session/steering`). Injected →
-    /// "Sent to running turn"; promptRequired → queued; failure, a 15 s
-    /// timeout, or an error returns the text to the draft with a composerError.
-    /// Attachments are not sent while steering.
-    func steer(_ text: String) {
-        // WP2: implement
-    }
-
-    /// Fills the single queued slot; sent only after stopReason end_turn,
-    /// otherwise restored to the draft. Cleared on shutDown, switchAgent, and
-    /// a new conversation.
-    func queueForNextTurn(_ text: String) {
-        // WP2: implement
-    }
-
-    /// "Ask to retry…": pre-fills the draft (redacted) for the failed step; never sends.
-    func prefillAskToRetry(stepKey: String) {
-        // WP2: implement
-    }
-
-    /// "Ask to continue…": pre-fills the draft (redacted) for the failed agent; never sends.
-    func prefillAskToContinue(childSessionID: String) {
-        // WP2: implement
-    }
-
-    /// Resends the last prompt's text and attachments; offered on a failed-turn notice.
-    func sendAgain() {
-        // WP2: implement
+        guard let optionID else {
+            dismissPermission(request)
+            return
+        }
+        guard let option = request.options.first(where: { $0.id == optionID }) else { return }
+        deliver(request, result: ACP.permissionResult(optionID: optionID), decision: .chose(
+            optionID: option.id, name: option.name, allows: option.kind?.allows ?? false
+        ))
     }
 
     /// "Cancel Request": answers `cancelled` and records `.cancelledByUser`.
     func dismissPermission(_ request: ACPPermissionRequest) {
-        // WP2: implement (record .cancelledByUser after respond succeeds)
-        answerPermission(request, optionID: nil)
+        deliver(request, result: ACP.permissionResult(optionID: nil), decision: .cancelledByUser)
+    }
+
+    private func deliver(_ request: ACPPermissionRequest, result: JSONValue, decision: Decision) {
+        guard permissionQueue.contains(request), let connection else { return }
+        permissionQueue.removeAll { $0.requestID == request.requestID }
+        let generation = generation
+        Task {
+            do {
+                try await connection.respondConfirmed(to: request.requestID, result: result)
+            } catch {
+                // Never reached the agent: the closing connection resolves
+                // the record as `.agentStopped`.
+                return
+            }
+            guard generation == self.generation else { return }
+            resolveApproval(request.requestID, decision)
+        }
+    }
+
+    /// Injects `text` into the running turn (`_session/steering`), never with
+    /// attachments. Injected → "Sent to running turn"; promptRequired → queued
+    /// (sent now if the turn already ended); failure, error, or `steerTimeout`
+    /// → the text returns to the draft with a composerError.
+    func steer(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, canSteer, pendingSteer == nil, let connection, let rootSessionID else { return }
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+        composerError = nil
+        pendingSteer = text
+        let generation = generation
+        let timeout = steerTimeout
+        Task {
+            let outcome: ACPSteerOutcome
+            do {
+                outcome = Self.steerOutcome(try await connection.request(
+                    ACP.Method.steer, params: ACP.steerParams(sessionID: rootSessionID, text: text), timeout: timeout
+                ))
+            } catch ACPConnectionError.timedOut {
+                outcome = .failed("The agent did not answer in time.")
+            } catch {
+                outcome = .failed(error.localizedDescription)
+            }
+            guard generation == self.generation, pendingSteer == text else { return }
+            pendingSteer = nil
+            switch outcome {
+            case .injected:
+                transcript.appendUser(text)
+                if let key = transcript.items.last?.key { steeredItemKeys.insert(key) }
+            case .promptRequired where phase == .ready && lastStopReason == "end_turn":
+                // The turn ended normally before the steer arrived: it is the
+                // queued prompt, flushed now. Any other ending restores it.
+                submit(text: text, media: [], blocks: [], fromComposer: false)
+            case .promptRequired where isTurnRunning:
+                queuedPrompt = queuedPrompt.map { $0 + "\n\n" + text } ?? text
+            case .promptRequired:
+                restoreToDraft(text)
+            case .failed(let reason):
+                restoreToDraft(text)
+                composerError = "Could not steer the running turn: " + Self.redactedLine(reason, limit: 200)
+            }
+        }
+    }
+
+    /// Fills the single queued slot (appending to text already queued); sent
+    /// only after stopReason end_turn, otherwise restored to the draft.
+    /// Cleared on shutDown, switchAgent, a new conversation, or a new session.
+    func queueForNextTurn(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, isTurnRunning else { return }
+        if draft.trimmingCharacters(in: .whitespacesAndNewlines) == text { draft = "" }
+        queuedPrompt = queuedPrompt.map { $0 + "\n\n" + text } ?? text
+    }
+
+    func clearQueuedPrompt() { queuedPrompt = nil }
+
+    /// Moves the queued text back into the draft for editing.
+    func editQueuedPrompt() {
+        guard let queued = queuedPrompt else { return }
+        queuedPrompt = nil
+        restoreToDraft(queued)
+    }
+
+    /// "Ask to retry…": pre-fills the draft (redacted) for the failed step; never sends.
+    func prefillAskToRetry(stepKey: String) {
+        guard let item = transcriptItem(forKey: stepKey), case .tool(let tool) = item.content else { return }
+        let verb = verbForTool(tool, input: transcript.stepDetails[stepKey]?.rawInput?.value)
+        var text = "The step “\(verb.settled)”"
+        if item.sessionKey != "root", let card = subagentCard(item.sessionKey) {
+            text += " in the subagent “\(Self.redactedLine(card.title, limit: 256))”"
+        }
+        text += " failed"
+        if let summary = tool.errorSummary.map({ Self.redactedLine($0, limit: 200) }), !summary.isEmpty {
+            text += " (\(summary))"
+        }
+        restoreToDraft(redactInline(text + ". Please retry it."), ahead: false)
+    }
+
+    /// "Ask to continue…": pre-fills the draft (redacted) for the failed agent; never sends.
+    func prefillAskToContinue(childSessionID: String) {
+        guard let card = subagentCard(childSessionID) else { return }
+        let name = Self.redactedLine(card.title, limit: 256)
+        restoreToDraft(redactInline("The subagent “\(name)” stopped before finishing. Please continue its task."), ahead: false)
     }
 
     // MARK: - Internals
@@ -394,6 +563,7 @@ final class AgentChatSession {
 
         let connection = ACPConnection()
         self.connection = connection
+        barriers.reopen()
         do {
             try await connection.start(configuration)
             eventTask = Task { [weak self] in
@@ -403,17 +573,19 @@ final class AgentChatSession {
                 await self?.connectionEnded(connection, generation: generation)
             }
 
-            let info = ACPAgentInfo(try await connection.request(
-                ACP.Method.initialize,
-                params: ACP.initializeParams(clientVersion: Self.clientVersion),
-                timeout: .seconds(30)
-            ))
+            let initialized = try await connection.request(
+                ACP.Method.initialize, params: ACP.initializeParams(clientVersion: Self.clientVersion), timeout: .seconds(30)
+            )
+            var info = ACPAgentInfo(initialized)
+            // `_meta.steering.supported`, as ACPAgentInfo reads it; harmless where it already does.
+            info.supportsSteering = info.supportsSteering || initialized["_meta"]?["steering"]?["supported"]?.boolValue == true
             guard generation == self.generation else { return }
             agentInfo = info
 
             var sessionResult = try await loadSavedSession(
-                connection, info: info, workingDirectory: workingDirectory, resume: resume
+                connection, info: info, workingDirectory: workingDirectory, resume: resume, generation: generation
             )
+            guard generation == self.generation else { return }
             if sessionResult == nil {
                 let hadTranscript = !transcript.items.isEmpty
                 let result = try await newSession(connection, info: info, workingDirectory: workingDirectory)
@@ -422,6 +594,8 @@ final class AgentChatSession {
                 }
                 guard generation == self.generation else { return }
                 rootSessionID = sessionID
+                transcript.isReplaying = false
+                queuedPrompt = nil
                 AgentChatPaneStore.setSessionID(sessionID, for: paneID, agent: agent, defaults: defaults)
                 if hadTranscript {
                     transcript.appendNotice("Started a new session. Earlier messages are not in the agent's context.")
@@ -437,34 +611,50 @@ final class AgentChatSession {
             await connection.terminate()
         } catch {
             guard generation == self.generation else { return }
-            phase = .failed(error.localizedDescription)
+            phase = .failed(redactInline(error.localizedDescription))
             await connection.terminate()
         }
     }
 
     /// Replays the pane's previous session into the transcript. Returns nil
-    /// when there is nothing to load or the agent rejects it.
+    /// when there is nothing to load or the agent rejects it. The result is
+    /// returned only after the replay before the response was applied.
     private func loadSavedSession(
         _ connection: ACPConnection,
         info: ACPAgentInfo,
         workingDirectory: String,
-        resume: Bool
+        resume: Bool,
+        generation: Int
     ) async throws -> JSONValue? {
         guard resume, info.canLoadSession,
               let saved = AgentChatPaneStore.sessionID(for: paneID, agent: agent, defaults: defaults) else { return nil }
         // The agent replays history as session/update notifications before it
         // answers, so the root session must be known before the request.
         transcript.reset()
+        transcript.isReplaying = true
         rootSessionID = saved
+        let barrier = barriers.makeToken()
         do {
-            return try await connection.request(
+            let result = try await connection.request(
                 ACP.Method.loadSession,
                 params: ACP.loadSessionParams(sessionID: saved, cwd: workingDirectory),
-                timeout: .seconds(120)
+                timeout: .seconds(120),
+                barrier: barrier
             )
+            guard generation == self.generation, await barriers.wait(for: barrier) else {
+                let reason = await connection.closeReason
+                throw reason ?? ACPConnectionError.notRunning
+            }
+            return result
         } catch let error as ACPConnectionError {
             throw error
         } catch {
+            // Apply whatever the agent replayed before rejecting, then drop it.
+            if error is ACPRemoteError, generation == self.generation, await !barriers.wait(for: barrier) {
+                let reason = await connection.closeReason
+                throw reason ?? ACPConnectionError.notRunning
+            }
+            guard generation == self.generation else { return nil }
             rootSessionID = nil
             transcript.reset()
             AgentChatPaneStore.setSessionID(nil, for: paneID, agent: agent, defaults: defaults)
@@ -499,33 +689,34 @@ final class AgentChatSession {
     private func handle(_ event: ACPIncoming, generation: Int) {
         guard generation == self.generation else { return }
         switch event {
+        case .barrier(let token):
+            log(.barrierReached(token: token))
+            barriers.reach(token)
         case .notification(let method, let params):
+            if method == ACP.Method.cancelRequest {
+                withdrawPermission(params["requestId"] ?? params["id"])
+                return
+            }
             guard method == ACP.Method.update,
                   let rootSessionID,
                   let notification = ACP.parseSessionUpdate(params) else { return }
-            if notification.sessionID == rootSessionID, case .context(let usage) = notification.update {
-                context = usage
-            }
             if notification.sessionID == rootSessionID {
                 switch notification.update {
+                case .context(let usage): context = usage
                 case .modelConfiguration(let state):
                     if state != nil || modelState?.selection != .legacy { modelState = state }
                 case .currentModel(let id): modelState?.currentID = id
                 default: break
                 }
             }
-            transcript.apply(notification, rootSessionID: rootSessionID)
+            record(transcript.apply(notification, rootSessionID: rootSessionID, now: now()))
         case .request(let id, let method, let params):
-            let connection = connection
-            if method == ACP.Method.requestPermission,
-               let request = ACPPermissionRequest(requestID: id, params: params),
-               permissionQueue.count < Self.maximumPendingPermissions {
-                permissionQueue.append(request)
-            } else if method == ACP.Method.requestPermission {
-                Task { await connection?.respond(to: id, result: ACP.permissionResult(optionID: nil)) }
+            if method == ACP.Method.requestPermission {
+                receivePermission(id: id, params: params)
             } else {
                 // Cockpit advertises no fs/terminal capabilities, so agents
                 // should not send these; answer rather than leave them hanging.
+                let connection = connection
                 Task {
                     await connection?.respond(
                         to: id,
@@ -536,14 +727,139 @@ final class AgentChatSession {
         }
     }
 
+    /// Queues and records a permission request. Malformed or overflowing
+    /// requests are answered `cancelled` and never recorded; a request that
+    /// reuses an open id is ignored, since answering it would answer both.
+    private func receivePermission(id: JSONValue, params: JSONValue) {
+        guard openApprovals[id] == nil else { return }
+        guard let request = ACPPermissionRequest(requestID: id, params: params),
+              permissionQueue.count < Self.maximumPendingPermissions else {
+            let connection = connection
+            Task { await connection?.respond(to: id, result: ACP.permissionResult(optionID: nil)) }
+            return
+        }
+        permissionQueue.append(request)
+        openApprovals[id] = request.sessionID
+        let name = agentName(forSession: request.sessionID)
+        transcript.recordApproval(request, agentName: name, now: now())
+        log(.approvalRecorded(requestID: id, agentName: name))
+    }
+
+    /// `$/cancel_request`: the agent withdrew an open request. The id must
+    /// match exactly (a string id never matches a number). ACP answers a
+    /// cancelled request with the `-32800` error.
+    private func withdrawPermission(_ requestID: JSONValue?) {
+        guard let requestID, let index = permissionQueue.firstIndex(where: { $0.requestID == requestID }) else { return }
+        permissionQueue.remove(at: index)
+        resolveApproval(requestID, .withdrawnByAgent)
+        let connection = connection
+        Task {
+            await connection?.respond(
+                to: requestID,
+                error: ACPRemoteError(code: ACPRemoteError.requestCancelled, message: "Request cancelled")
+            )
+        }
+    }
+
+    /// The agent that asked: the root agent, a subagent card's title, or
+    /// "untracked subagent".
+    private func agentName(forSession sessionID: String) -> String {
+        if sessionID == rootSessionID { return agent.displayName }
+        guard let card = subagentCard(sessionID) else { return Self.untrackedSubagentName }
+        return Self.redactedLine(card.title, limit: 256)
+    }
+
+    private func resolveApproval(_ requestID: JSONValue, _ decision: Decision) {
+        guard let sessionID = openApprovals.removeValue(forKey: requestID) else { return }
+        transcript.resolveApproval(requestID: requestID, sessionID: sessionID, decision: decision)
+        log(.approvalResolved(requestID: requestID, decision: decision))
+    }
+
+    /// Every unresolved record, open or being answered, ends as `.agentStopped`.
+    private func stopOpenApprovals() {
+        permissionQueue.removeAll()
+        for requestID in Array(openApprovals.keys) { resolveApproval(requestID, .agentStopped) }
+    }
+
     private func connectionEnded(_ connection: ACPConnection, generation: Int) async {
         let reason = await connection.closeReason
         guard generation == self.generation else { return }
-        permissionQueue.removeAll()
+        barriers.close()
+        finishOpenTurn(stopReason: nil)
+        stopOpenApprovals()
+        returnUnsentTextToDraft()
         self.connection = nil
         rootSessionID = nil
         if reason == .closedByClient { return }
-        phase = .failed(reason?.localizedDescription ?? "The agent stopped.")
+        phase = .failed(redactInline(reason?.localizedDescription ?? "The agent stopped."))
+    }
+
+    // MARK: Turn bookkeeping
+
+    private func finishOpenTurn(stopReason: String?) {
+        guard isTurnOpen else { return }
+        isTurnOpen = false
+        lastStopReason = stopReason
+        record(transcript.finishTurn(stopReason: stopReason, now: now()))
+        log(.turnFinished(stopReason: stopReason))
+    }
+
+    private func record(_ events: [AgentActivityEvent]) {
+        guard !events.isEmpty else { return }
+        recentEvents = (recentEvents + events).suffix(Self.maximumRecentEvents)
+        eventSequence += events.count
+    }
+
+    private func log(_ entry: Diagnostic) {
+        diagnostics = (diagnostics + [entry]).suffix(Self.maximumRecentEvents)
+    }
+
+    // MARK: Draft and transcript lookups
+
+    /// Puts `text` back in the draft, ahead of (restored) or after
+    /// (prefilled) whatever the user has typed since.
+    private func restoreToDraft(_ text: String, ahead: Bool = true) {
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { draft = text; return }
+        draft = ahead ? text + "\n\n" + draft : draft + "\n\n" + text
+    }
+
+    /// Unsent steer text and the queued prompt go back to the draft rather
+    /// than being lost or sent to a different session.
+    private func returnUnsentTextToDraft() {
+        if let pendingSteer {
+            self.pendingSteer = nil
+            restoreToDraft(pendingSteer)
+        }
+        if let queuedPrompt {
+            self.queuedPrompt = nil
+            restoreToDraft(queuedPrompt)
+        }
+    }
+
+    /// The first non-nil `match` over every item, root list first, without
+    /// building intermediate arrays (`hasBackgroundAgents` is read by views).
+    private func firstItem<T>(_ match: (AgentChatItem) -> T?) -> T? {
+        for item in transcript.items { if let found = match(item) { return found } }
+        for list in transcript.childItems.values { for item in list { if let found = match(item) { return found } } }
+        return nil
+    }
+
+    private func firstSubagent(where predicate: (AgentChatItem.Subagent) -> Bool) -> AgentChatItem.Subagent? {
+        firstItem { item in if case .subagent(let card) = item.content, predicate(card) { card } else { nil } }
+    }
+
+    private func subagentCard(_ childSessionID: String) -> AgentChatItem.Subagent? {
+        firstSubagent { $0.childSessionID == childSessionID }
+    }
+
+    private func transcriptItem(forKey key: String) -> AgentChatItem? { firstItem { $0.key == key ? $0 : nil } }
+
+    /// One redacted line of at most `limit` characters. Redaction runs
+    /// before the cut so truncation can never split a secret into a prefix
+    /// the patterns no longer match; the 4 KiB pre-bound keeps it cheap.
+    private static func redactedLine(_ text: String, limit: Int) -> String {
+        let line = String(text.prefix(4_096)).split(whereSeparator: \.isNewline).joined(separator: " ")
+        return String(redactInline(line).prefix(limit)).trimmingCharacters(in: .whitespaces)
     }
 
     private func recordUsage(_ result: JSONValue, agent: ChatAgent) {
@@ -563,112 +879,13 @@ final class AgentChatSession {
         context = nil
         lastTurnUsage = nil
         sessionUsage = nil
-    }
-
-    static func stopNotice(_ stopReason: String?) -> String? {
-        switch stopReason {
-        case "max_tokens": "Stopped: the response reached the model's output limit."
-        case "max_turn_requests": "Stopped: the turn reached its request limit."
-        case "refusal": "The agent declined to continue."
-        case "cancelled": "Stopped."
-        default: nil
-        }
+        queuedPrompt = nil
+        steeredItemKeys = []
+        sendAgainNoticeKey = nil
+        lastSubmission = nil
     }
 
     private static var clientVersion: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
-    }
-}
-
-// MARK: - Persistence
-
-/// Per-pane agent choice and ACP session IDs. Like `TerminalFastCommandStore`,
-/// this is UI state kept in UUID-keyed preferences so adding it does not
-/// migrate the versioned SwiftData store.
-enum AgentChatPaneStore {
-    private static let agentPrefix = "agentChat.agent."
-    private static let sessionPrefix = "agentChat.session."
-    static let lastAgentKey = "agentChat.lastAgent"
-
-    static func agent(for paneID: UUID, defaults: UserDefaults = .standard) -> ChatAgent {
-        defaults.string(forKey: agentPrefix + key(paneID)).flatMap(ChatAgent.init(rawValue:))
-            ?? lastUsedAgent(defaults: defaults)
-    }
-
-    static func lastUsedAgent(defaults: UserDefaults = .standard) -> ChatAgent {
-        defaults.string(forKey: lastAgentKey).flatMap(ChatAgent.init(rawValue:)) ?? .claude
-    }
-
-    static func setAgent(_ agent: ChatAgent, for paneID: UUID, defaults: UserDefaults = .standard) {
-        defaults.set(agent.rawValue, forKey: agentPrefix + key(paneID))
-        defaults.set(agent.rawValue, forKey: lastAgentKey)
-    }
-
-    static func sessionID(for paneID: UUID, agent: ChatAgent, defaults: UserDefaults = .standard) -> String? {
-        defaults.string(forKey: sessionKey(paneID, agent))
-    }
-
-    static func setSessionID(_ sessionID: String?, for paneID: UUID, agent: ChatAgent, defaults: UserDefaults = .standard) {
-        if let sessionID {
-            defaults.set(sessionID, forKey: sessionKey(paneID, agent))
-        } else {
-            defaults.removeObject(forKey: sessionKey(paneID, agent))
-        }
-    }
-
-    static func remove(paneID: UUID, defaults: UserDefaults = .standard) {
-        defaults.removeObject(forKey: agentPrefix + key(paneID))
-        for agent in ChatAgent.allCases {
-            defaults.removeObject(forKey: sessionKey(paneID, agent))
-        }
-    }
-
-    private static func key(_ paneID: UUID) -> String { paneID.uuidString.lowercased() }
-
-    private static func sessionKey(_ paneID: UUID, _ agent: ChatAgent) -> String {
-        sessionPrefix + agent.rawValue + "." + key(paneID)
-    }
-}
-
-// MARK: - Registry
-
-/// Owns each agent chat pane's session for the life of the pane, so switching
-/// workspaces or tabs never restarts an agent mid-turn.
-@MainActor
-@Observable
-final class AgentChatRegistry {
-    static let shared = AgentChatRegistry()
-
-    private var sessions: [UUID: AgentChatSession] = [:]
-
-    /// Safe to call from a view body: it never mutates an existing session.
-    /// The pane applies root-folder changes from its `.task`.
-    func session(for paneID: UUID, workingDirectory: String?) -> AgentChatSession {
-        if let existing = sessions[paneID] { return existing }
-        let session = AgentChatSession(
-            paneID: paneID,
-            agent: AgentChatPaneStore.agent(for: paneID),
-            workingDirectory: workingDirectory
-        )
-        sessions[paneID] = session
-        return session
-    }
-
-    func existingSession(for paneID: UUID) -> AgentChatSession? {
-        sessions[paneID]
-    }
-
-    /// Called when the pane is deleted: stops the agent and forgets the
-    /// pane's preferences. The agent's own session history is left alone.
-    func remove(paneID: UUID) {
-        let session = sessions.removeValue(forKey: paneID)
-        session?.shutDown()
-        if let session {
-            session.removeAttachmentStorage()
-        } else {
-            let directory = AgentChatAttachmentStore.directory(paneID: paneID)
-            Task.detached { try? FileManager.default.removeItem(at: directory) }
-        }
-        AgentChatPaneStore.remove(paneID: paneID)
     }
 }
