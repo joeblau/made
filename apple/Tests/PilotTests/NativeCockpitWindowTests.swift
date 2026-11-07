@@ -532,6 +532,12 @@ final class NativeCockpitWindowTests: XCTestCase {
         XCTAssertFalse(pane.isChoosingMode)
         let presentation = try XCTUnwrap(controller.paneController(for: pane) as? BrowserPaneViewController)
         XCTAssertTrue(presentation.children.first is BrowserStartPageViewController)
+        // Focus is applied once the new pane is attached and active, which can
+        // land a run-loop turn later on a loaded machine.
+        let focusDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while !(window.firstResponder is NSTableView), ContinuousClock.now < focusDeadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         let list = try XCTUnwrap(window.firstResponder as? NSTableView,
                                 "Browser list should own focus; responder: \(String(describing: window.firstResponder))")
         XCTAssertEqual(list.accessibilityLabel(), "Local development servers")
