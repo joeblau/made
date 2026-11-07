@@ -183,7 +183,13 @@ struct ACPSessionConfig: Equatable, Sendable {
         options.first { $0.category == .model } ?? options.first { $0.id == "model" }
     }
 
-    var model: ACPConfigOption? { Self.modelOption(in: options) ?? legacyModels }
+    /// The model option; the legacy `models` list stands in when the config
+    /// option lists no choices but the legacy list does.
+    var model: ACPConfigOption? {
+        guard let option = Self.modelOption(in: options) else { return legacyModels }
+        if option.choices.isEmpty, let legacyModels, !legacyModels.choices.isEmpty { return legacyModels }
+        return option
+    }
     var thoughtLevel: ACPConfigOption? { options.first { $0.category == .thoughtLevel } }
     var mode: ACPConfigOption? { options.first { $0.category == .mode } ?? legacyModes }
     /// A `model_config` on/off switch named "fast" (Claude `fast`, Codex `fast-mode`).

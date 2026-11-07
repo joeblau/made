@@ -260,8 +260,8 @@ final class CaptureDevicePicker: NSView, NSTableViewDataSource, NSTableViewDeleg
     private let content = NSView()
     private let titleLabel = CockpitUI.label("", size: 12, weight: .semibold)
     private let detailLabel = CockpitUI.label("", size: 12, color: .secondaryLabelColor)
-    private let progress = NSProgressIndicator()
-    private let refreshButton = CaptureActionButton(CapturePaneAction(title: "Refresh", symbol: "arrow.clockwise", perform: {}), iconOnly: true)
+    private let refreshButton = CockpitRefreshButton(help: "Refresh", diameter: 26, action: {})
+    private var refreshAction: () -> Void = {}
     private let actions = NSStackView()
     private var message: NSView?
 
@@ -276,13 +276,9 @@ final class CaptureDevicePicker: NSView, NSTableViewDataSource, NSTableViewDeleg
         let header = NSStackView(views: [titleLabel, NSView()])
         header.distribution = .fill
         header.spacing = 8
-        progress.style = .spinning
-        progress.controlSize = .small
-        header.addArrangedSubview(progress)
+        // One fixed slot: the glass refresh circle becomes a spinner in place.
+        refreshButton.action = { [weak self] in self?.refreshAction() }
         header.addArrangedSubview(refreshButton)
-        refreshButton.bezelStyle = .accessoryBarAction
-        refreshButton.controlSize = .small
-        refreshButton.widthAnchor.constraint(equalToConstant: 26).isActive = true
         actions.orientation = .horizontal
         actions.spacing = 4
         header.insertArrangedSubview(actions, at: 2)
@@ -334,9 +330,8 @@ final class CaptureDevicePicker: NSView, NSTableViewDataSource, NSTableViewDeleg
         titleLabel.stringValue = title
         detailLabel.stringValue = detail ?? ""
         detailLabel.isHidden = detail == nil
-        progress.isHidden = !refreshing
-        if refreshing { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
-        refreshButton.onAction = refresh
+        refreshAction = refresh
+        refreshButton.isRefreshing = refreshing
         refreshButton.isEnabled = !refreshing
         self.actions.updateCaptureActions(actions, iconOnly: true)
         for button in self.actions.arrangedSubviews.compactMap({ $0 as? NSButton }) {

@@ -114,6 +114,8 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
             refresh()
             return
         case .selectModel(let agent, let modelID):
+            // A running-agent placeholder ("Loading…") carries no model to select.
+            if agent == session.agent, modelID.isEmpty { return }
             if agent != session.agent {
                 // Another provider restarts the pane on it; a placeholder row carries no model.
                 if modelID.isEmpty { session.switchAgent(to: agent) } else { session.selectModel(modelID, on: agent) }
@@ -191,6 +193,13 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
                 state.rows = model.choices.map { row(agent, $0.id, $0.name, $0.detail, $0.group) }
             } else if let snapshot = catalog.snapshot(for: agent) {
                 state.rows = snapshot.models.map { row(agent, $0.id, $0.name, $0.detail, $0.group) }
+            } else {
+                // Never a bare "No models": say why the list is empty.
+                var placeholder = AgentModelPickerState.Row(agent: agent, modelID: "", name: runningPlaceholder(session),
+                                                            detail: nil, group: nil, isCurrent: false, isFavorite: false,
+                                                            isPlaceholder: true)
+                placeholder.isEnabled = false
+                state.rows = [placeholder]
             }
             if let level = config?.thoughtLevel, !level.choices.isEmpty {
                 state.reasoningTitle = config?.model?.currentName ?? level.name
@@ -219,6 +228,17 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
             }
         }
         return state
+    }
+
+    /// The running agent's tab when neither its session nor the catalog has
+    /// listed models: loading while it starts, a start hint while stopped.
+    static func runningPlaceholder(_ session: AgentChatSession) -> String {
+        let name = session.agent.displayName
+        switch session.phase {
+        case .starting: return "Loading \(name) models…"
+        case .ready, .prompting: return "\(name) did not list any models"
+        case .idle, .needsSetup, .failed: return "Start \(name) to see its models"
+        }
     }
 }
 

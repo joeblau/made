@@ -41,6 +41,33 @@ struct AgentModelPickerIntegrationTests {
         #expect(snapshot.currentModelID == harness.session.config?.model?.currentID)
     }
 
+    @Test("Opened while the running agent starts, the picker says it is loading, then lists the models once ready")
+    func pickerOpenedWhileStartingRefreshesWhenReady() async throws {
+        let harness = try Harness(.cursor, holdingSessionNew: true)
+        defer { harness.close() }
+        try await harness.waitUntil { harness.session.phase == .starting }
+        harness.layout()
+        let picker = harness.controller.modelPicker
+        picker.trigger.performClick(nil)
+        #expect(picker.isShown)
+        let view = try #require(picker.picker)
+        #expect(view.state.selectedTab == .agent(.cursor))
+        #expect(view.state.rows.map(\.name) == ["Loading Cursor models…"])
+        #expect(view.state.rows.allSatisfy { $0.isPlaceholder && !$0.isEnabled })
+        // A click on the placeholder selects nothing and keeps the popover open.
+        picker.handle(.selectModel(agent: .cursor, modelID: ""))
+        #expect(harness.session.pendingModel == nil && picker.isShown)
+
+        harness.files.release(.cursor)
+        try await harness.waitUntil { harness.session.phase == .ready }
+        // The pane's observation refreshes the open popover.
+        try await harness.waitUntil { view.state.rows.count == 47 }
+        #expect(view.state.rows.filter(\.isCurrent).map(\.modelID) == ["grok-4.7[context=256k,reasoning_effort=high,fast=true]"])
+        #expect(view.state.rows.allSatisfy { !$0.isPlaceholder })
+        #expect(view.state.isEditable)
+        picker.close()
+    }
+
     @Test("The trigger opens the picker on the running agent; Esc closes it and returns focus to the composer")
     func popoverOpensAndCloses() async throws {
         let harness = try Harness(.codex)
@@ -310,6 +337,7 @@ private struct PickerAgentFiles {
         read -r _
         printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}'
         read -r _
+        while [ -f "$DIR/AGENT-hold" ]; do sleep 0.05; done
         reply 2 AGENT-new
         n=0
         while read -r line; do
@@ -337,6 +365,15 @@ private struct PickerAgentFiles {
         }
     }
 
+    /// Holds `agent`'s session/new answer until `release` (the session stays `.starting`).
+    func hold(_ agent: ChatAgent) throws {
+        try Data().write(to: directory.appendingPathComponent("\(agent.rawValue)-hold"))
+    }
+
+    func release(_ agent: ChatAgent) {
+        try? FileManager.default.removeItem(at: directory.appendingPathComponent("\(agent.rawValue)-hold"))
+    }
+
     func remove() { try? FileManager.default.removeItem(at: directory) }
 }
 
@@ -351,10 +388,11 @@ private struct Harness {
     let files: PickerAgentFiles
     private let suite: String
 
-    init(_ agent: ChatAgent) throws {
+    init(_ agent: ChatAgent, holdingSessionNew: Bool = false) throws {
         suite = "AgentModelPickerIntegrationTests.\(UUID().uuidString)"
         defaults = try #require(UserDefaults(suiteName: suite))
         files = try PickerAgentFiles()
+        if holdingSessionNew { try files.hold(agent) }
         var launches: [ChatAgent: ACPConnection.LaunchConfiguration] = [:]
         for agent in ChatAgent.allCases { launches[agent] = try files.launch(agent) }
         let pane = Pane(kind: .agentChat)

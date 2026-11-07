@@ -113,11 +113,18 @@ final class NativeCapturePresentationTests: XCTestCase {
         let origin = scroll.contentView.bounds.origin
         XCTAssertGreaterThan(origin.y, 0)
         XCTAssertTrue(window.makeFirstResponder(table))
+        let refreshSlot = try XCTUnwrap(descendant(CockpitRefreshButton.self, in: picker))
+        let slotFrame = refreshSlot.frame
 
         for refreshing in [true, false, true, false] {
             controller.refreshing = refreshing
             controller.updatePresentation(isActive: true, isSelected: false)
             controller.view.layoutSubtreeIfNeeded()
+            // The spinner replaces the refresh circle in the same fixed slot.
+            XCTAssertEqual(refreshSlot.isRefreshing, refreshing)
+            XCTAssertEqual(refreshSlot.button.isHidden, refreshing)
+            XCTAssertEqual(refreshSlot.spinner.isHidden, !refreshing)
+            XCTAssertEqual(refreshSlot.frame, slotFrame)
             XCTAssertTrue(descendant(CaptureDevicePicker.self, in: controller.view) === picker)
             XCTAssertTrue(descendant(NSTableView.self, in: picker) === table)
             XCTAssertTrue(table.view(atColumn: 0, row: 30, makeIfNecessary: true) === row)

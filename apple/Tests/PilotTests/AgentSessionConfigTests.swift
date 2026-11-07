@@ -273,6 +273,88 @@ struct AgentSessionConfigTests {
         #expect(moved.mode?.currentID == "agent")
     }
 
+    /// The `cursor-agent acp` session/new shape from a live probe: legacy
+    /// `models`/`modes` plus `configOptions`, with bracketed model IDs.
+    static let cursorLiveSessionNew = #"""
+    {"sessionId":"c1",
+     "modes":{"currentModeId":"agent","availableModes":[{"id":"agent","name":"Agent"},{"id":"plan","name":"Plan"},{"id":"ask","name":"Ask"}]},
+     "models":{"currentModelId":"grok-4.7[context=256k,reasoning_effort=high,fast=true]","availableModels":[
+       {"modelId":"default[]","name":"Auto"},
+       {"modelId":"grok-4.7[context=256k,reasoning_effort=high,fast=true]","name":"grok-4.7"},
+       {"modelId":"claude-opus-5-5[context=300k,effort=medium,fast=false]","name":"Opus 5.5"}]},
+     "configOptions":[
+       {"id":"mode","name":"Mode","category":"mode","type":"select","currentValue":"agent","options":[
+         {"value":"agent","name":"Agent","description":"Full tools"},{"value":"plan","name":"Plan","description":"Read-only"},
+         {"value":"ask","name":"Ask","description":"Q&A"}]},
+       {"id":"model","name":"Model","category":"model","type":"select",
+        "currentValue":"grok-4.7[context=256k,reasoning_effort=high,fast=true]","options":[
+         {"value":"default[]","name":"Auto"},
+         {"value":"grok-4.7[context=256k,reasoning_effort=high,fast=true]","name":"grok-4.7"},
+         {"value":"claude-opus-5-5[context=300k,effort=medium,fast=false]","name":"Opus 5.5"}]}]}
+    """#
+
+    @Test
+    func cursorsLiveSessionNewKeepsItsBracketedModelChoices() throws {
+        let config = try #require(ACPSessionConfig(try json(Self.cursorLiveSessionNew)))
+        let model = try #require(config.model)
+        #expect(model.id == "model" && model.category == .model)
+        #expect(model.choices.map(\.id) == ["default[]", "grok-4.7[context=256k,reasoning_effort=high,fast=true]",
+                                            "claude-opus-5-5[context=300k,effort=medium,fast=false]"])
+        #expect(model.choices.first?.name == "Auto" && model.currentName == "grok-4.7")
+        #expect(config.legacyModels?.choices.count == 3 && config.mode?.id == "mode")
+        let request = try #require(config.request(sessionID: "c1", optionID: "model", value: "default[]"))
+        #expect(request.method == ACP.Method.setConfigOption && request.params["value"] == "default[]")
+        let snapshot = try #require(AgentModelCatalog.snapshot(of: config))
+        #expect(snapshot.models.count == 3 && snapshot.currentModelID == model.currentID)
+    }
+
+    @Test
+    func aModelOptionWithoutChoicesFallsBackToTheLegacyList() throws {
+        let config = try #require(ACPSessionConfig(try json(#"""
+        {"models":{"currentModelId":"a[x=1]","availableModels":[{"modelId":"a[x=1]","name":"A"},{"modelId":"b","name":"B"}]},
+         "configOptions":[{"id":"model","category":"model","type":"select","currentValue":"a[x=1]","options":[]}]}
+        """#)))
+        #expect(config.model?.id == ACPConfigOption.legacyModelID)
+        #expect(config.model?.choices.map(\.id) == ["a[x=1]", "b"])
+        // With choices on both, the config option still wins.
+        let both = try #require(ACPSessionConfig(try json(Self.cursorLiveSessionNew)))
+        #expect(both.model?.id == "model")
+    }
+
+    @Test @MainActor
+    func aLoadAnswerPatchesTheKnownConfigurationInsteadOfWipingIt() throws {
+        let defaults = try #require(UserDefaults(suiteName: "AgentSessionConfigTests.\(UUID().uuidString)"))
+        let session = AgentChatSession(paneID: UUID(), agent: .cursor, workingDirectory: nil, defaults: defaults)
+        let known = try #require(ACPSessionConfig(try json(Self.cursorLiveSessionNew)))
+        // Nothing known and nothing answered stays nil.
+        #expect(session.resumedConfiguration(nil) == nil && session.resumedConfiguration(.null) == nil)
+        session.applyConfiguration(known)
+        #expect(session.resumedConfiguration(nil) == known)
+        #expect(session.resumedConfiguration(.null) == known)
+        #expect(session.resumedConfiguration(try json("{}")) == known)
+        // A part the answer carries replaces only that part.
+        let modes = try #require(session.resumedConfiguration(try json(
+            #"{"modes":{"currentModeId":"plan","availableModes":[{"id":"plan","name":"Plan"}]}}"#)))
+        #expect(modes.model == known.model && modes.legacyModes?.currentID == "plan")
+    }
+
+    @Test @MainActor
+    func aLoadAnswerWithAModelOptionWithoutChoicesKeepsTheKnownChoices() throws {
+        let defaults = try #require(UserDefaults(suiteName: "AgentSessionConfigTests.\(UUID().uuidString)"))
+        let session = AgentChatSession(paneID: UUID(), agent: .cursor, workingDirectory: nil, defaults: defaults)
+        let known = try #require(ACPSessionConfig(try json(#"""
+        {"configOptions":[{"id":"model","category":"model","type":"select","currentValue":"a[x=1]",
+          "options":[{"value":"a[x=1]","name":"A"},{"value":"b","name":"B"}]}]}
+        """#)))
+        session.applyConfiguration(known)
+        let resumed = try #require(session.resumedConfiguration(try json(
+            #"{"configOptions":[{"id":"model","category":"model","type":"select","currentValue":"b","options":[]}]}"#)))
+        #expect(resumed.model?.id == "model")
+        #expect(resumed.model?.choices.map(\.id) == ["a[x=1]", "b"])
+        #expect(resumed.model?.currentID == "b")
+        #expect(resumed.request(sessionID: "c1", optionID: "model", value: "a[x=1]") != nil)
+    }
+
     private func json(_ text: String) throws -> JSONValue { try JSONValue.parse(Data(text.utf8)) }
 }
 
@@ -494,6 +576,87 @@ struct AgentSessionConfigSessionTests {
         #expect(session.composerError == "Codex no longer offers the selected model.")
     }
 
+    @Test
+    func aResumedSessionKeepsTheModelsItsReplayReported() async throws {
+        let files = try FixtureFiles()
+        defer { files.remove() }
+        let cursor = try ACPProbeFixtures.result(.cursor)
+        try files.write("update", ["sessionUpdate": "config_option_update",
+                                   "configOptions": cursor["configOptions"] ?? .array([])])
+        let defaults = try suite()
+        let paneID = UUID()
+        AgentChatPaneStore.setSessionID("saved-c", for: paneID, agent: .cursor, defaults: defaults)
+        // The load answer is null, as the ACP spec allows: no models, no configOptions.
+        let session = makeSession(.cursor, defaults: defaults, paneID: paneID, launches: [.cursor: files.loadingAgent(body: #"""
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"saved-c","update":'; cat "$DIR/update.json"; printf '}}\n'
+        printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":null}'
+        read -r _
+        """#)])
+        defer { session.shutDown() }
+        session.start()
+        try await waitUntil { session.phase == .ready }
+        #expect(session.config?.model?.choices.count == 47)
+        #expect(session.modelName == "grok-4.7")
+        let catalog = AgentModelCatalog(defaults: defaults)
+        #expect(catalog.snapshot(for: .cursor)?.models.count == 47)
+        let state = AgentModelPickerController.state(session: session, catalog: catalog, selectedTab: .agent(.cursor))
+        #expect(state.rows.count == 47 && state.rows.allSatisfy { !$0.isPlaceholder && $0.isEnabled } && state.isEditable)
+    }
+
+    @Test
+    func aRestartedSessionWhoseLoadAnswerOmitsModelsKeepsTheLastConfiguration() async throws {
+        let files = try FixtureFiles()
+        defer { files.remove() }
+        let cursor = try ACPProbeFixtures.result(.cursor)
+        try files.write("full", cursor)
+        try files.write("modes", ["modes": ["currentModeId": "plan", "availableModes": cursor["modes"]?["availableModes"] ?? .array([])]])
+        let defaults = try suite()
+        let paneID = UUID()
+        AgentChatPaneStore.setSessionID("saved-c", for: paneID, agent: .cursor, defaults: defaults)
+        // The first run's load answers with the full configuration; the next only with its modes.
+        let session = makeSession(.cursor, defaults: defaults, paneID: paneID, launches: [.cursor: files.loadingAgent(body: #"""
+        if [ -f "$DIR/ran" ]; then reply 2 modes; else : > "$DIR/ran"; reply 2 full; fi
+        read -r _
+        """#)])
+        defer { session.shutDown() }
+        session.start()
+        try await waitUntil { session.phase == .ready }
+        #expect(session.config?.model?.choices.count == 47 && session.config?.legacyModes?.currentID == "agent")
+
+        session.restart()
+        try await waitUntil { session.phase == .ready }
+        #expect(session.config?.model?.choices.count == 47)
+        #expect(session.config?.legacyModes?.currentID == "plan")
+    }
+
+    @Test
+    func withoutAnyConfigurationTheRunningTabListsTheCatalogOrSaysWhy() async throws {
+        let defaults = try suite()
+        let catalog = AgentModelCatalog(defaults: defaults)
+        let idle = makeSession(.cursor, defaults: defaults, launches: [:])
+        func rows(_ session: AgentChatSession) -> [AgentModelPickerState.Row] {
+            AgentModelPickerController.state(session: session, catalog: catalog, selectedTab: .agent(.cursor)).rows
+        }
+        #expect(rows(idle).map(\.name) == ["Start Cursor to see its models"])
+        #expect(rows(idle).allSatisfy { $0.isPlaceholder && !$0.isEnabled && $0.modelID.isEmpty })
+
+        // A session that answers neither models nor configOptions says so.
+        let files = try FixtureFiles()
+        defer { files.remove() }
+        let bare = makeSession(.cursor, defaults: defaults, launches: [.cursor: try files.agent(["sessionId": "b1"], body: "read -r _")])
+        defer { bare.shutDown() }
+        bare.start()
+        #expect(rows(bare).map(\.name) == ["Loading Cursor models…"])
+        try await waitUntil { bare.phase == .ready }
+        #expect(rows(bare).map(\.name) == ["Cursor did not list any models"])
+
+        // A cached catalog fills the tab, but its models are not offered by this session.
+        catalog.record(try #require(ACPSessionConfig(ACPProbeFixtures.result(.cursor))), for: .cursor)
+        let cached = rows(bare)
+        #expect(cached.count == 47 && cached.allSatisfy { !$0.isPlaceholder && !$0.isEnabled })
+        #expect(cached.first?.disabledReason == AgentModelPickerController.notOfferedReason)
+    }
+
     // MARK: Helpers
 
     @MainActor
@@ -551,6 +714,23 @@ struct AgentSessionConfigSessionTests {
         }
 
         func remove() { try? FileManager.default.removeItem(at: directory) }
+
+        /// Answers initialize with `loadSession: true`, then runs `body`
+        /// (which answers the session/load request, id 2) with `has` and `reply`.
+        func loadingAgent(body: String) -> ACPConnection.LaunchConfiguration {
+            let preamble = #"""
+            has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+            reply() { printf '{"jsonrpc":"2.0","id":%s,"result":' "$1"; cat "$DIR/$2.json"; printf '}\n'; }
+            read -r _
+            printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true}}}'
+            read -r line; has "$line" '"method":"session/load"' || exit 1
+
+            """#
+            return ACPConnection.LaunchConfiguration(
+                executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", preamble + body],
+                environment: ["DIR": directory.path, "PATH": "/usr/bin:/bin"], currentDirectory: directory
+            )
+        }
 
         /// Answers initialize and session/new (with `newSession`), then runs
         /// `body` with `has` and `reply <id> <file>` helpers.

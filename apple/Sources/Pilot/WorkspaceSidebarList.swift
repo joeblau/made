@@ -424,8 +424,13 @@ private final class WorkspaceSidebarCell: NSTableCellView {
         branch.font = .systemFont(ofSize: 10)
         name.font = .systemFont(ofSize: 12)
         let labels = shellStack([name, branch], spacing: 2)
+        // Trailing accessories read left-to-right: gauge, then task badge.
+        // A hidden accessory is detached, so a lone one sits at the trailing
+        // edge; the labels take the remaining width and truncate first.
         let row = shellStack([labels, gauge, taskBadge], orientation: .horizontal, spacing: 6)
         row.distribution = .fill
+        row.detachesHiddenViews = true
+        row.setCustomSpacing(4, after: gauge)
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
         // Indent the whole text block so a grouped row's branch line stays
@@ -440,11 +445,27 @@ private final class WorkspaceSidebarCell: NSTableCellView {
         ])
         gauge.widthAnchor.constraint(equalToConstant: 26).isActive = true
         gauge.heightAnchor.constraint(equalToConstant: 26).isActive = true
-        taskBadge.widthAnchor.constraint(greaterThanOrEqualToConstant: 20).isActive = true
-        taskBadge.heightAnchor.constraint(equalToConstant: 18).isActive = true
-        labels.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        taskBadge.heightAnchor.constraint(equalToConstant: WorkspaceOpenTaskBadgeView.diameter).isActive = true
+        for accessory in [gauge, taskBadge] as [NSView] {
+            accessory.setContentHuggingPriority(.required, for: .horizontal)
+            accessory.setContentCompressionResistancePriority(.required, for: .horizontal)
+        }
+        for label in [labels, name, self.branch] as [NSView] {
+            label.setContentHuggingPriority(.defaultLow - 1, for: .horizontal)
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
     }
     required init?(coder: NSCoder) { nil }
+
+    /// NSTableRowView sets `.emphasized` on a selected row's cell; the
+    /// custom-drawn accessories switch to white-on-accent there.
+    override var backgroundStyle: NSView.BackgroundStyle {
+        didSet {
+            let emphasized = backgroundStyle == .emphasized
+            gauge.isEmphasized = emphasized
+            taskBadge.isEmphasized = emphasized
+        }
+    }
 
     func configure(workspace: Workspace, branch: String?, openTaskCount: Int, indentation: CGFloat, store: WorkspaceStore) {
         if workspaceID != workspace.id { coldTicks = 2; workspaceID = workspace.id; gauge.started = 0; gauge.running = 0 }

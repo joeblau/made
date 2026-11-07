@@ -21,6 +21,8 @@ struct NativeRunnerPresentationTests {
         #expect(await probe.calls == 0)
         let buttons = buttons(in: controller.view)
         #expect(self.buttons(in: controller.pageToolbarView).first { $0.accessibilityLabel() == "Refresh" }?.isEnabled == false)
+        let refresh = try #require(self.buttons(in: controller.pageToolbarView).first { $0.accessibilityLabel() == "Refresh" })
+        #expect((refresh.superview as? CockpitRefreshButton)?.isRefreshing == store.isRefreshing)
         #expect(buttons.first { $0.title == "Add Source" }?.isEnabled == false)
     }
 

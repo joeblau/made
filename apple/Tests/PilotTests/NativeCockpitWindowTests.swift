@@ -106,9 +106,14 @@ final class NativeCockpitWindowTests: XCTestCase {
         XCTAssertEqual(badge.title, "3")
         XCTAssertEqual(badge.accessibilityLabel(), "3 open tasks")
         XCTAssertFalse(badge.isHidden)
+        XCTAssertEqual(badge.intrinsicContentSize.width, badge.intrinsicContentSize.height, "one or two digits draw a circle")
         cell.frame = NSRect(x: 0, y: 0, width: 240, height: 44)
         cell.layoutSubtreeIfNeeded()
         XCTAssertGreaterThanOrEqual(badge.frame.minX, gauge.frame.maxX)
+        // The lone visible badge hugs the trailing edge at its own size.
+        let badgeFrame = badge.convert(badge.bounds, to: cell)
+        XCTAssertEqual(badgeFrame.maxX, cell.bounds.maxX - 4, accuracy: 1)
+        XCTAssertEqual(badgeFrame.width, WorkspaceOpenTaskBadgeView.diameter, accuracy: 0.5)
         badge.performClick(nil)
         XCTAssertEqual(fixture.store.selectedWorkspaceID, workspace.id)
         XCTAssertEqual(workspace.inspectorTab, .tasks)
@@ -120,6 +125,39 @@ final class NativeCockpitWindowTests: XCTestCase {
         let updatedBadge = try XCTUnwrap(descendants(updated).compactMap { $0 as? WorkspaceOpenTaskBadgeView }.first)
         XCTAssertTrue(updatedBadge.isHidden)
         XCTAssertFalse(updatedBadge.isEnabled)
+    }
+
+    @MainActor
+    func testWorkspaceSidebarLongNameTruncatesBeforeTaskBadge() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkspace()
+        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        workspace.name = String(repeating: "very long workspace name ", count: 8)
+        fixture.store.openTaskCounts[workspace.id] = 120
+        let sidebar = WorkspaceSidebarViewController(store: fixture.store, defaults: fixture.defaults, isLive: false)
+        let table = try XCTUnwrap(descendants(sidebar.view).compactMap { $0 as? NSTableView }.first)
+        let cell = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: table.numberOfRows - 1))
+        let badge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceOpenTaskBadgeView }.first)
+        let name = try XCTUnwrap(descendants(cell).compactMap { $0 as? NSTextField }.first { $0.stringValue == workspace.name })
+        XCTAssertEqual(badge.title, "99+")
+        XCTAssertGreaterThan(badge.intrinsicContentSize.width, badge.intrinsicContentSize.height, "wide counts draw a capsule")
+        cell.frame = NSRect(x: 0, y: 0, width: 220, height: 44)
+        cell.layoutSubtreeIfNeeded()
+        let badgeFrame = badge.convert(badge.bounds, to: cell)
+        let nameFrame = name.convert(name.bounds, to: cell)
+        XCTAssertLessThanOrEqual(nameFrame.maxX, badgeFrame.minX)
+        XCTAssertEqual(badgeFrame.width, badge.intrinsicContentSize.width, accuracy: 0.5)
+        XCTAssertEqual(badgeFrame.maxX, cell.bounds.maxX - 4, accuracy: 1)
+
+        let tableCell = try XCTUnwrap(cell as? NSTableCellView)
+        let gauge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceGaugeView }.first)
+        tableCell.backgroundStyle = .emphasized
+        XCTAssertTrue(badge.isEmphasized)
+        XCTAssertTrue(gauge.isEmphasized)
+        tableCell.backgroundStyle = .normal
+        XCTAssertFalse(badge.isEmphasized)
+        XCTAssertFalse(gauge.isEmphasized)
     }
 
     @MainActor

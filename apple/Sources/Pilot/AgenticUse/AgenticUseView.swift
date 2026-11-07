@@ -6,8 +6,7 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
     let store: AgenticUsageStore
     private let isLive: Bool
     private let rangeControl = NSSegmentedControl()
-    private let refreshButton = NSButton()
-    private let spinner = NSProgressIndicator()
+    private let refreshButton = CockpitRefreshButton(help: "Refresh usage and pricing", action: {})
     private let intervalLabel = NSTextField(labelWithString: "")
     private let warningLabel = NSTextField(wrappingLabelWithString: "")
     private let warningDismiss = NSButton()
@@ -38,11 +37,7 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         rangeControl.target = self
         rangeControl.action = #selector(rangeChanged)
         rangeControl.setAccessibilityLabel("Usage date range")
-        refreshButton.bezelStyle = .rounded
-        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh usage and pricing")
-        refreshButton.target = self
-        refreshButton.action = #selector(refresh)
-        refreshButton.toolTip = "Refresh usage and pricing"
+        refreshButton.action = { [weak self] in self?.refresh() }
         warningDismiss.bezelStyle = .rounded
         warningDismiss.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss warning")
         warningDismiss.target = self
@@ -50,9 +45,6 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         warningLabel.textColor = .systemOrange
         intervalLabel.textColor = .secondaryLabelColor
         freshnessLabel.textColor = .secondaryLabelColor
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
         scanProgress.style = .bar
         scanProgress.minValue = 0
         scanProgress.maxValue = 1
@@ -65,7 +57,7 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         stateAction.action = #selector(performStateAction)
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
-        for child in [intervalLabel, rangeControl, refreshButton, spinner, warningLabel, warningDismiss,
+        for child in [intervalLabel, rangeControl, refreshButton, warningLabel, warningDismiss,
                       freshnessLabel, scroll, stateTitle, stateDetail, stateAction, scanProgress] { view.addSubview(child) }
         NotificationCenter.default.addObserver(self, selector: #selector(consentChanged), name: UsageConsent.changedNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(zoomChanged), name: .cockpitUIZoomDidChange, object: nil)
@@ -112,7 +104,7 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         refreshButton.isEnabled = isLive && !store.isRefreshing
         stateAction.isEnabled = isLive
         rangeControl.isEnabled = isLive
-        if store.isRefreshing { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        refreshButton.isRefreshing = store.isRefreshing
         intervalLabel.stringValue = store.snapshot.map {
             ($0.interval.start..<$0.interval.end).formatted(.interval.month(.abbreviated).day())
         } ?? "Agent usage"
@@ -180,8 +172,11 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         rangeControl.font = AgenticUseLayout.font(.meta)
         let rangeWidth = min(240 * zoom, max(100, width - 100))
         rangeControl.frame = NSRect(x: max(16, width - rangeWidth - 70 * zoom), y: controlsY, width: rangeWidth, height: 27 * zoom)
-        refreshButton.frame = NSRect(x: width - 16 - 30 * zoom, y: controlsY, width: 30 * zoom, height: 27 * zoom)
-        spinner.frame = NSRect(x: max(0, rangeControl.frame.minX - 24), y: controlsY + 5, width: 16, height: 16)
+        // One fixed square slot, vertically centred on the range control; the
+        // spinner replaces the button inside it while a rescan runs.
+        let refreshSide = refreshButton.slotSide
+        refreshButton.frame = NSRect(x: width - 16 - refreshSide, y: controlsY + (27 * zoom - refreshSide) / 2,
+                                     width: refreshSide, height: refreshSide)
         let warningHeight: CGFloat = warningLabel.isHidden ? 0 : 48 * zoom
         warningLabel.font = AgenticUseLayout.font(.body)
         warningLabel.frame = NSRect(x: 16, y: headerHeight + 4, width: max(0, width - 76), height: max(0, warningHeight - 4))
@@ -208,7 +203,7 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         guard isLive, AgenticUseRange.allCases.indices.contains(rangeControl.selectedSegment) else { return }
         store.range = AgenticUseRange.allCases[rangeControl.selectedSegment]
     }
-    @objc private func refresh() { if isLive { store.rescan() } }
+    private func refresh() { if isLive { store.rescan() } }
     @objc private func dismissWarning() { store.dismissScanWarning() }
     @objc private func consentChanged() { if isLive && visible { store.rescan() } }
     @objc private func zoomChanged() { dashboard?.refreshTypography(); view.needsLayout = true }

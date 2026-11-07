@@ -43,6 +43,12 @@ struct DockerNativePresentationTests {
         #expect(lookups == 0)
         let refresh = try #require(descendants(controller.pageToolbarView).compactMap { $0 as? NSButton }.first { $0.toolTip == "Refresh containers" })
         #expect(!refresh.isEnabled)
+        // The refresh circle owns its spinner slot and sits directly in the
+        // toolbar rather than inside another glass capsule.
+        let slot = try #require(refresh.superview as? CockpitRefreshButton)
+        #expect(slot.superview === controller.pageToolbarView)
+        #expect(slot.isRefreshing == (store.isRefreshing || store.engine == .checking))
+        #expect(!descendants(controller.view).contains { $0 is NSProgressIndicator && $0.superview === controller.view })
         controller.updatePresentation(isActive: false, isSelected: false)
         #expect(lookups == 0)
     }
