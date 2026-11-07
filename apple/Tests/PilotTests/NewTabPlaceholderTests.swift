@@ -322,7 +322,10 @@ struct NewTabPlaceholderTests {
             let title = try #require(labels.first { $0.stringValue == "app" })
             let port = try #require(card.subviews.compactMap { $0 as? ServerPortBadge }.first { !$0.isHidden })
             #expect(port.port == 3000)
-            #expect(port.frame.minX >= title.frame.maxX, "The port badge follows the name")
+            #expect(port.frame.minX >= title.frame.maxX, "The port follows the name")
+            let key = try #require(card.subviews.compactMap { $0 as? NewTabKeyBadge }.first)
+            #expect(port.frame.maxX <= key.frame.minX && key.frame.minX - port.frame.maxX < 16,
+                    "The port sits at the trailing edge, just before the shortcut")
             #expect(abs(port.frame.midY - title.frame.midY) < 1, "Name and port share one line")
             #expect(card.bounds.contains(title.frame) && card.bounds.contains(port.frame))
             #expect(labels.first { $0.stringValue == "localhost:3000" }?.isHidden ?? true, "No second address line")

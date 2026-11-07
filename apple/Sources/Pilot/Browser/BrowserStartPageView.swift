@@ -195,7 +195,7 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
 
     func numberOfRows(in tableView: NSTableView) -> Int { servers.count }
 
-    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CockpitCardRowView() }
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CockpitCardRowView(shape: .well) }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard servers.indices.contains(row) else { return nil }
@@ -205,14 +205,15 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
         name.lineBreakMode = .byTruncatingTail
         name.maximumNumberOfLines = 1
         name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        // One line: name and its port badge, then the shortcut and live status.
+        // One line: name, then the port, shortcut and live status at the trailing edge.
         let port = ServerPortBadge()
         port.port = server.port
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
         let hotkey = NewTabKeyBadge()
         hotkey.key = row < 9 ? String(row + 1) : nil
-        hotkey.isHidden = row >= 9
+        // Keep the shortcut slot when empty so ports align in one column.
+        hotkey.alphaValue = row < 9 ? 1 : 0
         hotkey.widthAnchor.constraint(equalToConstant: 24).isActive = true
         hotkey.heightAnchor.constraint(equalToConstant: 24).isActive = true
         let live = liveness[server.port] == true
@@ -220,13 +221,14 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
         indicator.contentTintColor = live ? .systemGreen : .tertiaryLabelColor
         indicator.widthAnchor.constraint(equalToConstant: 10).isActive = true
         indicator.heightAnchor.constraint(equalToConstant: 10).isActive = true
-        let content = NSStackView(views: [name, port, spacer, hotkey, indicator])
+        let content = NSStackView(views: [name, spacer, port, hotkey, indicator])
         content.orientation = .horizontal
         content.alignment = .centerY
         content.distribution = .fill
         content.spacing = 8
+        content.setCustomSpacing(10, after: port)
         content.setCustomSpacing(12, after: hotkey)
-        content.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
+        content.edgeInsets = NSEdgeInsets(top: 6, left: 20, bottom: 6, right: 18)
         content.toolTip = server.url.absoluteString
         content.setAccessibilityLabel("\(server.name), \(server.displayURL), \(live ? "listening" : "not listening")")
         return content
@@ -287,7 +289,7 @@ private enum StartPageKeyHandler {
 
 }
 
-/// A server's port in a small capsule beside its name, e.g. `app` `3000`.
+/// A server's port as quiet monospaced text in the row's trailing column.
 @MainActor
 final class ServerPortBadge: NSView {
     private let label = NSTextField(labelWithString: "")
@@ -295,10 +297,9 @@ final class ServerPortBadge: NSView {
 
     init() {
         super.init(frame: .zero)
-        wantsLayer = true
         label.font = .monospacedDigitSystemFont(ofSize: 11 * CGFloat(CockpitUIZoomController.shared.factor), weight: .medium)
         label.textColor = .secondaryLabelColor
-        label.alignment = .center
+        label.alignment = .right
         addSubview(label)
         setAccessibilityElement(false)
         setContentHuggingPriority(.required, for: .horizontal)
@@ -309,20 +310,12 @@ final class ServerPortBadge: NSView {
 
     override var intrinsicContentSize: NSSize {
         let text = label.intrinsicContentSize
-        return NSSize(width: ceil(text.width) + 12, height: ceil(text.height) + 4)
+        return NSSize(width: ceil(text.width) + 4, height: ceil(text.height))
     }
 
     override func layout() {
         super.layout()
-        layer?.cornerRadius = bounds.height / 2
         let height = label.intrinsicContentSize.height
         label.frame = NSRect(x: 0, y: (bounds.height - height) / 2, width: bounds.width, height: height)
-    }
-
-    override var wantsUpdateLayer: Bool { true }
-    override func updateLayer() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
-        }
     }
 }
