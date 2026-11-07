@@ -157,8 +157,8 @@ final class LandingSnapshotTests: XCTestCase {
         shell.featureToolbarFactory = nil
         let opening = workspace.addPane(kind: .terminal, side: .right, chooseModeOnOpen: true)
         shell.refresh()
-        let picker = try XCTUnwrap(descendants(try XCTUnwrap(window.contentView)).compactMap { $0 as? CockpitPaneModePicker }.first)
-        try capture(picker, name: "terminal-opening-keycaps")
+        let picker = try XCTUnwrap(descendants(try XCTUnwrap(window.contentView)).compactMap { $0 as? CockpitNewTabView }.first)
+        try capture(picker, name: "new-tab-placeholder")
         _ = workspace.removePane(opening)
         shell.refresh()
 

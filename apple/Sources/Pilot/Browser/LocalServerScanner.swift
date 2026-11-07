@@ -14,6 +14,63 @@ struct LocalServer: Identifiable, Hashable, Sendable {
     var displayURL: String { "localhost:\(port)" }
 }
 
+/// Per-workspace cache of discovered dev servers, shared by the New Tab
+/// launcher and the browser start page. A known workspace shows its list
+/// immediately; a scan runs only when nothing is cached or the cached list is
+/// older than `refreshInterval`, and concurrent requests share one scan.
+@MainActor
+final class LocalServerCatalog {
+    static let shared = LocalServerCatalog()
+    static let refreshInterval: Duration = .seconds(60)
+    /// Bounded so long sessions across many workspaces don't grow without limit.
+    static let maximumWorkspaces = 32
+
+    private struct Entry { var servers: [LocalServer]; var scannedAt: ContinuousClock.Instant }
+    private var entries: [String: Entry] = [:]
+    private var inFlight: [String: Task<[LocalServer], Never>] = [:]
+    private let scanner: @Sendable (String) async -> [LocalServer]
+    private let now: () -> ContinuousClock.Instant
+
+    init(
+        scanner: @escaping @Sendable (String) async -> [LocalServer] = { await LocalServerScanner.scan(rootPath: $0) },
+        now: @escaping () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) {
+        self.scanner = scanner
+        self.now = now
+    }
+
+    /// The last list found for this workspace, or nil if it was never scanned.
+    func cached(rootPath: String) -> [LocalServer]? { entries[rootPath]?.servers }
+
+    /// True when the workspace was never scanned or its list is stale.
+    func needsRefresh(rootPath: String) -> Bool {
+        guard let entry = entries[rootPath] else { return true }
+        return now() - entry.scannedAt >= Self.refreshInterval
+    }
+
+    /// Scans the workspace (sharing an in-flight scan) and caches the result.
+    func refresh(rootPath: String) async -> [LocalServer] {
+        if let running = inFlight[rootPath] { return await running.value }
+        let scan = scanner
+        let task = Task { await scan(rootPath) }
+        inFlight[rootPath] = task
+        let found = await task.value
+        inFlight[rootPath] = nil
+        entries[rootPath] = Entry(servers: found, scannedAt: now())
+        if entries.count > Self.maximumWorkspaces,
+           let oldest = entries.min(by: { $0.value.scannedAt < $1.value.scannedAt })?.key {
+            entries[oldest] = nil
+        }
+        return found
+    }
+
+    /// The cached list when fresh, otherwise a new scan.
+    func servers(rootPath: String) async -> [LocalServer] {
+        if !needsRefresh(rootPath: rootPath), let cached = cached(rootPath: rootPath) { return cached }
+        return await refresh(rootPath: rootPath)
+    }
+}
+
 // LocalServerScanner — best-effort discovery of dev-server candidates for a
 // workspace. Scans the project tree for `package.json`, framework configs,
 // and `.env*` files; pulls out an explicit port when present and otherwise
