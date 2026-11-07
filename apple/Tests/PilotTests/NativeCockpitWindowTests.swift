@@ -538,8 +538,11 @@ final class NativeCockpitWindowTests: XCTestCase {
         while !(window.firstResponder is NSTableView), ContinuousClock.now < focusDeadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        let list = try XCTUnwrap(window.firstResponder as? NSTableView,
-                                "Browser list should own focus; responder: \(String(describing: window.firstResponder))")
+        let diagnostics = "responder: \(String(describing: window.firstResponder)); "
+            + "pane active: \(presentation.isActive), selected: \(presentation.isSelected); "
+            + "window visible: \(window.isVisible), occlusion visible: \(window.occlusionState.contains(.visible)), "
+            + "key: \(window.isKeyWindow), app active: \(NSApp.isActive); sheet: \(window.attachedSheet != nil)"
+        let list = try XCTUnwrap(window.firstResponder as? NSTableView, "Browser list should own focus; \(diagnostics)")
         XCTAssertEqual(list.accessibilityLabel(), "Local development servers")
         XCTAssertFalse(pane.browserState?.needsAddressFocus ?? true)
     }

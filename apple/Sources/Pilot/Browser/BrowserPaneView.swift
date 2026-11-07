@@ -9,8 +9,8 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
     var onSelect: () -> Void = {}
     var targetTerminalPaneID: @MainActor () -> UUID? = { nil }
     private let observation = BrowserNativeObservation()
-    private var isActive = false
-    private var isSelected = false
+    private(set) var isActive = false
+    private(set) var isSelected = false
     private var isClosed = false
     private var hasLoadedAnyURL = false
     private let openedWithBlankURL: Bool
