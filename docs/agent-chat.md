@@ -51,8 +51,11 @@ their own built-in file and shell tools under their own permission rules,
 exactly as in their TUI; Cockpit never reads or writes files on an agent's
 behalf. Requests for those methods are answered `Method not found`.
 
-Permission requests are shown to the user and never auto-approved. Cancelling a
-turn first answers every open request `cancelled`, as ACP requires.
+Permission requests are shown to the user and never auto-approved. The head of
+the queue docks above the composer with the agent's own options verbatim and
+never takes focus by itself; a decided request stays in the transcript as a
+record. Cancelling a turn first answers every open request `cancelled`, as ACP
+requires.
 
 Sign-in is never initiated from Cockpit. If an agent reports `auth_required`,
 Cockpit completes only a silent method the agent itself marks as cached (Grok's
@@ -69,7 +72,10 @@ keeps one long-lived agent process per session, passes no extra MCP servers
 (the agent keeps its configured ones, and with them its cacheable prompt
 prefix), and adds nothing to the system prompt.
 
-Usage shown in the pane is normalized because agents disagree on what
+Usage appears in two places only: a disabled item at the end of the agent
+menu's Conversation submenu ("Context 58.1k / 258.4k · Cache 97%") and the
+Inspector's Meta tab for the run or an agent (never per step). The composer
+shows no meter. Usage is normalized because agents disagree on what
 `inputTokens` means: Grok's includes cache reads, Claude's and Codex's do not,
 Codex reports no cache writes, and Kimi reports no per-turn usage over ACP
 (only context size). These semantics were measured against Claude Code
@@ -79,7 +85,8 @@ Codex reports no cache writes, and Kimi reports no per-turn usage over ACP
 Cockpit opts into ACP's subagents RFD (`clientCapabilities.subagents`):
 
 - Claude and Codex announce each subagent with `subagent_update` and run it as
-  a child session, which the pane renders as a collapsible card.
+  a child session, which the pane renders as a chip in the activity card's
+  agent roster; clicking it opens the agent in the Inspector.
 - Grok runs a child session without announcing it; the card takes the title of
   the parent's running spawn call and is marked finished when the turn ends.
 - Kimi reports delegation as one tool call with streamed updates.

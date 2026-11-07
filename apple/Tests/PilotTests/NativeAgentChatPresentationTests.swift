@@ -7,12 +7,13 @@ import Testing
 struct NativeAgentChatPresentationTests {
     @Test("Streaming can restyle earlier Markdown and preserve the reader's selection")
     func streamingMarkdownRestylesPrefix() throws {
-        let cell = AgentChatTranscriptCell()
+        let cell = ProseCellView()
         cell.frame = NSRect(x: 0, y: 0, width: 600, height: 300)
+        var revision = 0
         func stream(_ message: String) {
-            let row = AgentChatNativeRow(id: "stream", item: .init(id: "stream", content: .assistant(message)),
-                                         depth: 0, expanded: false, childCount: 0)
-            cell.apply(AgentChatRenderedRow(row: row), depth: 0)
+            revision += 1
+            cell.configure(item: AgentChatItem(id: "stream", content: .assistant(message), revision: revision),
+                           isStreaming: true, followStreamingOutput: false, actions: AgentChatRowActions())
             cell.layoutSubtreeIfNeeded()
         }
         stream("A **bold")
@@ -133,7 +134,9 @@ struct NativeAgentChatPresentationTests {
         draft("Help me understand this workspace.")
         #expect(send.isEnabled)
         #expect(abs(send.bounds.width - send.bounds.height) < 1, "The send action must remain circular")
-        for identifier in ["agent-chat.agent", "agent-chat.attach", "agent-chat.send"] {
+        #expect(views.contains { $0.accessibilityIdentifier() == "agent-chat.stop" && $0.isHidden },
+                "Stop exists but stays hidden while nothing runs")
+        for identifier in ["agent-chat.agent", "agent-chat.attach", "agent-chat.send", "agent-chat.stop"] {
             let control = try #require(views.first { $0.accessibilityIdentifier() == identifier })
             if control.isHidden { continue }
             let frame = card.convert(control.bounds, from: control)
@@ -202,14 +205,15 @@ struct NativeAgentChatPresentationTests {
                               styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let cell = AgentChatTranscriptCell()
+        let cell = ProseCellView()
         cell.frame = NSRect(x: 0, y: 0, width: 752, height: 1_208)
         window.contentView?.addSubview(cell)
         var message = (0..<150).map { "Line \($0)" }.joined(separator: "\n")
+        var revision = 0
         func stream(follow: Bool) {
-            let row = AgentChatNativeRow(id: "stream", item: .init(id: "stream", content: .assistant(message)),
-                                         depth: 0, expanded: false, childCount: 0)
-            cell.apply(AgentChatRenderedRow(row: row), depth: 0, followStreamingOutput: follow)
+            revision += 1
+            cell.configure(item: AgentChatItem(id: "stream", content: .assistant(message), revision: revision),
+                           isStreaming: true, followStreamingOutput: follow, actions: AgentChatRowActions())
             cell.layoutSubtreeIfNeeded()
         }
         stream(follow: true)

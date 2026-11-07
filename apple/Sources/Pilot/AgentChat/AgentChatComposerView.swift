@@ -6,6 +6,10 @@ final class AgentChatComposerTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onCancel: (() -> Bool)?
     var onFocus: (() -> Void)?
+    /// Shift-Tab: moves focus to the transcript.
+    var onBacktab: (() -> Bool)?
+    /// Cmd-. stops the running turn.
+    var onStop: (() -> Bool)?
     var placeholder = "Message" { didSet { if oldValue != placeholder { needsDisplay = true } } }
 
     convenience init() {
@@ -78,7 +82,13 @@ final class AgentChatComposerTextView: NSTextView {
             return
         }
         if !hasMarkedText(), event.keyCode == 53, onCancel?() == true { return }
+        if !hasMarkedText(), AgentChatTimelineKey(event) == .stop, onStop?() == true { return }
         super.keyDown(with: event)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        if onBacktab?() == true { return }
+        super.insertBacktab(sender)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -129,9 +139,14 @@ final class AgentChatComposerCard: NSView {
 }
 
 /// Keeps native button focus, keyboard activation and accessibility while
-/// drawing the compact circular send/stop action used inside the composer.
+/// drawing the compact circular send action used inside the composer. While
+/// a turn runs, a non-empty draft is sent as a steer or queued instead.
 @MainActor
 final class AgentChatSendButton: NSButton {
+    enum Mode: Equatable { case send, steer, queue }
+
+    private(set) var mode = Mode.send
+
     // Standard push-button alignment adds vertical bezel overhang. This
     // custom circular surface needs its visible bounds to match its layout.
     override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0) }
@@ -143,18 +158,24 @@ final class AgentChatSendButton: NSButton {
         imagePosition = .imageOnly
         focusRingType = .exterior
         setButtonType(.momentaryPushIn)
-        update(prompting: false, enabled: false)
+        update(mode: .send, enabled: false)
     }
 
     required init?(coder: NSCoder) { nil }
 
-    func update(prompting: Bool, enabled: Bool) {
-        image = NSImage(systemSymbolName: prompting ? "stop.fill" : "arrow.up", accessibilityDescription: nil)
+    func update(mode: Mode, enabled: Bool) {
+        self.mode = mode
+        let (symbol, label, tip) = switch mode {
+        case .send: ("arrow.up", "Send message", "Send (Return); Option-Return inserts a newline")
+        case .steer: ("arrow.turn.down.right", "Steer current run", "Send to the running turn (Return)")
+        case .queue: ("text.badge.plus", "Queue for next turn", "Queue for after this turn (Return)")
+        }
+        image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
         isEnabled = enabled
         contentTintColor = enabled ? .white : .tertiaryLabelColor
-        setAccessibilityLabel(prompting ? "Stop response" : "Send message")
-        toolTip = prompting ? "Stop (Esc)" : "Send (Return); Option-Return inserts a newline"
+        setAccessibilityLabel(label)
+        toolTip = tip
         needsDisplay = true
     }
 
@@ -164,4 +185,93 @@ final class AgentChatSendButton: NSButton {
         NSBezierPath(ovalIn: bounds).fill()
         super.draw(dirtyRect)
     }
+}
+
+/// The persistent Stop control (Cmd-.), visible while a turn or background
+/// agents run. Background agents alone can't be stopped from the client.
+@MainActor
+final class AgentChatStopButton: NSButton {
+    override var alignmentRectInsets: NSEdgeInsets { NSEdgeInsets(top: 0, left: 0, bottom: 0, right: 0) }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        title = ""
+        isBordered = false
+        imagePosition = .imageOnly
+        focusRingType = .exterior
+        setButtonType(.momentaryPushIn)
+        image = NSImage(systemSymbolName: "stop.fill", accessibilityDescription: nil)
+        symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+        setAccessibilityIdentifier("agent-chat.stop")
+        setAccessibilityLabel("Stop")
+        update(turnRunning: false)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func update(turnRunning: Bool) {
+        isEnabled = turnRunning
+        contentTintColor = turnRunning ? .labelColor : .tertiaryLabelColor
+        toolTip = turnRunning ? "Stop the running turn (Cmd-.)"
+            : "Background agents keep running; Stop cancels only a running turn."
+        setAccessibilityHelp(toolTip)
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let fill = NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.18 : 0.1)
+        fill.setFill()
+        NSBezierPath(ovalIn: bounds).fill()
+        super.draw(dirtyRect)
+    }
+}
+
+/// "Steering current run" or "Queued for next turn" (removable), shown in the
+/// composer because the placeholder's contrast is too low to carry the state.
+@MainActor
+final class AgentChatComposerChip: NSView {
+    let label = NSTextField(labelWithString: "")
+    let removeButton = NSButton()
+    var onRemove: () -> Void = {}
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityIdentifier("agent-chat.composer-chip")
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        removeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Remove queued message")
+        removeButton.isBordered = false
+        removeButton.imagePosition = .imageOnly
+        removeButton.target = self
+        removeButton.action = #selector(remove)
+        removeButton.setAccessibilityIdentifier("agent-chat.composer-chip.remove")
+        let stack = NSStackView(views: [label, removeButton])
+        stack.orientation = .horizontal
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    /// `detail` (redacted) is the tooltip, e.g. the queued text.
+    func update(text: String, detail: String?, removable: Bool) {
+        label.stringValue = text
+        label.font = CockpitTypography.font(size: 11, weight: .medium)
+        label.textColor = AgentChatPalette.color(.live)
+        label.toolTip = detail
+        removeButton.isHidden = !removable
+        setAccessibilityLabel(text)
+        setAccessibilityHelp(detail)
+    }
+
+    @objc private func remove() { onRemove() }
 }

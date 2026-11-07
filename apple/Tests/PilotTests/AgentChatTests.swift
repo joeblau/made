@@ -360,10 +360,20 @@ struct AgentChatTests {
         #expect(AgentChatPaneStore.sessionID(for: pane, agent: .kimi, defaults: defaults) == nil)
     }
 
+    @MainActor
     @Test
     func markdownSeparatesFencedCodeIncludingAnOpenFence() {
-        #expect(AgentChatMarkdown.segments("Run:\n```sh\nls\n```\nDone.") == [.prose("Run:"), .code("ls"), .prose("Done.")])
-        #expect(AgentChatMarkdown.segments("Streaming:\n```\nlet x") == [.prose("Streaming:"), .code("let x")])
+        #expect(AgentProseRenderer.segments("Run:\n```sh\nls\n```\nDone.")
+            == [.prose("Run:"), .code(language: "sh", text: "ls"), .prose("Done.")])
+        #expect(AgentProseRenderer.segments("Streaming:\n```\nlet x") == [.prose("Streaming:"), .code(language: nil, text: "let x")])
+    }
+
+    @Test
+    func contextSummaryNamesTheMeterForTheAgentMenu() throws {
+        let usage = NormalizedTurnUsage(uncachedInputTokens: 3, cacheReadTokens: 97, cacheWriteTokens: 0, outputTokens: 5)
+        #expect(AgentChatFormat.contextSummary(ACPContextUsage(usedTokens: 58_100, windowTokens: 258_400), usage: usage)
+            == "Context 58.1k / 258.4k · Cache 97%")
+        #expect(AgentChatFormat.contextSummary(nil, usage: nil) == nil)
     }
 
     @Test
