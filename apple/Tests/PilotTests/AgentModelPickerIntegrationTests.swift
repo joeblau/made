@@ -74,6 +74,9 @@ struct AgentModelPickerIntegrationTests {
 
         view.view.cancelOperation(nil)
         try await harness.waitUntil { !picker.isShown && picker.picker == nil }
+        // AppKit may reassign first responder as the parent window becomes key
+        // again; the pane re-asserts composer focus on the next turn.
+        try await harness.waitUntil { harness.window.firstResponder === harness.composer }
         #expect(harness.window.firstResponder === harness.composer, "Closing the picker returns focus to the composer")
     }
 

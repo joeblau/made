@@ -331,8 +331,20 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
     /// The popover gives focus back to the composer unless a click outside
     /// it moved focus out of this pane (to a toolbar field or another pane).
     private func modelPickerDidClose(responderAtOpen: NSResponder?) {
-        guard let window = view.window else { return }
+        restoreComposerFocusAfterPicker(responderAtOpen: responderAtOpen)
+        // When the parent window becomes key again after the popover closes,
+        // AppKit can move first responder to the window's first key view (the
+        // transcript table) after this callback. Re-check once on the next turn.
+        DispatchQueue.main.async { [weak self] in
+            self?.restoreComposerFocusAfterPicker(responderAtOpen: responderAtOpen)
+        }
+    }
+
+    /// Focus returns to the composer unless the user moved it out of the pane.
+    private func restoreComposerFocusAfterPicker(responderAtOpen: NSResponder?) {
+        guard let window = view.window, modelPicker.isShown == false else { return }
         let responder = window.firstResponder
+        guard responder !== composer else { return }
         if responder == nil || responder === window || responder === responderAtOpen
             || (responder as? NSView)?.isDescendant(of: view) == true {
             focusComposer()
