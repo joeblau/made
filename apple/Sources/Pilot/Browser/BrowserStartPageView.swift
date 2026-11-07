@@ -154,7 +154,11 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
     private func refresh() {
         let path = rootPath ?? ""
         let currentGeneration = generation
-        if !hasScanned {
+        let catalog = LocalServerCatalog.shared
+        if let cached = catalog.cached(rootPath: path) {
+            // A known workspace shows its list at once; a stale one refreshes quietly.
+            show(cached)
+        } else if !hasScanned {
             // Fast scans never flash a loading row.
             scanningDelayTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(400))
@@ -163,17 +167,9 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
             }
         }
         task = Task { @MainActor [weak self] in
-            let discovered = await LocalServerScanner.scan(rootPath: path)
-            guard !Task.isCancelled, self?.generation == currentGeneration else { return }
-            self?.scanningDelayTask?.cancel()
-            self?.scanningDelayTask = nil
-            self?.hasScanned = true
-            self?.status.isHidden = false
-            self?.servers = discovered
-            self?.status.stringValue = discovered.isEmpty
-                ? "No dev servers found in this workspace. Start a local server, or enter a URL in the address bar."
-                : "Choose a server, or use its 1–9 shortcut."
-            self?.table.reloadData()
+            let discovered = await catalog.servers(rootPath: path)
+            guard !Task.isCancelled, let self, self.generation == currentGeneration else { return }
+            if !self.hasScanned || self.servers != discovered { self.show(discovered) }
             await LocalServerLivenessMonitor.monitor(servers: discovered) { [weak self] latest in
                 guard let self, self.generation == currentGeneration, self.liveness != latest else { return }
                 let changedRows = IndexSet(self.servers.indices.filter {
@@ -183,6 +179,18 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
                 self.table.reloadData(forRowIndexes: changedRows, columnIndexes: IndexSet(integer: 0))
             }
         }
+    }
+
+    private func show(_ discovered: [LocalServer]) {
+        scanningDelayTask?.cancel()
+        scanningDelayTask = nil
+        hasScanned = true
+        status.isHidden = false
+        servers = discovered
+        status.stringValue = discovered.isEmpty
+            ? "No dev servers found in this workspace. Start a local server, or enter a URL in the address bar."
+            : "Choose a server, or use its 1–9 shortcut."
+        table.reloadData()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { servers.count }

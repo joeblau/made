@@ -324,16 +324,19 @@ final class NewTabLiveSource: NewTabContentSource {
     @ObservationIgnored private var serverGeneration = 0
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     @ObservationIgnored private var polling: Task<Void, Never>?
-    @ObservationIgnored private let serverScanner: @Sendable (String) async -> [LocalServer]
+    @ObservationIgnored private let serverCatalog: LocalServerCatalog
     @ObservationIgnored private let serverProbe: @Sendable (Int) async -> Bool
 
+    /// `serverScanner` (tests) gets a private catalog; otherwise the shared
+    /// per-workspace catalog serves known workspaces without rescanning.
     init(
         paneID: UUID,
-        serverScanner: @escaping @Sendable (String) async -> [LocalServer] = { await LocalServerScanner.scan(rootPath: $0) },
+        serverCatalog: LocalServerCatalog? = nil,
+        serverScanner: (@Sendable (String) async -> [LocalServer])? = nil,
         serverProbe: @escaping @Sendable (Int) async -> Bool = { await LocalServerProbe.isLive(port: $0) }
     ) {
         self.paneID = paneID
-        self.serverScanner = serverScanner
+        self.serverCatalog = serverCatalog ?? serverScanner.map { LocalServerCatalog(scanner: $0) } ?? .shared
         self.serverProbe = serverProbe
     }
 
@@ -398,15 +401,21 @@ final class NewTabLiveSource: NewTabContentSource {
         guard serverRoot != rootPath || scanTask == nil else { return }
         stopServerScan()
         serverRoot = rootPath
-        servers = nil
+        // A known workspace shows its cached list at once; only an unknown one
+        // shows "Looking for dev servers…" while the first scan runs.
+        let cached = serverCatalog.cached(rootPath: rootPath)
+        servers = cached
         serverLiveness = [:]
         let generation = serverGeneration
-        let scan = serverScanner
+        let catalog = serverCatalog
         let probe = serverProbe
         scanTask = Task { [weak self] in
-            let found = await scan(rootPath)
-            guard !Task.isCancelled, self?.serverGeneration == generation else { return }
-            self?.servers = found
+            var found = cached ?? []
+            if cached == nil || catalog.needsRefresh(rootPath: rootPath) {
+                found = await catalog.refresh(rootPath: rootPath)
+                guard !Task.isCancelled, self?.serverGeneration == generation else { return }
+                if self?.servers != found { self?.servers = found }
+            }
             guard !found.isEmpty else { return }
             await LocalServerLivenessMonitor.monitor(servers: found, probe: probe) { [weak self] latest in
                 guard let self, self.serverGeneration == generation, self.serverLiveness != latest else { return }
@@ -838,7 +847,7 @@ private final class NewTabPageView: NSScrollView {
     init() {
         super.init(frame: .zero)
         drawsBackground = false
-        hasVerticalScroller = true
+        hasVerticalScroller = false
         autohidesScrollers = true
         borderType = .noBorder
         documentView = document
@@ -901,19 +910,31 @@ private final class NewTabPageView: NSScrollView {
 
     override func layout() {
         super.layout()
-        let width = contentSize.width
+        // Decide on the scroller first so rows are laid out in the width that
+        // remains. Only a list that really overflows gets one: with "Show
+        // scroll bars: Always", a sub-point rounding overflow drew an empty track.
+        let overflows = preferredHeight(width: bounds.width) > bounds.height + 1
+        if hasVerticalScroller != overflows {
+            hasVerticalScroller = overflows
+            tile()
+        }
+        // A scrolling list reserves the scroller's width as an equal gutter on
+        // both sides, so cards stay centered and never sit under the scroller
+        // (legacy or overlay).
+        let gutter = overflows ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: scrollerStyle) + 4 : 0
+        let width = max(0, bounds.width - 2 * gutter)
         var top: CGFloat = 0
         if let messageView {
-            messageView.frame = NSRect(x: 0, y: 0, width: width, height: messageView.preferredHeight)
+            messageView.frame = NSRect(x: gutter, y: 0, width: width, height: messageView.preferredHeight)
             top = messageHeight
         }
         for view in rowViews {
             guard let row = view.row else { continue }
             let height = height(for: row)
-            view.frame = NSRect(x: 0, y: top, width: width, height: height)
+            view.frame = NSRect(x: gutter, y: top, width: width, height: height)
             top += height + spacing(after: row)
         }
-        document.frame = NSRect(x: 0, y: 0, width: width, height: max(top, contentSize.height))
+        document.frame = NSRect(x: 0, y: 0, width: contentSize.width, height: overflows ? top : contentSize.height)
     }
 }
 
@@ -986,6 +1007,8 @@ private final class NewTabRowView: NSView {
     private let chevron = NSImageView()
     private let badge = NewTabKeyBadge()
     private let serverIndicator = NSView()
+    /// Liquid Glass capsule behind a hovered or keyboard-highlighted row.
+    private var highlightGlass: NSView?
     private var tracking: NSTrackingArea?
     override var isFlipped: Bool { true }
 
@@ -1057,6 +1080,9 @@ private final class NewTabRowView: NSView {
         super.layout()
         let zoom = CGFloat(CockpitUIZoomController.shared.factor)
         let height = bounds.height
+        highlightGlass?.frame = bounds
+        layer?.cornerRadius = height / 2
+        if #available(macOS 26.0, *), let glass = highlightGlass as? NSGlassEffectView { glass.cornerRadius = height / 2 }
         if row?.isHeader == true {
             let titleHeight = title.intrinsicContentSize.height
             title.frame = NSRect(x: 10, y: height - titleHeight - 4, width: bounds.width - 20, height: titleHeight)
@@ -1079,7 +1105,7 @@ private final class NewTabRowView: NSView {
         }
         let iconSize = 20 * zoom
         icon.frame = NSRect(x: 10, y: (height - iconSize) / 2, width: iconSize, height: iconSize)
-        let badgeSize = NSSize(width: 24 * zoom, height: 22 * zoom)
+        let badgeSize = NSSize(width: 24 * zoom, height: 24 * zoom)
         badge.frame = NSRect(x: bounds.width - 8 - badgeSize.width, y: (height - badgeSize.height) / 2,
                              width: badgeSize.width, height: badgeSize.height)
         let chevronWidth: CGFloat = chevron.isHidden ? 0 : 12
@@ -1131,9 +1157,12 @@ private final class NewTabRowView: NSView {
     }
 
     private func updateAppearance() {
+        let glass = isHighlighted ? highlightGlassView() : nil
+        highlightGlass?.isHidden = glass == nil
+        layer?.cornerRadius = bounds.height > 0 ? bounds.height / 2 : 8
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let fill: NSColor = if isHighlighted {
-                NSColor.quaternaryLabelColor.withAlphaComponent(0.35)
+                glass == nil ? NSColor.quaternaryLabelColor.withAlphaComponent(0.35) : .clear
             } else if row?.serverIsLive != nil {
                 NSColor.quaternaryLabelColor.withAlphaComponent(0.10)
             } else {
@@ -1146,6 +1175,24 @@ private final class NewTabRowView: NSView {
 }
 
 /// The rounded key cap shown at the trailing edge of each row.
+extension NewTabRowView {
+    /// The highlight glass, created on first use. Nil when Liquid Glass is
+    /// unavailable or Reduce Transparency is on; the row then uses a fill.
+    fileprivate func highlightGlassView() -> NSView? {
+        guard #available(macOS 26.0, *), !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency else {
+            highlightGlass?.isHidden = true
+            return nil
+        }
+        if let highlightGlass { return highlightGlass }
+        let glass = NSGlassEffectView()
+        glass.cornerRadius = bounds.height / 2
+        glass.frame = bounds
+        addSubview(glass, positioned: .below, relativeTo: nil)
+        highlightGlass = glass
+        return glass
+    }
+}
+
 @MainActor
 private final class NewTabKeyBadge: NSView {
     private let label = CockpitUI.label("", size: 12, weight: .semibold, color: .labelColor)
@@ -1165,6 +1212,7 @@ private final class NewTabKeyBadge: NSView {
 
     override func layout() {
         super.layout()
+        layer?.cornerRadius = min(bounds.width, bounds.height) / 2
         let height = label.intrinsicContentSize.height
         label.frame = NSRect(x: 0, y: (bounds.height - height) / 2, width: bounds.width, height: height)
     }

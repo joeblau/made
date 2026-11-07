@@ -194,6 +194,89 @@ struct NewTabPlaceholderTests {
         #expect(source.content(for: .browserServers(.chromium)).message?.title.contains("workspace folder") == true)
     }
 
+    @Test("A known workspace's sites appear at once from the shared catalog, without rescanning")
+    func cachedWorkspaceSites() async throws {
+        let counter = ScanCounter()
+        let catalog = LocalServerCatalog(scanner: { root in
+            await counter.increment()
+            return [LocalServer(port: 3000, name: "app-\(root)")]
+        })
+        let first = NewTabLiveSource(paneID: UUID(), serverCatalog: catalog, serverProbe: { _ in false })
+        first.activate(.browserServers(.webKit), rootPath: "/repo")
+        #expect(first.content(for: .browserServers(.webKit)).message?.title == "Looking for dev servers…")
+        try await waitUntil { first.content(for: .browserServers(.webKit)).rows.first?.title == "app-/repo" }
+        first.deactivate()
+
+        let second = NewTabLiveSource(paneID: UUID(), serverCatalog: catalog, serverProbe: { _ in false })
+        defer { second.deactivate() }
+        second.activate(.browserServers(.webKit), rootPath: "/repo")
+        let content = second.content(for: .browserServers(.webKit))
+        #expect(content.message?.isLoading != true, "No loading row for a workspace that was already scanned")
+        #expect(content.rows.first?.title == "app-/repo")
+        for _ in 0..<10 { await Task.yield() }
+        #expect(await counter.count == 1, "A fresh cache is not rescanned")
+    }
+
+    @Test("The catalog refreshes stale entries and shares concurrent scans")
+    func catalogFreshness() async throws {
+        let counter = ScanCounter()
+        var clock = ContinuousClock.now
+        let catalog = LocalServerCatalog(scanner: { _ in
+            await counter.increment()
+            try? await Task.sleep(for: .milliseconds(50))
+            return [LocalServer(port: 5173, name: "vite")]
+        }, now: { clock })
+        #expect(catalog.cached(rootPath: "/a") == nil && catalog.needsRefresh(rootPath: "/a"))
+        async let one = catalog.refresh(rootPath: "/a")
+        async let two = catalog.refresh(rootPath: "/a")
+        _ = await (one, two)
+        #expect(await counter.count == 1, "Concurrent requests share one scan")
+        #expect(!catalog.needsRefresh(rootPath: "/a"))
+        _ = await catalog.servers(rootPath: "/a")
+        #expect(await counter.count == 1)
+        clock = clock.advanced(by: LocalServerCatalog.refreshInterval)
+        #expect(catalog.needsRefresh(rootPath: "/a"))
+        _ = await catalog.servers(rootPath: "/a")
+        #expect(await counter.count == 2, "A stale entry is rescanned")
+    }
+
+    @Test("Only an overflowing list gets a scroller, and rows stay clear of it")
+    func scrollerOnlyWhenOverflowing() async throws {
+        let pane = Pane(kind: .terminal)
+        pane.isChoosingMode = true
+        defer { pane.isChoosingMode = false; NewTabProbes.release(paneID: pane.id, keeping: nil) }
+        let source = FakeNewTabSource()
+        source.contents[.browserServers(.webKit)] = NewTabContent(rows: NewTabMenu.numbered((0..<30).map {
+            NewTabRow(id: "server-\($0)", title: "server \($0)", action: .open(.terminal))
+        }))
+        let view = CockpitNewTabView(pane: pane, source: source)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 420), styleMask: [.titled],
+                              backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        defer { window.close() }
+        func scrollViews() -> [NSScrollView] {
+            func all(_ root: NSView) -> [NSView] { [root] + root.subviews.flatMap(all) }
+            return all(view).compactMap { $0 as? NSScrollView }.filter { !$0.isHiddenOrHasHiddenAncestor }
+        }
+        try await Task.sleep(for: .milliseconds(400))
+        view.layoutSubtreeIfNeeded()
+        #expect(scrollViews().allSatisfy { !$0.hasVerticalScroller }, "The short root list has no scroller")
+
+        #expect(view.press("b") && view.press("s"))
+        try await Task.sleep(for: .milliseconds(400))
+        view.layoutSubtreeIfNeeded()
+        let list = try #require(scrollViews().first { $0.hasVerticalScroller }, "The long list scrolls")
+        let scroller = try #require(list.verticalScroller)
+        let scrollerLeft = list.convert(scroller.frame, from: scroller.superview).minX
+        for row in list.documentView?.subviews ?? [] where row.frame.height > 0 {
+            let right = list.convert(row.frame, from: row.superview).maxX
+            #expect(right <= scrollerLeft + 0.5, "A row reaches \(right) under the scroller at \(scrollerLeft)")
+            let left = list.convert(row.frame, from: row.superview).minX
+            #expect(abs(left - (list.bounds.width - right)) < 0.5, "Rows sit centered with equal gutters")
+        }
+    }
+
     @Test("A late scan from the previous workspace cannot replace the current site's list")
     func staleWorkspaceScan() async throws {
         let scanner = ControlledNewTabScanner()
@@ -282,4 +365,9 @@ private actor ControlledNewTabScanner {
     }
     func hasRequest(_ root: String) -> Bool { requests[root] != nil }
     func complete(_ root: String, with servers: [LocalServer]) { requests.removeValue(forKey: root)?.resume(returning: servers) }
+}
+
+private actor ScanCounter {
+    private(set) var count = 0
+    func increment() { count += 1 }
 }
