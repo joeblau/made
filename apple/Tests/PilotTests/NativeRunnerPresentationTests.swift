@@ -91,3 +91,55 @@ struct RemoteDesktopAddressTests {
         }
     }
 }
+
+@Suite("Runner map controls")
+@MainActor
+struct RunnerMapControlsTests {
+    @Test("Related map actions share one 44pt glass capsule with labelled glyph buttons")
+    func capsules() throws {
+        var fired: [String] = []
+        let zoom = RunnerMapControls.capsule([
+            .init(symbol: "plus", name: "Zoom in") { fired.append("in") },
+            .init(symbol: "minus", name: "Zoom out") { fired.append("out") },
+        ])
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 200))
+        container.addSubview(zoom)
+        zoom.setFrameOrigin(.zero)
+        container.layoutSubtreeIfNeeded()
+        #expect(zoom.fittingSize == NSSize(width: RunnerMapControls.side, height: RunnerMapControls.side * 2))
+        #expect(zoom.cornerRadius == RunnerMapControls.side / 2)
+        func all(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(all) }
+        let buttons = all(zoom).compactMap { $0 as? RunnerMapControlButton }
+        #expect(buttons.map { $0.accessibilityLabel() } == ["Zoom in", "Zoom out"])
+        #expect(buttons.allSatisfy { !$0.isBordered && $0.image != nil })
+        buttons.forEach { $0.performClick(nil) }
+        #expect(fired == ["in", "out"])
+
+        guard let path = ProcessInfo.processInfo.environment["MADE_TOOL_REVIEW_OUTPUT"] else { return }
+        let fit = RunnerMapControls.capsule([
+            .init(symbol: "arrow.up.left.and.arrow.down.right", name: "Fit") {},
+            .init(symbol: "arrow.up.to.line", name: "Top") {},
+        ])
+        let stack = NSStackView(views: [RunnerMapControls.capsule([
+            .init(symbol: "plus", name: "Zoom in") {}, .init(symbol: "minus", name: "Zoom out") {},
+        ]), fit])
+        stack.orientation = .vertical
+        stack.spacing = RunnerMapControls.groupSpacing
+        let backdrop = NSView(frame: NSRect(x: 0, y: 0, width: 120, height: 260))
+        backdrop.wantsLayer = true
+        backdrop.layer?.backgroundColor = NSColor(calibratedRed: 0.08, green: 0.1, blue: 0.22, alpha: 1).cgColor
+        backdrop.appearance = NSAppearance(named: .darkAqua)
+        stack.frame = NSRect(x: 38, y: 20, width: 44, height: 98)
+        backdrop.addSubview(stack)
+        let window = NSWindow(contentRect: backdrop.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = backdrop
+        defer { window.close() }
+        backdrop.layoutSubtreeIfNeeded(); backdrop.displayIfNeeded()
+        let bitmap = try #require(backdrop.bitmapImageRepForCachingDisplay(in: backdrop.bounds))
+        backdrop.effectiveAppearance.performAsCurrentDrawingAppearance { backdrop.cacheDisplay(in: backdrop.bounds, to: bitmap) }
+        try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        try #require(bitmap.representation(using: .png, properties: [:]))
+            .write(to: URL(fileURLWithPath: path).appendingPathComponent("runner-map-controls.png"))
+    }
+}
