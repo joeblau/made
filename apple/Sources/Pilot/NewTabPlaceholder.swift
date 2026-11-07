@@ -112,8 +112,9 @@ struct NewTabRow: Equatable {
     /// A single lowercase letter or digit. Rows past the ninth list item have
     /// none and remain reachable with the arrow keys or the pointer.
     var shortcut: String?
-    /// Server rows use stacked labels and a live status indicator.
+    /// Server rows show the name, a port badge, the shortcut, and a live status dot.
     var serverIsLive: Bool?
+    var port: Int? = nil
     var isEnabled = true
     var action: Action
 
@@ -444,7 +445,7 @@ final class NewTabLiveSource: NewTabContentSource {
     private func browserContent(_ engine: BrowserEngine) -> NewTabContent {
         var rows = (servers ?? []).map { server in
             NewTabRow(id: server.id, title: server.name, detail: server.displayURL,
-                      serverIsLive: serverLiveness[server.port] == true,
+                      serverIsLive: serverLiveness[server.port] == true, port: server.port,
                       action: .open(.browser(engine, server.url)))
         }
         rows.append(NewTabRow(id: "start", title: "Open a URL", detail: "Enter an address", symbol: "globe",
@@ -861,7 +862,7 @@ private final class NewTabPageView: NSScrollView {
 
     private func height(for row: NewTabRow) -> CGFloat {
         if row.isHeader { return headerHeight }
-        return row.serverIsLive == nil ? rowHeight : 52 * CGFloat(CockpitUIZoomController.shared.factor)
+        return row.serverIsLive == nil ? rowHeight : 40 * CGFloat(CockpitUIZoomController.shared.factor)
     }
 
     private func spacing(after row: NewTabRow) -> CGFloat {
@@ -1007,6 +1008,7 @@ private final class NewTabRowView: NSView {
     private let chevron = NSImageView()
     private let badge = NewTabKeyBadge()
     private let serverIndicator = NSView()
+    private let portBadge = ServerPortBadge()
     /// Liquid Glass capsule behind a hovered or keyboard-highlighted row.
     private var highlightGlass: NSView?
     private var tracking: NSTrackingArea?
@@ -1027,7 +1029,7 @@ private final class NewTabRowView: NSView {
         }
         serverIndicator.wantsLayer = true
         serverIndicator.setAccessibilityElement(false)
-        [icon, title, detail, chevron, badge, serverIndicator].forEach(addSubview)
+        [icon, title, detail, chevron, badge, serverIndicator, portBadge].forEach(addSubview)
         setAccessibilityElement(true)
     }
 
@@ -1052,6 +1054,10 @@ private final class NewTabRowView: NSView {
         }
         icon.isHidden = row.isHeader || row.serverIsLive != nil
         serverIndicator.isHidden = row.serverIsLive == nil
+        portBadge.port = row.port
+        portBadge.isHidden = row.serverIsLive == nil || row.port == nil
+        // The port badge replaces the address line on server rows.
+        if row.serverIsLive != nil, row.port != nil { detail.isHidden = true }
         if case .push = row.action { chevron.isHidden = false } else { chevron.isHidden = true }
         badge.key = row.shortcut
         badge.isHidden = row.shortcut == nil || row.isHeader
@@ -1093,14 +1099,17 @@ private final class NewTabRowView: NSView {
             serverIndicator.frame = NSRect(x: bounds.width - 14 - dotSize, y: (height - dotSize) / 2,
                                            width: dotSize, height: dotSize)
             serverIndicator.layer?.cornerRadius = dotSize / 2
-            badge.frame = NSRect(x: serverIndicator.frame.minX - 12 - 24 * zoom, y: (height - 22 * zoom) / 2,
-                                 width: 24 * zoom, height: 22 * zoom)
+            badge.frame = NSRect(x: serverIndicator.frame.minX - 12 - 24 * zoom, y: (height - 24 * zoom) / 2,
+                                 width: 24 * zoom, height: 24 * zoom)
             let textRight = (badge.isHidden ? serverIndicator.frame.minX : badge.frame.minX) - 12
+            // One line: name, then its port in a badge.
+            let portSize = portBadge.isHidden ? .zero : portBadge.fittingSize
             let titleHeight = title.intrinsicContentSize.height
-            let detailHeight = detail.intrinsicContentSize.height
-            let top = (height - titleHeight - detailHeight - 2) / 2
-            title.frame = NSRect(x: 14, y: top, width: max(0, textRight - 14), height: titleHeight)
-            detail.frame = NSRect(x: 14, y: top + titleHeight + 2, width: title.frame.width, height: detailHeight)
+            let available = max(0, textRight - 14 - (portSize.width > 0 ? portSize.width + 8 : 0))
+            let titleWidth = min(ceil(title.fittingSize.width), available)
+            title.frame = NSRect(x: 14, y: (height - titleHeight) / 2, width: titleWidth, height: titleHeight)
+            portBadge.frame = NSRect(x: title.frame.maxX + 8, y: (height - portSize.height) / 2,
+                                     width: portSize.width, height: portSize.height)
             return
         }
         let iconSize = 20 * zoom
@@ -1194,7 +1203,7 @@ extension NewTabRowView {
 }
 
 @MainActor
-private final class NewTabKeyBadge: NSView {
+final class NewTabKeyBadge: NSView {
     private let label = CockpitUI.label("", size: 12, weight: .semibold, color: .labelColor)
     var key: String? { didSet { label.stringValue = key?.uppercased() ?? ""; needsLayout = true } }
 

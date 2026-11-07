@@ -293,7 +293,7 @@ struct NewTabPlaceholderTests {
         #expect(source.content(for: .browserServers(.webKit)).rows.first?.title == "current")
     }
 
-    @Test("Long site lists scroll and keep each name, address, and shortcut inside its card")
+    @Test("Long site lists scroll and keep each name, port badge, and shortcut on one line inside its card")
     func siteCardLayout() throws {
         let pane = Pane(kind: .terminal)
         pane.isChoosingMode = true
@@ -302,7 +302,7 @@ struct NewTabPlaceholderTests {
         let source = FakeNewTabSource()
         let names = ["app", "pro", "blog", "docs", "analytics", "deck", "www", "alert", "pitch", "leaderboard", "stats", "rpc-1337"]
         source.contents[.browserServers(.webKit)] = NewTabContent(rows: NewTabMenu.numbered(names.enumerated().map { index, name in
-            NewTabRow(id: name, title: name, detail: "localhost:\(3000 + index)", serverIsLive: index < 2,
+            NewTabRow(id: name, title: name, detail: "localhost:\(3000 + index)", serverIsLive: index < 2, port: 3000 + index,
                       action: .open(.browser(.webKit, URL(string: "http://localhost:\(3000 + index)"))))
         }), message: NewTabMessage(title: "Choose a server, or use its 1–9 shortcut."))
         let view = CockpitNewTabView(pane: pane, source: source)
@@ -320,9 +320,12 @@ struct NewTabPlaceholderTests {
             let card = try #require(descendants(view).first { $0.accessibilityIdentifier() == "pane.opening-choice.app" })
             let labels = card.subviews.compactMap { $0 as? NSTextField }
             let title = try #require(labels.first { $0.stringValue == "app" })
-            let address = try #require(labels.first { $0.stringValue == "localhost:3000" })
-            #expect(title.frame.maxY <= address.frame.minY)
-            #expect(card.bounds.contains(title.frame) && card.bounds.contains(address.frame))
+            let port = try #require(card.subviews.compactMap { $0 as? ServerPortBadge }.first { !$0.isHidden })
+            #expect(port.port == 3000)
+            #expect(port.frame.minX >= title.frame.maxX, "The port badge follows the name")
+            #expect(abs(port.frame.midY - title.frame.midY) < 1, "Name and port share one line")
+            #expect(card.bounds.contains(title.frame) && card.bounds.contains(port.frame))
+            #expect(labels.first { $0.stringValue == "localhost:3000" }?.isHidden ?? true, "No second address line")
             try capture(view, name: "sites-\(name)")
         }
         #expect(view.pop() && view.pop())
