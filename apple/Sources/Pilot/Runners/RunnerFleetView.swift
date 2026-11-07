@@ -49,14 +49,21 @@ final class RunnerFleetViewController: NSViewController {
             RRUI.label("● Idle", size: 11, color: GitHubRunner.State.idle.fleetColor),
             RRUI.label("○ Offline", size: 11, color: .lightGray),
         ], axis: .horizontal, spacing: 14)
+        // Apple Maps–style: related actions share one tall glass capsule.
+        let motion = { !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
         let controls = RRUI.stack([
-            RRButton("", symbol: "plus") { [weak self] in self?.fleet.zoom(by: 1.3, animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
-            RRButton("", symbol: "minus") { [weak self] in self?.fleet.zoom(by: 1 / 1.3, animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
-            RRButton("", symbol: "arrow.up.left.and.arrow.down.right") { [weak self] in self?.fleet.fitAll(animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
-            RRButton("", symbol: "arrow.up.to.line") { [weak self] in self?.fleet.frameTop(animated: !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) },
-        ], spacing: 4)
-        let names = ["Zoom in", "Zoom out", "Fit the whole fleet", "Back to GitHub"]
-        for (control, name) in zip(controls.arrangedSubviews, names) { control.toolTip = name; control.setAccessibilityLabel(name) }
+            RunnerMapControls.capsule([
+                .init(symbol: "plus", name: "Zoom in") { [weak self] in self?.fleet.zoom(by: 1.3, animated: motion()) },
+                .init(symbol: "minus", name: "Zoom out") { [weak self] in self?.fleet.zoom(by: 1 / 1.3, animated: motion()) },
+            ]),
+            RunnerMapControls.capsule([
+                .init(symbol: "arrow.up.left.and.arrow.down.right", name: "Fit the whole fleet") { [weak self] in
+                    self?.fleet.fitAll(animated: motion())
+                },
+                .init(symbol: "arrow.up.to.line", name: "Back to top") { [weak self] in self?.fleet.frameTop(animated: motion()) },
+            ]),
+        ], spacing: RunnerMapControls.groupSpacing)
+        controls.setAccessibilityElement(false)
         for child in [legend, controls] { child.translatesAutoresizingMaskIntoConstraints = false; container.addSubview(child) }
         NSLayoutConstraint.activate([
             legend.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
@@ -293,4 +300,68 @@ private final class FleetSCNView: SCNView {
             id: id, point: CGPoint(x: CGFloat(projected.x), y: bounds.height - CGFloat(projected.y)), isClick: isClick
         ))
     }
+}
+
+/// Map controls drawn like Apple Maps: square hit targets stacked inside a
+/// Liquid Glass capsule, with no dividers between related actions.
+@MainActor
+enum RunnerMapControls {
+    static let side: CGFloat = 44
+    static let groupSpacing: CGFloat = 10
+
+    struct Item {
+        let symbol: String
+        let name: String
+        let action: () -> Void
+    }
+
+    static func capsule(_ items: [Item]) -> CockpitGlassView {
+        let stack = NSStackView(views: items.map(button))
+        stack.orientation = .vertical
+        stack.spacing = 0
+        let capsule = CockpitGlassView(content: stack, cornerRadius: side / 2, interactive: true)
+        capsule.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            capsule.widthAnchor.constraint(equalToConstant: side),
+            capsule.heightAnchor.constraint(equalToConstant: side * CGFloat(items.count)),
+        ])
+        return capsule
+    }
+
+    private static func button(_ item: Item) -> NSView {
+        let button = RunnerMapControlButton(action: item.action)
+        button.image = NSImage(systemSymbolName: item.symbol, accessibilityDescription: item.name)?
+            .withSymbolConfiguration(.init(pointSize: 17, weight: .medium))
+        button.toolTip = item.name
+        button.setAccessibilityLabel(item.name)
+        button.setAccessibilityIdentifier("runners.map." + item.symbol)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: side),
+            button.heightAnchor.constraint(equalToConstant: side),
+        ])
+        return button
+    }
+}
+
+/// A borderless glyph button; the capsule behind it supplies the glass.
+@MainActor
+final class RunnerMapControlButton: NSButton {
+    private let handler: () -> Void
+
+    init(action: @escaping () -> Void) {
+        handler = action
+        super.init(frame: .zero)
+        isBordered = false
+        bezelStyle = .regularSquare
+        imagePosition = .imageOnly
+        imageScaling = .scaleNone
+        contentTintColor = .labelColor
+        target = self
+        self.action = #selector(runHandler)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func runHandler() { handler() }
 }
