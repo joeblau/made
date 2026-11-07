@@ -405,9 +405,9 @@ final class CaptureDevicePicker: NSView, NSTableViewDataSource, NSTableViewDeleg
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { items.indices.contains(row) && items[row].enabled && !items[row].group }
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { items.indices.contains(row) && items[row].group }
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { items.indices.contains(row) && items[row].group ? 26 : 48 }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { items.indices.contains(row) && items[row].group ? 26 : 44 }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        items.indices.contains(row) && !items[row].group ? CockpitCardRowView() : nil
+        items.indices.contains(row) && !items[row].group ? CockpitCardRowView(shape: .well) : nil
     }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -420,20 +420,23 @@ final class CaptureDevicePicker: NSView, NSTableViewDataSource, NSTableViewDeleg
         if item.group { return title }
         let icon = NSImageView(image: NSImage(systemSymbolName: item.symbol, accessibilityDescription: nil) ?? NSImage())
         icon.setContentHuggingPriority(.required, for: .horizontal)
-        let labels = NSStackView(views: [title])
-        labels.orientation = .vertical
-        labels.alignment = .leading
-        labels.spacing = 2
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // One line: icon and name, with status such as "Booted" on the trailing edge.
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        var views: [NSView] = [icon, title, spacer]
         if let detail = item.detail {
-            let subtitle = CockpitUI.label(detail, size: 11, color: .secondaryLabelColor)
-            subtitle.lineBreakMode = .byTruncatingTail
-            subtitle.maximumNumberOfLines = 1
-            labels.addArrangedSubview(subtitle)
+            let status = CockpitUI.label(detail, size: 11, weight: .medium, color: .secondaryLabelColor)
+            status.lineBreakMode = .byTruncatingTail
+            status.maximumNumberOfLines = 1
+            status.setContentHuggingPriority(.required, for: .horizontal)
+            views.append(status)
         }
-        let cell = CapturePickerRow(views: [icon, labels])
+        let cell = CapturePickerRow(views: views)
         cell.spacing = 10
         cell.alignment = .centerY
-        cell.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
+        cell.distribution = .fill
+        cell.edgeInsets = NSEdgeInsets(top: 6, left: 20, bottom: 6, right: 20)
         cell.toolTip = [item.title, item.detail].compactMap { $0 }.joined(separator: ", ")
         cell.setAccessibilityLabel(cell.toolTip)
         cell.setAccessibilityElement(true)
