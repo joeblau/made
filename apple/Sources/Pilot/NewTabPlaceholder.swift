@@ -1173,15 +1173,10 @@ private final class NewTabRowView: NSView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let fill: NSColor = if isHighlighted {
                 glass == nil ? NSColor.quaternaryLabelColor.withAlphaComponent(0.35) : .clear
-            } else if row?.serverIsLive != nil {
-                CockpitCardStyle.wellFill(for: effectiveAppearance)
             } else {
                 .clear
             }
             layer?.backgroundColor = fill.cgColor
-            let isWell = !isHighlighted && row?.serverIsLive != nil
-            layer?.borderWidth = isWell ? 1 : 0
-            layer?.borderColor = isWell ? CockpitCardStyle.wellEdge(for: effectiveAppearance).cgColor : nil
             serverIndicator.layer?.backgroundColor = (row?.serverIsLive == true ? NSColor.systemGreen : .tertiaryLabelColor).cgColor
         }
     }
