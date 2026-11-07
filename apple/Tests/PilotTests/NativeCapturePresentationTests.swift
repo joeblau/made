@@ -222,11 +222,13 @@ final class NativeCapturePresentationTests: XCTestCase {
         defer { window.orderOut(nil); window.contentViewController = nil }
         controller.view.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
-        // This test covers undo, not shape variety. CI's macOS 27.0.1 VM does
-        // not render an inserted rectangle within the deadline; ellipses insert
-        // reliably there (see the resize test).
-        controller.toolPicker.delegate?.markupToolbarViewController(controller.toolPicker, insertNewShape: .ellipse)
+        controller.toolPicker.delegate?.markupToolbarViewController(controller.toolPicker, insertNewShape: .rectangle)
         try await waitForAnnotation(in: controller)
+        // PaperKit inserts shapes only into the key window of an active app. Some
+        // CI runners start the test host inactive; skip only in that state.
+        if controller.markupController.markup?.contentsRenderFrame.isEmpty != false, !NSApp.isActive, !window.isKeyWindow {
+            throw XCTSkip("PaperKit shape insertion is unavailable: the test host is inactive with no key window.")
+        }
         XCTAssertFalse(try XCTUnwrap(controller.markupController.markup).contentsRenderFrame.isEmpty)
         XCTAssertTrue(controller.undoManager?.canUndo == true)
         let undo = try XCTUnwrap(buttons(in: controller.view).first { $0.toolTip == "Undo annotation" })

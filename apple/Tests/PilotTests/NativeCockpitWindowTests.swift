@@ -542,6 +542,12 @@ final class NativeCockpitWindowTests: XCTestCase {
             + "pane active: \(presentation.isActive), selected: \(presentation.isSelected); "
             + "window visible: \(window.isVisible), occlusion visible: \(window.occlusionState.contains(.visible)), "
             + "key: \(window.isKeyWindow), app active: \(NSApp.isActive); sheet: \(window.attachedSheet != nil)"
+        // Some CI runners start the test host inactive with no key window, where
+        // AppKit never delivers keyboard focus. Skip only in that state; anywhere
+        // the host is active or focus lands, the assertion below applies.
+        if !(window.firstResponder is NSTableView), !NSApp.isActive, !window.isKeyWindow {
+            throw XCTSkip("Keyboard focus is unavailable: the test host is inactive with no key window. \(diagnostics)")
+        }
         let list = try XCTUnwrap(window.firstResponder as? NSTableView, "Browser list should own focus; \(diagnostics)")
         XCTAssertEqual(list.accessibilityLabel(), "Local development servers")
         XCTAssertFalse(pane.browserState?.needsAddressFocus ?? true)
