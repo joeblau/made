@@ -8,6 +8,46 @@ import Testing
 @Suite("Mock-ups model")
 @MainActor
 struct MockupModelTests {
+    @Test("Backdrop colors default to Display P3; device finishes stay sRGB")
+    func backdropIsDisplayP3() {
+        #expect(MockupColor.palette.allSatisfy { $0.space == .displayP3 })
+        #expect(MockupGradient.presets.allSatisfy { $0.start.space == .displayP3 && $0.end.space == .displayP3 })
+        #expect(MockupDocument().background == .solid(MockupColor(hex: 0x7CF866, space: .displayP3)))
+        #expect(MockupColor(hex: 0x7CF866, space: .displayP3).nsColor.colorSpace == .displayP3)
+        #expect(MockupColor(hex: 0x7CF866).nsColor.colorSpace == .sRGB)
+    }
+
+    @Test("Each format shows the backdrop color and parses it back", arguments: MockupColorFormat.allCases)
+    func formatsRoundTrip(format: MockupColorFormat) throws {
+        let color = MockupColor(hex: 0x7CF866, space: .displayP3)
+        let text = format.string(for: color)
+        let parsed = try #require(format.color(from: text), "\(format.rawValue) couldn't parse \(text)")
+        #expect(parsed.space == .displayP3)
+        #expect(MockupColorFormat.hex.string(for: parsed) == "#7CF866" || format == .hsl || format == .hsv,
+                "\(format.rawValue) \(text) round-tripped to \(MockupColorFormat.hex.string(for: parsed))")
+        for channel in [parsed.red - color.red, parsed.green - color.green, parsed.blue - color.blue] {
+            #expect(abs(channel) < 0.01, "\(format.rawValue) drifted by \(channel)")
+        }
+    }
+
+    @Test("Formats render the expected text and reject malformed input")
+    func formatText() {
+        let color = MockupColor(hex: 0x7CF866, space: .displayP3)
+        #expect(MockupColorFormat.hex.string(for: color) == "#7CF866")
+        #expect(MockupColorFormat.rgb.string(for: color) == "124, 248, 102")
+        #expect(MockupColorFormat.hex.color(from: "#fff") == MockupColor(hex: 0xFFFFFF, space: .displayP3))
+        #expect(MockupColorFormat.rgb.color(from: "rgb(255, 0, 0)") == MockupColor(red: 1, green: 0, blue: 0))
+        #expect(MockupColorFormat.hex.color(from: "#12345") == nil)
+        #expect(MockupColorFormat.rgb.color(from: "300, 0, 0") == nil)
+        #expect(MockupColorFormat.hex.color(from: "#7CF866", space: .sRGB)?.space == .sRGB)
+        #expect(MockupColor.palette(in: .sRGB).allSatisfy { $0.space == .sRGB })
+        #expect(color.interpreted(in: .sRGB).nsColor.colorSpace == .sRGB && color.interpreted(in: .sRGB).red == color.red,
+                "Switching spaces keeps the values and changes the gamut")
+        #expect(!MockupColorFormat.allCases.map(\.rawValue).contains("Display P3"), "P3 is a separate setting, not a format")
+        #expect(MockupColorFormat.hsl.color(from: "120, 100") == nil)
+        #expect(MockupColorFormat.hex.color(from: String(repeating: "f", count: 100)) == nil)
+    }
+
     @Test("Aspect presets have unique ids and positive ratios")
     func presetsAreWellFormed() {
         let ids = MockupAspectRatio.presets.map(\.id)

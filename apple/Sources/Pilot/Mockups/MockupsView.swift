@@ -37,7 +37,16 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     private lazy var playButton = RRButton("", symbol: "pause.fill") { [weak self] in self?.document.isPlaying.toggle() }
     private let motionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let status = RRUI.label("", size: 11, color: .secondaryLabelColor)
-    private var lastSolid = MockupColor(hex: 0x7CF866)
+    private var lastSolid = MockupColor(hex: 0x7CF866, space: .displayP3)
+    private let colorFormatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let colorField = NSTextField()
+    private lazy var displayP3Toggle = NSButton(checkboxWithTitle: "Display P3", target: self, action: #selector(toggleDisplayP3))
+    private lazy var colorRow = RRUI.stack([
+        RRUI.stack([colorFormatPopup, colorField], axis: .horizontal),
+        displayP3Toggle,
+    ], spacing: 8)
+    private var colorFormat: MockupColorFormat = .hex
+    private var backdropSpace: MockupColor.Space = .displayP3
     private var lastGradient = MockupGradient.presets[0]
 
     init(defaults: UserDefaults = .standard) {
@@ -46,6 +55,15 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         if let kind = defaults.string(forKey: "mockups.kind").flatMap(MockupKind.init(rawValue:)) { document.kind = kind }
         if let aspect = defaults.string(forKey: "mockups.aspect").flatMap(MockupAspectRatio.preset(id:)) { document.aspect = aspect }
         if let device = defaults.string(forKey: "mockups.device").flatMap(MockupDevice.init(rawValue:)) { document.device = device }
+        if let format = defaults.string(forKey: MockupColorFormat.defaultsKey).flatMap(MockupColorFormat.init(rawValue:)) {
+            colorFormat = format
+        }
+        if defaults.object(forKey: MockupColorFormat.displayP3DefaultsKey) != nil,
+           !defaults.bool(forKey: MockupColorFormat.displayP3DefaultsKey) {
+            backdropSpace = .sRGB
+            lastSolid = lastSolid.interpreted(in: .sRGB)
+            if case .solid(let color) = document.background { document.background = .solid(color.interpreted(in: .sRGB)) }
+        }
     }
     required init?(coder: NSCoder) { nil }
 
@@ -158,6 +176,19 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         styleControl.action = #selector(changeStyle)
         styleControl.setAccessibilityLabel("Background style")
         swatches.onSelect = { [weak self] index in self?.selectSwatch(index) }
+        for format in MockupColorFormat.allCases { colorFormatPopup.addItem(withTitle: format.rawValue) }
+        colorFormatPopup.controlSize = .small
+        colorFormatPopup.target = self
+        colorFormatPopup.action = #selector(changeColorFormat)
+        colorFormatPopup.setAccessibilityLabel("Color format")
+        colorFormatPopup.setContentHuggingPriority(.required, for: .horizontal)
+        colorField.controlSize = .small
+        colorField.font = .monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        colorField.target = self
+        colorField.action = #selector(colorFieldCommitted)
+        colorField.setAccessibilityLabel("Backdrop color value")
+        displayP3Toggle.controlSize = .small
+        displayP3Toggle.toolTip = "Pick backdrop colors in the wide Display P3 gamut instead of sRGB"
         for slider in [rotation, scale, tiltX, tiltY, openSlider] {
             slider.target = self
             slider.action = #selector(slidersChanged)
@@ -173,6 +204,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             RRUI.label("Backdrop", size: 15, weight: .semibold),
             styleControl,
             swatches,
+            colorRow,
             chooseBackground,
             RRUI.label("Device", size: 15, weight: .semibold),
             Self.labeled("Turn", tiltY),
@@ -231,8 +263,9 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         styleControl.selectedSegment = MockupBackground.Style.allCases.firstIndex(of: style) ?? 0
         switch document.background {
         case .solid(let color):
-            swatches.items = MockupColor.palette.map { .solid($0.nsColor) }
-            swatches.selectedIndex = MockupColor.palette.firstIndex(of: color)
+            let palette = MockupColor.palette(in: backdropSpace)
+            swatches.items = palette.map { .solid($0.nsColor) }
+            swatches.selectedIndex = palette.firstIndex(of: color)
         case .gradient(let gradient):
             swatches.items = MockupGradient.presets.map { .gradient($0.start.nsColor, $0.end.nsColor, $0.angle) }
             swatches.selectedIndex = MockupGradient.presets.firstIndex(of: gradient)
@@ -240,6 +273,13 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             swatches.items = []
         }
         swatches.isHidden = swatches.items.isEmpty
+        colorRow.isHidden = style != .solid
+        colorFormatPopup.selectItem(withTitle: colorFormat.rawValue)
+        displayP3Toggle.state = backdropSpace == .displayP3 ? .on : .off
+        colorField.placeholderString = colorFormat.placeholder
+        if case .solid(let color) = document.background, colorField.currentEditor() == nil {
+            colorField.stringValue = colorFormat.string(for: color)
+        }
         chooseBackground.isHidden = style != .image
         rotation.doubleValue = document.rotation
         scale.doubleValue = document.scale
@@ -277,13 +317,42 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     private func selectSwatch(_ index: Int) {
         switch document.background {
         case .solid where MockupColor.palette.indices.contains(index):
-            lastSolid = MockupColor.palette[index]
+            lastSolid = MockupColor.palette(in: backdropSpace)[index]
             document.background = .solid(lastSolid)
         case .gradient where MockupGradient.presets.indices.contains(index):
             lastGradient = MockupGradient.presets[index]
             document.background = .gradient(lastGradient)
         default: break
         }
+    }
+
+    @objc private func changeColorFormat() {
+        guard let title = colorFormatPopup.titleOfSelectedItem, let format = MockupColorFormat(rawValue: title) else { return }
+        colorFormat = format
+        defaults.set(format.rawValue, forKey: MockupColorFormat.defaultsKey)
+        refreshControls()
+    }
+
+    /// Reinterprets the backdrop's values in the other space and remembers it.
+    @objc private func toggleDisplayP3() {
+        backdropSpace = displayP3Toggle.state == .on ? .displayP3 : .sRGB
+        defaults.set(backdropSpace == .displayP3, forKey: MockupColorFormat.displayP3DefaultsKey)
+        lastSolid = lastSolid.interpreted(in: backdropSpace)
+        if case .solid(let color) = document.background { document.background = .solid(color.interpreted(in: backdropSpace)) }
+        refreshControls()
+    }
+
+    /// Applies a typed value in the chosen format; invalid text reverts.
+    @objc private func colorFieldCommitted() {
+        guard case .solid(let current) = document.background else { return }
+        guard let color = colorFormat.color(from: colorField.stringValue, space: backdropSpace) else {
+            NSSound.beep()
+            colorField.stringValue = colorFormat.string(for: current)
+            return
+        }
+        lastSolid = color
+        document.background = .solid(color)
+        colorField.stringValue = colorFormat.string(for: color)
     }
 
     @objc private func slidersChanged() {

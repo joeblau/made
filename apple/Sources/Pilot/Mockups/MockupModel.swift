@@ -59,25 +59,44 @@ struct MockupAspectRatio: Hashable, Identifiable {
     }
 }
 
-/// sRGB color stored as components so documents stay value types.
+/// A color stored as components in its own space so documents stay value
+/// types. Backdrops default to Display P3; device finishes are sRGB paint.
 struct MockupColor: Hashable {
+    enum Space: Hashable { case sRGB, displayP3 }
+
     var red: CGFloat
     var green: CGFloat
     var blue: CGFloat
+    var space: Space
 
-    init(red: CGFloat, green: CGFloat, blue: CGFloat) {
-        self.red = red; self.green = green; self.blue = blue
+    init(red: CGFloat, green: CGFloat, blue: CGFloat, space: Space = .displayP3) {
+        self.red = red; self.green = green; self.blue = blue; self.space = space
     }
-    init(hex: UInt32) {
+    init(hex: UInt32, space: Space = .sRGB) {
         self.init(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
-                  blue: CGFloat(hex & 0xFF) / 255)
+                  blue: CGFloat(hex & 0xFF) / 255, space: space)
     }
-    init(hue: CGFloat, saturation: CGFloat, brightness: CGFloat) {
-        let color = NSColor(hue: hue, saturation: saturation, brightness: brightness, alpha: 1)
-        self.init(red: color.redComponent, green: color.greenComponent, blue: color.blueComponent)
+    /// HSV in the given space (P3 by default, so saturated hues use the wide gamut).
+    init(hue: CGFloat, saturation: CGFloat, brightness: CGFloat, space: Space = .displayP3) {
+        let (red, green, blue) = MockupColorFormat.rgb(hue: hue, saturation: saturation, value: brightness)
+        self.init(red: red, green: green, blue: blue, space: space)
     }
 
-    var nsColor: NSColor { NSColor(srgbRed: red, green: green, blue: blue, alpha: 1) }
+    var nsColor: NSColor {
+        switch space {
+        case .sRGB: NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+        case .displayP3: NSColor(displayP3Red: red, green: green, blue: blue, alpha: 1)
+        }
+    }
+
+    /// The same component values interpreted in another space: `#7CF866`
+    /// stays `#7CF866` but renders in that gamut.
+    func interpreted(in space: Space) -> MockupColor {
+        MockupColor(red: red, green: green, blue: blue, space: space)
+    }
+
+    /// The swatch grid in the chosen backdrop space.
+    static func palette(in space: Space) -> [MockupColor] { palette.map { $0.interpreted(in: space) } }
 
     /// PostSpark-style swatch grid: pastels, neutrals, then saturated hues.
     static let palette: [MockupColor] = {
@@ -105,14 +124,14 @@ struct MockupGradient: Hashable {
     var angle: CGFloat
 
     static let presets: [MockupGradient] = [
-        .init(start: .init(hex: 0x1E1B4B), end: .init(hex: 0x7C3AED), angle: 120),
-        .init(start: .init(hex: 0xF97316), end: .init(hex: 0xDB2777), angle: 45),
-        .init(start: .init(hex: 0x0EA5E9), end: .init(hex: 0x22C55E), angle: 135),
-        .init(start: .init(hex: 0x111827), end: .init(hex: 0x4B5563), angle: 90),
-        .init(start: .init(hex: 0xFDE68A), end: .init(hex: 0xF472B6), angle: 60),
-        .init(start: .init(hex: 0x2563EB), end: .init(hex: 0x06B6D4), angle: 30),
-        .init(start: .init(hex: 0x14532D), end: .init(hex: 0x84CC16), angle: 100),
-        .init(start: .init(hex: 0x0F172A), end: .init(hex: 0x1D4ED8), angle: 160),
+        .init(start: .init(hex: 0x1E1B4B, space: .displayP3), end: .init(hex: 0x7C3AED, space: .displayP3), angle: 120),
+        .init(start: .init(hex: 0xF97316, space: .displayP3), end: .init(hex: 0xDB2777, space: .displayP3), angle: 45),
+        .init(start: .init(hex: 0x0EA5E9, space: .displayP3), end: .init(hex: 0x22C55E, space: .displayP3), angle: 135),
+        .init(start: .init(hex: 0x111827, space: .displayP3), end: .init(hex: 0x4B5563, space: .displayP3), angle: 90),
+        .init(start: .init(hex: 0xFDE68A, space: .displayP3), end: .init(hex: 0xF472B6, space: .displayP3), angle: 60),
+        .init(start: .init(hex: 0x2563EB, space: .displayP3), end: .init(hex: 0x06B6D4, space: .displayP3), angle: 30),
+        .init(start: .init(hex: 0x14532D, space: .displayP3), end: .init(hex: 0x84CC16, space: .displayP3), angle: 100),
+        .init(start: .init(hex: 0x0F172A, space: .displayP3), end: .init(hex: 0x1D4ED8, space: .displayP3), angle: 160),
     ]
 }
 
@@ -276,7 +295,7 @@ enum MockupDevice: String, CaseIterable, Identifiable {
 final class MockupDocument {
     var kind: MockupKind = .photo
     var aspect: MockupAspectRatio = .default
-    var background: MockupBackground = .solid(MockupColor(hex: 0x7CF866))
+    var background: MockupBackground = .solid(MockupColor(hex: 0x7CF866, space: .displayP3))
     var device: MockupDevice = .iPhone18Pro { didSet { if oldValue != device { finishIndex = 0 } } }
     /// Static framing the motion presets play around (radians).
     var tiltX: CGFloat = 0
@@ -301,5 +320,113 @@ final class MockupDocument {
     var basePose: MockupPose {
         MockupPose(yaw: Double(tiltY), pitch: Double(tiltX), roll: Double(rotation * .pi / 180),
                    scale: Double(scale / 0.82), open: Double(openAmount))
+    }
+}
+
+/// How the backdrop color is shown and typed. Values are the color's own
+/// components in the backdrop space (the separate Display P3 setting).
+enum MockupColorFormat: String, CaseIterable {
+    case hex = "HEX", rgb = "RGB", hsl = "HSL", hsv = "HSV"
+
+    static let defaultsKey = "mockups.colorFormat"
+    /// Backdrop colors use Display P3 unless this is set to false.
+    static let displayP3DefaultsKey = "mockups.displayP3"
+
+    var placeholder: String {
+        switch self {
+        case .hex: "#7CF866"
+        case .rgb: "124, 248, 102"
+        case .hsl: "111°, 91%, 69%"
+        case .hsv: "111°, 59%, 97%"
+        }
+    }
+
+    func string(for color: MockupColor) -> String {
+        let byte = { (value: CGFloat) in Int((min(max(value, 0), 1) * 255).rounded()) }
+        switch self {
+        case .hex:
+            return String(format: "#%02X%02X%02X", byte(color.red), byte(color.green), byte(color.blue))
+        case .rgb:
+            return "\(byte(color.red)), \(byte(color.green)), \(byte(color.blue))"
+        case .hsl:
+            let (hue, saturation, lightness) = Self.hsl(color)
+            return "\(Int((hue * 360).rounded()) % 360)°, \(Int((saturation * 100).rounded()))%, \(Int((lightness * 100).rounded()))%"
+        case .hsv:
+            let (hue, saturation, value) = Self.hsv(color)
+            return "\(Int((hue * 360).rounded()) % 360)°, \(Int((saturation * 100).rounded()))%, \(Int((value * 100).rounded()))%"
+        }
+    }
+
+    /// Parses typed text into a color in `space`; nil when it doesn't fit the format.
+    func color(from text: String, space: MockupColor.Space = .displayP3) -> MockupColor? {
+        parse(text)?.interpreted(in: space)
+    }
+
+    private func parse(_ text: String) -> MockupColor? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.utf8.count <= 64 else { return nil }
+        if self == .hex {
+            var digits = trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed
+            if digits.count == 3 { digits = digits.map { "\($0)\($0)" }.joined() }
+            guard digits.count == 6, let value = UInt32(digits, radix: 16) else { return nil }
+            return MockupColor(hex: value, space: .displayP3)
+        }
+        let numbers = trimmed.components(separatedBy: CharacterSet(charactersIn: "0123456789.").inverted)
+            .filter { !$0.isEmpty }.compactMap(Double.init).map { CGFloat($0) }
+        guard numbers.count == 3 else { return nil }
+        let (a, b, c) = (numbers[0], numbers[1], numbers[2])
+        switch self {
+        case .hex: return nil
+        case .rgb:
+            guard [a, b, c].allSatisfy({ $0 <= 255 }) else { return nil }
+            return MockupColor(red: a / 255, green: b / 255, blue: c / 255)
+        case .hsl, .hsv:
+            guard a <= 360, b <= 100, c <= 100 else { return nil }
+            let hue = a.truncatingRemainder(dividingBy: 360) / 360
+            if self == .hsv { return MockupColor(hue: hue, saturation: b / 100, brightness: c / 100) }
+            let lightness = c / 100, saturation = b / 100
+            let value = lightness + saturation * min(lightness, 1 - lightness)
+            return MockupColor(hue: hue, saturation: value == 0 ? 0 : 2 * (1 - lightness / value), brightness: value)
+        }
+    }
+
+    static func rgb(hue: CGFloat, saturation: CGFloat, value: CGFloat) -> (CGFloat, CGFloat, CGFloat) {
+        let h = (hue - floor(hue)) * 6, chroma = value * saturation
+        let x = chroma * (1 - abs(h.truncatingRemainder(dividingBy: 2) - 1)), m = value - chroma
+        let (r, g, b): (CGFloat, CGFloat, CGFloat) = switch Int(h) {
+        case 0: (chroma, x, 0)
+        case 1: (x, chroma, 0)
+        case 2: (0, chroma, x)
+        case 3: (0, x, chroma)
+        case 4: (x, 0, chroma)
+        default: (chroma, 0, x)
+        }
+        return (r + m, g + m, b + m)
+    }
+
+    static func hsv(_ color: MockupColor) -> (CGFloat, CGFloat, CGFloat) {
+        let maximum = max(color.red, color.green, color.blue), minimum = min(color.red, color.green, color.blue)
+        let delta = maximum - minimum
+        return (hue(color, maximum: maximum, delta: delta), maximum == 0 ? 0 : delta / maximum, maximum)
+    }
+
+    static func hsl(_ color: MockupColor) -> (CGFloat, CGFloat, CGFloat) {
+        let maximum = max(color.red, color.green, color.blue), minimum = min(color.red, color.green, color.blue)
+        let delta = maximum - minimum, lightness = (maximum + minimum) / 2
+        let saturation = delta == 0 ? 0 : delta / (1 - abs(2 * lightness - 1))
+        return (hue(color, maximum: maximum, delta: delta), saturation, lightness)
+    }
+
+    private static func hue(_ color: MockupColor, maximum: CGFloat, delta: CGFloat) -> CGFloat {
+        guard delta > 0 else { return 0 }
+        let hue: CGFloat = if maximum == color.red {
+            ((color.green - color.blue) / delta).truncatingRemainder(dividingBy: 6)
+        } else if maximum == color.green {
+            (color.blue - color.red) / delta + 2
+        } else {
+            (color.red - color.green) / delta + 4
+        }
+        let normalized = hue / 6
+        return normalized < 0 ? normalized + 1 : normalized
     }
 }
