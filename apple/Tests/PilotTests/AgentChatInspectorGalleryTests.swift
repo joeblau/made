@@ -480,6 +480,28 @@ struct AgentChatInspectorGalleryTests {
         #expect(trace["items"]?.arrayValue?.first?["text"] == "why ••••")
     }
 
+    @Test("An agent's nested card opens when it fits half the drawer and otherwise collapses instead of clipping")
+    func nestedAgentCardNeverClips() {
+        let (inspector, _) = makeInspector()
+        let steps = (0..<15).map { index -> AgentActivityMember in
+            .step(AgentChatItem(id: "tool-\(index)", content: .tool(.init(title: "Read file\(index).swift", kind: .read, status: .completed,
+                                                                          content: "", toolCallID: "\(index)")), sessionKey: "child-1"))
+        }
+        let group = AgentActivityGroup(id: "activity-child-1/tool-0", members: steps, state: .settled, stepCount: 15)
+        let card = AgentChatItem(id: "subagent-child-1", content: .subagent(.init(childSessionID: "child-1", title: "Research", detail: nil, state: "idle", error: nil)))
+        let content = AgentInspectorContent(subject: .agent(childSessionID: "child-1"), title: "Research", agentName: "Claude",
+                                            item: card, group: group, finalProse: "Done.")
+        for (height, expands) in [(CGFloat(1_000), true), (CGFloat(300), false)] {
+            inspector.view.frame = NSRect(x: 0, y: 0, width: 360, height: height)
+            inspector.present(content, tab: nil)
+            inspector.view.layoutSubtreeIfNeeded()
+            #expect(inspector.nestedCard.presentation?.expanded == expands)
+            let needed = ActivityCardView.height(group: group, expandedOverride: expands, showAll: false, width: inspector.nestedCard.frame.width)
+            #expect(inspector.nestedCard.frame.height >= needed - 0.5, "The nested card is never clipped at \(height) pt")
+            inspector.dismiss()
+        }
+    }
+
     @Test("The resize handle widens and narrows within bounds for VoiceOver")
     func resizeHandleAccessibility() {
         let host = NSView(frame: NSRect(x: 0, y: 0, width: 900, height: 500))

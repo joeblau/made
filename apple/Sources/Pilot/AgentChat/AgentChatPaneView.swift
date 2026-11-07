@@ -183,6 +183,9 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         timeline.now = { [weak self] in self?.session.now() ?? Date() }
         timeline.onStateChange = { [weak self] in self?.scheduleRefresh() }
         timeline.onSelect = { [weak self] in self?.onSelect?() }
+        // Read live: a stored transcript snapshot would force a full copy on
+        // the session's next mutation.
+        timeline.stepInput = { [weak self] in self?.session.transcript.stepDetails[$0]?.rawInput?.value }
         timeline.observeScrolling(transcriptScroll)
         table.onKey = { [weak self] key in self?.handleTableKey(key) ?? false }
         transcriptScroll.documentView = table
@@ -502,7 +505,6 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         }
         var rows = project()
         if timeline.acknowledgeSettles(in: rows) { rows = project() }
-        timeline.stepInput = { transcript.stepDetails[$0]?.rawInput?.value }
         if session.isTurnRunning, case .prose(let item)? = rows.last { timeline.streamingKey = item.key } else { timeline.streamingKey = nil }
         timeline.sendAgainNoticeKey = session.canSendAgain ? session.sendAgainNoticeKey : nil
         timeline.applyRows(rows, now: now)

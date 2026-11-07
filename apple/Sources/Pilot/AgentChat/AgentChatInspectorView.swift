@@ -588,7 +588,7 @@ final class AgentInspectorViewController: NSViewController, NSMenuDelegate {
         var group: AgentActivityGroup?
         if case .agent = content.subject, selectedTab == .output { group = content.group }
         nestedCard.isHidden = group == nil
-        if let group { nestedCard.configure(group: group, expandedOverride: true, showAll: false, now: now(), actions: actions) }
+        if let group { nestedCard.configure(group: group, expandedOverride: nestedExpands(group), showAll: false, now: now(), actions: actions) }
         generation += 1
         let (token, tab, showAll, date, policy) = (generation, selectedTab, showsAll, now(), redactor)
         let key = "\(content.subject)|\(tab)|\(showAll)"
@@ -788,12 +788,17 @@ final class AgentInspectorViewController: NSViewController, NSMenuDelegate {
         }
         if !chips.isEmpty { y += rowHeight + 8 }
         if !nestedCard.isHidden, let group = content?.group {
-            let height = min(ActivityCardView.height(group: group, expandedOverride: true, showAll: false, width: width), bounds.height / 2)
+            let expands = nestedExpands(group)
+            if nestedCard.presentation?.expanded != expands { nestedCard.configure(group: group, expandedOverride: expands, showAll: false, now: now(), actions: actions) }
+            let height = min(ActivityCardView.height(group: group, expandedOverride: expands, showAll: false, width: width), bounds.height / 2)
             nestedCard.frame = NSRect(x: left, y: y, width: width, height: height)
             y = nestedCard.frame.maxY + 8
         }
         scrollView.frame = NSRect(x: left - 4, y: y, width: width + 4, height: max(0, bounds.height - y - inset))
     }
+    /// The agent's nested card opens only when it fits half the drawer; otherwise it shows its one-line receipt, never clipped.
+    private func nestedExpands(_ group: AgentActivityGroup) -> Bool { view.bounds.height <= 0 || ActivityCardView.height(group: group, expandedOverride: true,
+        showAll: false, width: max(0, view.bounds.width - AgentInspectorResizeHandle.width - 18)) <= view.bounds.height / 2 }
     /// Tab cycles only among the drawer's controls while it is open.
     func cycleFocus(backward: Bool) {
         guard let window = view.window else { return }
