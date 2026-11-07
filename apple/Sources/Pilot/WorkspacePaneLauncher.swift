@@ -53,7 +53,7 @@ extension Pane {
 final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
     var workspace: Workspace? { didSet { refreshToolbar() } }
     var onCreate: (() -> Void)?
-    private weak var toolbarGroup: NSToolbarItemGroup?
+    private weak var toolbarItem: NSToolbarItem?
 
     private enum Slot: String, CaseIterable {
         case terminal, browser, simulator, device, editor, finder
@@ -86,44 +86,28 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
         super.init()
     }
 
-    /// AppKit owns the shared glass capsule, symbol sizing and overflow menu.
-    func makeToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItemGroup {
-        let group = NSToolbarItemGroup(itemIdentifier: identifier)
-        group.label = "New Pane"
-        group.controlRepresentation = .expanded
-        group.selectionMode = .momentary
-        group.isBordered = true
-        group.autovalidates = false
-        group.subitems = Slot.allCases.map { slot in
-            let itemID = NSToolbarItem.Identifier("workspace.launcher.\(slot.rawValue)")
-            let item = NSToolbarItem(itemIdentifier: itemID)
-            item.target = self
-            item.action = switch slot {
-            case .terminal: #selector(openTerminal(_:))
-            case .browser: #selector(openBrowser(_:))
-            case .simulator: #selector(openSimulator(_:))
-            case .device: #selector(openDevice(_:))
-            case .editor: #selector(openEditor(_:))
-            case .finder: #selector(openFinder(_:))
-            }
-            item.label = slot.title
-            item.toolTip = slot.title
-            item.image = NSImage(systemSymbolName: slot.symbol, accessibilityDescription: slot.title)
-            item.isBordered = true
-            item.autovalidates = false
-            return item
-        }
-        toolbarGroup = group
+    /// The toolbar's single entry point: one button that opens the New Tab
+    /// selector, where every pane kind (terminal, browser, simulator,
+    /// device, editor, Finder) is chosen. Same as File > New Tab (⌘T).
+    static let toolbarSymbol = "plus.square.on.square"
+
+    func makeToolbarItem(identifier: NSToolbarItem.Identifier) -> NSToolbarItem {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = "New Tab"
+        item.paletteLabel = "New Tab"
+        item.toolTip = "New Tab (⌘T)"
+        item.image = NSImage(systemSymbolName: Self.toolbarSymbol, accessibilityDescription: "New Tab")
+        item.target = self
+        item.action = #selector(openTabSelector(_:))
+        item.isBordered = true
+        item.autovalidates = false
+        toolbarItem = item
         refreshToolbar()
-        return group
+        return item
     }
 
     private func refreshToolbar() {
-        guard let toolbarGroup else { return }
-        toolbarGroup.isEnabled = workspace != nil
-        for (slot, item) in zip(Slot.allCases, toolbarGroup.subitems) {
-            item.isEnabled = workspace != nil && (!slot.requiresRoot || workspace?.effectiveRootPath != nil)
-        }
+        toolbarItem?.isEnabled = workspace != nil
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -132,33 +116,11 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
         for item in entries(for: slot, workspace: workspace, side: .right) { menu.addItem(item) }
     }
 
-    /// Opens a new-tab placeholder already pushed to the toolbar category.
-    /// Escape returns to the full New Tab list.
-    private func openPlaceholder(_ kind: PaneKind, page: NewTabPage) {
+    /// Opens a new pane on the New Tab selector's root list.
+    @objc func openTabSelector(_ sender: Any?) {
         guard let workspace else { return }
-        let pane = workspace.addPane(kind: kind, side: .right, chooseModeOnOpen: true)
-        pane.openingPath = [.root, page]
+        workspace.addPane(kind: .terminal, side: .right, chooseModeOnOpen: true)
         onCreate?()
-    }
-
-    @objc private func openTerminal(_ sender: Any?) { openPlaceholder(.terminal, page: .terminal) }
-    @objc private func openBrowser(_ sender: Any?) {
-        guard let workspace else { return }
-        workspace.addBrowserPane(side: .right)
-        onCreate?()
-    }
-    @objc private func openSimulator(_ sender: Any?) { openPlaceholder(.simulator, page: .simulator) }
-    @objc private func openDevice(_ sender: Any?) { openPlaceholder(.device, page: .device) }
-
-    @objc private func openEditor(_ sender: Any?) {
-        guard let workspace, workspace.effectiveRootPath != nil else { return }
-        workspace.addPane(kind: .editor, side: .right)
-        onCreate?()
-    }
-
-    @objc private func openFinder(_ sender: Any?) {
-        guard let path = workspace?.effectiveRootPath else { return }
-        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
     func makeMenu(side: Workspace.Side = .right) -> NSMenu {
