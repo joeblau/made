@@ -700,6 +700,10 @@ final class NativeCockpitWindowTests: XCTestCase {
         content.layoutSubtreeIfNeeded()
         XCTAssertGreaterThan(results.numberOfRows, 0)
         XCTAssertGreaterThan(content.bounds.height, compactHeight)
+        // Typing pauses fire the search field's action; that must only filter.
+        _ = search.sendAction(search.action, to: search.target)
+        XCTAssertTrue(created.isEmpty, "Typing a query must not create a workspace")
+        XCTAssertNotNil(sheet.window?.sheetParent, "The sheet stays open while searching")
         try capture(content, "new-workspace-results")
         CockpitUIZoomController.shared.factor = 2
         let expandedDeadline = ContinuousClock.now.advanced(by: .seconds(1))

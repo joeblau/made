@@ -46,8 +46,10 @@ final class NewWorkspaceSheet: NSWindowController, NSSearchFieldDelegate, NSTabl
         search.controlSize = .large
         search.delegate = self
         search.setAccessibilityLabel("Search workspace folders")
-        search.target = self
-        search.action = #selector(create)
+        // NSSearchField sends its action incrementally while typing. Wiring it
+        // to Create made a pause mid-query create the first match. Typing only
+        // filters; Return (handled in doCommandBy) confirms the highlighted row.
+        search.sendsWholeSearchString = true
         let fieldLabel = CockpitUI.label("Starting folder", role: .caption)
         let searchGroup = shellStack([fieldLabel, search], spacing: 6)
         search.widthAnchor.constraint(equalTo: searchGroup.widthAnchor).isActive = true
@@ -213,6 +215,7 @@ final class NewWorkspaceSheet: NSWindowController, NSSearchFieldDelegate, NSTabl
         if commandSelector == #selector(NSResponder.moveDown(_:)) { moveSelection(1); return true }
         if commandSelector == #selector(NSResponder.moveUp(_:)) { moveSelection(-1); return true }
         if commandSelector == #selector(NSResponder.cancelOperation(_:)) { finish(create: false); return true }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) { finish(create: true); return true }
         return false
     }
 
