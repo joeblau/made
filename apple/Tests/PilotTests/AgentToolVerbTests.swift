@@ -116,6 +116,28 @@ struct AgentToolVerbTests {
     }
 
     @Test
+    func secretFileContentIsMaskedInTheExactInput() throws {
+        let input: JSONValue = ["file_path": "/repo/.env", "content": "DB_PASS=hunter2\nPGPASSWORD=s3cr3t\nSECRET_KEY_BASE=abc"]
+        let write = verb("Write", input)
+        let exact = try #require(write.exactInput)
+        #expect(exact.contains("/repo/.env"))
+        #expect(exact.contains("content: ••••"))
+        for secret in ["hunter2", "s3cr3t", "abc"] { #expect(!exact.contains(secret), "\(secret)") }
+        let edit = verb("Edit", ["file_path": "/u/.ssh/id_rsa", "old_string": "a", "new_string": "PRIVATE-BODY"])
+        #expect(edit.exactInput?.contains("PRIVATE-BODY") == false)
+        #expect(verb("Write", ["file_path": "/repo/a.txt", "content": "hello"]).exactInput?.contains("hello") == true)
+    }
+
+    @Test
+    func approvalsDescribeTheRequestWithoutClaimingItRuns() {
+        #expect(ApprovalCardView.requestPhrase(verb("Bash", ["command": "git push origin main"])) == "Run git push origin main")
+        #expect(ApprovalCardView.requestPhrase(verb("Read", ["file_path": "/a/b.swift"])) == "Read b.swift")
+        #expect(ApprovalCardView.requestPhrase(verb("Edit", ["file_path": "/a/b.swift"])) == "Edit b.swift")
+        let unknown = verb(title: "Frobnicate widgets")
+        #expect(ApprovalCardView.requestPhrase(unknown) == unknown.live)
+    }
+
+    @Test
     func exactInputIsBoundedAndRedactedBeforeTheCut() throws {
         let secret = "sk-ant-api03-" + String(repeating: "q7", count: 20)
         let longCommand = "export ANTHROPIC_API_KEY=\(secret) && " + String(repeating: "x", count: 100_000) + " " + secret

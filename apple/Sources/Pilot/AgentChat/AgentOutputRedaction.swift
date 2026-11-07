@@ -57,8 +57,34 @@ func redactFileContent(path: String, text: String, maximumLines: Int? = 200) -> 
 func isSecretLikePath(_ path: String) -> Bool {
     let name = (path as NSString).lastPathComponent.lowercased()
     guard !name.isEmpty else { return false }
-    if name.hasPrefix(".env") || name.hasSuffix(".pem") || name == ".netrc" || name == ".npmrc" { return true }
+    if name.hasPrefix(".env") || name.hasSuffix(".pem") || [".netrc", ".npmrc", ".pgpass", ".git-credentials"].contains(name) {
+        return true
+    }
+    if name == "config.json", (path as NSString).deletingLastPathComponent.lowercased().hasSuffix(".docker") { return true }
     return name.hasPrefix("id_rsa") || name.hasPrefix("id_ed25519") || name.hasPrefix("credentials")
+}
+
+/// True when a step reads or writes a file whose whole content is masked:
+/// any location, edit, subject, diff, or `*path*` input field names one.
+func agentStepTouchesSecretFile(_ tool: AgentChatItem.ToolCall, input: JSONValue?, blocks: [ACPToolContent] = [],
+                                secretPath: (String) -> Bool = isSecretLikePath) -> Bool {
+    var paths = tool.locations.prefix(64).map(\.path) + tool.edits.prefix(64).map(\.path) + [tool.subject].compactMap { $0 }
+    for case .diff(let path, _, _) in blocks.prefix(64) { paths.append(path) }
+    if case .object(let object)? = input {
+        paths += object.compactMap { key, value in key.lowercased().contains("path") ? value.stringValue : nil }
+    }
+    return paths.contains(where: secretPath)
+}
+
+/// Masks every string in a secret file's payload except path fields, so the
+/// file content never reaches a sink.
+func maskSecretFileContent(_ value: JSONValue, key: String = "") -> JSONValue {
+    switch value {
+    case .string(let text): key.lowercased().contains("path") || text.isEmpty ? value : .string(AgentRedactionPolicy.maskText)
+    case .array(let list): .array(list.map { maskSecretFileContent($0, key: key) })
+    case .object(let object): .object(Dictionary(uniqueKeysWithValues: object.map { ($0, maskSecretFileContent($1, key: $0)) }))
+    case .null, .bool, .number: value
+    }
 }
 
 /// Redacts off the main actor when `text` exceeds
@@ -170,11 +196,16 @@ enum AgentRedactionPolicy {
         return Rule(name: name, regex: regex, replacement: replacement, hints: hints)
     }
 
-    /// Key names whose values are secret: the listed names plus any
-    /// `*_KEY`, `*_SECRET`, `*_TOKEN`, `*_PASSWORD` (also `-` or `.` joined).
+    /// Key names whose values are secret: any name ending in a secret word,
+    /// joined by `_`, `-`, `.` or nothing (`accessToken`, `PGPASSWORD`); a
+    /// `secret` segment anywhere (`SECRET_KEY_BASE`); `*_KEY`, `*_PASS`,
+    /// `*_PWD` behind a separator; qualified keys (`privateKey`); and `auth`.
     static let secretKeyPattern =
-        #"(?:[A-Za-z0-9]{1,64}[_.-]){0,8}(?:password|passwd|secret|token|apikey|authorization|cookie)"#
-        + #"|(?:[A-Za-z0-9]{1,64}[_.-]){1,8}key"#
+        #"(?:[A-Za-z0-9]{1,64}[_.-]){0,8}[A-Za-z0-9]{0,64}(?:password|passwd|secret|token|apikey|authorization|cookie)"#
+        + #"|(?:[A-Za-z0-9]{1,64}[_.-]){0,8}[A-Za-z0-9]{0,64}secret(?:[_.-][A-Za-z0-9]{1,64}){1,4}"#
+        + #"|(?:[A-Za-z0-9]{1,64}[_.-]){1,8}(?:key|pass|pwd)"#
+        + #"|(?:[A-Za-z0-9]{1,64}[_.-]){0,8}[A-Za-z0-9]{0,64}(?:private|access|secret|signing|encryption|master|client)key"#
+        + #"|auth"#
 
     private static let secretKeyRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
@@ -244,23 +275,32 @@ enum AgentRedactionPolicy {
         .keyedValue, caseInsensitive: true, hints: keyHints
     )
 
-    private static let keyHints = ["pass", "secret", "token", "key", "authorization", "cookie"]
+    private static let keyHints = ["pass", "pwd", "secret", "token", "key", "auth", "cookie"]
 
-    static let allRules: [Rule] = [authorizationHeader, cookieHeader, bearerToken, urlCredentials] + prefixedTokens
-        + [keyedValue, cliFlagValue]
+    static let allRules: [Rule] = [authorizationHeader, cookieHeader, bearerToken, urlCredentials, puttyPrivateLines]
+        + prefixedTokens + [keyedValue, cliFlagValue]
     /// Prose keeps sentences like "Set the cookie: …" intact, so the cookie
     /// header rule and keyed values are left out.
-    static let proseRules: [Rule] = [authorizationHeader, bearerToken, urlCredentials] + prefixedTokens
+    static let proseRules: [Rule] = [authorizationHeader, bearerToken, urlCredentials, puttyPrivateLines] + prefixedTokens
 
+    /// PEM and PGP armor (`-----BEGIN PGP PRIVATE KEY BLOCK-----`).
     private static let pemBegin: NSRegularExpression = {
         // swiftlint:disable:next force_try
-        try! NSRegularExpression(pattern: #"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----"#)
+        try! NSRegularExpression(pattern: #"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----"#)
     }()
 
     private static let pemEnd: NSRegularExpression = {
         // swiftlint:disable:next force_try
-        try! NSRegularExpression(pattern: #"-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----"#)
+        try! NSRegularExpression(pattern: #"-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----"#)
     }()
+
+    /// A PuTTY key file's private section: the count line stays, the
+    /// base64 lines after it are masked.
+    static let puttyPrivateLines = rule(
+        "putty-private",
+        #"(Private-Lines:[ \t]{0,8}[0-9]{1,4}\r?\n)[A-Za-z0-9+/=]{1,128}(?=\r?\n|$)(?:\r?\n[A-Za-z0-9+/=]{1,128}(?=\r?\n|$)){0,511}"#,
+        .keepFirstGroup, hints: ["private-lines"]
+    )
 
     // MARK: Masking
 
@@ -268,7 +308,7 @@ enum AgentRedactionPolicy {
         guard !text.isEmpty else { return (text, false) }
         var current = text
         var redacted = false
-        if current.contains("-----BEGIN") {
+        if current.contains("-----BEGIN") || current.contains("-----END") {
             let pem = maskPEM(current)
             current = pem.text
             redacted = redacted || pem.redacted
@@ -285,12 +325,20 @@ enum AgentRedactionPolicy {
     }
 
     /// Keeps the BEGIN/END armor and masks the body; an unterminated BEGIN
-    /// masks through the end of the text.
+    /// masks through the end of the text, and an END with no BEGIN before
+    /// it (a tail cut inside a key) masks everything before it.
     private static func maskPEM(_ text: String) -> (text: String, redacted: Bool) {
         let source = text as NSString
         let output = NSMutableString()
         var cursor = 0
         var redacted = false
+        if let end = pemEnd.firstMatch(in: text, range: NSRange(location: 0, length: source.length)),
+           pemBegin.firstMatch(in: text, range: NSRange(location: 0, length: end.range.location)) == nil {
+            output.append("\(maskText)\n")
+            output.append(source.substring(with: end.range))
+            cursor = end.range.upperBound
+            redacted = true
+        }
         while cursor < source.length,
               let begin = pemBegin.firstMatch(in: text, range: NSRange(location: cursor, length: source.length - cursor)) {
             redacted = true

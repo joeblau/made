@@ -477,6 +477,29 @@ struct AgentChatInspectorGalleryTests {
         inspector.present(step, tab: .meta)
         #expect(!inspector.textView.string.contains("reported by") && !inspector.textView.string.contains("Context"))
         #expect(AgentInspectorFormatter.contextMeter(step.context!, usage: step.turnUsage) == "58.1k / 258.4k · Cache 33% · \(0.42.formatted(.currency(code: "USD")))")
+        // Usage lives on the run, which every other subject opens from its Actions menu.
+        var opened: [(AgentInspectorSubject, AgentInspectorTab?)] = []
+        inspector.actions.openInspector = { opened.append(($0, $1)) }
+        #expect(inspector.availableActions.contains(.showRun))
+        inspector.perform(.showRun)
+        #expect(opened.count == 1 && opened.first?.0 == .run && opened.first?.1 == .meta)
+        var agentUsage = agent(error: nil)
+        agentUsage.context = step.context
+        inspector.present(agentUsage, tab: .meta)
+        #expect(!inspector.textView.string.contains("Context"), "No per-subagent usage is claimed")
+    }
+
+    @Test("A request touching a secret file shows its content masked, the raw input only behind Reveal secrets")
+    func secretFileApprovalIsMasked() {
+        let approval = AgentChatItem.Approval(requestID: 7, sessionID: "s", agentName: "Claude", toolCallID: nil, title: "Write /repo/.env",
+                                              kind: .edit, subject: "/repo/.env", options: [], decision: .pending)
+        let raw = #"{"content": "DB_PASS=hunter2", "file_path": "/repo/.env"}"#
+        let masked = #"{"content": "••••", "file_path": "/repo/.env"}"#
+        let verb = AgentToolVerb(glyph: .edit, live: "Editing .env", settled: "Edited .env", exactInput: nil)
+        let content = ApprovalCardView.content(approval: approval, verb: verb, moreCount: 0, unredactedInput: raw, maskedInput: masked)
+        #expect(content.maskedInput == masked && !content.maskedInput.contains("hunter2"))
+        #expect(content.revealedInput == raw)
+        #expect(content.verbLine == "Edit .env", "A pending request never reads as already running")
     }
 
     @Test("Run-trace export builds from a snapshot off the main actor and never writes an empty trace")

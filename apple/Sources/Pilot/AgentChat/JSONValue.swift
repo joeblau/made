@@ -291,6 +291,18 @@ extension String {
         return String(self[start...])
     }
 
+    /// `utf8Suffix`, and when that cut text, without the partial first line
+    /// (or, in one long line, the partial first word): a secret cut in half
+    /// loses the key, prefix, or armor its redaction rule needs, so its
+    /// remainder is dropped rather than shown.
+    func utf8SuffixAtLineBoundary(_ maximumBytes: Int) -> String {
+        let tail = utf8Suffix(maximumBytes)
+        guard tail.utf8.count < utf8.count else { return tail }
+        if let newline = tail.firstIndex(where: \.isNewline) { return String(tail[tail.index(after: newline)...]) }
+        if let space = tail.firstIndex(where: \.isWhitespace) { return String(tail[tail.index(after: space)...]) }
+        return tail
+    }
+
     /// Nil when empty; otherwise at most `maximumBytes` UTF-8 bytes.
     func boundedNonEmpty(_ maximumBytes: Int) -> String? {
         isEmpty ? nil : utf8Prefix(maximumBytes)
@@ -360,7 +372,7 @@ extension AgentTranscript {
             return
         }
         let marker = terminalTruncationMarker
-        let tail = (output + delta).utf8Suffix(cap * 3 / 4 - marker.utf8.count)
+        let tail = (output + delta).utf8SuffixAtLineBoundary(cap * 3 / 4 - marker.utf8.count)
         output = marker + tail
     }
 

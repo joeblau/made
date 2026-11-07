@@ -186,6 +186,9 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         // Read live: a stored transcript snapshot would force a full copy on
         // the session's next mutation.
         timeline.stepInput = { [weak self] in self?.session.transcript.stepDetails[$0]?.rawInput?.value }
+        timeline.approvalVerb = { [weak self] approval in
+            self.flatMap { AgentChatPaneContent.recordVerb(for: approval, in: $0.session.transcript) }
+        }
         timeline.observeScrolling(transcriptScroll)
         table.onKey = { [weak self] key in self?.handleTableKey(key) ?? false }
         transcriptScroll.documentView = table
@@ -505,7 +508,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         }
         var rows = project()
         if timeline.acknowledgeSettles(in: rows) { rows = project() }
-        if session.isTurnRunning, case .prose(let item)? = rows.last { timeline.streamingKey = item.key } else { timeline.streamingKey = nil }
+        timeline.streamingKey = session.isTurnRunning ? AgentChatTimelineTable.streamingProseKey(in: rows) : nil
         timeline.sendAgainNoticeKey = session.canSendAgain ? session.sendAgainNoticeKey : nil
         // A steer shows as a pending bubble until the agent answers, then as
         // the delivered user message marked "Sent to running turn" (§1.3).
@@ -517,10 +520,18 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
             captions[item.key] = "Sending to running turn…"
         }
         timeline.userCaptions = captions
+        var groupWasShown = false
+        if case .group(let id)? = inspector.subject { groupWasShown = timeline.rows.contains { $0.id == id } }
         timeline.applyRows(rows, now: now)
-        if inspector.isPresented, let subject = inspector.subject {
-            inspector.update(AgentChatPaneContent.content(for: subject, session: session, rows: rows, now: now))
+        guard inspector.isPresented, let subject = inspector.subject else { return }
+        if case .group(let id) = subject, groupWasShown, !rows.contains(where: { $0.id == id }) {
+            // A head trim re-keys a group whose first member was dropped; a
+            // group that is gone entirely closes the drawer instead of blanking it.
+            guard let renamed = timeline.renamedGroups[id] else { return inspector.dismiss() }
+            inspector.present(AgentChatPaneContent.content(for: .group(id: renamed), session: session, rows: rows, now: now), tab: nil)
+            return
         }
+        inspector.update(AgentChatPaneContent.content(for: subject, session: session, rows: rows, now: now))
     }
 
     static let pendingSteerID = "pending-steer"
@@ -581,12 +592,13 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
             approval: model.approval, verb: model.verb, moreCount: max(0, queued - 1),
             onChoose: { [weak self] option in self?.session.answerPermission(request, optionID: option) },
             onCancelRequest: { [weak self] in self?.session.dismissPermission(request) },
-            unredactedInput: model.unredactedInput
+            unredactedInput: model.unredactedInput, maskedInput: model.maskedInput
         )
         let width = max(1, approvalCard.superview?.bounds.width ?? view.bounds.width - 24)
         approvalWidth = width
         approvalHeight?.constant = ApprovalCardView.height(approval: model.approval, verb: model.verb, width: width,
-                                                           moreCount: max(0, queued - 1), unredactedInput: model.unredactedInput)
+                                                           moreCount: max(0, queued - 1), unredactedInput: model.unredactedInput,
+                                                           maskedInput: model.maskedInput)
         approvalCard.isHidden = false
     }
 

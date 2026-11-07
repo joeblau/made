@@ -561,6 +561,10 @@ final class AgentChatShimmerLabel: NSView {
         gradient.colors = [NSColor.clear.cgColor, NSColor.white.cgColor, NSColor.clear.cgColor]
         gradient.locations = [0, 0.15, 0.3]
         highlight.layer?.mask = gradient
+        // The highlight is a decorative copy of the text: VoiceOver reads `base`
+        // once. A label's accessibility element is its cell, not the field.
+        highlight.setAccessibilityElement(false)
+        highlight.cell?.setAccessibilityElement(false)
         setAccessibilityElement(false)
     }
 

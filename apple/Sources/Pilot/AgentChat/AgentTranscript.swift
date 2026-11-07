@@ -153,28 +153,6 @@ extension AgentChatItem.Approval {
     }
 }
 
-/// Raw, bounded per-step payloads kept beside the transcript, keyed
-/// "<session>/<item>". Evicted (LRU, oldest settled first) over the pane budget.
-struct AgentStepDetail: Equatable, Sendable {
-    var rawInput: ACPBoundedJSON?
-    var rawOutput: ACPBoundedJSON?
-    var blocks: [ACPToolContent] = []
-    var terminalOutput = ""
-    var evicted = false
-}
-
-/// Typed lifecycle events the transcript emits as it applies updates. Keys
-/// are namespaced "<session>/<item>".
-enum AgentActivityEvent: Equatable, Sendable {
-    case stepStart(key: String)
-    case stepEnd(key: String)
-    case stepFail(key: String, summary: String?)
-    case agentSpawn(childSessionID: String, parentKey: String?)
-    case agentEnd(childSessionID: String, lifecycle: String)
-    case reasoningDelta(key: String)
-    case reasoningEnd(key: String)
-}
-
 /// The chat's transcript, built by applying ACP session updates in order.
 ///
 /// Updates from the root session go to `items`. Updates from any other
@@ -276,10 +254,23 @@ struct AgentTranscript: Equatable, Sendable {
     /// running keeps its thought and tools live and becomes `background`.
     @discardableResult
     mutating func finishTurn(stopReason: String?, now: Date) -> [AgentActivityEvent] {
+        let events = settle(stopReason: stopReason, now: now, processEnded: false)
+        turnIndex += 1
+        return events
+    }
+
+    /// The agent process is gone, so nothing it ran still runs: background and
+    /// running subagents end cancelled; their thoughts and tools close.
+    @discardableResult
+    mutating func stopAllSessions(stopReason: String?, now: Date) -> [AgentActivityEvent] {
+        settle(stopReason: stopReason, now: now, processEnded: true)
+    }
+
+    private mutating func settle(stopReason: String?, now: Date, processEnded: Bool) -> [AgentActivityEvent] {
         let stamp = isReplaying ? nil : now
         var events: [AgentActivityEvent] = []
         let sessions = [Self.rootKey] + childItems.keys.sorted()
-        for session in sessions where !(session != Self.rootKey && childStillReportsRunning(session)) {
+        for session in sessions where processEnded || !(session != Self.rootKey && childStillReportsRunning(session)) {
             closeOpenThought(in: session, stamp: stamp, events: &events)
             for index in list(session).indices {
                 guard case .tool(var tool) = list(session)[index].content, tool.isRunning else { continue }
@@ -295,12 +286,13 @@ struct AgentTranscript: Equatable, Sendable {
             for index in list(owner).indices {
                 guard case .subagent(var card) = list(owner)[index].content, card.isRunning else { continue }
                 let before = card.lifecycle
-                if card.state == nil { card.state = "idle" } else { card.isBackground = true }
+                if processEnded {
+                    (card.state, card.stopReason) = ("idle", "cancelled")
+                } else if card.state == nil { card.state = "idle" } else { card.isBackground = true }
                 transition(&card, from: before, stamp: stamp, events: &events)
                 modify(owner, at: index) { $0.content = .subagent(card) }
             }
         }
-        turnIndex += 1
         return isReplaying ? [] : events
     }
 
@@ -522,8 +514,8 @@ struct AgentTranscript: Equatable, Sendable {
 
     private mutating func appendAssistant(_ text: String, to session: String, stamp: Date?, events: inout [AgentActivityEvent]) {
         guard !text.isEmpty else { return }
-        if case .assistant(let existing)? = list(session).last?.content {
-            modify(session, at: list(session).count - 1) { $0.content = .assistant(existing + text) }
+        if case .assistant? = list(session).last?.content {
+            appendInPlace(text, session: session, at: list(session).count - 1)
         } else {
             appendItem(.assistant(text), to: session, stamp: stamp, events: &events)
         }
@@ -550,12 +542,9 @@ struct AgentTranscript: Equatable, Sendable {
             appendItem(.notice(notice), to: session, stamp: stamp, events: &events)
             return
         }
-        if let open = openThought(in: session), messageID == nil || messageID == open.thought.messageID {
-            var thought = open.thought
-            let room = ACPBounds.thoughtBytes - thought.text.utf8.count
-            guard room > 0 else { return }
-            thought.text += text.utf8Prefix(room)
-            modify(session, at: open.index) { $0.content = .thought(thought) }
+        if let open = openThoughtRoom(in: session, messageID: messageID) {
+            guard open.room > 0 else { return }
+            appendInPlace(text.utf8Prefix(open.room), session: session, at: open.index)
             return
         }
         closeOpenThought(in: session, stamp: stamp, events: &events)
@@ -567,6 +556,29 @@ struct AgentTranscript: Equatable, Sendable {
         appendRaw(item, to: session)
         openThoughts[session] = item.id
         events.append(.reasoningDelta(key: item.key))
+    }
+
+    /// The open thought a chunk continues and its remaining byte budget
+    /// (only the index escapes, so the text buffer stays uniquely owned).
+    private func openThoughtRoom(in session: String, messageID: String?) -> (index: Int, room: Int)? {
+        guard let open = openThought(in: session), messageID == nil || messageID == open.thought.messageID else { return nil }
+        return (open.index, ACPBounds.thoughtBytes - open.thought.text.utf8.count)
+    }
+
+    /// Appends to prose or a thought in place: taking the payload out first
+    /// leaves its buffer uniquely referenced, so a chunk doesn't copy it all.
+    private mutating func appendInPlace(_ text: String, session: String, at index: Int) {
+        modify(session, at: index) { item in
+            if case .assistant(var existing) = item.content {
+                item.content = .notice("")
+                existing += text
+                item.content = .assistant(existing)
+            } else if case .thought(var thought) = item.content {
+                item.content = .notice("")
+                thought.text += text
+                item.content = .thought(thought)
+            }
+        }
     }
 
     private func openThought(in session: String) -> (index: Int, thought: AgentChatItem.Thought)? {
@@ -830,8 +842,9 @@ struct AgentTranscript: Equatable, Sendable {
     private mutating func recordDetail(_ key: String, _ fields: ACPToolCallFields) -> Bool {
         guard fields.rawInput != nil || fields.rawOutput != nil || fields.blocks != nil
             || fields.terminalOutputDelta != nil else { return false }
-        var detail = stepDetails[key] ?? AgentStepDetail()
-        guard !detail.evicted else { return false }
+        // Taken out so the terminal buffer is uniquely referenced while it grows.
+        var detail = stepDetails.removeValue(forKey: key) ?? AgentStepDetail()
+        guard !detail.evicted else { stepDetails[key] = detail; return false }
         if let input = fields.rawInput { detail.rawInput = input }
         if let output = fields.rawOutput { detail.rawOutput = output }
         if let blocks = fields.blocks {

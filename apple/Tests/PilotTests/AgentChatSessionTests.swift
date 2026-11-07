@@ -233,6 +233,29 @@ struct AgentChatSessionTests {
     }
 
     @Test
+    func backgroundSubagentsEndWhenTheAgentProcessExits() async throws {
+        let session = makeSession(script(#"""
+        read -r _
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1","update":{"sessionUpdate":"subagent_update","sessionId":"c1","title":"Research","state":{"state":"running"}}}}'
+        printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"c1","update":{"sessionUpdate":"tool_call","toolCallId":"ct","title":"Read a","kind":"read","status":"in_progress"}}}'
+        stop 3 end_turn
+        sleep 0.5
+        exit 0
+        """#))
+        defer { session.shutDown() }
+        session.start()
+        try await waitUntil { session.phase == .ready }
+        session.draft = "go"
+        session.send()
+        try await waitUntil { session.phase == .ready && session.hasBackgroundAgents }
+        try await waitUntil { if case .failed = session.phase { true } else { false } }
+        let card = session.transcript.items.compactMap { if case .subagent(let card) = $0.content { card } else { nil } }.first
+        #expect(card?.lifecycle == .cancelled)
+        #expect(session.transcript.stepStats(of: "c1").running == 0)
+        #expect(!session.hasBackgroundAgents)
+    }
+
+    @Test
     func cancelRequestWithdrawsOnlyTheExactlyMatchingRequest() async throws {
         let session = makeSession(script(#"""
         read -r _

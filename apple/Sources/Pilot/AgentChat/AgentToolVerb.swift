@@ -236,7 +236,7 @@ enum AgentToolResolver {
         input: JSONValue?,
         includeExactInput: Bool = true
     ) -> AgentToolVerb {
-        let exact = includeExactInput ? exactInput(for: category, fields: fields, input: input) : nil
+        let exact = includeExactInput ? exactInput(for: category, fields: fields, tool: tool, input: input) : nil
         func make(_ live: String, _ settled: String, detail: String? = nil) -> AgentToolVerb {
             AgentToolVerb(glyph: category.glyph, live: live, settled: settled, detail: detail, exactInput: exact)
         }
@@ -333,12 +333,15 @@ enum AgentToolResolver {
         return trimmed
     }
 
-    private static func exactInput(for category: AgentToolCategory, fields: AgentToolFields, input: JSONValue?) -> String? {
+    private static func exactInput(for category: AgentToolCategory, fields: AgentToolFields, tool: AgentChatItem.ToolCall,
+                                   input: JSONValue?) -> String? {
         if category == .shell, let command = fields.command, !command.isEmpty {
             let source = String(command.prefix(maximumExactInputSourceLength))
             return bounded(AgentRedactionPolicy.escapeControls(redactOutput(source, maximumLines: nil).text))
         }
-        guard let input else { return nil }
+        guard var input else { return nil }
+        // A secret file's content (`.env`, keys) is masked whole, as in the Inspector.
+        if agentStepTouchesSecretFile(tool, input: input) { input = maskSecretFileContent(input) }
         let redacted = redactJSON(boundingStrings(input)).value
         let rendered: String
         if case .object(let object) = redacted {

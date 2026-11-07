@@ -187,6 +187,7 @@ final class AgentChatSession {
         isChangingModel = false
         isPreparingPrompt = false
         finishOpenTurn(stopReason: "cancelled")
+        record(transcript.stopAllSessions(stopReason: "cancelled", now: now()))
         stopOpenApprovals()
         returnUnsentTextToDraft()
         generation += 1
@@ -785,6 +786,8 @@ final class AgentChatSession {
         guard generation == self.generation else { return }
         barriers.close()
         finishOpenTurn(stopReason: nil)
+        // Background subagents died with the process.
+        record(transcript.stopAllSessions(stopReason: nil, now: now()))
         stopOpenApprovals()
         returnUnsentTextToDraft()
         self.connection = nil

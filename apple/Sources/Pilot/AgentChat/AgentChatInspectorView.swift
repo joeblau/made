@@ -51,22 +51,10 @@ struct AgentInspectorRedactor: Sendable {
     static let mask = "••••"
     /// True when a step reads or writes a file whose whole content is masked.
     func touchesSecretFile(_ tool: AgentChatItem.ToolCall, detail: AgentStepDetail?) -> Bool {
-        var paths = tool.locations.prefix(64).map(\.path) + tool.edits.prefix(64).map(\.path) + [tool.subject].compactMap { $0 }
-        for case .diff(let path, _, _) in (detail?.blocks ?? []).prefix(64) { paths.append(path) }
-        if case .object(let input)? = detail?.rawInput?.value {
-            paths += input.compactMap { key, value in key.lowercased().contains("path") ? value.stringValue : nil }
-        }
-        return paths.contains(where: secretPath)
+        agentStepTouchesSecretFile(tool, input: detail?.rawInput?.value, blocks: detail?.blocks ?? [], secretPath: secretPath)
     }
     /// Masks every string in a secret file's payload except path fields, so the file content never reaches a sink.
-    static func maskFileContent(_ value: JSONValue, key: String = "") -> JSONValue {
-        switch value {
-        case .string(let text): key.lowercased().contains("path") || text.isEmpty ? value : .string(mask)
-        case .array(let list): .array(list.map { maskFileContent($0, key: key) })
-        case .object(let object): .object(Dictionary(uniqueKeysWithValues: object.map { ($0, maskFileContent($1, key: $0)) }))
-        case .null, .bool, .number: value
-        }
-    }
+    static func maskFileContent(_ value: JSONValue, key: String = "") -> JSONValue { maskSecretFileContent(value, key: key) }
 }
 
 /// Run-trace and step export documents. Always redacted; reasoning is excluded unless `includeReasoning`.
@@ -363,11 +351,10 @@ enum AgentInspectorFormatter {
             if case .group = content.subject { times(group.startedAt, group.endedAt) }
         }
         add("Model", content.model.map(redactor.inline))
-        // Tokens are reported per turn or per agent, never per step.
-        var perAgent = content.subject == .run
-        if case .agent = content.subject { perAgent = true }
-        if perAgent, let context = content.context { add("Context", contextMeter(context, usage: content.turnUsage)) }
-        if perAgent, let usage = content.turnUsage {
+        // Tokens are reported per turn for the run (agents report no per-step or per-subagent usage).
+        let perRun = content.subject == .run
+        if perRun, let context = content.context { add("Context", contextMeter(context, usage: content.turnUsage)) }
+        if perRun, let usage = content.turnUsage {
             let line = [usage.uncachedInputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, usage.outputTokens].map(AgentChatFormat.tokens)
             add("\(content.subject == .run ? "Last turn" : "Usage") (reported by \(agent))",
                 "\(line[0]) input · \(line[1]) cached · \(line[2]) cache write · \(line[3]) output")
@@ -429,6 +416,8 @@ final class AgentInspectorViewController: NSViewController, NSMenuDelegate {
         case copyInput = "Copy Input", copyOutput = "Copy Output", copyUnredacted = "Copy Unredacted"
         case exportStepJSON = "Export Step JSON…", exportRunTrace = "Export Run Trace JSON…", exportReasoning = "Export Reasoning…"
         case askToContinue = "Ask to Continue…"
+        /// The run's Meta: model, last turn's tokens, and the context meter.
+        case showRun = "Show Run Usage"
     }
     static let accessibilityIdentifierValue = "agent-chat.inspector"
     static let allowReasoningExportKey = "agentChat.allowReasoningExport"
@@ -670,6 +659,7 @@ final class AgentInspectorViewController: NSViewController, NSMenuDelegate {
             (.copyInput, has(.input)), (.copyOutput, has(.output)), (.copyUnredacted, reveals && has(selectedTab)),
             (.exportStepJSON, content.item != nil), (.exportRunTrace, true),
             (.exportReasoning, allowed && AgentInspectorFormatter.reasoningText(content) != nil), (.askToContinue, failedChild != nil),
+            (.showRun, subject != .run),
         ]
         return candidates.filter(\.1).map(\.0)
     }
@@ -708,6 +698,8 @@ final class AgentInspectorViewController: NSViewController, NSMenuDelegate {
             save(name: name(content.title, "reasoning", "txt")) { Data(policy.output(text, nil).text.utf8) }
         case .askToContinue:
             failedChild.map(actions.askToContinue)
+        case .showRun:
+            actions.openInspector(.run, .meta)
         }
     }
     private func copyRedacted(_ text: String) { writePasteboard(text, false) }

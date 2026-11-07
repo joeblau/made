@@ -30,6 +30,9 @@ enum AgentProseRenderer {
         var copyText: String
         /// Redacted code of each block, by block index (per-block "Copy").
         var blocks: [String]
+        /// Identifies this rendering: its measured height is cached by it,
+        /// so a rendering reused across revisions is measured once.
+        var generation = 0
     }
 
     static let allowedLinkSchemes: Set<String> = ["http", "https", "mailto"]
@@ -38,7 +41,10 @@ enum AgentProseRenderer {
     static let blockInset: CGFloat = 10
     static let blockPadding: CGFloat = 6
 
-    private static var cache: [String: Rendered] = [:]
+    /// One rendering per item key (the newest revision), least recently
+    /// used evicted first, bounded by count and by characters.
+    private static var cache = AgentRecencyCache<(key: String, rendered: Rendered)>(capacity: 4_096, maximumCost: 8 * 1_024 * 1_024)
+    private static var nextGeneration = 0
     /// Off-main renders: the newest finished rendering per item key (shown
     /// while a newer revision redacts), the newest revision still wanted, and
     /// the keys with a redaction in flight.
@@ -54,10 +60,10 @@ enum AgentProseRenderer {
     static func rendered(for item: AgentChatItem) -> Rendered {
         guard case .assistant(let raw) = item.content else { return Rendered(text: NSAttributedString(), copyText: "", blocks: []) }
         let key = "\(item.key)#\(item.revision)#\(CockpitUIZoomController.shared.factor)#\(raw.utf16.count)"
-        if let cached = cache[key] { return cached }
+        if let cached = cache[item.key], cached.key == key { return cached.rendered }
         guard raw.utf8.count > AgentRedactionPolicy.offMainThresholdBytes else {
             let result = render(raw)
-            store(result, cacheKey: key)
+            store(result, itemKey: item.key, cacheKey: key)
             return result
         }
         wanted[item.key] = (key, raw)
@@ -65,9 +71,8 @@ enum AgentProseRenderer {
         return latest[item.key] ?? Rendered(text: proseText("Redacting…", spacedAfterCode: false), copyText: "", blocks: [])
     }
 
-    private static func store(_ result: Rendered, cacheKey: String) {
-        if cache.count > 256 { cache.removeAll(keepingCapacity: true) }
-        cache[cacheKey] = result
+    private static func store(_ result: Rendered, itemKey: String, cacheKey: String) {
+        cache.set((cacheKey, result), for: itemKey, cost: result.text.length)
     }
 
     /// One redaction per message at a time; revisions that arrive meanwhile
@@ -80,7 +85,7 @@ enum AgentProseRenderer {
             let source = await Task.detached(priority: .userInitiated) { redactProse(raw) }.value
             inFlight.remove(itemKey)
             let result = build(source)
-            store(result, cacheKey: job.cacheKey)
+            store(result, itemKey: itemKey, cacheKey: job.cacheKey)
             if latest.count > 64 { latest.removeAll(keepingCapacity: true) }
             latest[itemKey] = result
             NotificationCenter.default.post(name: .agentProseDidRender, object: itemKey)
@@ -156,7 +161,8 @@ enum AgentProseRenderer {
                 previousWasCode = true
             }
         }
-        return Rendered(text: output, copyText: source, blocks: blocks)
+        nextGeneration += 1
+        return Rendered(text: output, copyText: source, blocks: blocks, generation: nextGeneration)
     }
 
     private static func lastAttributes(_ string: NSAttributedString) -> [NSAttributedString.Key: Any] {
@@ -242,9 +248,19 @@ enum AgentProseRenderer {
     }
 }
 
-/// TextKit 1 measurement matching `ProseTextView`'s layout exactly.
+/// TextKit 1 measurement matching `ProseTextView`'s layout exactly, up to
+/// `limit`: the row never shows more than `ProseCellView.maximumTextHeight`,
+/// so text past it is never laid out here.
 @MainActor
-private enum ProseMeasure {
+enum ProseMeasure {
+    struct Entry {
+        var generation: Int
+        var width: CGFloat
+        var zoom: Double
+        var length: Int
+        var height: CGFloat
+    }
+
     static let storage = NSTextStorage()
     static let layout = NSLayoutManager()
     static let container: NSTextContainer = {
@@ -254,14 +270,62 @@ private enum ProseMeasure {
         layout.addTextContainer(container)
         return container
     }()
-    static var heights: [String: CGFloat] = [:]
+    /// The newest measurement per item key.
+    static var heights = AgentRecencyCache<Entry>(capacity: 8_192)
+    /// Layout passes run (tests).
+    private(set) static var measureCount = 0
 
-    static func height(_ text: NSAttributedString, width: CGFloat) -> CGFloat {
+    static func height(_ text: NSAttributedString, width: CGFloat, limit: CGFloat) -> CGFloat {
+        measureCount += 1
         let box = container
-        box.size = NSSize(width: max(1, width), height: .greatestFiniteMagnitude)
+        box.size = NSSize(width: max(1, width), height: limit + 1)
         storage.setAttributedString(text)
-        layout.ensureLayout(for: box)
-        return ceil(layout.usedRect(for: box).height)
+        // Text that doesn't fit the bounded container overflows the cap.
+        let laidOut = layout.characterRange(forGlyphRange: layout.glyphRange(for: box), actualGlyphRange: nil)
+        guard NSMaxRange(laidOut) >= storage.length else { return limit + 1 }
+        return min(limit + 1, ceil(layout.usedRect(for: box).height))
+    }
+}
+
+/// A bounded map keyed by string that evicts its least recently used
+/// quarter (or, past `maximumCost`, down to three quarters of it) instead of
+/// clearing everything, so one pass over many rows doesn't empty it.
+struct AgentRecencyCache<Value> {
+    let capacity: Int
+    let maximumCost: Int
+    private var entries: [String: (stamp: UInt64, cost: Int, value: Value)] = [:]
+    private var clock: UInt64 = 0
+    private(set) var totalCost = 0
+
+    init(capacity: Int, maximumCost: Int = .max) {
+        self.capacity = max(4, capacity)
+        self.maximumCost = maximumCost
+    }
+
+    var count: Int { entries.count }
+
+    subscript(key: String) -> Value? {
+        mutating get {
+            guard entries[key] != nil else { return nil }
+            clock += 1
+            entries[key]?.stamp = clock
+            return entries[key]?.value
+        }
+    }
+
+    mutating func set(_ value: Value, for key: String, cost: Int = 0) {
+        clock += 1
+        totalCost += cost - (entries[key]?.cost ?? 0)
+        entries[key] = (clock, cost, value)
+        guard entries.count > capacity || totalCost > maximumCost else { return }
+        let costTarget = maximumCost == .max ? .max : maximumCost - maximumCost / 4
+        var evictCount = entries.count > capacity ? capacity / 4 : 0
+        for (oldKey, entry) in entries.sorted(by: { $0.value.stamp < $1.value.stamp }) where oldKey != key {
+            guard evictCount > 0 || totalCost > costTarget else { break }
+            entries[oldKey] = nil
+            totalCost -= entry.cost
+            evictCount -= 1
+        }
     }
 }
 
@@ -409,17 +473,23 @@ final class ProseCellView: NSTableCellView {
         max(1, width - leadingInset - copyGutter)
     }
 
+    /// Measured per rendering, not per revision: a long message reusing its
+    /// previous rendering while a newer one redacts is not laid out again,
+    /// and once a streaming message fills the cap, later (longer) revisions
+    /// stay capped without another layout pass.
     static func height(item: AgentChatItem, width: CGFloat) -> CGFloat {
         let rendered = AgentProseRenderer.rendered(for: item)
         let textWidth = textWidth(for: width)
-        let key = "\(item.key)#\(item.revision)#\(textWidth)#\(CockpitUIZoomController.shared.factor)#\(rendered.text.length)"
+        let zoom = CockpitUIZoomController.shared.factor
+        let limit = maximumTextHeight - textInset * 2
         let textHeight: CGFloat
-        if let cached = ProseMeasure.heights[key] {
-            textHeight = cached
+        if let cached = ProseMeasure.heights[item.key], cached.width == textWidth, cached.zoom == zoom,
+           cached.generation == rendered.generation || (cached.height > limit && rendered.text.length >= cached.length) {
+            textHeight = cached.height
         } else {
-            textHeight = rendered.text.length == 0 ? 0 : ProseMeasure.height(rendered.text, width: textWidth)
-            if ProseMeasure.heights.count > 512 { ProseMeasure.heights.removeAll(keepingCapacity: true) }
-            ProseMeasure.heights[key] = textHeight
+            textHeight = rendered.text.length == 0 ? 0 : ProseMeasure.height(rendered.text, width: textWidth, limit: limit)
+            ProseMeasure.heights.set(ProseMeasure.Entry(generation: rendered.generation, width: textWidth, zoom: zoom,
+                                                        length: rendered.text.length, height: textHeight), for: item.key)
         }
         let visible = min(maximumTextHeight, textHeight + textInset * 2)
         return max(24, visible + verticalInset * 2)

@@ -172,29 +172,41 @@ final class ApprovalCardView: NSView {
         var verb: AgentToolVerb
         var moreCount: Int
         var unredactedInput: String?
+        var maskedInput: String?
     }
 
     private static var lastContent: (key: ContentKey, content: Content)?
 
     /// Cached for the last inputs: redacting a 64 K input on every pane
     /// layout would be heavy main-thread work.
-    static func content(approval: AgentChatItem.Approval, verb: AgentToolVerb, moreCount: Int, unredactedInput: String?) -> Content {
-        let key = ContentKey(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput)
+    /// `maskedInput` replaces the shown input when the request touches a
+    /// secret file (`.env`, keys): its content is masked whole, and the raw
+    /// input sits behind "Reveal secrets".
+    static func content(approval: AgentChatItem.Approval, verb: AgentToolVerb, moreCount: Int, unredactedInput: String?,
+                        maskedInput: String? = nil) -> Content {
+        let key = ContentKey(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput,
+                             maskedInput: maskedInput)
         if let lastContent, lastContent.key == key { return lastContent.content }
-        let content = makeContent(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput)
+        let content = makeContent(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput,
+                                  maskedInput: maskedInput)
         lastContent = (key, content)
         return content
     }
 
     private static func makeContent(approval: AgentChatItem.Approval, verb: AgentToolVerb, moreCount: Int,
-                                    unredactedInput: String?) -> Content {
+                                    unredactedInput: String?, maskedInput: String?) -> Content {
         var header = redactInline(String(approval.agentName.prefix(256))) + " is asking for permission"
         if moreCount > 0 { header += " · \(moreCount) more" }
-        let title = redactInline(String(approval.title.prefix(512)))
-        let verbText = redactInline(verb.live)
-        let raw = String((unredactedInput ?? verb.exactInput ?? approval.subject ?? approval.title).prefix(maximumInputCharacters))
-        let source = escapedForReview(raw)
-        let masked = redactOutput(source, maximumLines: nil)
+        // Redact, then clip: a cut can't split a secret into a head the
+        // patterns no longer match.
+        let title = String(redactInline(String(approval.title.prefix(4_096))).prefix(512))
+        let verbText = redactInline(requestPhrase(verb))
+        let full = String((unredactedInput ?? verb.exactInput ?? approval.subject ?? approval.title).prefix(maximumInputCharacters * 2))
+        let source = String(escapedForReview(full).prefix(maximumInputCharacters))
+        var masked = redactOutput(escapedForReview(maskedInput.map { String($0.prefix(maximumInputCharacters * 2)) } ?? full),
+                                  maximumLines: nil)
+        masked.text = String(masked.text.prefix(maximumInputCharacters))
+        if maskedInput != nil { masked.redacted = true }
         // A mode-changing request (switch_mode, e.g. exiting plan mode) gets no
         // default at all, whatever its options are called.
         let modeChange = approval.kind == .switchMode
@@ -290,8 +302,23 @@ final class ApprovalCardView: NSView {
     /// `unredactedInput` (extension, defaulted) is the raw command/arguments;
     /// when given and it contains secrets, the card offers "Reveal secrets".
     static func height(approval: AgentChatItem.Approval, verb: AgentToolVerb, width: CGFloat, moreCount: Int = 0,
-                       unredactedInput: String? = nil) -> CGFloat {
-        frames(content: content(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput), width: width).height
+                       unredactedInput: String? = nil, maskedInput: String? = nil) -> CGFloat {
+        let content = content(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput,
+                              maskedInput: maskedInput)
+        return frames(content: content, width: width).height
+    }
+
+    /// What a request would do, without claiming it already runs:
+    /// "Running git push" → "Run git push". Labels without a tense (an
+    /// unknown tool's title) are returned as they are.
+    nonisolated static func requestPhrase(_ verb: AgentToolVerb) -> String {
+        let forms = ["Running": "Run", "Reading": "Read", "Searching": "Search", "Editing": "Edit", "Creating": "Create",
+                     "Deleting": "Delete", "Moving": "Move", "Fetching": "Fetch", "Updating": "Update", "Using": "Use",
+                     "Delegating": "Delegate", "Compacting": "Compact", "Switching": "Switch", "Reasoning": "Reason"]
+        let live = verb.live
+        let word = live.prefix { $0.isLetter }
+        guard live != verb.settled, let base = forms[String(word)] else { return live }
+        return base + live.dropFirst(word.count)
     }
 
     // MARK: Configuration
@@ -304,13 +331,15 @@ final class ApprovalCardView: NSView {
         moreCount: Int,
         onChoose: @escaping (String) -> Void,
         onCancelRequest: @escaping () -> Void,
-        unredactedInput: String? = nil
+        unredactedInput: String? = nil,
+        maskedInput: String? = nil
     ) {
         let isNewRequest = requestID != approval.requestID
         requestID = approval.requestID
         self.onChoose = onChoose
         self.onCancelRequest = onCancelRequest
-        let content = Self.content(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput)
+        let content = Self.content(approval: approval, verb: verb, moreCount: moreCount, unredactedInput: unredactedInput,
+                                   maskedInput: maskedInput)
         if isNewRequest || content.revealedInput == nil { isRevealed = false }
         if isNewRequest { armedRequestID = nil }
         self.content = content
@@ -483,18 +512,28 @@ final class ApprovalRecordView: NSTableCellView {
         }
     }
 
-    /// `item.content` is `.approval`.
-    func configure(item: AgentChatItem, actions: AgentChatRowActions) {
+    /// `item.content` is `.approval`. `verb` is the requested step's verb;
+    /// the record names what was asked ("Run git push"), never the raw
+    /// command, which stays in the tooltip.
+    func configure(item: AgentChatItem, actions: AgentChatRowActions, verb: AgentToolVerb? = nil) {
         self.item = item
         guard case .approval(let approval) = item.content else { return }
         let status = Self.status(approval.decision)
         dot.configure(status: status.dot)
         AgentChatText.apply(statusLabel, text: status.text, font: Self.font, color: status.color)
-        let title = redactInline(String(approval.title.prefix(512)))
-        AgentChatText.apply(titleLabel, text: " · " + title, font: AgentChatText.font(12), color: .textMuted)
+        let title = String(redactInline(String(approval.title.prefix(4_096))).prefix(512))
+        let request = verb ?? Self.verb(for: approval)
+        let label = String(redactInline(ApprovalCardView.requestPhrase(request)).prefix(512))
+        AgentChatText.apply(titleLabel, text: " · " + label, font: AgentChatText.font(12), color: .textMuted)
         titleLabel.toolTip = title
-        setAccessibilityLabel("Permission: \(status.text), \(title)")
+        setAccessibilityLabel("Permission: \(status.text), \(label)")
         needsLayout = true
+    }
+
+    /// The verb from the request alone (no step was reported for it).
+    static func verb(for approval: AgentChatItem.Approval) -> AgentToolVerb {
+        let tool = AgentChatItem.ToolCall(title: approval.title, kind: approval.kind, status: .pending, content: "")
+        return verbForTool(tool, input: nil, includeExactInput: false)
     }
 
     static func height(item: AgentChatItem, width: CGFloat) -> CGFloat {

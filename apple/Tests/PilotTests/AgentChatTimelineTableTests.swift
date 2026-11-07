@@ -211,6 +211,95 @@ struct AgentChatTimelineTableTests {
         #expect(abs(timeline.tableView.rect(ofRow: 2).height - plain) < 0.5)
     }
 
+    @Test("A turn's trailing plan keeps the streaming message tracked, and rows landing before it splice instead of reloading")
+    func trailingPlanKeepsStreamingAndSplices() throws {
+        let (timeline, scroll, window) = makeTimeline()
+        defer { window.close() }
+        let plan = AgentChatItem(id: "plan", content: .plan([ACPPlanEntry(content: "Ship", status: "in_progress")]), revision: 2)
+        let prose = AgentChatItem(id: "p", content: .assistant("Streaming answer"), revision: 50)
+        func rows(_ items: [AgentChatItem]) -> [AgentTimelineRow] {
+            AgentTimeline.project(items: items, isTurnRunning: true, acknowledgedSettles: [], now: Self.origin)
+        }
+        let first = rows([user(0), plan, tool(0, running: false, revision: 3), prose])
+        #expect(first.last?.id == plan.key, "The plan sits at the end of its turn")
+        #expect(AgentChatTimelineTable.streamingProseKey(in: first) == prose.key)
+        #expect(AgentChatTimelineTable.streamingProseKey(in: Array(first.dropLast(2))) == nil, "A group last: nothing streams")
+        timeline.applyRows(first, now: Self.origin)
+        timeline.streamingKey = prose.key
+        settle(scroll)
+        let index = try #require(first.firstIndex { $0.id == prose.key })
+        let cell = try #require(timeline.tableView.view(atColumn: 0, row: index, makeIfNecessary: false) as? ProseCellView)
+        #expect(cell.textView.accessibilityValue() == "Streaming")
+        let next = rows([user(0), plan, tool(0, running: false, revision: 3), prose, tool(1, running: true, revision: 60)])
+        #expect(next.map(\.id).last == plan.key && next.count == first.count + 1)
+        timeline.applyRows(next, now: Self.origin)
+        #expect(timeline.lastApplyPath == .splice)
+        #expect(timeline.tableView.numberOfRows == next.count)
+        #expect(timeline.tableView.view(atColumn: 0, row: index, makeIfNecessary: false) === cell, "The streaming cell survives")
+    }
+
+    @Test("A head trim that re-keys a group carries its disclosure state and reports the rename")
+    func headTrimRekeysGroupState() {
+        let timeline = AgentChatTimelineTable(tableView: AgentChatTimelineTableView())
+        let tools = (0..<20).map { tool($0, running: false, revision: 10 + $0) }
+        let done = AgentChatItem(id: "a", content: .assistant("Done"), revision: 99)
+        func rows(_ items: [AgentChatItem]) -> [AgentTimelineRow] {
+            AgentTimeline.project(items: items, isTurnRunning: false, acknowledgedSettles: timeline.acknowledgedSettles, now: Self.origin)
+        }
+        let before = rows([user(0)] + tools + [done])
+        _ = timeline.acknowledgeSettles(in: before)
+        timeline.applyRows(rows([user(0)] + tools + [done]), now: Self.origin)
+        timeline.toggleExpanded("activity-root/tool-t0")
+        #expect(timeline.acknowledgedSettles.contains("activity-root/tool-t0"))
+        let trimmed = rows(Array(tools.dropFirst(3)) + [done])
+        _ = timeline.acknowledgeSettles(in: trimmed)
+        #expect(timeline.renamedGroups == ["activity-root/tool-t0": "activity-root/tool-t3"])
+        #expect(timeline.acknowledgedSettles.contains("activity-root/tool-t3"))
+        #expect(timeline.expandedOverrides["activity-root/tool-t3"] == true)
+        let reprojected = rows(Array(tools.dropFirst(3)) + [done])
+        guard case .activity(let group)? = reprojected.first else { Issue.record("expected a group"); return }
+        #expect(group.state == .settled, "The re-keyed group doesn't settle again")
+    }
+
+    @Test("Approval records name the requested action, not the raw command; the shimmer is read once")
+    func approvalRecordAndShimmerAccessibility() throws {
+        let request = AgentChatItem.Approval(requestID: 1, sessionID: "s", agentName: "Claude", toolCallID: nil, title: "git push origin main",
+                                             kind: .execute, subject: nil, options: [], decision: .chose(optionID: "a", name: "Allow", allows: true))
+        let record = ApprovalRecordView()
+        let bash = verbForTool(AgentChatItem.ToolCall(title: "Bash", kind: .execute, status: .completed, content: ""),
+                               input: ["command": "git push origin main"])
+        record.configure(item: AgentChatItem(id: "r", content: .approval(request)), actions: AgentChatRowActions(), verb: bash)
+        #expect(record.statusLabel.stringValue == "Approved · Allow")
+        #expect(record.titleLabel.stringValue == " · Run git push origin main")
+        #expect(record.titleLabel.toolTip == "git push origin main")
+        let shimmer = AgentChatShimmerLabel()
+        shimmer.setText("Checking the transport", font: AgentChatText.font(12))
+        #expect(NSAccessibility.unignoredChildren(from: shimmer.subviews).count == 1)
+        #expect(ActivityCardView().isAccessibilityElement())
+    }
+
+    @Test("Prose height is measured once per rendering and stays capped as a long message streams")
+    func proseMeasurementIsBoundedPerRendering() {
+        let width: CGFloat = 600
+        let long = String(repeating: "A long line of streamed text that wraps across the row.\n", count: 400)
+        let first = AgentChatItem(id: "measure-\(UUID())", content: .assistant(long), revision: 1)
+        let capped = ProseCellView.height(item: first, width: width)
+        #expect(capped == ProseCellView.maximumTextHeight + ProseCellView.verticalInset * 2)
+        let before = ProseMeasure.measureCount
+        _ = ProseCellView.height(item: first, width: width)
+        var grown = first
+        grown.content = .assistant(long + "More streamed text.")
+        grown.revision = 2
+        #expect(ProseCellView.height(item: grown, width: width) == capped)
+        #expect(ProseMeasure.measureCount == before, "Neither the same rendering nor a longer capped revision is laid out again")
+        var cache = AgentRecencyCache<Int>(capacity: 8)
+        for index in 0..<8 { cache.set(index, for: "k\(index)") }
+        _ = cache["k0"]
+        cache.set(8, for: "k8")
+        let kept = cache["k0"], evicted = cache["k1"]
+        #expect(kept == 0 && evicted == nil && cache.count == 7, "The least recently used quarter goes, not everything")
+    }
+
     // MARK: - Fixtures
 
     private func makeTimeline() -> (AgentChatTimelineTable, NSScrollView, NSWindow) {

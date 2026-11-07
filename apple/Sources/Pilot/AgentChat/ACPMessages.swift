@@ -548,7 +548,7 @@ extension ACP {
             ?? (isCancelledStatus ? "cancelled" : nil)
         // Terminal output keeps its newest bytes, so an oversized delta keeps its tail.
         fields.terminalOutputDelta = meta?["terminal_output_delta"]?["data"]?.stringValue
-            .flatMap { $0.isEmpty ? nil : $0.utf8Suffix(ACPBounds.terminalOutputBytes) }
+            .flatMap { $0.isEmpty ? nil : $0.utf8SuffixAtLineBoundary(ACPBounds.terminalOutputBytes) }
         let rawOutput = update["rawOutput"]
         fields.exitCode = meta?["terminal_exit"]?["exit_code"]?.intValue
             ?? rawOutput?.int("exit_code", "exitCode")
@@ -743,8 +743,9 @@ extension AgentTranscript {
         }
     }
 
-    /// The first meaningful line of `text`, ≤ 200 characters: fences and
-    /// Claude's `<tool_use_error>` wrapper are skipped.
+    /// The first meaningful line of `text`, redacted, then clipped to ≤ 200
+    /// characters (clipping first could leave a token head no rule matches):
+    /// fences and Claude's `<tool_use_error>` wrapper are skipped.
     static func summaryLine(_ text: String) -> String? {
         for line in text.prefix(16_384).split(whereSeparator: \.isNewline) {
             let cleaned = line
@@ -752,7 +753,7 @@ extension AgentTranscript {
                 .replacingOccurrences(of: "</tool_use_error>", with: "")
                 .trimmingCharacters(in: .whitespaces)
             guard !cleaned.isEmpty, !cleaned.hasPrefix("```") else { continue }
-            return String(cleaned.prefix(ACPBounds.errorSummaryCharacters))
+            return String(redactInline(String(cleaned.prefix(4_096))).prefix(ACPBounds.errorSummaryCharacters))
         }
         return nil
     }

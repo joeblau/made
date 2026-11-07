@@ -66,6 +66,8 @@ final class ActivityCardView: NSTableCellView {
         super.init(frame: .zero)
         identifier = Self.reuseIdentifier
         setAccessibilityIdentifier(Self.reuseIdentifier.rawValue)
+        // A labelled group ("Activity: …") that VoiceOver enters for the steps.
+        setAccessibilityElement(true)
         setAccessibilityRole(.group)
         addSubview(chrome)
         addSubview(header)

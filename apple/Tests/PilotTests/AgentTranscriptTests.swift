@@ -397,6 +397,37 @@ struct AgentTranscriptTests {
         AgentTranscript.appendTerminal("END", to: &output)
         #expect(output.utf8.count <= ACPBounds.terminalOutputBytes)
         #expect(output.hasPrefix(AgentTranscript.terminalTruncationMarker) && output.hasSuffix("oEND"))
+        // A cut never leaves a secret's tail without its key: the partial line goes.
+        var log = ""
+        let line = "export API_TOKEN=" + String(repeating: "t", count: 60) + "\n"
+        for _ in 0..<(ACPBounds.terminalOutputBytes / line.utf8.count + 2) { AgentTranscript.appendTerminal(line, to: &log) }
+        let kept = log.dropFirst(AgentTranscript.terminalTruncationMarker.count)
+        #expect(kept.hasPrefix("export API_TOKEN="))
+        #expect(redactOutput(String(kept), maximumLines: nil).text.contains("ttt") == false)
+    }
+
+    @Test
+    func aProcessEndSettlesBackgroundSubagents() throws {
+        var transcript = AgentTranscript()
+        try transcript.apply(update(#"{"sessionUpdate":"subagent_update","sessionId":"bg","state":{"state":"running"}}"#),
+                             rootSessionID: "s", now: start)
+        try transcript.apply(update(#"{"sessionUpdate":"tool_call","toolCallId":"ct","status":"in_progress"}"#, session: "bg"),
+                             rootSessionID: "s", now: start)
+        transcript.apply(thought("child thinking", messageID: nil, session: "bg"), rootSessionID: "s", now: start)
+        transcript.finishTurn(stopReason: "end_turn", now: start)
+        #expect(subagents(transcript).first?.lifecycle == .background)
+        let events = transcript.stopAllSessions(stopReason: nil, now: later)
+        #expect(events.contains(.agentEnd(childSessionID: "bg", lifecycle: "cancelled")))
+        #expect(subagents(transcript).first?.lifecycle == .cancelled && subagents(transcript).first?.endedAt == later)
+        #expect(transcript.stepStats(of: "bg").running == 0)
+        #expect(transcript.children(of: "bg").allSatisfy { if case .thought(let thought) = $0.content { thought.endedAt != nil } else { true } })
+        #expect(summaryRedacts())
+    }
+
+    private func summaryRedacts() -> Bool {
+        let token = "ghp_" + String(repeating: "Q", count: 36)
+        let summary = AgentTranscript.summaryLine(String(repeating: "context ", count: 22) + "key: " + token) ?? ""
+        return summary.count <= ACPBounds.errorSummaryCharacters && !summary.contains("QQQ")
     }
 
     @Test

@@ -334,6 +334,72 @@ struct AgentRedactionTests {
         #expect(redactFileContent(path: ".env", text: "") == AgentRedaction(text: "", redacted: false, truncatedLines: 0))
     }
 
+    // MARK: Final review: key names, armor, cut tails, secret files
+
+    @Test(arguments: [
+        (#"{"accessToken": "opaque123", "clientSecret": "c-1", "refreshToken": "r-1"}"#,
+         #"{"accessToken": "••••", "clientSecret": "••••", "refreshToken": "••••"}"#),
+        ("PGPASSWORD=hunter2", "PGPASSWORD=••••"),
+        ("MYSQL_PWD=hunter2", "MYSQL_PWD=••••"),
+        ("DB_PASS=hunter2", "DB_PASS=••••"),
+        ("SECRET_KEY_BASE=abc123", "SECRET_KEY_BASE=••••"),
+        ("SESSION_SECRET_SALT=abc123", "SESSION_SECRET_SALT=••••"),
+        (#"{"auths": {"ghcr.io": {"auth": "dXNlcjpodW50ZXIy"}}}"#, #"{"auths": {"ghcr.io": {"auth": "••••"}}}"#),
+        ("--apiToken abc123", "--apiToken ••••"),
+    ])
+    func camelCaseAndConcatenatedSecretKeysAreMasked(input: String, expected: String) {
+        #expect(masked(input) == expected)
+    }
+
+    @Test
+    func camelCaseSecretKeysAreMaskedInJSON() {
+        let (value, redacted) = redactJSON(["accessToken": "opaque123", "authToken": "x", "privateKey": "y", "auth": "z",
+                                            "maxTokens": "4096", "monkey": "banana", "author": "Joe"])
+        #expect(redacted)
+        #expect(value == ["accessToken": "••••", "authToken": "••••", "privateKey": "••••", "auth": "••••",
+                          "maxTokens": "4096", "monkey": "banana", "author": "Joe"])
+        for text in ["bypass=1", "compass: north", "author: Joe", "oauth: enabled", "PWD=/Users/me/src", "monkey=banana"] {
+            #expect(masked(text) == text, "\(text)")
+        }
+    }
+
+    @Test
+    func pgpAndPuttyPrivateKeysAreMasked() {
+        let pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF\n=abcd\n-----END PGP PRIVATE KEY BLOCK-----\nafter"
+        #expect(masked(pgp) == "-----BEGIN PGP PRIVATE KEY BLOCK-----\n••••\n-----END PGP PRIVATE KEY BLOCK-----\nafter")
+        #expect(redactProse(pgp).contains("lQOYBF") == false)
+        let putty = "PuTTY-User-Key-File-3: ssh-ed25519\nPrivate-Lines: 2\nAAAAIGhlbGxv\nd29ybGQ=\nPrivate-MAC: 1234"
+        #expect(masked(putty) == "PuTTY-User-Key-File-3: ssh-ed25519\nPrivate-Lines: 2\n••••\nPrivate-MAC: 1234")
+    }
+
+    @Test
+    func anEndArmorWithoutBeginMasksEverythingBeforeIt() {
+        let tail = "MIIEowIBAAKCAQEA\nqWm9base64body\n-----END RSA PRIVATE KEY-----\nnext line"
+        #expect(masked(tail) == "••••\n-----END RSA PRIVATE KEY-----\nnext line")
+        #expect(masked("-----END CERTIFICATE-----") == "-----END CERTIFICATE-----")
+    }
+
+    @Test
+    func aSuffixCutDropsThePartialFirstLine() {
+        let text = "export API_TOKEN=abcdefghijklmnop\nline two\nline three"
+        let cut = text.utf8SuffixAtLineBoundary(text.utf8.count - 10)
+        #expect(cut == "line two\nline three")
+        #expect(text.utf8SuffixAtLineBoundary(1_000) == text)
+        #expect("aaaa sk-ant-api03-xyz".utf8SuffixAtLineBoundary(18) == "sk-ant-api03-xyz")
+        #expect("one two three".utf8SuffixAtLineBoundary(10) == "two three")
+    }
+
+    @Test
+    func secretFileStepsMaskContentButKeepPaths() {
+        let tool = AgentChatItem.ToolCall(title: "Write", kind: .edit, status: .pending, content: "")
+        let input: JSONValue = ["file_path": "/repo/.env", "content": "DB_PASS=hunter2\nPGPASSWORD=s3cr3t"]
+        #expect(agentStepTouchesSecretFile(tool, input: input))
+        #expect(maskSecretFileContent(input) == ["file_path": "/repo/.env", "content": "••••"])
+        #expect(!agentStepTouchesSecretFile(tool, input: ["file_path": "/repo/README.md", "content": "hi"]))
+        for path in ["/home/u/.pgpass", "~/.git-credentials", "/Users/me/.docker/config.json"] { #expect(isSecretLikePath(path), "\(path)") }
+        #expect(!isSecretLikePath("/repo/config.json"))
+    }
+
     // MARK: Off-main and cache
 
     @Test

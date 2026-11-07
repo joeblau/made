@@ -40,6 +40,7 @@ enum AgentChatPaneContent {
         switch subject {
         case .step(let key), .thought(let key), .plan(let key):
             let item = item(forKey: key, in: transcript)
+            if case .plan = subject {} else { content.model = session.modelName }
             content.item = item
             content.detail = transcript.stepDetails[key]
             switch item?.content {
@@ -70,6 +71,7 @@ enum AgentChatPaneContent {
                 content.group = group
                 content.title = group.summary
             }
+            content.model = session.modelName
         case .run:
             content.title = "Run"
             content.model = session.modelName
@@ -105,9 +107,10 @@ enum AgentChatPaneContent {
     }
 
     /// The pending record for `request` (with the requesting agent's name),
-    /// its verb, and the raw input "Reveal secrets" may show.
+    /// its verb, the raw input "Reveal secrets" may show, and, when the
+    /// request touches a secret file, the input with that content masked.
     static func approval(for request: ACPPermissionRequest, session: AgentChatSession)
-        -> (approval: AgentChatItem.Approval, verb: AgentToolVerb, unredactedInput: String?) {
+        -> (approval: AgentChatItem.Approval, verb: AgentToolVerb, unredactedInput: String?, maskedInput: String?) {
         let transcript = session.transcript
         var approval = AgentChatItem.Approval(request, agentName: session.agent.displayName)
         for item in transcript.items.reversed() {
@@ -123,18 +126,28 @@ enum AgentChatPaneContent {
             tool = found
             input = input ?? transcript.stepDetails[step.key]?.rawInput?.value
         }
-        return (approval, verbForTool(tool, input: input), input.map(rawText))
+        let secret = agentStepTouchesSecretFile(tool, input: input)
+        return (approval, verbForTool(tool, input: input), input.map(rawText), secret ? input.map { rawText(maskSecretFileContent($0)) } : nil)
+    }
+
+    /// The verb of the step an approval record asked about (labels only).
+    static func recordVerb(for approval: AgentChatItem.Approval, in transcript: AgentTranscript) -> AgentToolVerb? {
+        guard let callID = approval.toolCallID, let step = toolItem(callID: callID, in: transcript),
+              case .tool(let tool) = step.content else { return nil }
+        return verbForTool(tool, input: transcript.stepDetails[step.key]?.rawInput?.value, includeExactInput: false)
     }
 
     /// The command itself when the input names one, else the JSON input.
+    /// Twice the card's limit: the card redacts before it clips.
     private static func rawText(_ input: JSONValue) -> String {
+        let limit = ApprovalCardView.maximumInputCharacters * 2
         for field in ["command", "cmd"] {
-            if let command = input[field]?.stringValue { return String(command.prefix(ApprovalCardView.maximumInputCharacters)) }
+            if let command = input[field]?.stringValue { return String(command.prefix(limit)) }
             if let argv = input[field]?.arrayValue {
-                return String(argv.compactMap(\.stringValue).joined(separator: " ").prefix(ApprovalCardView.maximumInputCharacters))
+                return String(argv.compactMap(\.stringValue).joined(separator: " ").prefix(limit))
             }
         }
-        return String(AgentRunTrace.prettyText(input).prefix(ApprovalCardView.maximumInputCharacters))
+        return String(AgentRunTrace.prettyText(input).prefix(limit))
     }
 }
 

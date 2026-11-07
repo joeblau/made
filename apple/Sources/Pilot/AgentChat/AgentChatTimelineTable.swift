@@ -31,6 +31,7 @@ final class AgentChatTimelineTableView: NSTableView {
     var onFocusChange: (Bool) -> Void = { _ in }
     /// Window visibility or occlusion changed (the 1 Hz tick follows it).
     var onWindowStateChange: () -> Void = {}
+    var onLiveResizeEnd: () -> Void = {}
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -73,6 +74,11 @@ final class AgentChatTimelineTableView: NSTableView {
 
     @objc private func windowStateChanged() { onWindowStateChange() }
 
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        onLiveResizeEnd()
+    }
+
     isolated deinit { NotificationCenter.default.removeObserver(self) }
 }
 
@@ -92,6 +98,8 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         case insert
         /// Rows removed from the head (transcript trim).
         case headTrim
+        /// A few rows inserted or removed elsewhere (before a trailing plan).
+        case splice
         case reload
     }
 
@@ -111,6 +119,8 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     var actions = AgentChatRowActions()
     /// A step key's raw input (verbs read commands, paths, and patterns from it).
     var stepInput: (String) -> JSONValue? = { _ in nil }
+    /// The verb of the step an approval record asked about.
+    var approvalVerb: (AgentChatItem.Approval) -> AgentToolVerb? = { _ in nil }
     /// The prose row currently streaming.
     var streamingKey: String? {
         didSet { if oldValue != streamingKey { refresh(ids: [oldValue, streamingKey]) } }
@@ -143,11 +153,16 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     private(set) var expandedOverrides: [String: Bool] = [:]
     private(set) var showAllGroups: Set<String> = []
     private(set) var rosterOverrides: [String: Bool] = [:]
+    /// Old → new group ids from the latest projection: a transcript head
+    /// trim dropped a group's first member, so its id moved to the next one.
+    private(set) var renamedGroups: [String: String] = [:]
     let cursor: AgentChatTimelineCursor
     private var heights: [String: (key: HeightKey, height: CGFloat)] = [:]
     private var verbCache: [String: (revision: Int, verb: AgentToolVerb)] = [:]
     private var timer: Timer?
     private var applyingFollow: Bool?
+    private var lastWidthChange: ContinuousClock.Instant?
+    private var fullHeightPass: Task<Void, Never>?
 
     var isTicking: Bool { timer != nil }
 
@@ -171,6 +186,7 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         tableView.delegate = self
         tableView.onWindowStateChange = { [weak self] in self?.updateTimer() }
         tableView.onFocusChange = { [weak self] _ in self?.cursor.focusChanged() }
+        tableView.onLiveResizeEnd = { [weak self] in self?.liveResizeEnded() }
         // Cells consume mouseDown for their own clicks; a non-delaying click
         // recognizer still lets a click focus the table and place the cursor.
         let click = NSClickGestureRecognizer(target: self, action: #selector(clicked(_:)))
@@ -217,6 +233,7 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     func stop() {
         timer?.invalidate()
         timer = nil
+        fullHeightPass?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -228,20 +245,63 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     /// when the projection must be recomputed.
     func acknowledgeSettles(in next: [AgentTimelineRow]) -> Bool {
         var settling: [AgentActivityGroup] = []
+        var changed = migrateRenamedGroups(in: next)
         for case .activity(let group) in next {
             if group.isLive { acknowledgedSettles.remove(group.id) }
             if group.state == .settling, !acknowledgedSettles.contains(group.id) { settling.append(group) }
         }
-        guard !settling.isEmpty else { return false }
+        guard !settling.isEmpty else { return changed }
         let animates = AgentChatMotion.animatesTransitions(in: tableView)
         let visible = tableView.rows(in: tableView.visibleRect)
         let visibleIDs = Set((visible.location..<NSMaxRange(visible)).compactMap { rows.indices.contains($0) ? rows[$0].id : nil })
-        var changed = false
         for group in settling where !group.animatesSettle || !animates || !visibleIDs.contains(group.id) {
             acknowledgedSettles.insert(group.id)
             changed = true
         }
         return changed
+    }
+
+    /// Carries a group's disclosure state (acknowledgement, expansion, "show
+    /// all") to its new id when a head trim dropped its first member: the
+    /// group keeps its later members, so an old group holding the new first
+    /// member is the same group. Returns true when an acknowledgement moved.
+    private func migrateRenamedGroups(in next: [AgentTimelineRow]) -> Bool {
+        renamedGroups = [:]
+        let known = Set(rows.map(\.id))
+        let added = next.compactMap { row -> AgentActivityGroup? in
+            if case .activity(let group) = row, !known.contains(group.id) { group } else { nil }
+        }
+        guard !added.isEmpty else { return false }
+        let nextIDs = Set(next.map(\.id))
+        let gone = rows.compactMap { row -> AgentActivityGroup? in
+            if case .activity(let group) = row, !nextIDs.contains(group.id) { group } else { nil }
+        }
+        var renamed: [String: String] = [:]
+        for group in added {
+            let firstKey = String(group.id.dropFirst("activity-".count))
+            if let old = gone.first(where: { $0.contains(memberKey: firstKey) }) { renamed[old.id] = group.id }
+        }
+        renamedGroups = renamed
+        var changed = false
+        for (old, new) in renamed {
+            if acknowledgedSettles.remove(old) != nil { changed = acknowledgedSettles.insert(new).inserted || changed }
+            if let expanded = expandedOverrides.removeValue(forKey: old) { expandedOverrides[new] = expanded }
+            if showAllGroups.remove(old) != nil { showAllGroups.insert(new) }
+        }
+        return changed
+    }
+
+    /// The prose row streaming in a running turn: the last prose row, with
+    /// only plan rows after it (a turn's plan sits at the end of its turn).
+    static func streamingProseKey(in rows: [AgentTimelineRow]) -> String? {
+        for row in rows.reversed() {
+            switch row {
+            case .plan: continue
+            case .prose(let item): return item.key
+            default: return nil
+            }
+        }
+        return nil
     }
 
     /// The card's settle animation finished (or was skipped).
@@ -324,6 +384,15 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
             if next.count > old.count - trimmed {
                 tableView.insertRows(at: IndexSet(integersIn: (old.count - trimmed)..<next.count), withAnimation: [])
             }
+        } else if let splice = Self.splice(from: oldIDs, to: newIDs) {
+            // A row landing before a turn's trailing plan, a re-keyed group:
+            // a few insertions and removals, not a reload.
+            lastApplyPath = .splice
+            pairs = splice.pairs
+            tableView.beginUpdates()
+            if !splice.removed.isEmpty { tableView.removeRows(at: splice.removed, withAnimation: []) }
+            if !splice.inserted.isEmpty { tableView.insertRows(at: splice.inserted, withAnimation: []) }
+            tableView.endUpdates()
         } else {
             lastApplyPath = .reload
             lastReconfiguredRows = []
@@ -352,6 +421,28 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         noteHeights(changed.subtracting(collapsing), animated: false)
         noteHeights(collapsing, animated: true)
         finishApply(follow: follow)
+    }
+
+    static let maximumSpliceChanges = 16
+
+    /// Removed rows (old indexes), inserted rows (new indexes), and the
+    /// surviving old → new pairs, when at most `maximumSpliceChanges` rows
+    /// changed and the survivors kept their order.
+    static func splice(from oldIDs: [String], to newIDs: [String]) -> (removed: IndexSet, inserted: IndexSet, pairs: [(old: Int, new: Int)])? {
+        guard abs(oldIDs.count - newIDs.count) <= maximumSpliceChanges else { return nil }
+        let difference = newIDs.difference(from: oldIDs)
+        guard difference.count <= maximumSpliceChanges else { return nil }
+        var removed = IndexSet(), inserted = IndexSet()
+        for change in difference {
+            switch change {
+            case .remove(let offset, _, _): removed.insert(offset)
+            case .insert(let offset, _, _): inserted.insert(offset)
+            }
+        }
+        let survivorsOld = oldIDs.indices.filter { !removed.contains($0) }
+        let survivorsNew = newIDs.indices.filter { !inserted.contains($0) }
+        guard survivorsOld.count == survivorsNew.count else { return nil }
+        return (removed, inserted, Array(zip(survivorsOld, survivorsNew)).map { (old: $0.0, new: $0.1) })
     }
 
     private func finishApply(follow: Bool) {
@@ -389,11 +480,44 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         }
     }
 
-    /// Width changed: every height is stale.
+    /// Width changed: every height is stale. While the width keeps changing
+    /// (a window live resize, a pane divider drag) only visible rows are
+    /// re-measured each step; the rest are re-measured once it settles.
     func widthChanged() {
         guard !rows.isEmpty else { return }
-        tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: rows.indices))
+        let now = ContinuousClock.now
+        let resizing = tableView.inLiveResize || lastWidthChange.map { now - $0 < Self.resizeSettleDelay } == true
+        lastWidthChange = now
+        if resizing {
+            let visible = visibleRows()
+            if !visible.isEmpty { tableView.noteHeightOfRows(withIndexesChanged: IndexSet(visible)) }
+            scheduleFullHeightPass()
+        } else {
+            fullHeightPass?.cancel()
+            fullHeightPass = nil
+            tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: rows.indices))
+        }
         cursor.updateRing()
+    }
+
+    static let resizeSettleDelay = Duration.milliseconds(250)
+
+    private func scheduleFullHeightPass() {
+        fullHeightPass?.cancel()
+        fullHeightPass = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: Self.resizeSettleDelay)
+            guard let self, !Task.isCancelled, !tableView.inLiveResize else { return }
+            liveResizeEnded()
+        }
+    }
+
+    /// The resize ended: re-measure the rows skipped while it ran.
+    func liveResizeEnded() {
+        guard fullHeightPass != nil else { return }
+        fullHeightPass?.cancel()
+        fullHeightPass = nil
+        lastWidthChange = nil
+        widthChanged()
     }
 
     /// Zoom changed: rebuild every cell.
@@ -489,7 +613,8 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
                 now: now(), actions: actions, verbs: verbs(for: group), rosterOverrides: rosterOverrides
             )
         case .approvalRecord(let item):
-            (view as? ApprovalRecordView)?.configure(item: item, actions: actions)
+            let verb = if case .approval(let approval) = item.content { approvalVerb(approval) } else { AgentToolVerb?.none }
+            (view as? ApprovalRecordView)?.configure(item: item, actions: actions, verb: verb)
         case .plan(let item):
             (view as? PlanRowView)?.configure(item: item, actions: actions)
         case .notice(let item):
@@ -623,5 +748,17 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     isolated deinit {
         timer?.invalidate()
         NotificationCenter.default.removeObserver(self)
+    }
+}
+
+private extension AgentActivityGroup {
+    /// True when an item key belongs to one of the group's members.
+    func contains(memberKey key: String) -> Bool {
+        members.contains { member in
+            switch member {
+            case .step(let item), .thought(let item): item.key == key
+            case .agents(let entries): entries.contains { key.hasSuffix("/subagent-\($0.id)") }
+            }
+        }
     }
 }

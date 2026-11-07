@@ -50,9 +50,11 @@ Agent stdout and stderr are untrusted input:
   oldest 10% at once when over (pending approvals are never dropped); the
   agent keeps the full history. At most 64 child sessions are rendered.
 - Tool-call fields are bounded before they are kept: paths 4 KiB, names and
-  ids 256 bytes, subjects 512 characters, error summaries 200 characters,
-  64 content blocks and 512 KiB of their text, 64 locations, 256 KiB per
-  thought and per terminal-output buffer (newest bytes kept).
+  ids 256 bytes, subjects 512 characters, error summaries 200 characters
+  (redacted before they are clipped), 64 content blocks and 512 KiB of their
+  text, 64 locations, 256 KiB per thought and per terminal-output buffer
+  (newest bytes kept; the partial line at the cut is dropped so a secret cut
+  in half cannot lose the key or prefix its redaction rule needs).
 - Raw `rawInput`/`rawOutput` JSON is size-measured by an early-exit walk; over
   256 KiB only a bounded text prefix is kept. These per-step payloads share a
   64 MiB budget per pane; past it, the least recently written settled steps
@@ -87,8 +89,9 @@ prefix), and adds nothing to the system prompt.
 
 Usage appears in two places only: a disabled item at the end of the agent
 menu's Conversation submenu ("Context 58.1k / 258.4k · Cache 97%") and the
-Inspector's Meta tab for the run or an agent (never per step). The composer
-shows no meter. Usage is normalized because agents disagree on what
+Inspector's Meta tab for the run, which **Show Run Usage** in the Inspector's
+Actions menu opens from any subject (never per step or per subagent: agents
+report usage only for the root session). The composer shows no meter. Usage is normalized because agents disagree on what
 `inputTokens` means: Grok's includes cache reads, Claude's and Codex's do not,
 Codex reports no cache writes, and Kimi reports no per-turn usage over ACP
 (only context size). These semantics were measured against Claude Code
@@ -96,8 +99,9 @@ Codex reports no cache writes, and Kimi reports no per-turn usage over ACP
 `ChatAgent.inputTokensIncludeCacheReads` when an agent changes its reporting.
 
 In the Meta tab the meter reads `used / window · Cache NN% · cost`, labelled
-"reported by <agent>". Tokens are reported per turn or per agent, never per
-step, because no agent reports per-tool usage.
+"reported by <agent>". Tokens are reported per turn, never per step or per
+subagent, because no agent reports per-tool or per-subagent usage. Step,
+thought, and group subjects show the session's model.
 
 ## Transcript tiers
 
@@ -266,6 +270,10 @@ were cancelled), and its chevron shows the chips again.
 | cancelled | Stop reason `cancelled` | Hollow gray ring |
 | background | Still reported running after the root turn ended | Half ring |
 
+When the agent process exits or is shut down, every running or background
+subagent ends as cancelled and its running steps and open reasoning close, so
+nothing stays live for a process that is gone.
+
 ## Inspector
 
 The Inspector is a trailing overlay drawer above the transcript. It does not
@@ -306,12 +314,20 @@ The policy masks values with `••••` and leaves the rest in place:
   Tokens of 16 characters or more may keep their known prefix as a hint.
 - Values of secret-named keys in env, YAML, JSON, and CLI flags: any key
   named or ending in `password`, `passwd`, `secret`, `token`, `apikey`,
-  `authorization`, or `cookie`, and any `*_key` (also joined by `-` or `.`),
-  ignoring case. The key stays visible; numbers, booleans, `null`, and `$VAR`
+  `authorization`, or `cookie`, joined by `_`, `-`, `.`, or nothing
+  (`accessToken`, `clientSecret`, `PGPASSWORD`); a `secret` segment anywhere
+  (`SECRET_KEY_BASE`); any `*_key`, `*_pass`, or `*_pwd` behind a separator;
+  `privateKey`, `accessKey`, and similar qualified keys; and `auth`, ignoring
+  case. The key stays visible; numbers, booleans, `null`, and `$VAR`
   references are left alone.
-- PEM private-key bodies; an unterminated `BEGIN` masks to the end of the text.
+- PEM and PGP private-key bodies (`-----BEGIN PGP PRIVATE KEY BLOCK-----`) and
+  PuTTY `Private-Lines`; an unterminated `BEGIN` masks to the end of the text,
+  and an `END` with no `BEGIN` before it masks everything before it.
 - The whole content of files named `.env*`, `*.pem`, `id_rsa*`,
-  `id_ed25519*`, `.netrc`, `.npmrc`, or `credentials*`.
+  `id_ed25519*`, `.netrc`, `.npmrc`, `.pgpass`, `.git-credentials`,
+  `credentials*`, or `.docker/config.json`, at every sink: Inspector, exports,
+  step tooltips, **Copy command**, and the approval card (where the raw input
+  sits behind **Reveal secrets**).
 
 JSON is redacted key by key and string by string before it is printed. Prose
 and notices are masked only for known-secret shapes (prefixed tokens, bearer
@@ -385,7 +401,8 @@ relaunching.
 A pending request docks above the composer as an approval card for the head of
 the queue, with "N more" when others wait. The card names the requesting agent
 (the root agent, the subagent's title, or "untracked subagent"), and shows the
-title, verb, and full command or arguments in a scrollable monospaced view.
+title, the requested action ("Run git push", never "Running" before it is
+approved), and full command or arguments in a scrollable monospaced view.
 Control and bidirectional characters are escaped so the input reads exactly as
 it will run, and secrets are masked behind **Reveal secrets**.
 
@@ -403,7 +420,9 @@ it will run, and secrets are masked behind **Reveal secrets**.
 A decision is recorded only after the answer was written to a live connection.
 The record stays in the timeline after its group as "Approved · <option>"
 (allow options), "Rejected · <option>" (any other option), "Cancelled",
-"Withdrawn by agent", or "Stopped". An agent can withdraw an open request with
+"Withdrawn by agent", or "Stopped", followed by the requested action
+("Approved · Allow · Run git push origin main"); the raw request title is
+only its tooltip. An agent can withdraw an open request with
 `$/cancel_request`. The id must match exactly (a string never matches a
 number), and Cockpit answers the withdrawn request with error `-32800`.
 Stopping a turn, a closed connection, or a restart records open requests as
