@@ -575,9 +575,9 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         RRUI.fillWidth(passwordGroup)
         let options = RRUI.stack([save, automatic], spacing: 6)
         let form = RRUI.stack([identity, usernameGroup, passwordGroup, options], spacing: 12)
-        form.setCustomSpacing(20, after: identity)
+        form.setCustomSpacing(16, after: identity)
         form.setCustomSpacing(16, after: passwordGroup)
-        form.setCustomSpacing(20, after: options)
+        form.setCustomSpacing(16, after: options)
         if let error {
             let message = RRUI.label(error, size: 12, color: .systemRed)
             message.maximumNumberOfLines = 3
@@ -613,8 +613,8 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
             form.leadingAnchor.constraint(greaterThanOrEqualTo: document.leadingAnchor, constant: 20),
             form.trailingAnchor.constraint(lessThanOrEqualTo: document.trailingAnchor, constant: -20),
             form.centerXAnchor.constraint(equalTo: document.centerXAnchor),
-            form.topAnchor.constraint(greaterThanOrEqualTo: document.topAnchor, constant: 20),
-            form.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor, constant: -20),
+            form.topAnchor.constraint(greaterThanOrEqualTo: document.topAnchor, constant: 12),
+            form.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor, constant: -12),
             form.centerYAnchor.constraint(equalTo: document.centerYAnchor),
         ])
         RRUI.pin(scroll, to: content)
