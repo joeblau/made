@@ -225,44 +225,35 @@ struct AppKitDesignTests {
         #expect(closed == 1 && hidden == 1)
     }
 
-    @Test("Opening choices fit narrow and wide panes and dismiss after one selection", arguments: [PaneKind.terminal, .browser, .device, .android])
-    func paneModeLayout(kind: PaneKind) throws {
-        let pane = Pane(kind: kind)
+    @Test("New-tab placeholder fits narrow and wide panes and dismisses after one choice")
+    func newTabLayout() throws {
+        let pane = Pane(kind: .terminal)
         pane.isChoosingMode = true
-        let picker = CockpitPaneModePicker(pane: pane)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+        defer { pane.isChoosingMode = false }
+        let placeholder = CockpitNewTabView(pane: pane)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        window.contentView?.addSubview(picker)
+        window.contentView?.addSubview(placeholder)
         var changes = 0
-        picker.onChange = { changes += 1 }
-        for width in [600.0, 160.0, 600.0] {
-            picker.frame = NSRect(x: 0, y: 0, width: width, height: 300)
-            picker.needsLayout = true
-            picker.layoutSubtreeIfNeeded()
-            let buttons = picker.subviews.compactMap { $0 as? NSButton }
-            #expect(buttons.count == 2)
-            #expect(buttons.allSatisfy { picker.bounds.contains($0.frame) })
-            #expect(!picker.subviews.contains { $0 is NSSegmentedControl || $0 is NSPopUpButton })
+        placeholder.onChange = { changes += 1 }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        for width in [600.0, 180.0, 600.0] {
+            placeholder.frame = NSRect(x: 0, y: 0, width: width, height: 400)
+            placeholder.needsLayout = true
+            placeholder.layoutSubtreeIfNeeded()
+            let rows = descendants(placeholder).filter { $0.accessibilityRole() == .button && $0.accessibilityIdentifier().hasPrefix("pane.opening-choice.") }
+            #expect(rows.count == 6)
+            #expect(rows.allSatisfy { placeholder.bounds.contains($0.convert($0.bounds, to: placeholder)) })
+            #expect(!descendants(placeholder).contains { $0 is NSSegmentedControl || $0 is NSPopUpButton })
         }
-        if kind == .browser {
-            picker.selectMode(at: 1)
-            if ChromiumBrowserCreationPolicy.isCreationEnabled {
-                #expect(pane.browserState?.engine == .chromium)
-            } else {
-                #expect(changes == 0 && pane.isChoosingMode)
-                picker.selectMode(at: 0)
-                #expect(pane.browserState?.engine == .webKit)
-            }
-        } else {
-            picker.selectMode(at: 1)
-            if kind == .terminal { #expect(pane.kind == .agentChat) }
-            if kind == .device { #expect(pane.kind == .device) }
-            if kind == .android { #expect(pane.androidTarget == .device) }
-        }
+        #expect(placeholder.press("t"))
+        #expect(placeholder.currentPage == .terminal && changes == 0)
+        #expect(placeholder.press("a"))
+        #expect(pane.kind == .agentChat)
         #expect(changes == 1 && !pane.isChoosingMode)
-        picker.selectMode(at: 0)
-        #expect(changes == 1, "A completed opening choice cannot change the running pane")
+        #expect(!placeholder.press("r"), "A completed opening choice cannot change the running pane")
+        #expect(changes == 1 && pane.kind == .agentChat)
     }
 }

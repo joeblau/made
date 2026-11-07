@@ -116,12 +116,21 @@ final class NativePaneLifecycleTests: XCTestCase {
 
     @MainActor
     func testOpeningChoiceStartsOnlyTheSelectedModeAndReclaimsItsSpace() throws {
-        for kind: PaneKind in [.terminal, .browser, .simulator, .android] {
+        // Each case types a key path through the placeholder.
+        let cases: [(start: PaneKind, keys: [String], expected: PaneKind)] = [
+            (.terminal, ["t", "a"], .agentChat),
+            (.terminal, ["t", "r"], .terminal),
+            (.terminal, ["b", "s", "0"], .browser),
+            (.simulator, ["\u{1b}", "t", "r"], .terminal),
+        ]
+        for (start, keys, expected) in cases {
             let cache = CockpitPaneControllerCache()
             defer { cache.closeAll() }
             let workspace = Workspace(name: "Opening choice")
-            let pane = Pane(kind: kind)
+            workspace.rootPath = "/tmp"
+            let pane = Pane(kind: start)
             pane.isChoosingMode = true
+            if start == .simulator { pane.openingPath = [.root, .simulator] }
             pane.workspace = workspace
             workspace.panes = [pane]
             workspace.selectedPaneID = pane.id
@@ -132,26 +141,26 @@ final class NativePaneLifecycleTests: XCTestCase {
                 factory: { pane, _ in created.append(pane.kind); return child }, onDrop: { _, _ in false })
             presentation.refresh(isActive: true)
             func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-            let picker = try XCTUnwrap(descendants(presentation.view).compactMap { $0 as? CockpitPaneModePicker }.first)
+            let placeholder = try XCTUnwrap(descendants(presentation.view).compactMap { $0 as? CockpitNewTabView }.first)
             XCTAssertTrue(created.isEmpty, "No session should start before the opening choice")
-            let index = kind == .browser ? 0 : 1
-            picker.selectMode(at: index)
-            let expected: PaneKind = kind == .terminal ? .agentChat : (kind == .simulator ? .device : kind)
+            for key in keys {
+                if key == "\u{1b}" { XCTAssertTrue(placeholder.pop()) } else { XCTAssertTrue(placeholder.press(key), "\(keys)") }
+            }
             XCTAssertEqual(created, [expected])
             XCTAssertFalse(pane.isChoosingMode)
-            XCTAssertNil(picker.superview)
-            XCTAssertFalse(descendants(presentation.view).contains { $0 is CockpitPaneModePicker })
+            XCTAssertNil(placeholder.superview)
+            XCTAssertFalse(descendants(presentation.view).contains { $0 is CockpitNewTabView })
             let host = try XCTUnwrap(child.view.superview)
             XCTAssertEqual(host.bounds.height,
                            presentation.view.bounds.height - CockpitPaneTab.preferredHeight - LiquidGlassMetrics.Spacing.xSmall,
                            accuracy: 1, "Only the pane header and its top inset should consume vertical space")
-            picker.selectMode(at: 1 - index)
+            XCTAssertFalse(placeholder.press("t"))
             presentation.deactivate()
             presentation.refresh(isActive: true)
             XCTAssertEqual(created, [expected])
             XCTAssertEqual(pane.kind, expected)
-            if kind == .android { XCTAssertEqual(pane.androidTarget, .device) }
-            if kind == .browser { XCTAssertEqual(pane.browserState?.engine, .webKit) }
+            if expected == .browser { XCTAssertEqual(pane.browserState?.engine, .webKit) }
+            if expected.isTerminalTool { XCTAssertEqual(pane.currentDirectory, workspace.effectiveRootPath) }
         }
     }
 

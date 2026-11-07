@@ -58,7 +58,7 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
         table.addTableColumn(column)
         table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
         table.headerView = nil
-        table.rowHeight = 52
+        table.rowHeight = 40
         table.intercellSpacing = NSSize(width: 0, height: 2)
         table.style = .fullWidth
         table.dataSource = self
@@ -97,7 +97,7 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
             self.shortcuts.font = CockpitTypography.font(size: 11)
             self.heading.font = CockpitTypography.font(size: 13, weight: .semibold)
             self.status.font = CockpitTypography.font(size: 12)
-            self.table.rowHeight = 52 * CockpitUIZoomController.shared.factor
+            self.table.rowHeight = 40 * CockpitUIZoomController.shared.factor
             self.table.reloadData()
         }
     }
@@ -154,7 +154,11 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
     private func refresh() {
         let path = rootPath ?? ""
         let currentGeneration = generation
-        if !hasScanned {
+        let catalog = LocalServerCatalog.shared
+        if let cached = catalog.cached(rootPath: path) {
+            // A known workspace shows its list at once; a stale one refreshes quietly.
+            show(cached)
+        } else if !hasScanned {
             // Fast scans never flash a loading row.
             scanningDelayTask = Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .milliseconds(400))
@@ -163,17 +167,9 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
             }
         }
         task = Task { @MainActor [weak self] in
-            let discovered = await LocalServerScanner.scan(rootPath: path)
-            guard !Task.isCancelled, self?.generation == currentGeneration else { return }
-            self?.scanningDelayTask?.cancel()
-            self?.scanningDelayTask = nil
-            self?.hasScanned = true
-            self?.status.isHidden = false
-            self?.servers = discovered
-            self?.status.stringValue = discovered.isEmpty
-                ? "No dev servers found in this workspace. Start a local server, or enter a URL in the address bar."
-                : "Choose a server, or use its 1–9 shortcut."
-            self?.table.reloadData()
+            let discovered = await catalog.servers(rootPath: path)
+            guard !Task.isCancelled, let self, self.generation == currentGeneration else { return }
+            if !self.hasScanned || self.servers != discovered { self.show(discovered) }
             await LocalServerLivenessMonitor.monitor(servers: discovered) { [weak self] latest in
                 guard let self, self.generation == currentGeneration, self.liveness != latest else { return }
                 let changedRows = IndexSet(self.servers.indices.filter {
@@ -183,6 +179,18 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
                 self.table.reloadData(forRowIndexes: changedRows, columnIndexes: IndexSet(integer: 0))
             }
         }
+    }
+
+    private func show(_ discovered: [LocalServer]) {
+        scanningDelayTask?.cancel()
+        scanningDelayTask = nil
+        hasScanned = true
+        status.isHidden = false
+        servers = discovered
+        status.stringValue = discovered.isEmpty
+            ? "No dev servers found in this workspace. Start a local server, or enter a URL in the address bar."
+            : "Choose a server, or use its 1–9 shortcut."
+        table.reloadData()
     }
 
     func numberOfRows(in tableView: NSTableView) -> Int { servers.count }
@@ -196,33 +204,29 @@ final class BrowserStartPageViewController: NSViewController, NSTableViewDataSou
         name.font = CockpitTypography.font(size: 13, weight: .medium)
         name.lineBreakMode = .byTruncatingTail
         name.maximumNumberOfLines = 1
-        let address = BrowserNativeUI.label(server.displayURL, secondary: true)
-        address.font = CockpitTypography.font(size: 11)
-        address.lineBreakMode = .byTruncatingHead
-        address.maximumNumberOfLines = 1
-        let labels = NSStackView(views: [name, address])
-        labels.orientation = .vertical
-        labels.alignment = .leading
-        labels.spacing = 2
-        for label in [name, address] {
-            label.widthAnchor.constraint(equalTo: labels.widthAnchor).isActive = true
-            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        }
-        labels.setHuggingPriority(.defaultLow, for: .horizontal)
-        let hotkey = BrowserNativeUI.label(row < 9 ? String(row + 1) : "", secondary: true)
-        hotkey.font = CockpitTypography.font(size: 12, weight: .semibold, monospaced: true)
-        hotkey.setContentHuggingPriority(.required, for: .horizontal)
-        hotkey.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        name.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        // One line: name and its port badge, then the shortcut and live status.
+        let port = ServerPortBadge()
+        port.port = server.port
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let hotkey = NewTabKeyBadge()
+        hotkey.key = row < 9 ? String(row + 1) : nil
+        hotkey.isHidden = row >= 9
+        hotkey.widthAnchor.constraint(equalToConstant: 24).isActive = true
+        hotkey.heightAnchor.constraint(equalToConstant: 24).isActive = true
         let live = liveness[server.port] == true
         let indicator = NSImageView(image: NSImage(systemSymbolName: "circle.fill", accessibilityDescription: live ? "Listening" : "Not listening") ?? NSImage())
         indicator.contentTintColor = live ? .systemGreen : .tertiaryLabelColor
         indicator.widthAnchor.constraint(equalToConstant: 10).isActive = true
         indicator.heightAnchor.constraint(equalToConstant: 10).isActive = true
-        let content = NSStackView(views: [labels, hotkey, indicator])
+        let content = NSStackView(views: [name, port, spacer, hotkey, indicator])
         content.orientation = .horizontal
+        content.alignment = .centerY
         content.distribution = .fill
         content.spacing = 8
-        content.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+        content.setCustomSpacing(12, after: hotkey)
+        content.edgeInsets = NSEdgeInsets(top: 6, left: 14, bottom: 6, right: 14)
         content.toolTip = server.url.absoluteString
         content.setAccessibilityLabel("\(server.name), \(server.displayURL), \(live ? "listening" : "not listening")")
         return content
@@ -281,4 +285,44 @@ private enum StartPageKeyHandler {
         return nil
     }
 
+}
+
+/// A server's port in a small capsule beside its name, e.g. `app` `3000`.
+@MainActor
+final class ServerPortBadge: NSView {
+    private let label = NSTextField(labelWithString: "")
+    var port: Int? { didSet { label.stringValue = port.map(String.init) ?? ""; invalidateIntrinsicContentSize(); needsLayout = true } }
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        label.font = .monospacedDigitSystemFont(ofSize: 11 * CGFloat(CockpitUIZoomController.shared.factor), weight: .medium)
+        label.textColor = .secondaryLabelColor
+        label.alignment = .center
+        addSubview(label)
+        setAccessibilityElement(false)
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        let text = label.intrinsicContentSize
+        return NSSize(width: ceil(text.width) + 12, height: ceil(text.height) + 4)
+    }
+
+    override func layout() {
+        super.layout()
+        layer?.cornerRadius = bounds.height / 2
+        let height = label.intrinsicContentSize.height
+        label.frame = NSRect(x: 0, y: (bounds.height - height) / 2, width: bounds.width, height: height)
+    }
+
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
+        }
+    }
 }

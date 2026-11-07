@@ -410,7 +410,6 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
 private final class WorkspaceSidebarCell: NSTableCellView {
     private let name = shellLabel("")
     private let branch = shellLabel("", secondary: true)
-    private let badge = shellLabel("")
     private let gauge = WorkspaceGaugeView(frame: .zero)
     private var coldTicks = 2
     private var workspaceID: UUID?
@@ -421,9 +420,8 @@ private final class WorkspaceSidebarCell: NSTableCellView {
         super.init(frame: .zero)
         branch.font = .systemFont(ofSize: 10)
         name.font = .systemFont(ofSize: 12)
-        badge.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
         let labels = shellStack([name, branch], spacing: 2)
-        let row = shellStack([labels, badge, gauge], orientation: .horizontal, spacing: 6)
+        let row = shellStack([labels, gauge], orientation: .horizontal, spacing: 6)
         row.distribution = .fill
         row.translatesAutoresizingMaskIntoConstraints = false
         addSubview(row)
@@ -447,12 +445,10 @@ private final class WorkspaceSidebarCell: NSTableCellView {
         if workspaceID != workspace.id { coldTicks = 2; workspaceID = workspace.id; gauge.started = 0; gauge.running = 0 }
         name.font = CockpitTypography.font(size: 12)
         self.branch.font = CockpitTypography.font(size: 10)
-        badge.font = CockpitTypography.font(size: 10, weight: .medium, monospaced: true)
         nameLeading?.constant = 4 + indentation
         name.stringValue = workspace.name
         self.branch.stringValue = branch.map { "⑂ \($0)" } ?? ""
         self.branch.isHidden = branch == nil
-        badge.stringValue = workspace.badgeCount > 0 ? String(workspace.badgeCount) : ""
         setAccessibilityLabel(workspace.name + (branch.map { ", branch \($0)" } ?? ""))
         refreshStatus(workspace: workspace, store: store)
     }
@@ -468,6 +464,13 @@ private final class WorkspaceSidebarCell: NSTableCellView {
             started += 1
             if status.agent.needsVisibleTerminalContentsForActivity && pane.visibleTerminalContents() == nil && coldTicks > 0 { coldTicks -= 1; return }
             if status.activity == .running { running.insert(pane.id) }
+        }
+        // Agent Chat panes count too: a live session is started, and it is
+        // working while a turn runs or its background subagents do.
+        for pane in workspace.panes where pane.kind == .agentChat {
+            guard let session = AgentChatRegistry.shared.existingSession(for: pane.id) else { continue }
+            started += 1
+            if session.phase == .prompting || session.hasBackgroundAgents { running.insert(pane.id) }
         }
         coldTicks = 2
         runningPaneIDs = running
