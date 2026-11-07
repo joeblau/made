@@ -804,7 +804,8 @@ extension AgentActivityGroup {
     /// Live groups open; settling and settled groups close.
     var isExpandedByDefault: Bool { isLive }
 
-    /// Failed steps and failed agents, shown beneath a collapsed label.
+    /// Failed steps and rosters with a failed agent, shown beneath a
+    /// collapsed label.
     var failedMembers: [AgentActivityMember] {
         members.compactMap { member in
             switch member {
@@ -814,8 +815,9 @@ extension AgentActivityGroup {
             case .thought:
                 return nil
             case .agents(let entries):
-                let failed = entries.filter { $0.lifecycle == .failed }
-                return failed.isEmpty ? nil : .agents(failed)
+                // The whole roster, so its summary counts every agent
+                // ("12 agents · 11 done · 1 failed"), not just the failures.
+                return entries.contains { $0.lifecycle == .failed } ? member : nil
             }
         }
     }

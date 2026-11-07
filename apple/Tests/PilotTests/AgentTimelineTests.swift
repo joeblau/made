@@ -227,6 +227,24 @@ struct AgentTimelineTests {
     }
 
     @Test
+    func collapsedCardKeepsTheWholeRosterWhenOneAgentFails() throws {
+        let items = [
+            user("u"), tool("1"), tool("2"), tool("3"), tool("4"),
+            agent("a", state: "idle", stopReason: "end_turn"), agent("b", state: "idle", stopReason: "error"),
+            agent("c", state: "idle", stopReason: "end_turn"), prose("p"),
+        ]
+        let group = try onlyGroup(project(items, running: false))
+        let layout = group.layout(expandedOverride: false, showAll: false)
+        #expect(!layout.isExpanded)
+        let rosters = layout.entries.compactMap { entry -> [AgentRosterEntry]? in
+            if case .member(.agents(let entries)) = entry { return entries }
+            return nil
+        }
+        #expect(rosters.map { $0.map(\.id) } == [["a", "b", "c"]])
+        #expect(AgentRosterView.summary(rosters.first ?? []).text == "3 agents · 2 done · 1 failed")
+    }
+
+    @Test
     func runningAgentsAfterTheTurnAreBackgroundAndKeepTheCardLive() throws {
         let group = try onlyGroup(project([user("u"), agent("a")], running: false))
         guard case .agents(let entries) = group.members.first else {
