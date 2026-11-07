@@ -10,6 +10,8 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
     }
     private let sections = [
         Section(id: SettingsTab.general, title: "General", searchTerms: "General identity keys about version updates setup permissions tools Chromium"),
+        Section(id: SettingsTab.sidebar, title: "Sidebar",
+                searchTerms: (["Sidebar", "show", "hide"] + SidebarFeature.allCases.map(\.title)).joined(separator: " ")),
         Section(id: SettingsTab.drones, title: "Drones", searchTerms: "Drones remote workers pairing Bonjour"),
         Section(id: SettingsTab.usage, title: "Usage", searchTerms: "Usage Claude Codex Kimi Grok")
     ]
@@ -19,6 +21,7 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
     private let onOpenSetup: () -> Void
     private let onOpenMessaging: () -> Void
     private let defaults: UserDefaults
+    private let sidebarVisibility: SidebarFeatureVisibility
     private let runsLiveChecks: Bool
     private let search = NSSearchField()
     private let table = NSTableView()
@@ -32,13 +35,15 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
 
     init(updater: SPUUpdater, droneStore: DroneStore, identity: SecureIdentity,
          onOpenSetup: @escaping () -> Void, onOpenMessaging: @escaping () -> Void,
-         defaults: UserDefaults = .standard, runsLiveChecks: Bool = true) {
+         defaults: UserDefaults = .standard, sidebarVisibility: SidebarFeatureVisibility? = nil,
+         runsLiveChecks: Bool = true) {
         self.updater = updater
         self.droneStore = droneStore
         self.identity = identity
         self.onOpenSetup = onOpenSetup
         self.onOpenMessaging = onOpenMessaging
         self.defaults = defaults
+        self.sidebarVisibility = sidebarVisibility ?? SidebarFeatureVisibility(defaults: defaults)
         self.runsLiveChecks = runsLiveChecks
         super.init(nibName: nil, bundle: nil)
         preferredContentSize = NSSize(width: 920, height: 680)
@@ -127,6 +132,8 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
         let controller: NSViewController
         if let cached = controllers[selected] { controller = cached } else {
             switch selected {
+            case SettingsTab.sidebar:
+                controller = SidebarSettingsViewController(visibility: sidebarVisibility)
             case SettingsTab.drones:
                 controller = DroneSettingsViewController(store: droneStore, runsDiscovery: runsLiveChecks)
             case SettingsTab.usage:

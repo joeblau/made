@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 
 /// A single native menu routes every command through the window that owns the
 /// active pane. The responder chain continues to own text editing and Undo.
@@ -16,6 +17,9 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
     private let showSettings: () -> Void
     private let showSetup: () -> Void
     private let checkForUpdates: () -> Void
+    private let sidebarVisibility: SidebarFeatureVisibility?
+    private var featureItems: [SidebarFeature: NSMenuItem] = [:]
+    private var visibilityGeneration = 0
     private weak var droneMenu: NSMenu?
     private weak var workspaceMenu: NSMenu?
     private weak var addLeftMenu: NSMenu?
@@ -24,7 +28,8 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
     init(windowProvider: @escaping () -> CockpitWindowController?,
          showMain: @escaping () -> Void, toggleExtendo: @escaping () -> Void,
          showSettings: @escaping () -> Void, showSetup: @escaping () -> Void,
-         checkForUpdates: @escaping () -> Void, keyWindowProvider: @escaping () -> NSWindow? = { NSApp.keyWindow }) {
+         checkForUpdates: @escaping () -> Void, keyWindowProvider: @escaping () -> NSWindow? = { NSApp.keyWindow },
+         sidebarVisibility: SidebarFeatureVisibility? = nil) {
         self.windowProvider = windowProvider
         self.keyWindowProvider = keyWindowProvider
         self.showMain = showMain
@@ -32,6 +37,7 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
         self.showSettings = showSettings
         self.showSetup = showSetup
         self.checkForUpdates = checkForUpdates
+        self.sidebarVisibility = sidebarVisibility
         super.init()
     }
 
@@ -112,11 +118,13 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
         let view = submenu("View", in: main)
         view.addItem(command("Toggle Sidebar", key: "s", modifiers: [.command, .control]) { $0.toggleSidebar() })
         view.addItem(command("Toggle Inspector", key: "i", requiresWorkspace: true) { $0.toggleInspector() })
-        view.addItem(command("Toggle Notes", key: "0") { $0.store.toggleNotesMode(); $0.refresh() })
-        view.addItem(command("Toggle Remote Desktop", key: "0", modifiers: [.command, .shift]) { $0.store.toggleRemoteDesktopMode(); $0.refresh() })
-        view.addItem(command("Toggle Docker", key: "0", modifiers: [.command, .control]) { $0.store.toggleDockerMode(); $0.refresh() })
-        view.addItem(command("Toggle Agentic Use") { $0.store.toggleAgenticUseMode(); $0.refresh() })
-        view.addItem(command("Toggle Runners") { $0.store.isRunnersMode.toggle(); $0.refresh() })
+        for feature in SidebarFeature.allCases {
+            let (key, modifiers) = Self.shortcut(for: feature)
+            let item = command("Toggle " + feature.title, key: key, modifiers: modifiers) { $0.store.toggleMode(feature); $0.refresh() }
+            featureItems[feature] = item
+            view.addItem(item)
+        }
+        observeSidebarVisibility()
         view.addItem(.separator())
         let layout = submenu("Layout", in: view)
         layout.addItem(command("Focus or Restore Selected Pane", requiresPane: true) { window in
@@ -180,6 +188,31 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
         workspaceMenu = workspaces; workspaces.delegate = self
         populateWorkspaceMenu(workspaces)
         NSApp.mainMenu = main
+    }
+
+    private static func shortcut(for feature: SidebarFeature) -> (String, NSEvent.ModifierFlags) {
+        switch feature {
+        case .notes: ("0", .command)
+        case .remoteDesktop: ("0", [.command, .shift])
+        case .docker: ("0", [.command, .control])
+        case .agenticUse, .runners: ("", .command)
+        }
+    }
+
+    /// A hidden sidebar mode also loses its View menu toggle, and with it the
+    /// keyboard shortcut; the store refuses to enter it from anywhere else.
+    private func observeSidebarVisibility() {
+        guard let sidebarVisibility else { return }
+        visibilityGeneration += 1
+        let generation = visibilityGeneration
+        withObservationTracking {
+            for (feature, item) in featureItems { item.isHidden = !sidebarVisibility.isVisible(feature) }
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, generation == self.visibilityGeneration else { return }
+                self.observeSidebarVisibility()
+            }
+        }
     }
 
     private func submenu(_ title: String, in parent: NSMenu) -> NSMenu {

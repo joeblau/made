@@ -11,7 +11,8 @@ extension WorkspaceStore {
     var syncSummaries: [WorkspaceSummary] {
         let workspaceSummaries = summaries
         let connections = remoteConnections
-        guard !connections.isEmpty || isRemoteDesktopMode else { return workspaceSummaries }
+        // A Remote Desktop hidden from the sidebar is not offered to Walkie either.
+        guard isSidebarFeatureVisible(.remoteDesktop), !connections.isEmpty || isRemoteDesktopMode else { return workspaceSummaries }
         let remoteDesktop = WorkspaceSummary(
             id: Self.remoteDesktopWorkspaceID,
             name: "Remote Desktop",
@@ -30,7 +31,7 @@ extension WorkspaceStore {
 
     @discardableResult
     func selectRemoteDesktopTab(_ id: UUID) -> Bool {
-        guard remoteConnections.contains(where: { $0.id == id }) else { return false }
+        guard isSidebarFeatureVisible(.remoteDesktop), remoteConnections.contains(where: { $0.id == id }) else { return false }
         selectedRemoteConnectionID = id
         enterRemoteDesktopMode()
         return true

@@ -283,7 +283,7 @@ final class PilotApp {
                 updater: updaterController.updater, droneStore: droneStore, identity: secureIdentity,
                 onOpenSetup: { [weak self] in self?.showSetup() },
                 onOpenMessaging: { [weak self] in self?.showMessaging() }, defaults: preferences,
-                runsLiveChecks: !isIsolated),
+                sidebarVisibility: store.sidebarVisibility, runsLiveChecks: !isIsolated),
                 title: "Settings", identifier: "settings", size: NSSize(width: 920, height: 680))
         }
         settingsWindow?.showWindow(nil)
@@ -337,7 +337,8 @@ final class PilotApp {
         let menus = CockpitMenuController(windowProvider: { [weak self] in self?.keyWindowController },
             showMain: { [weak self] in self?.showMain() }, toggleExtendo: { [weak self] in self?.toggleExtendo() },
             showSettings: { [weak self] in self?.showSettings() }, showSetup: { [weak self] in self?.showSetup() },
-            checkForUpdates: { [weak self] in self?.updaterController.updater.checkForUpdates() })
+            checkForUpdates: { [weak self] in self?.updaterController.updater.checkForUpdates() },
+            sidebarVisibility: store.sidebarVisibility)
         menus.copyAction = { [weak self] in self?.copyOrCaptureScreenshot() }
         menus.pasteAction = { [weak self] in self?.pasteIntoSelectedPane() }
         menus.cutAction = { [weak self] in self?.sendStandardEditAction(#selector(NSText.cut(_:))) }
