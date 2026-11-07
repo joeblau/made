@@ -123,7 +123,7 @@ struct AgenticUseNativePresentationTests {
         let plot = try #require(descendants(chart).compactMap { $0 as? AgenticUseStackedPlot }.first)
         let diagram = try #require(descendants(dashboard).compactMap { $0 as? AgenticUseTokenFlowDiagram }.first)
         let metric = try #require(descendants(chart).compactMap { $0 as? NSSegmentedControl }.first)
-        let provider = try #require(descendants(chart).compactMap { $0 as? NSButton }.first { $0.title.hasPrefix("Claude ") })
+        let provider = try #require(descendants(chart).compactMap { $0 as? NSButton }.first { $0.accessibilityLabel()?.hasPrefix("Claude ") == true })
         let tokens = try #require(descendants(dashboard).compactMap { $0 as? AgenticUseKPICard }.first {
             $0.titleLabel.stringValue == "Processed Tokens"
         })
@@ -256,7 +256,7 @@ struct AgenticUseNativePresentationTests {
         let panel = AgenticUseDailyChartPanel(snapshot: snapshot())
         panel.frame = NSRect(x: 0, y: 0, width: 900, height: panel.preferredHeight(for: 900))
         panel.layoutSubtreeIfNeeded()
-        let legend = try #require(descendants(panel).compactMap { $0 as? NSButton }.first { $0.title.hasPrefix("Claude ") })
+        let legend = try #require(descendants(panel).compactMap { $0 as? NSButton }.first { $0.accessibilityLabel()?.hasPrefix("Claude ") == true })
         let plot = try #require(descendants(panel).first { $0.accessibilityHelp()?.contains("Use Left and Right Arrow") == true })
         let right = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                                                  windowNumber: 0, context: nil, characters: "", charactersIgnoringModifiers: "",

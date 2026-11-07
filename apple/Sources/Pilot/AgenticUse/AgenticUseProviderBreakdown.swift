@@ -289,7 +289,8 @@ final class AgenticUseProviderModelsController: NSViewController, NSTableViewDat
 @MainActor
 private final class AgenticUseProviderModelRow: NSTableCellView {
     private let name = NSTextField(labelWithString: "")
-    private let value = NSTextField(labelWithString: "")
+    private let value = AgenticUseNumericTextField(labelWithString: "")
+    private var modelID: String?
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         addSubview(name); addSubview(value)
@@ -299,7 +300,11 @@ private final class AgenticUseProviderModelRow: NSTableCellView {
     required init?(coder: NSCoder) { nil }
     func configure(_ model: AgenticModelTotal) {
         name.stringValue = model.displayName + (model.isUnpriced ? " · unpriced" : "")
-        value.stringValue = "\(model.isUnpriced ? "—" : AgenticUseFormat.cost(model.cost))    \(AgenticUseFormat.tokens(model.tokens))"
+        // Roll only when this row keeps showing the same model.
+        value.font = AgenticUseLayout.font(.meta)
+        value.roll(to: "\(model.isUnpriced ? "—" : AgenticUseFormat.cost(model.cost))    \(AgenticUseFormat.tokens(model.tokens))",
+                   animated: modelID == model.id)
+        modelID = model.id
         name.font = AgenticUseLayout.font(.meta, weight: .medium)
         value.font = AgenticUseLayout.font(.meta)
         name.lineBreakMode = .byTruncatingMiddle

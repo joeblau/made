@@ -94,6 +94,7 @@ final class AgenticUseDailyChartPanel: AgenticUseCardView {
     private let stylePicker = NSPopUpButton()
     private let plot = AgenticUseStackedPlot()
     private var legendButtons: [AgenticUseActionButton] = []
+    private var legendShares: [AgenticUseNumericTextField] = []
     private var legendProviders: [AgenticProvider] = []
 
     init(snapshot: AgenticUseSnapshot) {
@@ -166,6 +167,7 @@ final class AgenticUseDailyChartPanel: AgenticUseCardView {
                     hourly: snapshot.range == .day, weekly: effectiveGranularity == .weekly, animated: animated)
         if legendProviders != allProviders {
             legendButtons.forEach { $0.removeFromSuperview() }
+            legendShares = []
             legendProviders = allProviders
             legendButtons = allProviders.map { provider in
                 let button = AgenticUseActionButton("") { [weak self] in
@@ -177,6 +179,14 @@ final class AgenticUseDailyChartPanel: AgenticUseCardView {
                 button.setButtonType(.pushOnPushOff)
                 button.image = AgenticUseModelPalette.providerMarker(for: provider)
                 button.imagePosition = .imageLeading
+                button.alignment = .left
+                // The share rolls like numeric text inside the chip; the
+                // button title keeps only the provider name.
+                let share = AgenticUseNumericTextField(labelWithString: "")
+                share.alignment = .right
+                share.refusesFirstResponder = true
+                button.addSubview(share)
+                legendShares.append(share)
                 addSubview(button)
                 return button
             }
@@ -184,7 +194,11 @@ final class AgenticUseDailyChartPanel: AgenticUseCardView {
         let sum = shares.values.reduce(0, +)
         for (provider, button) in zip(allProviders, legendButtons) {
             let share = sum > 0 ? (shares[provider] ?? 0) / sum : 0
-            button.title = provider.displayName + " " + AgenticUseFormat.percent(share)
+            button.title = provider.displayName
+            if let index = legendButtons.firstIndex(of: button) {
+                legendShares[index].roll(to: AgenticUseFormat.percent(share))
+            }
+            button.setAccessibilityLabel(provider.displayName + " " + AgenticUseFormat.percent(share))
             button.contentTintColor = .labelColor
             button.state = isolated == provider ? .on : .off
             button.toolTip = isolated == provider ? "Show all providers" : "Show only " + provider.displayName
@@ -218,6 +232,14 @@ final class AgenticUseDailyChartPanel: AgenticUseCardView {
             button.frame = NSRect(x: 16 + CGFloat(index % columns) * columnWidth,
                                   y: plot.frame.maxY + 8 + CGFloat(index / columns) * 32 * zoom,
                                   width: max(1, columnWidth - 6), height: 27 * zoom)
+            if legendShares.indices.contains(index) {
+                let share = legendShares[index]
+                share.font = AgenticUseLayout.font(.meta)
+                share.textColor = .labelColor
+                let height = ceil(share.font?.boundingRectForFont.height ?? 16)
+                share.frame = NSRect(x: button.bounds.width * 0.45, y: (button.bounds.height - height) / 2,
+                                     width: button.bounds.width * 0.55 - 10 * zoom, height: height)
+            }
         }
     }
     @objc private func metricChanged() {

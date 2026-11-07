@@ -2,7 +2,7 @@ import AppKit
 
 @MainActor
 final class AgenticUseTokenFlowPanel: AgenticUseCardView {
-    private let subtitle = NSTextField(labelWithString: "")
+    private let subtitle = AgenticUseNumericTextField(labelWithString: "")
     private let diagram: AgenticUseTokenFlowDiagram
     private var graph: AgenticTokenFlowGraph
     init(snapshot: AgenticUseSnapshot) {
@@ -17,7 +17,7 @@ final class AgenticUseTokenFlowPanel: AgenticUseCardView {
     required init?(coder: NSCoder) { nil }
     func update(snapshot: AgenticUseSnapshot) {
         graph = AgenticTokenFlowGraph.make(modelTotals: snapshot.modelTotals)
-        subtitle.stringValue = "\(AgenticUseFormat.tokens(graph.totalTokens)) tokens by provider, model, and type"
+        subtitle.roll(to: "\(AgenticUseFormat.tokens(graph.totalTokens)) tokens by provider, model, and type")
         diagram.update(graph: graph, modelTotals: snapshot.modelTotals)
         needsLayout = true
     }

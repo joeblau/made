@@ -214,7 +214,7 @@ final class AgenticUseKPICard: AgenticUseCardView {
     let transition = AgenticUseDataTransition()
     private(set) var displayedNumber: Double
     private let valueLabel = AgenticUseNumericTextField(labelWithString: "")
-    private let deltaLabel = NSTextField(labelWithString: "")
+    private let deltaLabel = AgenticUseNumericTextField(labelWithString: "")
     private let caption = NSTextField(labelWithString: "")
     private let sparkline = AgenticUseSparkline(values: [], tint: .secondaryLabelColor)
     private var measuredZoom: CGFloat?
@@ -255,12 +255,12 @@ final class AgenticUseKPICard: AgenticUseCardView {
             self.valueLabel.setTransitionProgress(progress)
         }
         if let delta = metric.delta {
-            deltaLabel.stringValue = (delta.isFlat ? "− " : delta.change > 0 ? "↑ " : "↓ ") + delta.text
+            deltaLabel.roll(to: (delta.isFlat ? "− " : delta.change > 0 ? "↑ " : "↓ ") + delta.text)
             deltaLabel.textColor = .labelColor
             deltaLabel.setAccessibilityLabel("\(delta.spokenDirection) \(delta.text)")
             caption.stringValue = delta.caption
         } else {
-            deltaLabel.stringValue = ""
+            deltaLabel.roll(to: "", animated: false)
             caption.stringValue = metric.fallbackCaption
         }
         sparkline.update(values: metric.sparkline, tint: .secondaryLabelColor, anchorsAtZero: metric.anchorsAtZero)
@@ -319,6 +319,34 @@ final class AgenticUseNumericTextField: NSTextField {
     private var transitionWidthInFontUnits: CGFloat = 0
     var transitionWidth: CGFloat { transitionWidthInFontUnits * (font?.pointSize ?? CockpitTypography.font(.metric).pointSize) }
     private(set) var isTransitioning = false
+    private let rollTransition = AgenticUseDataTransition()
+
+    /// Self-driven numeric transition for labels that aren't animated by an
+    /// enclosing card. Direction follows the numeric value when both parse.
+    func roll(to text: String, animated: Bool = true) {
+        guard text != stringValue || isTransitioning else { return }
+        guard animated, !stringValue.isEmpty else {
+            rollTransition.cancel()
+            prepareTransition(to: text, countsDown: false)
+            setTransitionProgress(1)
+            stringValue = text
+            return
+        }
+        let countsDown = Self.numericValue(text).flatMap { next in
+            Self.numericValue(stringValue).map { next < $0 }
+        } ?? false
+        prepareTransition(to: text, countsDown: countsDown)
+        rollTransition.start(in: self) { [weak self] progress in self?.setTransitionProgress(progress) }
+    }
+
+    static func numericValue(_ text: String) -> Double? {
+        let separator = Locale.current.decimalSeparator ?? "."
+        let digits = text.compactMap { character -> String? in
+            if character.isNumber { return String(character) }
+            return String(character) == separator ? "." : nil
+        }.joined()
+        return Double(digits)
+    }
 
     func prepareTransition(to text: String, countsDown: Bool) {
         guard text != stringValue || isTransitioning else { return }
@@ -379,7 +407,10 @@ final class AgenticUseNumericTextField: NSTextField {
         let firstDigit = characters.firstIndex(where: \.isNumber) ?? 0
         let lastDigit = characters.lastIndex(where: \.isNumber) ?? 0
         let font = font ?? CockpitTypography.font(.metric)
-        var x: CGFloat = 0
+        // Glyph x is measured from the field's text anchor (leading, centre,
+        // or trailing edge) so right-aligned values roll in place.
+        let total = characters.reduce(CGFloat(0)) { $0 + (String($1) as NSString).size(withAttributes: [.font: font]).width / font.pointSize }
+        var x: CGFloat = alignment == .right ? -total : alignment == .center ? -total / 2 : 0
         return characters.enumerated().map { index, character in
             let key: String
             if character.isNumber {
@@ -404,10 +435,11 @@ final class AgenticUseNumericTextField: NSTextField {
         NSGraphicsContext.saveGraphicsState()
         bounds.clip()
         let titleRect = cell?.titleRect(forBounds: bounds) ?? bounds
+        // Match NSTextFieldCell's two-point horizontal text inset so the
+        // first and final animated frames align with native text drawing.
+        let anchor = alignment == .right ? titleRect.maxX - 2 : alignment == .center ? titleRect.midX : titleRect.minX + 2
         for glyph in renderedGlyphs where glyph.opacity > 0 {
-            // Match NSTextFieldCell's two-point horizontal text inset so the
-            // first and final animated frames align with native text drawing.
-            (glyph.text as NSString).draw(at: NSPoint(x: titleRect.minX + 2 + glyph.x * font.pointSize,
+            (glyph.text as NSString).draw(at: NSPoint(x: anchor + glyph.x * font.pointSize,
                                                      y: titleRect.minY + glyph.y * font.pointSize),
                                         withAttributes: [.font: font,
                                                          .foregroundColor: (textColor ?? .labelColor).withAlphaComponent(glyph.opacity)])

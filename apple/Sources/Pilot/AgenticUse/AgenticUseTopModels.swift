@@ -200,20 +200,17 @@ final class AgenticUseTopModels: AgenticUseCardView, NSTableViewDataSource, NSTa
 
 @MainActor
 private final class AgenticUseModelTextCell: NSTableCellView {
-    private let transition = AgenticUseDataTransition()
     private var number: Double?
     private var numberIdentity: String?
+    /// Rolls changed digits (numeric-text style) when the same model's value
+    /// updates; a reused cell showing a different model swaps instantly.
     func setNumber(_ value: Double?, identity: String, format: @escaping (Double) -> String) {
-        let from = number ?? value ?? 0
         let animate = numberIdentity == identity && number != nil && value != nil && number != value
         numberIdentity = identity
-        transition.start(in: self, animated: animate) { [weak self] progress in
-            guard let self else { return }
-            self.number = value.map { AgenticUseDataTransition.mix(from, $0, progress) }
-            self.label.stringValue = self.number.map(format) ?? "—"
-        }
+        number = value
+        label.roll(to: value.map(format) ?? "—", animated: animate)
     }
-    let label = NSTextField(labelWithString: "")
+    let label = AgenticUseNumericTextField(labelWithString: "")
     let marker = NSImageView(image: NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil) ?? NSImage())
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
