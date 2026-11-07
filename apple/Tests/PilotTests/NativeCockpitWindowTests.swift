@@ -581,7 +581,7 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
-    func testCommandTAndCommandBOpenTheSameNativeChoicesAsTheToolbar() async throws {
+    func testCommandTOpensTheNativeChoicesAndNoCommandOpensABrowserDirectly() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         fixture.store.addWorkspace()
@@ -609,10 +609,12 @@ final class NativeCockpitWindowTests: XCTestCase {
         XCTAssertTrue(picker.pane.isChoosingMode)
         XCTAssertEqual(picker.currentPage, .root)
         XCTAssertEqual(picker.rows.map(\.shortcut), ["t", "b", "s", "d", "f", "e"])
-        let browser = try XCTUnwrap(items.first { $0.title == "New Browser" } as? ShellMenuItem)
-        XCTAssertEqual(browser.keyEquivalent, "b")
-        XCTAssertEqual(browser.keyEquivalentModifierMask, .command)
-        browser.perform()
+        // New Tab is the single way to open panes: no menu item opens a
+        // browser directly, and Command-B is unbound.
+        XCTAssertFalse(items.contains { $0.title == "New Browser" || $0.title == "New Chromium Browser" })
+        XCTAssertFalse(items.contains { $0.keyEquivalent == "b" && $0.keyEquivalentModifierMask == .command })
+        controller.selectedWorkspace?.addBrowserPane(engine: .webKit, side: .right)
+        controller.refresh(); controller.focusSelectedPane()
         let pane = try XCTUnwrap(controller.selectedPane)
         XCTAssertEqual(pane.browserState?.engine, .webKit)
         XCTAssertFalse(pane.isChoosingMode)
@@ -911,7 +913,7 @@ final class NativeCockpitWindowTests: XCTestCase {
         menus.canCheckForUpdates = { false }
         menus.install()
         let items = flattened(try XCTUnwrap(NSApp.mainMenu))
-        for title in ["New Tab", "New Browser", "Focus Address Bar", "Check for Updates…", "Focus or Restore Selected Pane", "Hide Selected Pane", "Arrange Panes Horizontally", "Stack Panes Vertically", "Reset Pane Sizes"] {
+        for title in ["New Tab", "Focus Address Bar", "Check for Updates…", "Focus or Restore Selected Pane", "Hide Selected Pane", "Arrange Panes Horizontally", "Stack Panes Vertically", "Reset Pane Sizes"] {
             let item = try XCTUnwrap(items.first { $0.title == title } as? ShellMenuItem)
             XCTAssertFalse(item.validateMenuItem(item), title)
         }

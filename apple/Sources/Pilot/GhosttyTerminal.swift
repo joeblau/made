@@ -606,7 +606,7 @@ class GhosttyMetalView: NSView, CALayerDelegate {
         guard window?.firstResponder === self else { return false }
 
         // Give Pilot's main menu first crack at its global shortcuts (⌘T new
-        // terminal, ⌘B new browser, ⌘0 notes, ⌥⌘E toggle Extendo, …) before
+        // tab, ⌘0 notes, ⌥⌘E toggle Extendo, …) before
         // Ghostty's binding system swallows the Cmd combo. See
         // GhosttyMenuKeyEquivalentPolicy for which combos stay with the terminal.
         if GhosttyMenuKeyEquivalentPolicy.forwardsToMainMenu(
