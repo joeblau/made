@@ -465,6 +465,10 @@ final class CockpitToolbarGroups: NSStackView {
             // AppKit owns the segmented control's bezel, padding, and size.
             // Another glass capsule makes its selection pill look undersized.
             if group.count == 1, let segmented = group.first as? NSSegmentedControl {
+                segmented.controlSize = .extraLarge
+                segmented.heightAnchor.constraint(equalToConstant: Self.capsuleHeight).isActive = true
+                if #available(macOS 26.0, *) { segmented.borderShape = .capsule }
+                if #available(macOS 27.0, *) { segmented.role = .valueSelection }
                 addArrangedSubview(segmented)
                 continue
             }

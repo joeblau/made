@@ -124,6 +124,19 @@ struct AppKitDesignTests {
         #expect(view.control.accessibilityLabel() == "Inspector")
     }
 
+    @Test("Toolbar value pickers use full-height native capsules")
+    func toolbarSegmentedControl() {
+        let picker = NSSegmentedControl(labels: ["Photo", "Video"], trackingMode: .selectOne, target: nil, action: nil)
+        picker.controlSize = .small
+        let toolbar = CockpitToolbarGroups()
+        toolbar.setGroups([[picker]])
+        #expect(toolbar.arrangedSubviews == [picker])
+        #expect(picker.controlSize == .extraLarge)
+        #expect(picker.borderShape == .capsule)
+        #expect(picker.fittingSize.height == CockpitToolbarGroups.capsuleHeight)
+        if #available(macOS 27.0, *) { #expect(picker.role == .valueSelection) }
+    }
+
     @Test("Appearance reporting follows connection and window override")
     func appearanceReporting() {
         var values: [Bool] = []
