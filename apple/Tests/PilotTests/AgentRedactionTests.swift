@@ -64,6 +64,10 @@ struct AgentRedactionTests {
         ("x-api-key: abc", "x-api-key: ••••"),
         ("spring.datasource.password=abc", "spring.datasource.password=••••"),
         ("https://h.io/cb?access_token=abc&state=1", "https://h.io/cb?access_token=••••&state=1"),
+        ("--build-arg=NPM_TOKEN=abc", "--build-arg=NPM_TOKEN=••••"),
+        ("a.b-c.db_password=abc", "a.b-c.db_password=••••"),
+        ("SECRET_KEY_BASE=abc", "SECRET_KEY_BASE=••••"),
+        ("name=x token=abc", "name=x token=••••"),
     ])
     func keyedValuesKeepTheirKey(input: String, expected: String) {
         #expect(masked(input) == expected)
@@ -85,6 +89,8 @@ struct AgentRedactionTests {
         ("tool --api-key abc123 --verbose", "tool --api-key •••• --verbose"),
         ("tool --password 'two words'", "tool --password '••••'"),
         ("tool --token=abc123", "tool --token=••••"),
+        ("tool --db-password hunter2 -v", "tool --db-password •••• -v"),
+        ("tool --tokens-file x --verbose y", "tool --tokens-file x --verbose y"),
     ])
     func cliFlagsMaskTheirArgument(input: String, expected: String) {
         #expect(masked(input) == expected)
@@ -373,10 +379,19 @@ struct AgentRedactionTests {
     }
 
     @Test
-    func anEndArmorWithoutBeginMasksEverythingBeforeIt() {
+    func anEndArmorWithoutBeginMasksOnlyTheBodyAboveIt() {
         let tail = "MIIEowIBAAKCAQEA\nqWm9base64body\n-----END RSA PRIVATE KEY-----\nnext line"
         #expect(masked(tail) == "••••\n-----END RSA PRIVATE KEY-----\nnext line")
         #expect(masked("-----END CERTIFICATE-----") == "-----END CERTIFICATE-----")
+        let output = "$ tail -3 key.pem\nbuild ok, 12 files\nqWm9base64+body/==\n\nMIIEow\n-----END PRIVATE KEY-----"
+        #expect(masked(output) == "$ tail -3 key.pem\nbuild ok, 12 files\n••••\n-----END PRIVATE KEY-----")
+        // An END that doesn't start a line, or has no body above it, hides nothing.
+        let command = "rm -rf ~/work; echo '-----END PRIVATE KEY-----'"
+        #expect(masked(command) == command)
+        let grep = "src/a.swift:3: let footer = \"x\"\nsrc/b.swift:9: -----END RSA PRIVATE KEY-----"
+        #expect(masked(grep) == grep)
+        let log = String(repeating: "compiling module Foo\n", count: 9_000) + "-----END RSA PRIVATE KEY-----"
+        #expect(masked(log) == log)
     }
 
     @Test
@@ -387,6 +402,13 @@ struct AgentRedactionTests {
         #expect(text.utf8SuffixAtLineBoundary(1_000) == text)
         #expect("aaaa sk-ant-api03-xyz".utf8SuffixAtLineBoundary(18) == "sk-ant-api03-xyz")
         #expect("one two three".utf8SuffixAtLineBoundary(10) == "two three")
+        // One long newline-terminated line keeps its tail instead of becoming empty.
+        let minified = String(repeating: "x", count: 600_000) + "\n"
+        #expect(minified.utf8SuffixAtLineBoundary(196_000) == String(repeating: "x", count: 195_999) + "\n")
+        let words = String(repeating: "word ", count: 120_000) + "end\n"
+        let kept = words.utf8SuffixAtLineBoundary(196_000)
+        #expect(kept.hasSuffix("word end\n") && kept.hasPrefix("word ") && kept.utf8.count > 195_000)
+        #expect("ab cd\n\n".utf8SuffixAtLineBoundary(6) == "cd\n\n")
     }
 
     @Test
@@ -463,5 +485,20 @@ struct AgentRedactionTests {
         let clock = ContinuousClock()
         let elapsed = clock.measure { _ = redactOutput(hostile, maximumLines: nil) }
         #expect(elapsed < .seconds(2), "\(hostile.prefix(16))… took \(elapsed)")
+    }
+
+    /// Ordinary dashed and dotted text that mentions a key word: the keyed
+    /// and flag rules take each key token once instead of retrying the key
+    /// pattern after every `-` and `.` (about 1 s → 5 s per MiB before).
+    @Test(arguments: [
+        #"    "node_modules/some-package-name": {"version": "1.2.3", "resolved": "https://registry.npmjs.org/a/-/a-1.2.3.tgz"},"#,
+        "3f2b8c1e-9d4a-4b7e-8f6a-2c1d0e9b7a65",
+        "some-kebab-case-identifier-name-here",
+    ])
+    func hintedDashedTextStaysFast(line: String) {
+        let text = String(repeating: line + "\n", count: 1_048_576 / (line.utf8.count + 1)) + "key"
+        let clock = ContinuousClock()
+        let elapsed = clock.measure { _ = redactOutput(text, maximumLines: nil) }
+        #expect(elapsed < .milliseconds(1_500), "\(line.prefix(16))… took \(elapsed)")
     }
 }

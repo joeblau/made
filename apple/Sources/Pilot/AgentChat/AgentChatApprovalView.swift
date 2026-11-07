@@ -51,6 +51,10 @@ final class ApprovalCardView: NSView {
     static let inputInset = NSSize(width: 6, height: 4)
     static let buttonSpacing: CGFloat = 8
     static let maximumInputCharacters = 64 * 1_024
+    /// Redacted before the shown input is clipped, so a secret crossing the
+    /// cut still matches: one key token and value (≤ 4 K each) past it. The
+    /// card redacts on the main actor, so this stays near the shown limit.
+    static let redactedInputCharacters = maximumInputCharacters + 8 * 1_024
     static let cancelTitle = "Cancel Request"
     static let revealTitle = "Reveal secrets"
     static let hideTitle = "Hide secrets"
@@ -201,9 +205,9 @@ final class ApprovalCardView: NSView {
         // patterns no longer match.
         let title = String(redactInline(String(approval.title.prefix(4_096))).prefix(512))
         let verbText = redactInline(requestPhrase(verb))
-        let full = String((unredactedInput ?? verb.exactInput ?? approval.subject ?? approval.title).prefix(maximumInputCharacters * 2))
+        let full = String((unredactedInput ?? verb.exactInput ?? approval.subject ?? approval.title).prefix(redactedInputCharacters))
         let source = String(escapedForReview(full).prefix(maximumInputCharacters))
-        var masked = redactOutput(escapedForReview(maskedInput.map { String($0.prefix(maximumInputCharacters * 2)) } ?? full),
+        var masked = redactOutput(escapedForReview(maskedInput.map { String($0.prefix(redactedInputCharacters)) } ?? full),
                                   maximumLines: nil)
         masked.text = String(masked.text.prefix(maximumInputCharacters))
         if maskedInput != nil { masked.redacted = true }

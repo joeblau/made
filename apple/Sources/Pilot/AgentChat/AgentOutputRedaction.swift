@@ -76,16 +76,22 @@ func agentStepTouchesSecretFile(_ tool: AgentChatItem.ToolCall, input: JSONValue
     return paths.contains(where: secretPath)
 }
 
-/// Masks every string in a secret file's payload except path fields, so the
-/// file content never reaches a sink.
+/// Masks every string in a secret file's payload except path fields and what
+/// the step runs or looks for (`command`, `cmd`, `pattern`, `query`, `url`),
+/// so the file content never reaches a sink while a shell request still shows
+/// exactly what will run (with the ordinary key-pattern redaction).
 func maskSecretFileContent(_ value: JSONValue, key: String = "") -> JSONValue {
     switch value {
-    case .string(let text): key.lowercased().contains("path") || text.isEmpty ? value : .string(AgentRedactionPolicy.maskText)
+    case .string(let text):
+        key.lowercased().contains("path") || secretFileVisibleFields.contains(key.lowercased()) || text.isEmpty
+            ? value : .string(AgentRedactionPolicy.maskText)
     case .array(let list): .array(list.map { maskSecretFileContent($0, key: key) })
     case .object(let object): .object(Dictionary(uniqueKeysWithValues: object.map { ($0, maskSecretFileContent($1, key: $0)) }))
     case .null, .bool, .number: value
     }
 }
+
+private let secretFileVisibleFields: Set<String> = ["command", "cmd", "pattern", "query", "url"]
 
 /// Redacts off the main actor when `text` exceeds
 /// `AgentRedactionPolicy.offMainThresholdBytes`; smaller text runs inline.
@@ -176,8 +182,11 @@ enum AgentRedactionPolicy {
             case prefixHint
             /// Keyed value: keep key and separator (group 1), mask the value
             /// (group 2, 3, or 4); unquoted literals (numbers, booleans, null,
-            /// `$VAR` references) are left alone.
+            /// `$VAR` references) are left alone. Group 1 opens with the
+            /// whole key token, kept only when a secret key name ends it.
             case keyedValue
+            /// `keyedValue` for a CLI flag token (`--api-key value`).
+            case flagValue
         }
 
         var name: String
@@ -260,19 +269,24 @@ enum AgentRedactionPolicy {
     ]
 
     /// `key = value`, `key: value`, `"key": "value"`, `export KEY=value`.
+    /// The regex takes the whole key token once (possessive, no retries
+    /// inside it) and `secretKeyEnds` classifies it: trying the key pattern
+    /// at every `-` or `.` in the text was several times slower. The value
+    /// (group 2) is read ahead, not consumed, so a key that isn't secret
+    /// leaves its value to be scanned (`--build-arg=NPM_TOKEN=abc`).
     static let keyedValue = rule(
         "keyed-value",
-        #"((?<![A-Za-z0-9_])(?:"# + secretKeyPattern + #")(?![A-Za-z0-9])\\?["']?[ \t]{0,8}[:=][ \t]{0,8})"#
-            + #"(?:\\?"([^"\\\r\n]{1,4096})|'([^'\r\n]{1,4096})'|([^\s"'\\,;&}\]\)\[{]{1,4096}))"#,
+        #"((?<![A-Za-z0-9_.-])[A-Za-z0-9_.-]{1,4096}+\\?["']?[ \t]{0,8}[:=][ \t]{0,8})"#
+            + #"(?=(\\?"([^"\\\r\n]{1,4096})|'([^'\r\n]{1,4096})'|([^\s"'\\,;&}\]\)\[{]{1,4096})))"#,
         .keyedValue, caseInsensitive: true, hints: keyHints
     )
 
     /// CLI flags: `--token value`, `-api-key value`.
     static let cliFlagValue = rule(
         "cli-flag",
-        #"((?<![A-Za-z0-9_-])-{1,2}(?:"# + secretKeyPattern + #")(?![A-Za-z0-9-])[ \t]{1,8})"#
-            + #"(?:"([^"\r\n]{1,4096})"|'([^'\r\n]{1,4096})'|([^\s"'\\,;&}\]\)\[{-][^\s"'\\,;&}\]\)\[{]{0,4095}))"#,
-        .keyedValue, caseInsensitive: true, hints: keyHints
+        #"((?<![A-Za-z0-9_.-])-[A-Za-z0-9_.-]{1,4096}+[ \t]{1,8})"#
+            + #"(?=("([^"\r\n]{1,4096})"|'([^'\r\n]{1,4096})'|([^\s"'\\,;&}\]\)\[{-][^\s"'\\,;&}\]\)\[{]{0,4095})))"#,
+        .flagValue, caseInsensitive: true, hints: keyHints
     )
 
     private static let keyHints = ["pass", "pwd", "secret", "token", "key", "auth", "cookie"]
@@ -326,14 +340,16 @@ enum AgentRedactionPolicy {
 
     /// Keeps the BEGIN/END armor and masks the body; an unterminated BEGIN
     /// masks through the end of the text, and an END with no BEGIN before
-    /// it (a tail cut inside a key) masks everything before it.
+    /// it (a tail cut inside a key) masks the base64 lines directly above it.
     private static func maskPEM(_ text: String) -> (text: String, redacted: Bool) {
         let source = text as NSString
         let output = NSMutableString()
         var cursor = 0
         var redacted = false
         if let end = pemEnd.firstMatch(in: text, range: NSRange(location: 0, length: source.length)),
-           pemBegin.firstMatch(in: text, range: NSRange(location: 0, length: end.range.location)) == nil {
+           pemBegin.firstMatch(in: text, range: NSRange(location: 0, length: end.range.location)) == nil,
+           let body = orphanArmorBody(source, before: end.range.location) {
+            output.append(source.substring(to: body))
             output.append("\(maskText)\n")
             output.append(source.substring(with: end.range))
             cursor = end.range.upperBound
@@ -356,6 +372,27 @@ enum AgentRedactionPolicy {
         return (output as String, redacted)
     }
 
+    /// Where the run of armor body lines (base64, with blank lines between)
+    /// ending at `location` starts; nil unless the END starts its line and at
+    /// least one such line sits directly above it. Unrelated text above the
+    /// run (a command, earlier output) stays.
+    private static func orphanArmorBody(_ source: NSString, before location: Int) -> Int? {
+        guard location > 0, source.character(at: location - 1) == 0x0A else { return nil }
+        var (start, body, lines) = (location, nil as Int?, 0)
+        while start > 0, lines < 1_024 {
+            lines += 1
+            let line = source.lineRange(for: NSRange(location: start - 1, length: 0))
+            let text = source.substring(with: line).trimmingCharacters(in: .newlines)
+            if text.range(of: #"^[A-Za-z0-9+/=]{1,128}$"#, options: .regularExpression) != nil {
+                body = line.location
+            } else if !text.isEmpty {
+                break
+            }
+            start = line.location
+        }
+        return body
+    }
+
     private static func apply(_ rule: Rule, to text: String) -> (text: String, redacted: Bool) {
         let source = text as NSString
         let matches = rule.regex.matches(in: text, range: NSRange(location: 0, length: source.length))
@@ -363,11 +400,12 @@ enum AgentRedactionPolicy {
         let output = NSMutableString()
         var cursor = 0
         var redacted = false
-        for match in matches {
-            guard let replacement = replacement(for: match, rule: rule, in: source) else { continue }
+        for match in matches where match.range.location >= cursor {
+            let span = replacedSpan(match)
+            guard let replacement = replacement(for: match, span: span, rule: rule, in: source) else { continue }
             output.append(source.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
             output.append(replacement)
-            cursor = match.range.upperBound
+            cursor = span.upperBound
             redacted = true
         }
         guard redacted else { return (text, false) }
@@ -375,8 +413,14 @@ enum AgentRedactionPolicy {
         return (output as String, true)
     }
 
-    private static func replacement(for match: NSTextCheckingResult, rule: Rule, in source: NSString) -> String? {
-        let matched = source.substring(with: match.range)
+    /// The match plus any value read ahead of it (keyed rules' group 2).
+    private static func replacedSpan(_ match: NSTextCheckingResult) -> NSRange {
+        let upper = (0..<match.numberOfRanges).map { match.range(at: $0) }.filter { $0.location != NSNotFound }.map(NSMaxRange).max()
+        return NSRange(location: match.range.location, length: (upper ?? match.range.upperBound) - match.range.location)
+    }
+
+    private static func replacement(for match: NSTextCheckingResult, span: NSRange, rule: Rule, in source: NSString) -> String? {
+        let matched = source.substring(with: span)
         guard !matched.contains("•") else { return nil }
         switch rule.replacement {
         case .whole:
@@ -385,27 +429,51 @@ enum AgentRedactionPolicy {
             return source.substring(with: match.range(at: 1)) + maskText
         case .prefixHint:
             return matched.count >= 16 ? String(matched.prefix(4)) + maskText : maskText
-        case .keyedValue:
+        case .keyedValue, .flagValue:
+            guard secretKeyEnds(source.substring(with: match.range(at: 1)), flag: rule.replacement == .flagValue) else {
+                return nil
+            }
             return keyedReplacement(for: match, in: source)
         }
     }
 
+    /// True when the key token opening `prefix` ends in a secret key name:
+    /// the whole token, or its part after a `-` or `.` (`x.token`,
+    /// `--db-password`). The key pattern allows at most 12 separators, so
+    /// only the last 13 can start one.
+    private static func secretKeyEnds(_ prefix: String, flag: Bool) -> Bool {
+        let token = Array(prefix.unicodeScalars.prefix { $0.isASCII && ($0.properties.isAlphabetic || $0.properties.numericType != nil
+                                                                        || "_.-".unicodeScalars.contains($0)) })
+        var separators = 0
+        for start in stride(from: token.count - 1, through: 0, by: -1) {
+            let previous = start > 0 ? token[start - 1] : nil
+            let opens = flag ? token[start] == "-" && (previous == nil || previous == ".") : previous == nil || previous == "-" || previous == "."
+            if opens {
+                let key = String(String.UnicodeScalarView(token[start...]))
+                if flag ? isSecretFlag(key) : isSecretKey(key) { return true }
+            }
+            if "_.-".unicodeScalars.contains(token[start]) { separators += 1 }
+            if separators > 14 { return false }
+        }
+        return false
+    }
+
     private static func keyedReplacement(for match: NSTextCheckingResult, in source: NSString) -> String? {
         let key = source.substring(with: match.range(at: 1))
-        if match.range(at: 2).location != NSNotFound {
-            let value = source.substring(with: match.range(at: 2))
+        if match.range(at: 3).location != NSNotFound {
+            let value = source.substring(with: match.range(at: 3))
             // Keep the opening quote (and its escape) so JSON stays well formed.
             let opening = source.substring(with: NSRange(
                 location: match.range(at: 1).upperBound,
-                length: match.range(at: 2).location - match.range(at: 1).upperBound
+                length: match.range(at: 3).location - match.range(at: 1).upperBound
             ))
             return value.contains("•") ? nil : key + opening + maskText
         }
-        if match.range(at: 3).location != NSNotFound {
+        if match.range(at: 4).location != NSNotFound {
             return key + "'" + maskText + "'"
         }
-        guard match.range(at: 4).location != NSNotFound else { return nil }
-        let value = source.substring(with: match.range(at: 4))
+        guard match.range(at: 5).location != NSNotFound else { return nil }
+        let value = source.substring(with: match.range(at: 5))
         return isLiteral(value) ? nil : key + maskText
     }
 

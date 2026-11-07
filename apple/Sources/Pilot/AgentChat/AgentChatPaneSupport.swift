@@ -126,8 +126,14 @@ enum AgentChatPaneContent {
             tool = found
             input = input ?? transcript.stepDetails[step.key]?.rawInput?.value
         }
-        let secret = agentStepTouchesSecretFile(tool, input: input)
-        return (approval, verbForTool(tool, input: input), input.map(rawText), secret ? input.map { rawText(maskSecretFileContent($0)) } : nil)
+        // Only a payload that masking changes gets a masked view: a command is never masked.
+        // (`JSONValue` takes `nil` as `.null`, so the optionals are spelled out.)
+        var maskedInput: String?
+        if let input, agentStepTouchesSecretFile(tool, input: input) {
+            let masked = maskSecretFileContent(input)
+            if masked != input { maskedInput = rawText(masked) }
+        }
+        return (approval, verbForTool(tool, input: input), input.map(rawText), maskedInput)
     }
 
     /// The verb of the step an approval record asked about (labels only).
@@ -138,9 +144,9 @@ enum AgentChatPaneContent {
     }
 
     /// The command itself when the input names one, else the JSON input.
-    /// Twice the card's limit: the card redacts before it clips.
+    /// A margin past the card's limit: the card redacts before it clips.
     private static func rawText(_ input: JSONValue) -> String {
-        let limit = ApprovalCardView.maximumInputCharacters * 2
+        let limit = ApprovalCardView.redactedInputCharacters
         for field in ["command", "cmd"] {
             if let command = input[field]?.stringValue { return String(command.prefix(limit)) }
             if let argv = input[field]?.arrayValue {

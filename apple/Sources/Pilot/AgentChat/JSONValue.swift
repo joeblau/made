@@ -298,8 +298,14 @@ extension String {
     func utf8SuffixAtLineBoundary(_ maximumBytes: Int) -> String {
         let tail = utf8Suffix(maximumBytes)
         guard tail.utf8.count < utf8.count else { return tail }
-        if let newline = tail.firstIndex(where: \.isNewline) { return String(tail[tail.index(after: newline)...]) }
-        if let space = tail.firstIndex(where: \.isWhitespace) { return String(tail[tail.index(after: space)...]) }
+        var line = tail[...]
+        if let newline = tail.firstIndex(where: \.isNewline) {
+            let rest = tail[tail.index(after: newline)...]
+            if rest.contains(where: { !$0.isWhitespace }) { return String(rest) }
+            // One long newline-terminated line: keep its tail from a word boundary.
+            line = tail[..<newline]
+        }
+        if let space = line.firstIndex(where: \.isWhitespace) { return String(tail[tail.index(after: space)...]) }
         return tail
     }
 

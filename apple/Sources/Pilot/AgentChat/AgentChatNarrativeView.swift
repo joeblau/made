@@ -259,6 +259,10 @@ enum ProseMeasure {
         var zoom: Double
         var length: Int
         var height: CGFloat
+        /// Hash of the measured text: a capped height carries over only to a
+        /// longer rendering of the same message (one that starts with it),
+        /// never to another pane's message under the same item key.
+        var textHash: Int
     }
 
     static let storage = NSTextStorage()
@@ -483,13 +487,16 @@ final class ProseCellView: NSTableCellView {
         let zoom = CockpitUIZoomController.shared.factor
         let limit = maximumTextHeight - textInset * 2
         let textHeight: CGFloat
+        let text = rendered.text.string as NSString
         if let cached = ProseMeasure.heights[item.key], cached.width == textWidth, cached.zoom == zoom,
-           cached.generation == rendered.generation || (cached.height > limit && rendered.text.length >= cached.length) {
+           cached.generation == rendered.generation || (cached.height > limit && text.length >= cached.length
+               && text.substring(to: cached.length).hashValue == cached.textHash) {
             textHeight = cached.height
         } else {
             textHeight = rendered.text.length == 0 ? 0 : ProseMeasure.height(rendered.text, width: textWidth, limit: limit)
             ProseMeasure.heights.set(ProseMeasure.Entry(generation: rendered.generation, width: textWidth, zoom: zoom,
-                                                        length: rendered.text.length, height: textHeight), for: item.key)
+                                                        length: text.length, height: textHeight,
+                                                        textHash: (text as String).hashValue), for: item.key)
         }
         let visible = min(maximumTextHeight, textHeight + textInset * 2)
         return max(24, visible + verticalInset * 2)

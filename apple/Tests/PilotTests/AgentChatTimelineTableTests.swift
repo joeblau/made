@@ -300,6 +300,19 @@ struct AgentChatTimelineTableTests {
         #expect(kept == 0 && evicted == nil && cache.count == 7, "The least recently used quarter goes, not everything")
     }
 
+    @Test("Another pane's capped message under the same item key never caps a message that fits")
+    func cappedHeightIsNotSharedAcrossPanes() {
+        let width: CGFloat = 600, key = "pane-\(UUID())"
+        let listing = "```swift\n" + (0..<120).map { "let v\($0) = \($0)" }.joined(separator: "\n") + "\n```"
+        let paneA = AgentChatItem(id: key, content: .assistant(listing), revision: 2)
+        let capped = ProseCellView.height(item: paneA, width: width)
+        #expect(capped == ProseCellView.maximumTextHeight + ProseCellView.verticalInset * 2)
+        let prose = String(repeating: "Paragraph prose that wraps across the row without any code at all. ", count: 30)
+        let paneB = AgentChatItem(id: key, content: .assistant(prose), revision: 2)
+        #expect(prose.utf16.count > listing.utf16.count)
+        #expect(ProseCellView.height(item: paneB, width: width) < capped - 200, "Pane B is measured, not given pane A's cap")
+    }
+
     // MARK: - Fixtures
 
     private func makeTimeline() -> (AgentChatTimelineTable, NSScrollView, NSWindow) {
