@@ -1,141 +1,6 @@
 import AppKit
 import UniformTypeIdentifiers
 
-/// A one-time choice in a newly opened pane. The working view takes its entire
-/// place after selection; restored panes go straight to their persisted mode.
-@MainActor
-final class CockpitPaneModePicker: NSView {
-    let pane: Pane
-    var onChange: (() -> Void)?
-    private let heading = CockpitUI.label("", role: .sectionTitle)
-    private var shortcutHint: NSTextField?
-    private var buttons: [NSButton] = []
-    private var options: [String] = []
-    private var shortcuts: [String] = []
-    override var isFlipped: Bool { true }
-    override var acceptsFirstResponder: Bool { pane.isChoosingMode && !shortcuts.isEmpty }
-
-    init(pane: Pane) {
-        self.pane = pane
-        super.init(frame: .zero)
-        setAccessibilityIdentifier("pane.opening-choice")
-        heading.alignment = .center
-        heading.lineBreakMode = .byTruncatingTail
-        addSubview(heading)
-        switch pane.kind {
-        case .terminal, .agentChat:
-            heading.stringValue = "Open Terminal"
-            options = ["Raw Terminal", "Agentic Terminal"]
-            shortcuts = ["r", "a"]
-        case .browser:
-            heading.stringValue = "Open Browser"
-            options = ["Safari", "Chrome"]
-            shortcuts = ["s", "c"]
-            setShortcutHint("S Safari · C Chrome")
-        case .device, .simulator:
-            heading.stringValue = "Open Apple"
-            options = ["Simulator", "Device"]
-            shortcuts = ["s", "d"]
-            setShortcutHint("S Simulator · D Device")
-        case .android:
-            heading.stringValue = "Open Android"
-            options = ["Simulator", "Device"]
-            shortcuts = ["s", "d"]
-            setShortcutHint("S Simulator · D Device")
-        case .editor: break
-        }
-        for (index, title) in options.enumerated() {
-            let button = CockpitActionButton(title: title) { [weak self] in self?.selectMode(at: index) }
-            button.controlSize = .large
-            button.setAccessibilityIdentifier("pane.opening-choice.\(index)")
-            button.setAccessibilityLabel(title)
-            button.toolTip = title
-            if shortcuts.indices.contains(index) {
-                button.setAccessibilityHelp("Press \(shortcuts[index].uppercased()) to open \(title).")
-                if pane.kind == .terminal || pane.kind == .agentChat {
-                    button.image = NSImage(systemSymbolName: shortcuts[index] + ".square", accessibilityDescription: nil)
-                    button.imagePosition = .imageTrailing
-                    button.symbolConfiguration = .init(pointSize: 12, weight: .regular)
-                }
-            }
-            button.lineBreakMode = .byTruncatingTail
-            if pane.kind == .browser && index == 1 {
-                button.isEnabled = ChromiumBrowserCreationPolicy.isCreationEnabled
-                button.toolTip = ChromiumBrowserCreationPolicy.unavailableReason?.message ?? title
-            }
-            buttons.append(button)
-            addSubview(button)
-        }
-    }
-
-    required init?(coder: NSCoder) { nil }
-
-    private func setShortcutHint(_ text: String) {
-        let hint = CockpitUI.label(text, size: 11, color: .secondaryLabelColor)
-        hint.alignment = .center
-        hint.lineBreakMode = .byTruncatingTail
-        shortcutHint = hint
-        addSubview(hint)
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        // Handle letters only in this focused opening chooser, never as
-        // window-wide key equivalents that could consume input in another pane.
-        guard pane.isChoosingMode,
-              pane.workspace?.selectedPaneID == pane.id, !isHiddenOrHasHiddenAncestor,
-              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
-              !event.isARepeat,
-              let key = event.charactersIgnoringModifiers?.lowercased(),
-              let index = shortcuts.firstIndex(of: key) else { super.keyDown(with: event); return }
-        selectMode(at: index)
-    }
-
-    override func layout() {
-        super.layout()
-        let width = min(240, max(0, bounds.width - 24))
-        let headingHeight = heading.intrinsicContentSize.height
-        let buttonHeight: CGFloat = 32
-        let hintHeight = shortcutHint?.intrinsicContentSize.height ?? 0
-        let height = headingHeight + 16 + CGFloat(buttons.count) * (buttonHeight + 8) - 8
-            + (shortcutHint == nil ? 0 : hintHeight + 12)
-        let left = (bounds.width - width) / 2
-        var top = max(12, (bounds.height - height) / 2)
-        heading.frame = NSRect(x: left, y: top, width: width, height: headingHeight)
-        top += headingHeight + 16
-        for button in buttons {
-            button.frame = NSRect(x: left, y: top, width: width, height: buttonHeight)
-            top += buttonHeight + 8
-        }
-        shortcutHint?.frame = NSRect(x: left, y: top + 4, width: width, height: hintHeight)
-    }
-
-    func selectMode(at index: Int) {
-        guard pane.isChoosingMode, options.indices.contains(index) else { return }
-        switch pane.kind {
-        case .terminal, .agentChat:
-            pane.kind = index == 0 ? .terminal : .agentChat
-        case .browser:
-            guard index == 0 || ChromiumBrowserCreationPolicy.isCreationEnabled else { return }
-            pane.browserState?.engine = index == 0 ? .webKit : .chromium
-        case .device, .simulator:
-            pane.kind = index == 0 ? .simulator : .device
-        case .android:
-            pane.androidTarget = index == 0 ? .simulator : .device
-            AndroidDeviceRegistry.shared.configure(target: pane.androidTarget, for: pane.id)
-        case .editor: return
-        }
-        pane.isChoosingMode = false
-        pane.workspace?.selectedPaneID = pane.id
-        if pane.kind == .terminal { pane.workspace?.setFrontmostTerminalPaneID(pane.id) }
-        _ = pane.modelContext?.saveReporting(operation: "Choosing pane mode")
-        onChange?()
-    }
-}
-
 @MainActor
 final class CockpitPaneTab: NSView, NSDraggingSource {
     /// Keep room for the native buttons even at the smallest text size.
@@ -159,6 +24,7 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
     private var agentBadge: AgentChatTabBadge?
     private var downPoint: NSPoint?
     private var statusTask: Task<Void, Never>?
+    private var pathObserver: NSObjectProtocol?
 
     init(pane: Pane, payload: WorkspacePaneDragPayload) {
         self.pane = pane
@@ -166,6 +32,16 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
         closeButton = ShellActionButton("", symbol: "xmark", perform: {})
         hideButton = ShellActionButton("", symbol: "eye.slash", perform: {})
         super.init(frame: .zero)
+        // The new-tab path isn't observable, so the launcher posts each step.
+        // `object` matching is by identity and a bridged UUID is a new object
+        // each time, so filter on the ID instead.
+        let paneID = pane.id
+        pathObserver = NotificationCenter.default.addObserver(
+            forName: .paneOpeningPathDidChange, object: nil, queue: .main
+        ) { [weak self] note in
+            guard (note.object as? UUID) == paneID else { return }
+            MainActor.assumeIsolated { self?.refresh() }
+        }
         wantsLayer = true
         layer?.cornerRadius = 8
         title.lineBreakMode = .byTruncatingTail
@@ -202,12 +78,20 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
         refresh()
     }
     required init?(coder: NSCoder) { nil }
-    isolated deinit { statusTask?.cancel() }
+    isolated deinit {
+        statusTask?.cancel()
+        if let pathObserver { NotificationCenter.default.removeObserver(pathObserver) }
+    }
     override var isFlipped: Bool { true }
 
     func refresh() {
-        if let image = icon as? NSImageView, pane.kind != .browser {
-            image.image = NSImage(systemSymbolName: pane.kind.systemImageName, accessibilityDescription: nil)
+        if pane.kind == .browser, !pane.isChoosingMode, let state = pane.browserState, !(icon is BrowserFaviconView) {
+            // A new-tab placeholder can become a browser after its tab exists.
+            replaceIcon(with: BrowserFaviconView(state: state))
+        }
+        if let image = icon as? NSImageView {
+            let symbol = pane.isChoosingMode ? "plus.square.on.square" : pane.kind.systemImageName
+            image.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         }
         if pane.kind == .agentChat, agentBadge == nil {
             let badge = AgentChatTabBadge(paneID: pane.id)
@@ -217,13 +101,24 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
         agentBadge?.isHidden = pane.kind != .agentChat
         title.font = CockpitTypography.font(size: 12)
         status.font = CockpitTypography.font(size: 10)
-        title.stringValue = pane.displayTitle
+        title.stringValue = pane.tabTitle
         if pane.terminalDestination.kind == .drone { title.stringValue += " · " + (pane.terminalDroneNameRaw ?? "Drone") }
         title.toolTip = title.stringValue
         hideButton.image = NSImage(systemSymbolName: pane.isCollapsed ? "eye" : "eye.slash", accessibilityDescription: nil)
-        setAccessibilityLabel(pane.displayTitle)
+        setAccessibilityLabel(title.stringValue)
         setAccessibilityValue(pane.isCollapsed ? "Collapsed" : (isSelected ? "Selected" : ""))
         updateAppearance()
+    }
+
+    private func replaceIcon(with view: NSView) {
+        view.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        view.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        if let index = row.arrangedSubviews.firstIndex(of: icon) {
+            row.removeArrangedSubview(icon)
+            icon.removeFromSuperview()
+            row.insertArrangedSubview(view, at: index)
+        }
+        icon = view
     }
 
     private var isMonitoring = false

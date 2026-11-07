@@ -415,9 +415,29 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
-    func testMobileOpeningShortcutsStayWithTheFocusedChooser() throws {
-        for tool in ["Apple", "Android"] {
-            try assertOpeningShortcuts(tool: tool, letters: ["s", "d", "S", "D"])
+    func testMobileLaunchersOpenThePlaceholderOnTheirPlatformChoice() throws {
+        for (tool, page) in [("Simulator", NewTabPage.simulator), ("Device", .device)] {
+            let fixture = try Fixture()
+            defer { fixture.cleanUp() }
+            fixture.store.addWorkspace()
+            let controller = fixture.window(paneFactory: { _, _ in FixturePaneController() })
+            controller.showWindow(nil)
+            let window = try XCTUnwrap(controller.window)
+            defer { window.orderOut(nil); controller.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
+            let launcher = try XCTUnwrap(window.toolbar?.items.compactMap { $0 as? NSToolbarItemGroup }.first {
+                $0.itemIdentifier.rawValue == "cockpit.launcher"
+            })
+            let item = try XCTUnwrap(launcher.subitems.first { $0.label == tool })
+            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
+            let placeholder = try XCTUnwrap(window.firstResponder as? CockpitNewTabView)
+            XCTAssertEqual(placeholder.currentPage, page)
+            XCTAssertEqual(placeholder.rows.map(\.shortcut), ["a", "g"])
+            let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: window.windowNumber, context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}",
+                isARepeat: false, keyCode: 53))
+            window.sendEvent(escape)
+            XCTAssertEqual(placeholder.currentPage, .root, "Escape returns to the full New Tab list")
+            XCTAssertTrue(placeholder.pane.isChoosingMode)
         }
     }
 
@@ -447,7 +467,7 @@ final class NativeCockpitWindowTests: XCTestCase {
             let item = try XCTUnwrap(launcher.subitems.first { $0.label == tool })
             func openPane() throws {
                 XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
-                XCTAssertTrue(window.firstResponder is CockpitPaneModePicker)
+                XCTAssertTrue(window.firstResponder is CockpitNewTabView)
             }
             func key(_ text: String, flags: NSEvent.ModifierFlags = [], repeatKey: Bool = false) throws -> NSEvent {
                 try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0,
@@ -467,24 +487,18 @@ final class NativeCockpitWindowTests: XCTestCase {
             XCTAssertEqual(originalInput.string, typing.joined())
             XCTAssertTrue(pane.isChoosingMode && backgroundPane.isChoosingMode)
             controller.focusSelectedPane()
-            let picker = try XCTUnwrap(window.firstResponder as? CockpitPaneModePicker)
+            let picker = try XCTUnwrap(window.firstResponder as? CockpitNewTabView)
             XCTAssertEqual(picker.pane.id, pane.id)
+            XCTAssertEqual(picker.currentPage, .terminal, "The toolbar opens the placeholder on its category")
             for flags: NSEvent.ModifierFlags in [.command, .control, .option] {
                 picker.keyDown(with: try key(letter, flags: flags))
             }
             picker.keyDown(with: try key(letter, repeatKey: true))
-            picker.keyDown(with: try key(tool == "Terminal" ? "c" : "a"))
+            picker.keyDown(with: try key("c"))
             XCTAssertTrue(pane.isChoosingMode)
 
             window.sendEvent(try key(letter, flags: letter == letter.uppercased() ? .shift : []))
-            if tool == "Terminal" {
-                XCTAssertEqual(pane.kind, letter.lowercased() == "a" ? .agentChat : .terminal)
-            } else if tool == "Apple" {
-                XCTAssertEqual(pane.kind, letter.lowercased() == "s" ? .simulator : .device)
-            } else {
-                XCTAssertEqual(pane.kind, .android)
-                XCTAssertEqual(pane.androidTarget, letter.lowercased() == "s" ? .simulator : .device)
-            }
+            XCTAssertEqual(pane.kind, letter.lowercased() == "a" ? .agentChat : .terminal)
             XCTAssertFalse(pane.isChoosingMode)
             XCTAssertTrue(backgroundPane.isChoosingMode)
             XCTAssertEqual(created.count, initialCount + 1)
@@ -516,13 +530,14 @@ final class NativeCockpitWindowTests: XCTestCase {
                                          showSettings: {}, showSetup: {}, checkForUpdates: {})
         menus.install()
         let items = flattened(try XCTUnwrap(NSApp.mainMenu))
-        let terminal = try XCTUnwrap(items.first { $0.title == "New Terminal" } as? ShellMenuItem)
-        XCTAssertEqual(terminal.keyEquivalent, "t")
-        XCTAssertEqual(terminal.keyEquivalentModifierMask, .command)
-        terminal.perform()
-        let picker = try XCTUnwrap(window.firstResponder as? CockpitPaneModePicker)
+        let newTab = try XCTUnwrap(items.first { $0.title == "New Tab" } as? ShellMenuItem)
+        XCTAssertEqual(newTab.keyEquivalent, "t")
+        XCTAssertEqual(newTab.keyEquivalentModifierMask, .command)
+        newTab.perform()
+        let picker = try XCTUnwrap(window.firstResponder as? CockpitNewTabView)
         XCTAssertTrue(picker.pane.isChoosingMode)
-        XCTAssertEqual(picker.pane.kind, .terminal)
+        XCTAssertEqual(picker.currentPage, .root)
+        XCTAssertEqual(picker.rows.map(\.shortcut), ["t", "b", "s", "d", "f", "e"])
         let browser = try XCTUnwrap(items.first { $0.title == "New Browser" } as? ShellMenuItem)
         XCTAssertEqual(browser.keyEquivalent, "b")
         XCTAssertEqual(browser.keyEquivalentModifierMask, .command)
@@ -578,12 +593,14 @@ final class NativeCockpitWindowTests: XCTestCase {
         XCTAssertFalse(group.subitems.contains { $0.label == "Agent Chat" })
         XCTAssertEqual(second.selectedPane?.kind, .terminal)
         XCTAssertTrue(second.selectedPane?.isChoosingMode == true)
-        for (title, kind) in [("Browser", PaneKind.browser), ("Apple", .simulator), ("Android", .android)] {
+        XCTAssertEqual(second.selectedPane?.openingPath, [.root, .terminal])
+        for (title, kind) in [("Browser", PaneKind.browser), ("Simulator", .simulator), ("Device", .device)] {
             let item = try XCTUnwrap(group.subitems.first { $0.label == title })
             XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
             XCTAssertEqual(second.selectedPane?.kind, kind)
             XCTAssertEqual(second.selectedPane?.isChoosingMode, kind != .browser)
         }
+        XCTAssertEqual(second.selectedPane?.openingPath, [.root, .device])
         let terminalMenu = try XCTUnwrap(launcher.makeMenu().items.first { $0.title == "Terminal" }?.submenu)
         XCTAssertTrue(terminalMenu.items.contains { $0.title == "Agentic Terminal" })
         launcher.workspace = nil
@@ -648,7 +665,7 @@ final class NativeCockpitWindowTests: XCTestCase {
             window.contentView?.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(100))
             let root = try XCTUnwrap(window.contentView)
-            let pickers = descendants(root).compactMap { $0 as? CockpitPaneModePicker }
+            let pickers = descendants(root).compactMap { $0 as? CockpitNewTabView }
             XCTAssertTrue(pickers.isEmpty, "Existing panes must use their saved mode without a permanent selector")
             let local = try XCTUnwrap(descendants(root).compactMap { $0 as? NSTableView }.first { $0.accessibilityLabel() == "Local development servers" })
             // Drive this fixture's visibility explicitly: a hosted test must
@@ -834,7 +851,7 @@ final class NativeCockpitWindowTests: XCTestCase {
         menus.canCheckForUpdates = { false }
         menus.install()
         let items = flattened(try XCTUnwrap(NSApp.mainMenu))
-        for title in ["New Terminal", "New Browser", "Focus Address Bar", "Check for Updates…", "Focus or Restore Selected Pane", "Hide Selected Pane", "Arrange Panes Horizontally", "Stack Panes Vertically", "Reset Pane Sizes"] {
+        for title in ["New Tab", "New Browser", "Focus Address Bar", "Check for Updates…", "Focus or Restore Selected Pane", "Hide Selected Pane", "Arrange Panes Horizontally", "Stack Panes Vertically", "Reset Pane Sizes"] {
             let item = try XCTUnwrap(items.first { $0.title == title } as? ShellMenuItem)
             XCTAssertFalse(item.validateMenuItem(item), title)
         }

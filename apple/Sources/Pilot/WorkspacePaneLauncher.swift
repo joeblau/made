@@ -3,14 +3,25 @@ import Synchronization
 
 /// Opening UI state follows pane identity, since SwiftData can recreate model
 /// instances. Only the chosen kind/engine/target belongs in the saved model.
+/// Each pending pane keeps its placeholder navigation stack.
 enum PaneOpeningChoices {
-    private static let pending = Mutex<Set<UUID>>([])
+    private static let pending = Mutex<[UUID: [NewTabPage]]>([:])
 
-    static func contains(_ id: UUID) -> Bool { pending.withLock { $0.contains(id) } }
+    static func contains(_ id: UUID) -> Bool { pending.withLock { $0[id] != nil } }
     static func set(_ choosing: Bool, for id: UUID) {
-        pending.withLock { if choosing { $0.insert(id) } else { $0.remove(id) } }
+        pending.withLock {
+            if choosing { $0[id] = $0[id] ?? [.root] } else { $0.removeValue(forKey: id) }
+        }
     }
-    static func retainOnly(_ ids: Set<UUID>) { pending.withLock { $0.formIntersection(ids) } }
+    static func path(for id: UUID) -> [NewTabPage]? { pending.withLock { $0[id] } }
+    /// Only a pending pane has a path; the root page is always kept.
+    static func setPath(_ path: [NewTabPage], for id: UUID) {
+        pending.withLock {
+            guard $0[id] != nil else { return }
+            $0[id] = path.first == .root ? path : [.root] + path
+        }
+    }
+    static func retainOnly(_ ids: Set<UUID>) { pending.withLock { $0 = $0.filter { ids.contains($0.key) } } }
 }
 
 extension Workspace {
@@ -45,14 +56,14 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
     private weak var toolbarGroup: NSToolbarItemGroup?
 
     private enum Slot: String, CaseIterable {
-        case terminal, browser, apple, android, editor, finder
+        case terminal, browser, simulator, device, editor, finder
 
         var title: String {
             switch self {
             case .terminal: "Terminal"
             case .browser: "Browser"
-            case .apple: "Apple"
-            case .android: "Android"
+            case .simulator: "Simulator"
+            case .device: "Device"
             case .editor: "Editor"
             case .finder: "Open in Finder"
             }
@@ -61,8 +72,8 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
             switch self {
             case .terminal: PaneKind.terminal.systemImageName
             case .browser: PaneKind.browser.systemImageName
-            case .apple: "apple.logo"
-            case .android: PaneKind.android.systemImageName
+            case .simulator: PaneKind.simulator.systemImageName
+            case .device: "iphone"
             case .editor: PaneKind.editor.systemImageName
             case .finder: "folder"
             }
@@ -90,15 +101,14 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
             item.action = switch slot {
             case .terminal: #selector(openTerminal(_:))
             case .browser: #selector(openBrowser(_:))
-            case .apple: #selector(openApple(_:))
-            case .android: #selector(openAndroid(_:))
+            case .simulator: #selector(openSimulator(_:))
+            case .device: #selector(openDevice(_:))
             case .editor: #selector(openEditor(_:))
             case .finder: #selector(openFinder(_:))
             }
             item.label = slot.title
             item.toolTip = slot.title
-            item.image = slot == .android ? NSImage(named: "AndroidRobot") : nil
-            if item.image == nil { item.image = NSImage(systemSymbolName: slot.symbol, accessibilityDescription: slot.title) }
+            item.image = NSImage(systemSymbolName: slot.symbol, accessibilityDescription: slot.title)
             item.isBordered = true
             item.autovalidates = false
             return item
@@ -122,16 +132,23 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
         for item in entries(for: slot, workspace: workspace, side: .right) { menu.addItem(item) }
     }
 
-    private func open(_ kind: PaneKind) {
+    /// Opens a new-tab placeholder already pushed to the toolbar category.
+    /// Escape returns to the full New Tab list.
+    private func openPlaceholder(_ kind: PaneKind, page: NewTabPage) {
         guard let workspace else { return }
-        workspace.addPane(kind: kind, side: .right, chooseModeOnOpen: kind != .browser)
+        let pane = workspace.addPane(kind: kind, side: .right, chooseModeOnOpen: true)
+        pane.openingPath = [.root, page]
         onCreate?()
     }
 
-    @objc private func openTerminal(_ sender: Any?) { open(.terminal) }
-    @objc private func openBrowser(_ sender: Any?) { open(.browser) }
-    @objc private func openApple(_ sender: Any?) { open(.simulator) }
-    @objc private func openAndroid(_ sender: Any?) { open(.android) }
+    @objc private func openTerminal(_ sender: Any?) { openPlaceholder(.terminal, page: .terminal) }
+    @objc private func openBrowser(_ sender: Any?) {
+        guard let workspace else { return }
+        workspace.addBrowserPane(side: .right)
+        onCreate?()
+    }
+    @objc private func openSimulator(_ sender: Any?) { openPlaceholder(.simulator, page: .simulator) }
+    @objc private func openDevice(_ sender: Any?) { openPlaceholder(.device, page: .device) }
 
     @objc private func openEditor(_ sender: Any?) {
         guard let workspace, workspace.effectiveRootPath != nil else { return }
@@ -185,21 +202,16 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
                 item.isEnabled = false; items.append(item)
             }
             return items
-        case .apple:
+        case .simulator:
             return [
                 ShellMenuItem("Apple Simulator") { [weak self] in workspace.addPane(kind: .simulator, side: side); self?.onCreate?() },
-                ShellMenuItem("Apple Device Stream") { [weak self] in workspace.addPane(kind: .device, side: side); self?.onCreate?() }
+                androidEntry("Android Simulator", target: .simulator, workspace: workspace, side: side)
             ]
-        case .android:
-            return [("Android Simulator", AndroidPaneTarget.simulator), ("Android Device", AndroidPaneTarget.device)].map { title, target in
-                ShellMenuItem(title) { [weak self] in
-                    let pane = workspace.addPane(kind: .android, side: side)
-                    pane.androidTarget = target
-                    _ = workspace.modelContext?.saveReporting()
-                    AndroidDeviceRegistry.shared.configure(target: target, for: pane.id)
-                    self?.onCreate?()
-                }
-            }
+        case .device:
+            return [
+                ShellMenuItem("Apple Device Stream") { [weak self] in workspace.addPane(kind: .device, side: side); self?.onCreate?() },
+                androidEntry("Android Device", target: .device, workspace: workspace, side: side)
+            ]
         case .editor:
             return [ShellMenuItem("Editor", enabledWhen: { workspace.effectiveRootPath != nil }) { [weak self] in
                 workspace.addPane(kind: .editor, side: side); self?.onCreate?()
@@ -208,6 +220,16 @@ final class WorkspacePaneLauncher: NSObject, NSMenuDelegate {
             return [ShellMenuItem("Open in Finder", enabledWhen: { workspace.effectiveRootPath != nil }) {
                 if let path = workspace.effectiveRootPath { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }
             }]
+        }
+    }
+
+    private func androidEntry(_ title: String, target: AndroidPaneTarget, workspace: Workspace, side: Workspace.Side) -> NSMenuItem {
+        ShellMenuItem(title) { [weak self] in
+            let pane = workspace.addPane(kind: .android, side: side)
+            pane.androidTarget = target
+            _ = workspace.modelContext?.saveReporting()
+            AndroidDeviceRegistry.shared.configure(target: target, for: pane.id)
+            self?.onCreate?()
         }
     }
 }

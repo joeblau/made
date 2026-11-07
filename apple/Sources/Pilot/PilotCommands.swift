@@ -57,7 +57,7 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
         file.addItem(command("New Workspace…", key: "n", modifiers: [.command, .shift]) { $0.presentNewWorkspace() })
         file.addItem(command("New Workspace Group…") { $0.presentNewGroup() })
         file.addItem(.separator())
-        file.addItem(command("New Terminal", key: "t", requiresWorkspace: true) {
+        file.addItem(command("New Tab", key: "t", requiresWorkspace: true) {
             $0.selectedWorkspace?.addPane(kind: .terminal, side: .right, chooseModeOnOpen: true)
             $0.refresh(); $0.focusSelectedPane()
         })

@@ -368,7 +368,7 @@ private final class CockpitPaneSlot: NSView {
     var onFocus: (() -> Void)?
     var onModeChange: (() -> Void)?
     private let content = NSView()
-    private var modePicker: CockpitPaneModePicker?
+    private var modePicker: CockpitNewTabView?
     private weak var controller: NSViewController?
     private let reveal = ShellActionButton("Show Pane", symbol: "eye", perform: {})
     override var isFlipped: Bool { true }
@@ -407,7 +407,7 @@ private final class CockpitPaneSlot: NSView {
         detach()
         reveal.removeFromSuperview()
         if modePicker == nil {
-            let picker = CockpitPaneModePicker(pane: pane)
+            let picker = CockpitNewTabView(pane: pane)
             picker.onChange = { [weak self] in
                 guard let self else { return }
                 self.onModeChange?()
