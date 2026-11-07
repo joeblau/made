@@ -67,7 +67,7 @@ map, not a declaration that every row has passed.
 | Application lifecycle | PilotApp, PilotAppDelegate | Startup/setup gating, single instance, CEF dispatch/shutdown, reopen, services, test isolation | #343–#345 |
 | Shared presentation boundary | Shared SettingsView/LiquidGlassStyles/SecureIdentity, DashboardShared views | Shared models/settings keys preserved; widget views excluded from Pilot | #342, #378 |
 | Visual primitives | GlassCompat, UIZoom, PilotAppearanceReporter, PreviewCanvasBackground, PilotEditorTheme | Appearance/accent, text sizing, zoom, control states, reduced effects | #346 |
-| Main window/global modes | ContentView, SidebarSelection | Workspace, Notes, Remote Desktop, Docker, Agentic Use, Runners, empty states | #347 |
+| Main window/global modes | ContentView, SidebarSelection | Workspace, Notes, Remote Desktop, Docker, Agentic Use, Runners, empty states; per-mode visibility ([sidebar modes](sidebar-modes.md)) | #347 |
 | Menus and responders | PilotCommands, ExtensionWindowView, ContentView shortcut controls | Native editing/IME, menu validation, contextual copy/screenshot, close, browser commands | #348 |
 | Sidebar | WorkspaceSidebarList/Row/Drag, WorkspaceGroups, WorkspaceQuickJump | Pin/group/reorder, expansion, activity/gauges, quick jump, rename and selection | #349 |
 | Sidebar footer/status | ContentView, AwakeSessionController | Device/audio/microphone detail popovers, Keep Awake switches/status/errors | #349 |
