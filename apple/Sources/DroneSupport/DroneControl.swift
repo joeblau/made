@@ -5,12 +5,91 @@ struct DroneControlRequest: Codable, Equatable, Sendable {
     var version = DroneVersion.control
     var command = "status"
     var requestID: UUID?
+    var controllerID: UUID?
+    var workspaceID: UUID?
+    var permissions: [String]?
+    var lifetimeSeconds: Int?
+
+    func validate() throws {
+        guard version == DroneVersion.control else { throw DroneWorkerError.unsupportedControlVersion }
+        switch command {
+        case "status", "controllers":
+            guard requestID == nil, controllerID == nil, workspaceID == nil,
+                  permissions == nil, lifetimeSeconds == nil else { throw DroneWorkerError.invalidArguments }
+        case "approve", "reject":
+            guard requestID != nil, controllerID == nil, workspaceID == nil,
+                  permissions == nil, lifetimeSeconds == nil else { throw DroneWorkerError.invalidArguments }
+        case "revoke":
+            guard controllerID != nil, requestID == nil, workspaceID == nil,
+                  permissions == nil, lifetimeSeconds == nil else { throw DroneWorkerError.invalidArguments }
+        case "grant-tools":
+            guard requestID == nil, controllerID != nil, workspaceID != nil,
+                  let permissions, !permissions.isEmpty, permissions.count <= 3,
+                  Set(permissions).count == permissions.count,
+                  permissions.allSatisfy({ ["files", "jobs", "git"].contains($0) }),
+                  let lifetimeSeconds, (1...900).contains(lifetimeSeconds)
+            else { throw DroneWorkerError.invalidArguments }
+        default: throw DroneWorkerError.invalidArguments
+        }
+    }
+}
+
+/// Independent of the execution module so the small CLI can print a lease
+/// whose JSON is directly decodable as DroneToolLease by a controller adapter.
+struct DroneControlToolLease: Codable, Equatable, Sendable {
+    struct Job: Codable, Equatable, Sendable { let rawValue: UUID }
+    let id: UUID
+    let controllerID: UUID
+    let droneID: UUID
+    let jobID: Job
+    let workspaceID: UUID
+    let expiresAt: TimeInterval
+}
+
+enum DroneOwnerCommand {
+    static func parse(_ arguments: [String]) throws -> DroneControlRequest {
+        guard let command = arguments.first else { throw DroneWorkerError.invalidArguments }
+        let request: DroneControlRequest
+        switch command {
+        case "controllers":
+            guard arguments.count == 1 else { throw DroneWorkerError.invalidArguments }
+            request = DroneControlRequest(command: command)
+        case "revoke":
+            guard arguments.count == 2, let controller = UUID(uuidString: arguments[1]) else {
+                throw DroneWorkerError.invalidArguments
+            }
+            request = DroneControlRequest(command: command, controllerID: controller)
+        case "grant-tools":
+            guard arguments.count == 5, let controller = UUID(uuidString: arguments[1]),
+                  let workspace = UUID(uuidString: arguments[2]), let lifetime = Int(arguments[4]) else {
+                throw DroneWorkerError.invalidArguments
+            }
+            request = DroneControlRequest(
+                command: command, controllerID: controller, workspaceID: workspace,
+                permissions: arguments[3].split(separator: ",", omittingEmptySubsequences: false).map(String.init),
+                lifetimeSeconds: lifetime
+            )
+        default: throw DroneWorkerError.invalidArguments
+        }
+        try request.validate()
+        return request
+    }
 }
 
 struct DroneApprovalSummary: Codable, Equatable, Sendable {
     let requestID: UUID
     let verificationCode: String
     let isKeyChange: Bool
+}
+
+struct DroneWorkerHealthSnapshot: Codable, Equatable, Sendable {
+    let listenerReady: Bool
+    let paired: Bool
+    let storageHealthy: Bool
+}
+
+protocol DroneWorkerHealthReporting: Sendable {
+    func healthSnapshot() async -> DroneWorkerHealthSnapshot
 }
 
 struct DroneControlResponse: Codable, Equatable, Sendable {
@@ -20,15 +99,19 @@ struct DroneControlResponse: Codable, Equatable, Sendable {
     let paired: Bool
     let processIdentifier: Int32
     let executionEnabled: Bool
+    let workerHealth: DroneWorkerHealthSnapshot?
     var approvals: [DroneApprovalSummary]
+    var controllers: [UUID]?
+    var toolLease: DroneControlToolLease?
 
-    init(paths: DronePaths) {
+    init(paths: DronePaths, workerHealth: DroneWorkerHealthSnapshot? = nil) {
         version = DroneVersion.control
         workerVersion = DroneVersion.marketing
         protocolVersion = DroneVersion.protocolVersion
-        paired = paths.hasPairingState()
+        paired = workerHealth?.paired ?? false
         processIdentifier = getpid()
         executionEnabled = paths.workspace != nil
+        self.workerHealth = workerHealth
         approvals = []
     }
 
@@ -39,6 +122,7 @@ struct DroneControlResponse: Codable, Equatable, Sendable {
         paired: Bool,
         processIdentifier: Int32,
         executionEnabled: Bool = false,
+        workerHealth: DroneWorkerHealthSnapshot? = nil,
         approvals: [DroneApprovalSummary] = []
     ) {
         self.version = version
@@ -47,6 +131,7 @@ struct DroneControlResponse: Codable, Equatable, Sendable {
         self.paired = paired
         self.processIdentifier = processIdentifier
         self.executionEnabled = executionEnabled
+        self.workerHealth = workerHealth
         self.approvals = approvals
     }
 }
@@ -77,6 +162,7 @@ struct DroneControlClient {
     }
 
     func send(_ controlRequest: DroneControlRequest) throws -> DroneControlResponse {
+        try controlRequest.validate()
         try paths.validateSocketPath()
         var info = stat()
         guard lstat(paths.controlSocket.path, &info) == 0,
@@ -102,7 +188,9 @@ struct DroneControlClient {
         request.append(0x0A)
         try DroneUnixSocket.writeAll(request, to: descriptor)
         let response = try DroneUnixSocket.readLine(from: descriptor, maximum: DroneControlCodec.maximumBytes)
-        return try DroneControlCodec.decodeResponse(response)
+        let decoded = try DroneControlCodec.decodeResponse(response)
+        guard decoded.version == DroneVersion.control else { throw DroneWorkerError.unsupportedControlVersion }
+        return decoded
     }
 
     private func setTimeout(_ descriptor: Int32) throws {
@@ -133,7 +221,11 @@ enum DroneStatusEvaluator {
             guard response.version == DroneVersion.control,
                   response.protocolVersion == DroneVersion.protocolVersion
             else { return .incompatible }
-            return response.paired ? .paired : .listening
+            guard response.executionEnabled else { return .disabled }
+            guard let health = response.workerHealth,
+                  health.listenerReady, health.storageHealthy
+            else { return .unhealthy }
+            return health.paired ? .paired : .listening
         }
         return launchdLoaded ? .unhealthy : .stopped
     }

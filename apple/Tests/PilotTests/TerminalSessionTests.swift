@@ -41,6 +41,76 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertNil(window.firstResponder as? NSTextView)
     }
 
+    func testNativePaneRecoversInitialFailureAndRetainsOutputAcrossReplacement() async throws {
+        let droneID = UUID()
+        let remoteID = UUID()
+        let slot = NativeTerminalClientSlot()
+        let provider = TerminalSessionProvider { _ in slot.client }
+        let pane = Pane(kind: .terminal, terminalDestination: .drone(droneID: droneID))
+        let controller = DroneTerminalViewController(pane: pane, provider: provider)
+        defer { controller.closePane() }
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let views = descendants(controller.view)
+        let input = try XCTUnwrap(views.compactMap { $0 as? NSTextField }.first {
+            $0.accessibilityIdentifier() == "terminal.remote-command"
+        })
+        let output = try XCTUnwrap(views.compactMap { $0 as? NSTextView }.first)
+        let send = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Send" })
+        let retry = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.title == "Reconnect" })
+        let labels = views.compactMap { $0 as? NSTextField }
+        controller.updatePresentation(isActive: true, isSelected: false)
+        try await waitForNativeTerminal { labels.contains { $0.stringValue.hasPrefix("Unavailable:") } }
+        XCTAssertFalse(input.isEnabled)
+        XCTAssertFalse(retry.isHidden)
+
+        let first = TerminalFakeDroneClient(droneID: droneID, remoteID: remoteID)
+        slot.client = first
+        NotificationCenter.default.post(name: .droneTerminalClientDidChange, object: droneID)
+        try await waitForNativeTerminal { input.isEnabled }
+        XCTAssertTrue(retry.isHidden)
+        first.emit("recovered", sequence: 0, offset: 0)
+        try await waitForNativeTerminal { output.string == "recovered" }
+        output.setSelectedRange(NSRange(location: 1, length: 3))
+
+        let replacement = TerminalFakeDroneClient(droneID: droneID, remoteID: remoteID)
+        slot.client = replacement
+        NotificationCenter.default.post(name: .droneTerminalClientDidChange, object: droneID)
+        try await waitForNativeTerminal { input.isEnabled }
+        replacement.emit(" again", sequence: 1, offset: 9)
+        try await waitForNativeTerminal { output.string == "recovered again" }
+        XCTAssertEqual(output.selectedRange(), NSRange(location: 1, length: 3))
+        XCTAssertEqual(pane.terminalDestination.remoteSessionID, remoteID)
+        XCTAssertEqual(replacement.createCount, 0)
+        input.stringValue = "echo fixture"
+        controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: input))
+        send.performClick(nil)
+        try await waitForNativeTerminal { replacement.receivedInput == Data("echo fixture\r".utf8) }
+        XCTAssertTrue(input.stringValue.isEmpty)
+
+        controller.updatePresentation(isActive: false, isSelected: false)
+        XCTAssertFalse(input.isEnabled)
+        replacement.emit(" hidden", sequence: 2, offset: 15)
+        await Task.yield()
+        XCTAssertEqual(output.string, "recovered again")
+        controller.updatePresentation(isActive: true, isSelected: false)
+        try await waitForNativeTerminal { input.isEnabled && output.string == "recovered again hidden" }
+
+        controller.closePane()
+        XCTAssertFalse(input.isEnabled)
+        first.emit("stale", sequence: 3, offset: 22)
+        replacement.emit(" closed", sequence: 3, offset: 22)
+        NotificationCenter.default.post(name: .droneTerminalClientDidChange, object: droneID)
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertFalse(input.isEnabled)
+        XCTAssertEqual(output.string, "recovered again hidden")
+    }
+
+    private func waitForNativeTerminal(_ predicate: @MainActor () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertTrue(predicate(), "Native terminal did not reach the expected state")
+    }
+
     func testLegacyPaneDefaultsToLocalDestination() {
         let pane = Pane(kind: .terminal)
         XCTAssertEqual(pane.terminalDestination, .local)
@@ -126,6 +196,20 @@ private final class TerminalFakeDroneClient: DroneTerminalClient, @unchecked Sen
     private let remoteID: UUID
     private(set) var createCount = 0
     private(set) var attachCount = 0
+    private let outputLock = NSLock()
+    private var outputHandler: (@Sendable (DroneOutputBody) -> Bool)?
+    private var inputBytes = Data()
+    var receivedInput: Data { outputLock.withLock { inputBytes } }
+
+    func setOutputHandler(_ handler: @escaping @Sendable (DroneOutputBody) -> Bool,
+                          for reference: DroneTerminalSessionReference) async {
+        outputLock.withLock { outputHandler = handler }
+    }
+
+    func emit(_ text: String, sequence: UInt64, offset: UInt64) {
+        let handler = outputLock.withLock { outputHandler }
+        _ = handler?(DroneOutputBody(sequence: sequence, offset: offset, data: Data(text.utf8), isFinal: false))
+    }
 
     init(droneID: UUID, remoteID: UUID) {
         self.droneID = droneID
@@ -145,7 +229,9 @@ private final class TerminalFakeDroneClient: DroneTerminalClient, @unchecked Sen
         attachCount += 1
     }
 
-    func sendInput(_ data: Data, to reference: DroneTerminalSessionReference) async throws {}
+    func sendInput(_ data: Data, to reference: DroneTerminalSessionReference) async throws {
+        outputLock.withLock { inputBytes.append(data) }
+    }
     func foregroundActivity(for reference: DroneTerminalSessionReference) async throws -> TerminalProcessActivity {
         .idle
     }
@@ -153,4 +239,13 @@ private final class TerminalFakeDroneClient: DroneTerminalClient, @unchecked Sen
     func interrupt(_ reference: DroneTerminalSessionReference) async throws {}
     func detach(_ reference: DroneTerminalSessionReference) async throws {}
     func close(_ reference: DroneTerminalSessionReference) async throws {}
+}
+
+private final class NativeTerminalClientSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: TerminalFakeDroneClient?
+    var client: TerminalFakeDroneClient? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
 }

@@ -32,10 +32,12 @@ drone status
 drone doctor
 ```
 
-`BLAU_DRONE_WORKSPACE` is the only workspace the daemon can access. The
-permission list independently enables interactive terminals, process jobs,
-file reads/writes, and Git status/diff. Use only the capabilities required for
-the rollout. Installation creates a per-user `app.blau.drone` LaunchAgent with
+`BLAU_DRONE_WORKSPACE` registers the root used by typed workspace operations.
+Terminals and process jobs intentionally run with the worker user's authority;
+they are not an OS sandbox. Use trusted controllers and grant only the
+capabilities required for the controlled rollout. Tool calls additionally need
+a worker-issued lease from the local approval/control path. The hardening and
+recovery checklist remains a prerequisite for broader rollout. Installation creates a per-user `app.blau.drone` LaunchAgent with
 `RunAtLoad`, crash supervision, restart throttling, private state directories,
 and two bounded log generations. It does not install a root daemon, cron job,
 or unmanaged shell loop.
@@ -56,9 +58,46 @@ or unmanaged shell loop.
    cannot be selected. Cockpit never substitutes Local or another Drone.
 
 Each Cockpit/controller and worker has independent key material in
-Keychain-protected storage. No fleet-wide key exists. Keys, pins, environment
-secrets, provider credentials, and terminal contents are not written to the
-registry, Bonjour metadata, logs, or diagnostics.
+Keychain-protected storage. No fleet-wide key exists. Private keys and provider credentials must not be copied between workers or to
+Cockpit. Registry and Bonjour metadata are separate from command output. Treat
+job output and file/diff results as sensitive: arbitrary executed programs can
+print secrets, and bounded output is not automatic redaction.
+
+## Owner-approved central tools
+
+On the worker, use the private local control socket through the CLI:
+
+```bash
+drone controllers
+drone grant-tools <controller-uuid> 00000000-0000-0000-0000-000000000001 files,jobs,git 300
+drone revoke <controller-uuid>
+```
+
+`controllers` lists authenticated connected controllers. `grant-tools` requires
+one of those controllers, the configured workspace ID, a nonempty subset of
+`files,jobs,git`, and a lifetime of 1–900 seconds. The requested permissions must
+also be enabled by the daemon owner. The JSON result decodes directly as
+`DroneToolLease`; supply it to `DroneToolClient` on the approved controller.
+The lease records worker identity, controller, workspace, a worker-assigned
+orchestration job ID and Unix-epoch expiry. The worker caps outstanding grants
+at 16 per controller and 128 total.
+
+Only the worker owner can issue or revoke grants through the mode-0600 Unix
+socket; the daemon also checks the connecting UID. The LAN tool protocol cannot
+issue grants. Clients that previously invented their own leases fail closed and
+must obtain an owner-issued lease. Grants expire on worker restart and must be
+approved again. Provider credentials are not part of a grant.
+
+`revoke` invalidates grants and channels immediately, requests cancellation of
+running tool processes, and reports success only after pin removal succeeds.
+Already accepted edits retain their recorded outcome. Detached user terminals
+are not terminated by revocation. A persistence failure returns failure while
+local denial remains active; repair storage and retry revocation before restart.
+
+Storage health is deliberately latched unhealthy after an observed storage
+failure or incomplete shutdown. A later successful probe does not erase that
+failure. Repair the underlying problem, preserve identity/job records, then
+restart and confirm `drone doctor` succeeds before enabling further rollout.
 
 ## Execution and recovery semantics
 
@@ -74,9 +113,10 @@ registry, Bonjour metadata, logs, or diagnostics.
   environments, and retained replay histories are bounded.
 - A network partition or unavailable worker produces an actionable offline
   state. It never silently moves a live pane to another destination.
-- Revocation closes active channels and prevents new work until a fresh
-  approval. Existing detached terminals remain non-executable retained state;
-  close them explicitly if their processes must stop.
+- Transport revocation closes active channels and blocks reconnect until fresh
+  approval. Detached terminals may still run processes; detachment is not
+  suspension. Verify the running-work policy as part of the #327 checklist;
+  do not treat detachment as proof that execution has stopped.
 - Worker updates preserve identity, pins, and durable records. Protocol
   incompatibility blocks execution and requires a compatible upgrade rather
   than an unsafe downgrade. `status` and `doctor` distinguish stopped, paired,
@@ -106,10 +146,17 @@ Before a physical rollout, verify on at least two worker Macs:
 - A 15-Drone registry/connection simulation and isolation of an unhealthy
   worker from the rest of the fleet.
 
-**Current rollout record:** the loopback worker proof and repository Apple,
-web, and Worker gates are passing. The physical two-Mac matrix and hardware
-full-screen-TUI checks have not been recorded here. Keep a broader rollout
-disabled until those checks and the security/recovery checklist are complete.
+**Current rollout record:** the coordinator verified successful CI for the
+#335 implementation at `5d060f3f52dbf2ad9c236aca2e44176ec887f593`
+([run 41701765935](https://github.com/joeblau/made/actions/runs/41701765935)).
+This is historical automated evidence, not physical fleet acceptance or a test
+of subsequent changes. The two-worker-Mac matrix, full-screen-TUI checks,
+concurrent fleet load, sleep/wake, disk-pressure recovery, and signing/upgrade
+results still need a dated record identifying hardware, OS, revision, commands,
+and observed outcomes. Keep broader rollout disabled until these checks and
+#326/#327's authorization and recovery gaps are resolved. Explicit workspace and
+permission configuration is the current opt-in gate, not a completed security
+certification.
 
 ## Revocation, backup, rollback, and uninstall
 

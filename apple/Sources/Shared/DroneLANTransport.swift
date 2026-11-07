@@ -153,36 +153,62 @@ final class DroneLANTransport: @unchecked Sendable {
         })
     }
 
-    func connect(peerID: DronePeerID, host: String, port: UInt16) {
+    func connect(
+        peerID: DronePeerID, host: String, port: UInt16,
+        connectionID: DroneConnectionID = DroneConnectionID()
+    ) {
         begin(
+            id: connectionID,
             peerID: peerID,
             endpoint: .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(integerLiteral: port)),
             pairing: false
         )
     }
 
-    func connect(peerID: DronePeerID, serviceName: String, type: String, domain: String) {
+    func connect(
+        peerID: DronePeerID, serviceName: String, type: String, domain: String,
+        connectionID: DroneConnectionID = DroneConnectionID()
+    ) {
         begin(
+            id: connectionID,
             peerID: peerID,
             endpoint: .service(name: serviceName, type: type, domain: domain, interface: nil),
             pairing: false
         )
     }
 
-    func pair(peerID: DronePeerID, host: String, port: UInt16) {
+    func pair(
+        peerID: DronePeerID, host: String, port: UInt16,
+        connectionID: DroneConnectionID = DroneConnectionID()
+    ) {
         begin(
+            id: connectionID,
             peerID: peerID,
             endpoint: .hostPort(host: NWEndpoint.Host(host), port: NWEndpoint.Port(integerLiteral: port)),
             pairing: true
         )
     }
 
-    func pair(peerID: DronePeerID, serviceName: String, type: String, domain: String) {
+    func pair(
+        peerID: DronePeerID, serviceName: String, type: String, domain: String,
+        connectionID: DroneConnectionID = DroneConnectionID()
+    ) {
         begin(
+            id: connectionID,
             peerID: peerID,
             endpoint: .service(name: serviceName, type: type, domain: domain, interface: nil),
             pairing: true
         )
+    }
+
+    /// Local lifecycle query used to retire owner approval prompts after a
+    /// handshake closes. Never exposes pins, keys, or remote execution payloads.
+    func pendingPairingRequestIDs() async -> Set<UUID> {
+        await withCheckedContinuation { continuation in
+            queue.async { [self] in
+                continuation.resume(returning: Set(requests.keys))
+            }
+        }
     }
 
     func resolvePairing(requestID: UUID, approved: Bool) {
@@ -214,6 +240,7 @@ final class DroneLANTransport: @unchecked Sendable {
                         for: request.peerID,
                         replacing: nil
                     )
+                    self.revokedPeerIDs.remove(request.peerID)
                     state.peerID = request.peerID
                     if let pendingNoise {
                         try self.acceptWorkerNoise(
@@ -257,17 +284,25 @@ final class DroneLANTransport: @unchecked Sendable {
         }
     }
 
-    func revoke(_ peerID: DronePeerID) {
-        queue.async { [weak self] in
-            guard let self else { return }
-            self.revokedPeerIDs.insert(peerID)
-            for state in self.connections.values where state.peerID == peerID {
-                self.close(state, failure: nil)
+    func revoke(
+        _ peerID: DronePeerID,
+        completion: (@Sendable (Result<Void, DroneTransportFailure>) -> Void)? = nil
+    ) {
+        // Retain the transport until the caller receives a definitive storage result.
+        queue.async { [self] in
+            revokedPeerIDs.insert(peerID)
+            for state in Array(connections.values) where state.peerID == peerID {
+                close(state, failure: nil)
             }
             do {
-                try self.pairingStore.revoke(peerID)
+                try pairingStore.revoke(peerID)
+                completion?(.success(()))
             } catch {
-                self.emit(.failed(id: nil, failure: .storage))
+                if let completion {
+                    completion(.failure(.storage))
+                } else {
+                    emit(.failed(id: nil, failure: .storage))
+                }
             }
         }
     }
@@ -292,20 +327,22 @@ final class DroneLANTransport: @unchecked Sendable {
         }
     }
 
-    private func begin(peerID: DronePeerID, endpoint: NWEndpoint, pairing: Bool) {
+    private func begin(id: DroneConnectionID, peerID: DronePeerID, endpoint: NWEndpoint, pairing: Bool) {
         queue.async { [weak self] in
             guard let self, self.role == .controller else {
-                self?.emit(.failed(id: nil, failure: .invalidRole))
+                self?.emit(.failed(id: id, failure: .invalidRole))
                 return
             }
             guard pairing || !self.revokedPeerIDs.contains(peerID) else {
-                self.emit(.failed(id: nil, failure: .peerRevoked))
+                self.emit(.failed(id: id, failure: .peerRevoked))
                 return
             }
-            guard self.connections.count < DroneLimits.maxConnectionsPerWorker,
+            // The controller owns one outgoing connection per saved worker. The
+            // eight-connection preauthentication budget applies only to a worker listener.
+            guard self.connections.count < DroneLimits.maxPairedWorkers,
                   !self.connections.values.contains(where: { $0.peerID == peerID && !$0.closed })
             else {
-                self.emit(.failed(id: nil, failure: .connectionLimit))
+                self.emit(.failed(id: id, failure: .connectionLimit))
                 return
             }
             do {
@@ -314,7 +351,7 @@ final class DroneLANTransport: @unchecked Sendable {
                 guard pairing || existingPin != nil else { throw DroneTransportFailure.peerNotPaired }
                 let connection = NWConnection(to: endpoint, using: Self.tcpParameters())
                 let state = ConnectionState(
-                    id: DroneConnectionID(),
+                    id: id,
                     connection: connection,
                     phase: .connecting,
                     peerID: peerID
@@ -338,9 +375,9 @@ final class DroneLANTransport: @unchecked Sendable {
                     }
                 }
             } catch let failure as DroneTransportFailure {
-                self.emit(.failed(id: nil, failure: failure))
+                self.emit(.failed(id: id, failure: failure))
             } catch {
-                self.emit(.failed(id: nil, failure: .storage))
+                self.emit(.failed(id: id, failure: .storage))
             }
         }
     }

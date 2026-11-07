@@ -275,6 +275,12 @@ private func markdownTouchedLineIndices(_ ranges: [NSRange], in text: NSString) 
 /// indented descendant as part of its root item. This keeps nested checklists
 /// structurally intact when the editor reflows completed work.
 enum MarkdownTaskFormatter {
+    struct ReflowResult {
+        let text: String
+        /// Original line index at each output position, including duplicate lines.
+        let originalLineIndices: [Int]
+    }
+
     private struct TaskLine {
         let text: String
         let indentation: Int
@@ -289,12 +295,19 @@ enum MarkdownTaskFormatter {
     /// When `ranges` is supplied, only groups touching those post-edit UTF-16
     /// ranges are considered.
     static func reflow(_ text: String, touching ranges: [NSRange]? = nil) -> String? {
+        reflowWithLineMapping(text, touching: ranges)?.text
+    }
+
+    /// Retains the actual block permutation so selections follow their source
+    /// lines rather than searching for equal text or enclosing moved endpoints.
+    static func reflowWithLineMapping(_ text: String, touching ranges: [NSRange]? = nil) -> ReflowResult? {
         // Runs on every keystroke, so avoid splitting ordinary notes.
         guard text.contains("[x]") || text.contains("[X]") else { return nil }
         let touchedLines = ranges.map { markdownTouchedLineIndices($0, in: text as NSString) }
         if touchedLines?.isEmpty == true { return nil }
 
         var lines = text.components(separatedBy: "\n")
+        var originalLineIndices = Array(lines.indices)
         var changed = false
         var index = 0
 
@@ -316,25 +329,29 @@ enum MarkdownTaskFormatter {
             }
 
             let baseline = group.map(\.indentation).min() ?? 0
-            var blocks: [[TaskLine]] = []
-            for task in group {
-                if task.indentation == baseline || blocks.isEmpty {
-                    blocks.append([task])
+            var blocks: [[Int]] = []
+            for offset in group.indices {
+                if group[offset].indentation == baseline || blocks.isEmpty {
+                    blocks.append([offset])
                 } else {
-                    blocks[blocks.endIndex - 1].append(task)
+                    blocks[blocks.endIndex - 1].append(offset)
                 }
             }
 
-            let sortedBlocks = blocks.filter { !$0[0].isDone } + blocks.filter { $0[0].isDone }
-            let sortedLines = sortedBlocks.flatMap { $0.map(\.text) }
+            let sortedBlocks = blocks.filter { !group[$0[0]].isDone } + blocks.filter { group[$0[0]].isDone }
+            let sortedOffsets = sortedBlocks.flatMap { $0 }
+            let sortedLines = sortedOffsets.map { group[$0].text }
             if sortedLines != Array(lines[index..<end]) {
                 lines.replaceSubrange(index..<end, with: sortedLines)
+                originalLineIndices.replaceSubrange(index..<end, with: sortedOffsets.map { index + $0 })
                 changed = true
             }
             index = end
         }
 
-        return changed ? lines.joined(separator: "\n") : nil
+        return changed ? ReflowResult(
+            text: lines.joined(separator: "\n"), originalLineIndices: originalLineIndices
+        ) : nil
     }
 
     private static func parse(_ line: String) -> TaskLine? {

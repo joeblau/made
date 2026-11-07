@@ -1,16 +1,16 @@
 # Drone execution architecture and wire protocol
 
-Status: #318 protocol baseline with #320 pairing and LAN transport implemented
+Status: protocol baseline plus #335 execution foundation; #326–#328 acceptance remains open
 
 Tracking: [#317](https://github.com/joeblau/made/issues/317),
 [#318](https://github.com/joeblau/made/issues/318), and
 [#320](https://github.com/joeblau/made/issues/320)
 
-This is the trust and transport foundation, not a production Drone launch. It
-adds versioned value types, namespaced pairing stores, a direct encrypted LAN
-transport, security/state checks, and a two-process loopback fixture. It does
-not add a Drone destination, launchd service, remote PTY, durable job executor,
-or workspace file transfer.
+The baseline below specifies the trust and transport contract. #335 added
+Drone destinations, launchd service, remote PTYs, durable jobs, and typed tools.
+These implementations do not yet establish production rollout readiness. See
+the tool contract and implementation limits below and the
+[controlled rollout guide](drone-rollout.md).
 
 ## Decision and roles
 
@@ -289,3 +289,49 @@ prior-session record rejection, and real loopback pairing/reconnect/revocation.
 Physical fleet behavior, durable recovery, pairing UI, launchd supervision, PTY
 execution, and production Drone destinations remain in their respective
 #319–#328 issues and are not claimed by this gate.
+
+## Provider-neutral tool contract and current implementation limits
+
+`DroneToolClient` accepts a `DroneToolTransport` and a `DroneToolLease` binding
+controller, Drone, job, workspace, lease ID, and expiry (Unix-epoch seconds).
+The intended trust boundary requires a worker-approved lease, validated against
+the authenticated channel and the approved job/workspace. A caller-provided
+lease is not evidence of authorization.
+
+A future Claude or other provider adapter should map tools as follows:
+
+| Provider operation | Typed operation | Adapter responsibility |
+| --- | --- | --- |
+| Read a file | `read` / `toolRead` | Relative path, bounded bytes, handle truncation |
+| Replace text | `edit` / `toolEdit` | Unique old bytes, optional SHA-256 precondition, stable retry key |
+| Build or test | `run` / `toolRun` | Executable and argument vector, timeout and output budget |
+| Inspect changes | `diff` / `toolDiff` | Relative paths, bounded diff output |
+| Resume output | `toolAttach` | Original request ID, next sequence and per-stream offsets |
+| Cancel | `cancel` / `toolCancel` | Original operation request ID, retain job outcome |
+
+`DroneAgentDriver` demonstrates read/edit/build/test/diff orchestration without
+an interactive terminal. Adapters must preserve idempotency keys across retries,
+report ambiguous outcomes instead of starting replacement work, and keep source,
+stdout, stderr, and diffs out of diagnostics. `diagnosticSummary` reports counts
+and statuses only. Provider authentication remains with the agent's host;
+remote terminal agents use credentials already on their Drone. This interface
+does not authorize copying credentials to Cockpit or another worker.
+
+Worker-local approval issues bounded leases tied to the worker identity,
+configured workspace and authenticated controller. Grants are held in memory
+and expire on worker restart. Older clients that construct their own leases
+are rejected; `drone grant-tools` on the worker must issue an approved lease before
+using the unchanged typed calls. There is no remote first-use registration.
+The lease job ID identifies the approved orchestration session; individual
+operations retain their own durable job records.
+
+Authorization, resource-governance and recovery acceptance remains tracked in
+#326/#327. Keep detailed security findings and remediation evidence in private
+review as described in [SECURITY.md](../SECURITY.md). The fake tool proof does
+not replace production integration or physical rollout checks.
+
+Run `apple/bin/test-drone-tools.sh` for the typed client/fake-engine proof and
+`apple/bin/test-drone-worker.sh --tool-replay-authorization` for the encrypted
+production attach-route ownership proof without creating a terminal. The full
+worker proof exercises a real terminal and agent cycle. None substitutes for
+the physical matrix or adverse recovery checks in the rollout guide.

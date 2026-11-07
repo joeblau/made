@@ -102,20 +102,6 @@ struct DronePaths: Sendable {
         guard controlSocket.path.utf8.count < 104 else { throw DroneWorkerError.unsafeFile }
     }
 
-    func hasPairingState() -> Bool {
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: pairings,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-            options: [.skipsHiddenFiles]
-        ) else { return false }
-        return entries.prefix(DronePairingLimits.maximum).contains { entry in
-            guard let values = try? entry.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey]) else {
-                return false
-            }
-            return values.isRegularFile == true && values.isSymbolicLink != true
-        }
-    }
-
     func permissionsAreValid() -> Bool {
         let privateDirectories = [root, configuration, state, identity, pairings, runtime, logs, releases]
         guard privateDirectories.allSatisfy({ DroneFileSystem.hasMode($0, mode: 0o700) }),

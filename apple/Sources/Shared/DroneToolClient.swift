@@ -26,7 +26,7 @@ struct DroneToolClient: Sendable {
     init(
         transport: any DroneToolTransport,
         lease: DroneToolLease,
-        now: TimeInterval = Date().timeIntervalSinceReferenceDate
+        now: TimeInterval = Date().timeIntervalSince1970
     ) throws {
         guard transport.capabilities.contains("tools.v1") else {
             throw DroneProtocolError.negotiationFailed
