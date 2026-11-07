@@ -106,7 +106,11 @@ extension MultiCursorTextView {
     /// it. A no-op unless some group is actually out of order.
     @discardableResult
     func reorderCompletedTasks(touching ranges: [NSRange]? = nil) -> Bool {
-        applyReflow { MarkdownTaskFormatter.reflow($0, touching: ranges) }
+        applyReflow { text in
+            MarkdownTaskFormatter.reflowWithLineMapping(text, touching: ranges).map {
+                ($0.text, $0.originalLineIndices)
+            }
+        }
     }
 
     /// Align markdown tables to fit their content (issue #79). When
@@ -127,7 +131,8 @@ extension MultiCursorTextView {
                 text, skipLines: skip, touching: ranges
             )
             skippedTableNeedsFormatting = result.skippedBlockNeedsFormatting
-            return result.text
+            // Table alignment preserves line order and count.
+            return result.text.map { ($0, nil) }
         }
         if skippedTableNeedsFormatting { carriedReflowScope.insert(.tables) }
         // A reformatted row can stop being a task line; re-check tasks next edit.
@@ -136,8 +141,9 @@ extension MultiCursorTextView {
     }
 
     /// The one application path for whole-document reflows. `transform` is a
-    /// pure formatter returning `nil` when the text is already settled. Only
-    /// the span that differs is replaced, through `shouldChangeText` /
+    /// pure formatter returning text and its line permutation, or `nil` when
+    /// the text is already settled. Only the differing span is replaced through
+    /// `shouldChangeText` /
     /// `didChangeText`, so it is registered for undo, restyled, and pushed to
     /// the binding like any edit while the styler and undo record cover just
     /// that span. `isReflowing` keeps the resulting `textDidChange` from
@@ -148,13 +154,17 @@ extension MultiCursorTextView {
     /// remaining recorded edits (whose ranges then land on the wrong lines),
     /// so reflows stand down until the replay finishes. The replayed state is
     /// one the user already saw, already formatted.
-    private func applyReflow(_ transform: (String) -> String?) -> Bool {
+    private func applyReflow(_ transform: (String) -> (text: String, originalLineIndices: [Int]?)?) -> Bool {
         guard !isReflowing, let textStorage else { return false }
         if let undoManager, undoManager.isUndoing || undoManager.isRedoing { return false }
         let ns = string as NSString
-        guard ns.length > 0, let newText = transform(string) else { return false }
-
-        let anchor = NoteCaretAnchor(selection: selectedRange(), in: ns)
+        guard ns.length > 0, let result = transform(string) else { return false }
+        let newText = result.text
+        let selections = NoteSelectionMapping.ranges(
+            selectedRanges.map(\.rangeValue), from: string, to: newText,
+            originalLineIndices: result.originalLineIndices
+        )
+        let affinity = selectionAffinity
         let span = Self.changedSpan(from: ns, to: newText as NSString)
         let replacement = (newText as NSString).substring(with: span.new)
         isReflowing = true
@@ -166,7 +176,7 @@ extension MultiCursorTextView {
         isReflowing = false
         guard applied else { return false }
 
-        setSelectedRange(NSRange(location: anchor.location(in: newText), length: 0))
+        setSelectedRanges(selections.map { NSValue(range: $0) }, affinity: affinity, stillSelecting: false)
         return true
     }
 
