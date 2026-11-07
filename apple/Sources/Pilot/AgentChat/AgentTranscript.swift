@@ -368,11 +368,11 @@ struct AgentTranscript: Equatable, Sendable {
             upsertTool(fields, in: session, stamp: stamp, events: &events)
         case .plan(let entries):
             upsertPlan(entries, in: session)
-        case .modelConfiguration(let state):
-            if !isRoot, let name = state?.currentName { setChildModel(name, for: session) }
+        case .configuration(let patch):
+            if !isRoot, let name = patch.model?.currentName { setChildModel(name, for: session) }
         case .currentModel(let id):
             if !isRoot { setChildModel(id, for: session) }
-        case .context, .subagent, .other:
+        case .context, .currentMode, .subagent, .other:
             break
         }
         if !isRoot, Self.isChildActivity(notification.update) { markChildStarted(session, stamp: stamp) }
@@ -384,7 +384,7 @@ struct AgentTranscript: Equatable, Sendable {
     private static func isChildActivity(_ update: ACPUpdate) -> Bool {
         switch update {
         case .agentMessage, .agentThought, .userMessage, .toolCall, .toolCallUpdate, .plan: true
-        case .context, .modelConfiguration, .currentModel, .subagent, .other: false
+        case .context, .configuration, .currentModel, .currentMode, .subagent, .other: false
         }
     }
 

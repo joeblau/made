@@ -157,77 +157,60 @@ enum AgentChatPaneContent {
     }
 }
 
-// MARK: - Agent menu
+// MARK: - Conversation menu
 
-/// The composer's model and provider menu. Its Conversation submenu ends with
-/// the context meter ("Context 58.1k / 258.4k · Cache 97%") as a disabled
-/// item; the meter is no longer shown in the composer.
+/// The composer's Conversation menu (the ⋯ button left of the model
+/// trigger). It ends with the context meter ("Context 58.1k / 258.4k ·
+/// Cache 97%") as a disabled item; the meter is not shown in the composer.
+/// Models and providers live in the model picker popover.
 @MainActor
 enum AgentChatAgentMenu {
     struct Actions {
-        var changeModel: Selector
-        var changeAgent: Selector
         var newConversation: Selector
         var restart: Selector
     }
 
     static let contextItemIdentifier = NSUserInterfaceItemIdentifier("agent-chat.context")
 
-    static func populate(_ popup: NSPopUpButton, session: AgentChatSession, editable: Bool, info: String?, target: AnyObject,
-                         actions: Actions) {
-        popup.removeAllItems()
-        guard let menu = popup.menu else { return }
+    static func conversationMenu(info: String?, target: AnyObject, actions: Actions) -> NSMenu {
+        let menu = NSMenu(title: "Conversation")
         menu.autoenablesItems = false
-        popup.addItem(withTitle: session.modelName ?? session.agent.displayName)
-        menu.addItem(.sectionHeader(title: session.agent.displayName + " Models"))
-        let choices = session.modelState?.choices ?? []
-        if choices.isEmpty {
-            let item = NSMenuItem(title: session.modelName ?? "Default model", action: nil, keyEquivalent: "")
-            item.isEnabled = false
-            item.toolTip = "This agent does not advertise selectable models."
-            menu.addItem(item)
-        }
-        var previousGroup: String?
-        for choice in choices {
-            if let group = choice.group, group != previousGroup { menu.addItem(.sectionHeader(title: group)) }
-            previousGroup = choice.group
-            let item = NSMenuItem(title: choice.name, action: actions.changeModel, keyEquivalent: "")
-            item.target = target
-            item.representedObject = choice.id
-            item.toolTip = choice.detail
-            item.state = choice.id == session.modelState?.currentID ? .on : .off
-            item.isEnabled = editable
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-        let providers = NSMenuItem(title: "Provider", action: nil, keyEquivalent: "")
-        let providerMenu = NSMenu(title: "Provider")
-        for agent in ChatAgent.allCases {
-            let item = NSMenuItem(title: agent.displayName, action: actions.changeAgent, keyEquivalent: "")
-            item.target = target
-            item.representedObject = agent.rawValue
-            item.state = agent == session.agent ? .on : .off
-            providerMenu.addItem(item)
-        }
-        providers.submenu = providerMenu
-        menu.addItem(providers)
-        let conversation = NSMenuItem(title: "Conversation", action: nil, keyEquivalent: "")
-        let submenu = NSMenu(title: "Conversation")
-        submenu.autoenablesItems = false
         for (title, action) in [("New Conversation", actions.newConversation), ("Restart Agent", actions.restart)] {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
             item.target = target
-            submenu.addItem(item)
+            menu.addItem(item)
         }
         if let info {
-            submenu.addItem(.separator())
+            menu.addItem(.separator())
             let item = NSMenuItem(title: info, action: nil, keyEquivalent: "")
             item.isEnabled = false
             item.identifier = contextItemIdentifier
-            submenu.addItem(item)
+            menu.addItem(item)
         }
-        conversation.submenu = submenu
-        menu.addItem(conversation)
+        return menu
+    }
+}
+
+/// The borderless ⋯ button that opens the Conversation menu above itself.
+@MainActor
+final class AgentChatConversationMenuButton: NSButton {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
+        imagePosition = .imageOnly
+        isBordered = false
+        contentTintColor = .secondaryLabelColor
+        target = self
+        action = #selector(showMenu)
+        toolTip = "Conversation"
+        setAccessibilityLabel("Conversation")
+        setAccessibilityIdentifier("agent-chat.conversation-menu")
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    @objc private func showMenu() {
+        menu?.popUp(positioning: nil, at: NSPoint(x: 0, y: isFlipped ? bounds.height + 4 : -4), in: self)
     }
 }
 
@@ -387,7 +370,7 @@ enum AgentChatFormat {
         "\(Int((rate * 100).rounded()))%"
     }
 
-    /// "Context 58.1k / 258.4k · Cache 97%" for the agent menu, or nil when
+    /// "Context 58.1k / 258.4k · Cache 97%" for the Conversation menu, or nil when
     /// the agent reported neither.
     static func contextSummary(_ context: ACPContextUsage?, usage: NormalizedTurnUsage?) -> String? {
         var parts: [String] = []

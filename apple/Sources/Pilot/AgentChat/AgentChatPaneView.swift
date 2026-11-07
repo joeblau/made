@@ -20,11 +20,13 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
     let composerChip = AgentChatComposerChip()
     private let transcriptScroll = NSScrollView()
     private let transcriptArea = NSView()
-    private let agentMenu = NSPopUpButton(frame: .zero, pullsDown: true)
+    private(set) lazy var modelPicker = AgentModelPickerController(session: session)
+    let conversationMenuButton = AgentChatConversationMenuButton()
+    /// Asks before an unrestricted mode; tests replace the sheet.
+    var confirmUnrestrictedMode: @MainActor (ChatAgent, ACPConfigOption.Choice) async -> Bool = { _, _ in false }
     private let attachmentButton = NSButton()
     private let attachmentStrip = AgentChatAttachmentStrip()
     private let composerStatus = NSTextField(wrappingLabelWithString: "")
-    private let providerMark = NSImageView()
     private let modelLabel = NSTextField(labelWithString: "")
     private let spinner = NSProgressIndicator()
     private let composer = AgentChatComposerTextView()
@@ -50,7 +52,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
     private var approvalWidth: CGFloat = 0
     private var lastWidth: CGFloat = 0
     private var displayedAgent: ChatAgent?
-    private var menuSignature: [String]?
+    private var conversationMenuInfo: String??
     private var compactComposer: Bool?
     private var composerControls: NSStackView?
 
@@ -60,6 +62,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         session = AgentChatRegistry.shared.session(for: pane.id, workingDirectory: rootPath)
         super.init(nibName: nil, bundle: nil)
         session.setWorkingDirectory(rootPath)
+        installConfirmation()
     }
 
     /// Injecting a session keeps native UI tests independent of agent installs,
@@ -69,6 +72,19 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         self.session = session
         self.rootPath = session.workingDirectory
         super.init(nibName: nil, bundle: nil)
+        installConfirmation()
+    }
+
+    /// Unrestricted modes need the user's yes on a sheet (Cancel is the
+    /// default); a pane that is gone refuses.
+    private func installConfirmation() {
+        confirmUnrestrictedMode = { [weak self] agent, choice in
+            await AgentUnrestrictedModeAlert.confirm(agent: agent, choice: choice, window: self?.view.window)
+        }
+        session.confirmUnrestrictedMode = { [weak self] agent, choice in
+            guard let self, !self.closed else { return false }
+            return await self.confirmUnrestrictedMode(agent, choice)
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -146,15 +162,10 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         attachmentButton.action = #selector(chooseAttachments)
         attachmentButton.setAccessibilityLabel("Attach photos or videos")
         attachmentButton.setAccessibilityIdentifier("agent-chat.attach")
-        agentMenu.isBordered = false
-        agentMenu.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        agentMenu.setAccessibilityLabel("Model and provider")
-        agentMenu.setAccessibilityIdentifier("agent-chat.agent")
-        refreshAgentMenu()
-        providerMark.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: nil)
-        providerMark.imageScaling = .scaleProportionallyUpOrDown
+        modelPicker.onClose = { [weak self] responder in self?.modelPickerDidClose(responderAtOpen: responder) }
+        modelPicker.onChange = { [weak self] in self?.renderAndObserve() }
+        refreshConversationMenu()
         modelLabel.font = CockpitTypography.font(size: 11)
-        agentMenu.font = CockpitTypography.font(size: 13, weight: .semibold)
         modelLabel.lineBreakMode = .byTruncatingTail
         modelLabel.textColor = .secondaryLabelColor
         modelLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -164,13 +175,13 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         stopButton.target = self
         stopButton.action = #selector(stopClicked)
         stopButton.isHidden = true
-        let controls = NSStackView(views: [attachmentButton, modelLabel, composerSpacer, spinner, providerMark, agentMenu,
-                                           stopButton, sendButton])
+        let controls = NSStackView(views: [attachmentButton, modelLabel, composerSpacer, spinner, conversationMenuButton,
+                                           modelPicker.trigger, stopButton, sendButton])
         controls.orientation = .horizontal
         controls.alignment = .centerY
         controls.spacing = 8
         composerControls = controls
-        for (control, size) in [(attachmentButton, NSSize(width: 28, height: 32)), (providerMark, NSSize(width: 8, height: 8)),
+        for (control, size) in [(attachmentButton, NSSize(width: 28, height: 32)), (conversationMenuButton, NSSize(width: 18, height: 28)),
                                 (stopButton, NSSize(width: 28, height: 28)), (sendButton, NSSize(width: 32, height: 32))] as [(NSView, NSSize)] {
             control.widthAnchor.constraint(equalToConstant: size.width).isActive = true
             control.heightAnchor.constraint(equalToConstant: size.height).isActive = true
@@ -306,19 +317,38 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         }
     }
 
-    // MARK: Agent menu
+    // MARK: Model picker and Conversation menu
 
-    private func refreshAgentMenu() {
-        let editable = session.phase == .ready && !session.isChangingModel && !session.isPreparingPrompt
+    private func refreshConversationMenu() {
         let info = AgentChatFormat.contextSummary(session.context, usage: session.lastTurnUsage)
-        let signature = [session.agent.rawValue, String(describing: session.modelState), "\(editable)", info ?? ""]
-        guard menuSignature != signature else { return }
-        menuSignature = signature
-        compactComposer = nil
-        AgentChatAgentMenu.populate(agentMenu, session: session, editable: editable, info: info, target: self, actions: .init(
-            changeModel: #selector(changeModel(_:)), changeAgent: #selector(changeAgent(_:)),
-            newConversation: #selector(newConversation), restart: #selector(restart)
-        ))
+        guard conversationMenuInfo != .some(info) else { return }
+        conversationMenuInfo = .some(info)
+        conversationMenuButton.menu = AgentChatAgentMenu.conversationMenu(
+            info: info, target: self, actions: .init(newConversation: #selector(newConversation), restart: #selector(restart))
+        )
+    }
+
+    /// The popover gives focus back to the composer unless a click outside
+    /// it moved focus out of this pane (to a toolbar field or another pane).
+    private func modelPickerDidClose(responderAtOpen: NSResponder?) {
+        restoreComposerFocusAfterPicker(responderAtOpen: responderAtOpen)
+        // When the parent window becomes key again after the popover closes,
+        // AppKit can move first responder to the window's first key view (the
+        // transcript table) after this callback. Re-check once on the next turn.
+        DispatchQueue.main.async { [weak self] in
+            self?.restoreComposerFocusAfterPicker(responderAtOpen: responderAtOpen)
+        }
+    }
+
+    /// Focus returns to the composer unless the user moved it out of the pane.
+    private func restoreComposerFocusAfterPicker(responderAtOpen: NSResponder?) {
+        guard let window = view.window, modelPicker.isShown == false else { return }
+        let responder = window.firstResponder
+        guard responder !== composer else { return }
+        if responder == nil || responder === window || responder === responderAtOpen
+            || (responder as? NSView)?.isDescendant(of: view) == true {
+            focusComposer()
+        }
     }
 
     // MARK: Presentation lifecycle
@@ -376,13 +406,11 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         // Keep the provider and send action usable in narrow split panes.
         let compact = composerCard.bounds.width < 240 * scale
         composerSpacer.isHidden = compact
-        providerMark.isHidden = compact
         spinner.isHidden = compact || (session.phase != .starting && session.phase != .prompting)
         if compactComposer != compact {
             compactComposer = compact
             composerControls?.spacing = compact ? 4 : 8
-            agentMenu.imagePosition = compact ? .imageOnly : .noImage
-            agentMenu.item(at: 0)?.image = compact ? NSImage(systemSymbolName: "brain", accessibilityDescription: nil) : nil
+            modelPicker.refresh(compact: compact)
         }
         modelLabel.isHidden = modelLabel.stringValue.isEmpty || composerCard.bounds.width < 440 * scale
         guard composerScroll.contentSize.width > 0, let layout = composer.layoutManager,
@@ -427,11 +455,10 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         let changingAgent = displayedAgent != nil && displayedAgent != session.agent
         displayedAgent = session.agent
         defer { if changingAgent { CockpitMotion.reveal(view) } }
-        refreshAgentMenu()
-        providerMark.contentTintColor = AgenticUseModelPalette.providerColor(for: session.agent.provider)
+        refreshConversationMenu()
+        modelPicker.refresh()
         modelLabel.stringValue = session.modelName == nil ? "" : session.agent.displayName
         modelLabel.toolTip = session.modelName
-        agentMenu.toolTip = [session.agent.displayName, session.modelName].compactMap { $0 }.joined(separator: "\n")
         attachmentStrip.update(session.attachments)
         attachmentStrip.isHidden = session.attachments.isEmpty
         let status = session.composerError ?? (session.isImportingAttachments ? "Adding attachments…"
@@ -686,18 +713,6 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
     @objc private func sendClicked() { sendDraft() }
     @objc private func stopClicked() { stopTurn() }
 
-    @objc private func changeAgent(_ sender: NSMenuItem) {
-        guard let raw = sender.representedObject as? String, let agent = ChatAgent(rawValue: raw) else { return }
-        session.switchAgent(to: agent)
-        renderAndObserve()
-    }
-
-    @objc private func changeModel(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? String else { return }
-        session.selectModel(id)
-        renderAndObserve()
-    }
-
     @objc private func newConversation() { session.startNewConversation() }
     @objc private func restart() { session.restart() }
 
@@ -705,7 +720,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         composer.font = CockpitTypography.font(size: 14)
         emptyPrompt.font = CockpitTypography.font(size: 17, weight: .medium)
         modelLabel.font = CockpitTypography.font(size: 11)
-        agentMenu.font = CockpitTypography.font(size: 13, weight: .semibold)
+        modelPicker.zoomChanged()
         previousPhase = nil
         renderPhase()
         updateRunControls()
@@ -722,6 +737,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         refreshTask?.cancel()
         refreshTask = nil
         timeline.stop()
+        modelPicker.close()
         NotificationCenter.default.removeObserver(self)
         // Pane deletion already removes the registry session. Releasing a view
         // during application teardown must not erase its saved ACP session ID.
