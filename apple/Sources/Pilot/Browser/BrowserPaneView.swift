@@ -75,6 +75,11 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
         self.isActive = isActive
         self.isSelected = isSelected
         if isViewLoaded { synchronize() }
+        // A pane opened while its window was occluded keeps its focus request
+        // pending; honour it once the pane is actually presented. Limited to
+        // the start page so a web view that can't take focus yet doesn't
+        // clear the responder on every presentation update.
+        if isActive, isSelected, startPage != nil, state.needsAddressFocus { focusPaneInput() }
     }
 
     func focusPaneInput() {
