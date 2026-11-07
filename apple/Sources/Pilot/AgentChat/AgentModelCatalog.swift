@@ -32,7 +32,7 @@ struct AgentModelCatalog {
     }
 
     /// A favorite with the name and description its agent last advertised;
-    /// `name` falls back to the model ID when the agent's snapshot lacks it.
+    /// `name` falls back to the sanitized model ID when the agent's snapshot lacks it.
     struct FavoriteEntry: Equatable, Sendable {
         var favorite: Favorite
         var name: String
@@ -161,7 +161,8 @@ struct AgentModelCatalog {
         return favorites().map { favorite in
             if snapshots[favorite.agent] == nil { snapshots[favorite.agent] = .some(snapshot(for: favorite.agent)) }
             let entry = snapshots[favorite.agent]??.models.first { $0.id == favorite.modelID }
-            return FavoriteEntry(favorite: favorite, name: entry?.name ?? favorite.modelID, detail: entry?.detail)
+            return FavoriteEntry(favorite: favorite, name: entry?.name ?? ACPConfigText.label(forID: favorite.modelID),
+                                 detail: entry?.detail)
         }
     }
 
@@ -180,7 +181,7 @@ private extension AgentModelCatalog.Entry {
         guard let id = ACPConfigText.id(.string(id)) else { return nil }
         return Self(
             id: id,
-            name: ACPConfigText.name(.string(name)) ?? id,
+            name: ACPConfigText.name(.string(name)) ?? ACPConfigText.label(forID: id),
             detail: detail.flatMap { ACPConfigText.detail(.string($0)) },
             group: group.flatMap { ACPConfigText.name(.string($0)) }
         )

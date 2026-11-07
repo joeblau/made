@@ -134,6 +134,11 @@ final class AgentModelPickerRailButton: NSButton {
 final class AgentModelPickerKeycap: NSView {
     private(set) var text = ""
     private var font = NSFont.systemFont(ofSize: 12, weight: .medium)
+    /// Drawn on a hovered or highlighted row, whose fill matches `pickerFill`.
+    var onHighlight = false { didSet { if onHighlight != oldValue { needsDisplay = true } } }
+
+    /// The keycap fill: raised on a highlighted row so the box stays visible.
+    static func fill(onHighlight: Bool) -> AgentChatPalette.Token { onHighlight ? .pickerRaised : .pickerFill }
 
     func configure(_ text: String, font: NSFont) {
         self.text = text
@@ -148,7 +153,7 @@ final class AgentModelPickerKeycap: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        AgentChatPalette.color(.pickerFill).setFill()
+        AgentChatPalette.color(Self.fill(onHighlight: onHighlight)).setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 5, yRadius: 5).fill()
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: AgentChatPalette.color(.textMuted)]
         let size = (text as NSString).size(withAttributes: attributes)
@@ -169,7 +174,7 @@ final class AgentModelPickerRowView: NSView {
         var hover: (Bool) -> Void = { _ in }
     }
 
-    let row: AgentModelPickerState.Row
+    private(set) var row: AgentModelPickerState.Row
     let glyph = AgentModelPickerBrand.imageView(pointSize: 16)
     let nameLabel = AgentChatText.makeLabel()
     let check = NSImageView()
@@ -177,8 +182,8 @@ final class AgentModelPickerRowView: NSView {
     let favoriteButton = NSButton()
     private(set) var isHovered = false
     private(set) var isHighlighted = false
-    private let enabled: Bool
-    private let scale: CGFloat
+    private(set) var enabled: Bool
+    let scale: CGFloat
     var callbacks = Callbacks()
 
     init(row: AgentModelPickerState.Row, shortcut: Int?, enabled: Bool, scale: CGFloat) {
@@ -189,14 +194,9 @@ final class AgentModelPickerRowView: NSView {
         glyph.image = AgentModelPickerBrand.image(for: row.agent)
         glyph.symbolConfiguration = .init(pointSize: 24 * scale, weight: .regular)
         glyph.contentTintColor = AgentModelPickerBrand.tint(for: row.agent, emphasized: false)
-        AgentChatText.apply(nameLabel, text: row.name, font: AgentChatText.font(15),
-                            color: row.isPlaceholder ? .textMuted : .textPrimary)
         check.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)
         check.symbolConfiguration = .init(pointSize: 12 * scale, weight: .medium)
         check.contentTintColor = AgentChatPalette.color(.textMuted)
-        check.isHidden = !row.isCurrent
-        keycap.configure(shortcut.map { "⌘\($0)" } ?? "", font: AgentChatText.font(12, .medium))
-        keycap.isHidden = shortcut == nil
         favoriteButton.isBordered = false
         favoriteButton.imagePosition = .imageOnly
         favoriteButton.title = ""
@@ -204,25 +204,40 @@ final class AgentModelPickerRowView: NSView {
         favoriteButton.action = #selector(toggleFavorite)
         favoriteButton.isHidden = true
         favoriteButton.setAccessibilityIdentifier("agent-model-picker.favorite")
-        configureFavoriteButton()
         for view in [glyph, nameLabel, check, keycap, favoriteButton] as [NSView] { addSubview(view) }
-        alphaValue = self.enabled ? 1 : 0.45
-        toolTip = row.detail
         setAccessibilityElement(true)
         setAccessibilityRole(.button)
         setAccessibilityIdentifier("agent-model-picker.row")
-        setAccessibilityLabel(row.isCurrent ? "\(row.name), current" : row.name)
-        setAccessibilityHelp(row.detail)
-        setAccessibilityEnabled(self.enabled)
-        if !row.isPlaceholder {
-            setAccessibilityCustomActions([NSAccessibilityCustomAction(name: favoriteTitle) { [weak self] in
-                self?.callbacks.toggleFavorite()
-                return true
-            }])
-        }
+        configure(row: row, shortcut: shortcut, enabled: enabled)
     }
 
     required init?(coder: NSCoder) { nil }
+
+    /// Applies new values for the same model (favorite, current, enabled,
+    /// keycap) without replacing the view, so hover and focus survive.
+    func configure(row: AgentModelPickerState.Row, shortcut: Int?, enabled: Bool) {
+        self.row = row
+        self.enabled = enabled
+        AgentChatText.apply(nameLabel, text: row.name, font: AgentChatText.font(15),
+                            color: row.isPlaceholder ? .textMuted : .textPrimary)
+        check.isHidden = !row.isCurrent
+        keycap.configure(shortcut.map { "⌘\($0)" } ?? "", font: AgentChatText.font(12, .medium))
+        keycap.isHidden = shortcut == nil
+        configureFavoriteButton()
+        favoriteButton.isHidden = !isHovered || row.isPlaceholder
+        alphaValue = enabled ? 1 : 0.45
+        toolTip = enabled ? row.detail : row.disabledReason ?? row.detail
+        setAccessibilityLabel(row.isCurrent ? "\(row.name), current" : row.name)
+        setAccessibilityHelp(enabled ? row.detail : row.disabledReason ?? row.detail)
+        setAccessibilityEnabled(enabled)
+        setAccessibilityCustomActions(row.isPlaceholder ? [] : [NSAccessibilityCustomAction(name: favoriteTitle) { [weak self] in
+            self?.callbacks.toggleFavorite()
+            return true
+        }])
+        updateKeycapEmphasis()
+        needsLayout = true
+        needsDisplay = true
+    }
 
     override var isFlipped: Bool { true }
 
@@ -236,17 +251,25 @@ final class AgentModelPickerRowView: NSView {
         favoriteButton.toolTip = favoriteTitle
     }
 
+    /// The keycap keeps a visible box on the highlighted row fill.
+    private func updateKeycapEmphasis() {
+        keycap.onHighlight = (isHighlighted || isHovered) && enabled
+    }
+
     func setHighlighted(_ highlighted: Bool) {
         guard isHighlighted != highlighted else { return }
         isHighlighted = highlighted
         setAccessibilitySelected(highlighted)
+        updateKeycapEmphasis()
         needsDisplay = true
     }
 
     func setHovering(_ hovering: Bool) {
         isHovered = hovering
         favoriteButton.isHidden = !hovering || row.isPlaceholder
+        updateKeycapEmphasis()
         needsLayout = true
+        needsDisplay = true
     }
 
     override func layout() {

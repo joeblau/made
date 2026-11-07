@@ -76,6 +76,10 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
         )
         let popover = NSPopover()
         popover.behavior = .transient
+        // The surface paints under the arrow too, so the chrome never shows
+        // the lighter system material against the near-black body; content
+        // stays inside the safe area (see `AgentModelPickerSurfaceView`).
+        popover.hasFullSizeContent = true
         popover.animates = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         popover.contentViewController = picker
         popover.delegate = self
@@ -115,11 +119,13 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
                 if modelID.isEmpty { session.switchAgent(to: agent) } else { session.selectModel(modelID, on: agent) }
                 close()
             } else {
-                guard let model = session.config?.model else { return }
-                session.selectConfigOption(model.id, value: modelID)
+                // Before the session is ready this replaces the pending model;
+                // once ready, an unadvertised model is reported, not dropped.
+                session.selectModel(modelID, on: agent)
                 // Codex refreshes its reasoning levels per model, so the popover
                 // stays open where a reasoning column follows the choice.
-                if session.config?.thoughtLevel == nil { close() }
+                let config = session.config
+                if session.phase != .ready || config?.thoughtLevel == nil || config?.model?.choice(modelID) == nil { close() }
             }
         case .selectReasoning(let value):
             guard let option = session.config?.thoughtLevel else { return }
@@ -143,10 +149,15 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
 
     // MARK: - State
 
+    /// Tooltip on a running-agent row the live session does not advertise.
+    static let notOfferedReason = "Not offered by the running session"
+
     /// The picker's values for `selectedTab`. The running agent's tab lists
     /// the models its session advertises; other providers list their cached
     /// catalog, or one row that starts them. Reasoning and the footer belong
-    /// to the running session and show only on its tab.
+    /// to the running session and show only on its tab. A row of the running
+    /// agent is enabled only while the session can change models and
+    /// advertises that model, on every tab, so no click is silently dropped.
     static func state(session: AgentChatSession, catalog: AgentModelCatalog,
                       selectedTab: AgentModelPickerState.Tab.Kind) -> AgentModelPickerState {
         let running = session.agent
@@ -154,12 +165,19 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
         let favorites = Set(catalog.favorites())
         let currentModelID = config?.model?.currentID
         let canEdit = session.phase == .ready && !session.isChangingModel && !session.isPreparingPrompt
+        let liveModel = config?.model.flatMap { $0.choices.isEmpty ? nil : $0 }
         let tabs = [AgentModelPickerState.Tab(kind: .favorites, title: "Favorites")]
             + ChatAgent.allCases.map { AgentModelPickerState.Tab(kind: .agent($0), title: $0.displayName) }
         func row(_ agent: ChatAgent, _ id: String, _ name: String, _ detail: String?, _ group: String?) -> AgentModelPickerState.Row {
-            AgentModelPickerState.Row(agent: agent, modelID: id, name: name, detail: detail, group: group,
-                                      isCurrent: agent == running && id == currentModelID,
-                                      isFavorite: favorites.contains(.init(agent: agent, modelID: id)), isPlaceholder: false)
+            var row = AgentModelPickerState.Row(agent: agent, modelID: id, name: name, detail: detail, group: group,
+                                                isCurrent: agent == running && id == currentModelID,
+                                                isFavorite: favorites.contains(.init(agent: agent, modelID: id)), isPlaceholder: false)
+            if agent == running {
+                let offered = liveModel?.choice(id) != nil
+                row.isEnabled = canEdit && offered
+                row.disabledReason = offered ? nil : notOfferedReason
+            }
+            return row
         }
         var state = AgentModelPickerState(tabs: tabs, selectedTab: selectedTab, rows: [], reasoningTitle: nil, reasoning: [],
                                           fast: nil, modeName: nil, modeChoices: [], modeIsUnrestricted: false,
@@ -188,7 +206,8 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
                     .init(id: $0.id, name: mode.displayName(of: $0), detail: $0.detail, isCurrent: $0.id == mode.currentID,
                           isUnrestricted: ACPConfigOption.isUnrestrictedMode($0))
                 }
-                state.modeIsUnrestricted = mode.currentChoice.map(ACPConfigOption.isUnrestrictedMode) ?? false
+                // An unlisted current mode is classified by its ID and shown as reported.
+                state.modeIsUnrestricted = ACPConfigOption.isUnrestrictedMode(mode.currentOrUnlistedChoice)
             }
         case .agent(let agent):
             if let snapshot = catalog.snapshot(for: agent) {

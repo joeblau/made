@@ -31,9 +31,24 @@ extension AgentChatSession {
     }
 
     /// Selects `id` on `target`; another provider is started first (as
-    /// `switchAgent` does) and the model is selected once it is ready.
+    /// `switchAgent` does) and the model is selected once it is ready. On the
+    /// running agent before its session is ready, the choice replaces any
+    /// pending one, so the latest pick is the one applied; once ready, a model
+    /// the session no longer advertises is reported instead of dropped.
     func selectModel(_ id: String, on target: ChatAgent) {
-        guard target != agent else { selectModel(id); return }
+        guard target != agent else {
+            switch phase {
+            case .idle, .starting:
+                pendingModel = PendingModel(agent: target, modelID: id)
+            default:
+                if canChangeConfiguration, config?.model?.choice(id) == nil {
+                    composerError = "\(agent.displayName) no longer offers the selected model."
+                } else {
+                    selectModel(id)
+                }
+            }
+            return
+        }
         switchAgent(to: target)
         guard agent == target else { return }
         pendingModel = PendingModel(agent: target, modelID: id)

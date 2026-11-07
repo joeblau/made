@@ -186,6 +186,79 @@ struct AgentModelPickerIntegrationTests {
         try await harness.waitUntil { picker.trigger.agent == .codex && picker.trigger.label.stringValue == "6 Luna Extra High" }
     }
 
+    @Test("A running-agent model is enabled only while the session can select it, on every tab")
+    func runningAgentRowsMatchWhatTheSessionCanSelect() async throws {
+        let harness = try Harness(.codex)
+        defer { harness.close() }
+        let catalog = AgentModelCatalog(defaults: harness.defaults)
+        try #require(catalog.record(try #require(ACPSessionConfig(ACPProbeFixtures.result(.claude))), for: .claude))
+        try await harness.waitUntil { harness.session.phase == .ready }
+        harness.layout()
+        catalog.addFavorite(.init(agent: .codex, modelID: "gpt-6-luna"))
+        catalog.addFavorite(.init(agent: .claude, modelID: "opus"))
+        let picker = harness.controller.modelPicker
+        picker.show()
+        let view = try #require(picker.picker)
+        picker.handle(.selectTab(.favorites))
+        #expect(view.state.rows.map(\.isEnabled) == [true, true])
+
+        // Mid-change (or mid-turn), the running agent's favorite is disabled; another provider's is not.
+        harness.session.changingConfigOptionID = "mode"
+        picker.refresh()
+        #expect(view.state.rows.map(\.isEnabled) == [false, true])
+        #expect(view.rowViews[0].alphaValue < 1 && view.rowViews[1].alphaValue == 1)
+        view.select(rowAt: 0)
+        #expect(view.handleKeyEquivalent(try key(18, "1", flags: .command)))
+        harness.session.changingConfigOptionID = nil
+
+        // Live config without model choices: the cached rows are shown but inert, with a reason.
+        let live = try #require(harness.session.config)
+        var bare = live
+        bare.legacyModels = nil
+        let modelIndex = try #require(bare.options.firstIndex { $0.category == .model })
+        bare.options[modelIndex].choices = []
+        harness.session.config = bare
+        picker.handle(.selectTab(.agent(.codex)))
+        #expect(view.state.isEditable && view.state.rows.count == 8)
+        #expect(view.state.rows.allSatisfy { !$0.isEnabled && $0.disabledReason == AgentModelPickerController.notOfferedReason })
+        #expect(view.rowViews.first?.toolTip == AgentModelPickerController.notOfferedReason)
+        #expect(view.handleKeyEquivalent(try key(18, "1", flags: .command)))
+        picker.handle(.selectTab(.favorites))
+        #expect(view.state.rows.map(\.isEnabled) == [false, true])
+        // A selection that still arrives is reported rather than dropped.
+        picker.handle(.selectModel(agent: .codex, modelID: "gpt-6-luna"))
+        #expect(harness.session.composerError == "Codex no longer offers the selected model.")
+        try await harness.waitUntil { !picker.isShown }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(try harness.requests(.codex).isEmpty, "Disabled rows send nothing")
+
+        // An unlisted current mode is classified by its reported ID and shown sanitized.
+        harness.session.config = live.settingCurrent(optionID: "mode", to: "yo\u{202E}lo")
+        picker.show()
+        let reopened = try #require(picker.picker)
+        #expect(reopened.state.modeName == "yolo" && reopened.state.modeIsUnrestricted)
+        #expect(reopened.modeButton.isUnrestricted)
+    }
+
+    @Test("The popover paints under its arrow and keeps the content inside the chrome's safe area")
+    func popoverUsesFullSizeContent() async throws {
+        let harness = try Harness(.codex)
+        defer { harness.close() }
+        try await harness.waitUntil { harness.session.phase == .ready }
+        harness.layout()
+        let picker = harness.controller.modelPicker
+        picker.show()
+        let popover = try #require(picker.popover)
+        let view = try #require(picker.picker)
+        #expect(popover.hasFullSizeContent)
+        view.view.layoutSubtreeIfNeeded()
+        let insets = view.view.safeAreaInsets
+        #expect(view.root.frame == view.view.safeAreaRect)
+        #expect(view.preferredContentSize.width == view.metrics.width + insets.left + insets.right)
+        #expect(view.preferredContentSize.height == view.metrics.height(footer: true) + insets.top + insets.bottom)
+        picker.close()
+    }
+
     // MARK: Helpers
 
     @MainActor

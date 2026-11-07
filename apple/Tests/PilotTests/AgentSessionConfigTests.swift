@@ -202,6 +202,36 @@ struct AgentSessionConfigTests {
         #expect(config.model?.choices.map(\.group) == ["Recommended", "Recommended", nil])
     }
 
+    @Test @MainActor
+    func unnamedChoicesAndUnlistedCurrentValuesDisplaySanitizedIDs() throws {
+        let sneaky = "agent-full-access\n\nSandboxed: no file or network access"
+        let config = try #require(ACPSessionConfig([
+            "configOptions": [
+                ["id": "m\u{202E}x", "category": "model", "type": "select", "currentValue": "gpt\u{202E}6\nX",
+                 "options": [["value": "gpt\u{202E}7"], ["value": "\u{202E}\u{200B}"], ["value": "named", "name": "Named"]]],
+                ["id": "mode", "category": "mode", "type": "select", "currentValue": "auto",
+                 "options": [["value": .string(sneaky)], ["value": "auto", "name": "Auto"]]],
+            ],
+            "modes": ["currentModeId": "y\u{2066}olo", "availableModes": [["id": "ask\tfirst"]]],
+        ]))
+        let model = try #require(config.model)
+        #expect(model.name == "mx", "An unnamed option shows its sanitized ID")
+        #expect(model.choices.map(\.name) == ["gpt7", "Unnamed", "Named"])
+        #expect(model.choices.map(\.id) == ["gpt\u{202E}7", "\u{202E}\u{200B}", "named"], "Requests keep the raw ID")
+        #expect(model.request(sessionID: "s", value: "gpt\u{202E}7")?.params["value"] == .string("gpt\u{202E}7"))
+        #expect(model.currentChoice == nil && model.currentName == "gpt6 X" && model.currentDisplayName == "gpt6 X")
+        #expect(AgentModelPickerController.triggerLabel(config).model == "gpt6 X")
+        let mode = try #require(config.mode)
+        #expect(mode.choices.first?.name == "agent-full-access Sandboxed: no file or network access")
+        #expect(mode.choices.first?.id == sneaky)
+        #expect(config.legacyModes?.choices.map(\.name) == ["ask first"] && config.legacyModes?.currentName == "yolo")
+        // An unlisted current mode is still classified by what it reports.
+        let unlisted = config.settingCurrent(optionID: "mode", to: "bypassPermissions").mode
+        #expect(unlisted?.currentChoice == nil)
+        #expect(unlisted.map { ACPConfigOption.isUnrestrictedMode($0.currentOrUnlistedChoice) } == true)
+        #expect(ACPConfigText.label(forID: "\u{202E}") == "Unnamed")
+    }
+
     // MARK: Updates
 
     @Test
@@ -429,6 +459,39 @@ struct AgentSessionConfigSessionTests {
         #expect(session.pendingModel == nil)
         #expect(session.modelName == "K3.1 Pro Highspeed 2x Usage Cost")
         #expect(session.composerError == "Kimi no longer offers the selected model.")
+    }
+
+    @Test
+    func aModelPickedWhileTheRunningAgentStartsReplacesThePendingOne() async throws {
+        let files = try FixtureFiles()
+        defer { files.remove() }
+        let codex = try ACPProbeFixtures.result(.codex)
+        try files.write("sol", options(codex, current: ["model": "gpt-6.1-sol"]))
+        let defaults = try suite()
+        let session = makeSession(.claude, defaults: defaults, launches: [
+            .claude: try files.agent(ACPProbeFixtures.result(.claude), body: "read -r _"),
+            .codex: try files.agent(codex, body: #"""
+            read -r line; has "$line" '"configId":"model"' && has "$line" '"value":"gpt-6.1-sol"' || exit 1
+            reply 3 sol
+            read -r _
+            """#),
+        ])
+        defer { session.shutDown() }
+        session.start()
+        try await waitUntil { session.phase == .ready }
+
+        session.selectModel("gpt-6-luna", on: .codex)
+        #expect(session.agent == .codex && session.phase == .starting)
+        // The same agent again while it starts: the latest pick wins.
+        session.selectModel("gpt-6.1-sol", on: .codex)
+        #expect(session.pendingModel == AgentChatSession.PendingModel(agent: .codex, modelID: "gpt-6.1-sol"))
+        try await waitUntil { session.modelName == "6.1 Sol" && !session.isChangingModel }
+        #expect(session.pendingModel == nil && session.composerError == nil)
+
+        // Once ready, a model the session does not advertise is reported, not dropped silently.
+        session.selectModel("gpt-retired", on: .codex)
+        #expect(!session.isChangingModel && session.modelName == "6.1 Sol")
+        #expect(session.composerError == "Codex no longer offers the selected model.")
     }
 
     // MARK: Helpers

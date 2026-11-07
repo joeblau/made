@@ -51,10 +51,15 @@ struct ACPConfigOption: Equatable, Sendable {
 
     var isLegacy: Bool { id == Self.legacyModelID || id == Self.legacyModeID }
     var currentChoice: Choice? { choice(currentID) }
-    /// The current choice's agent-given name, or its ID when it is not listed.
-    var currentName: String { currentChoice?.name ?? currentID }
+    /// The current choice's agent-given name, or its sanitized ID when it is not listed.
+    var currentName: String { currentChoice?.name ?? ACPConfigText.label(forID: currentID) }
     /// The current choice's name, normalized for display.
-    var currentDisplayName: String { currentChoice.map(displayName(of:)) ?? currentID }
+    var currentDisplayName: String { currentChoice.map(displayName(of:)) ?? ACPConfigText.label(forID: currentID) }
+    /// The current choice, or one synthesized from an unlisted current ID, so
+    /// an unlisted unrestricted mode is still classified as unrestricted.
+    var currentOrUnlistedChoice: Choice {
+        currentChoice ?? Choice(id: currentID, name: ACPConfigText.label(forID: currentID))
+    }
 
     func choice(_ id: String) -> Choice? { choices.first { $0.id == id } }
 
@@ -76,7 +81,7 @@ struct ACPConfigOption: Equatable, Sendable {
               let id = ACPConfigText.id(json["id"]), id != Self.legacyModelID, id != Self.legacyModeID,
               let current = ACPConfigText.id(json["currentValue"]) else { return nil }
         self.id = id
-        name = ACPConfigText.name(json["name"]) ?? id
+        name = ACPConfigText.name(json["name"]) ?? ACPConfigText.label(forID: id)
         detail = ACPConfigText.detail(json["description"])
         category = Category(json["category"]?.stringValue, optionID: id)
         currentID = current
@@ -95,7 +100,7 @@ struct ACPConfigOption: Equatable, Sendable {
         for entry in (json[isModel ? "availableModels" : "availableModes"]?.arrayValue ?? []).prefix(ACPConfigBounds.scannedEntries) {
             guard choices.count < ACPConfigBounds.choices,
                   let value = ACPConfigText.id(entry[isModel ? "modelId" : "id"]), seen.insert(value).inserted else { continue }
-            choices.append(Choice(id: value, name: ACPConfigText.name(entry["name"]) ?? value,
+            choices.append(Choice(id: value, name: ACPConfigText.name(entry["name"]) ?? ACPConfigText.label(forID: value),
                                   detail: ACPConfigText.detail(entry["description"])))
         }
     }
@@ -273,6 +278,11 @@ enum ACPConfigText {
     }
 
     static func name(_ value: JSONValue?) -> String? { text(value, maximumBytes: ACPConfigBounds.nameBytes) }
+
+    /// A display name for an unnamed ID: sanitized like a name, never the raw
+    /// ID (which stays as-is only in requests). An ID with nothing printable
+    /// shows as "Unnamed".
+    static func label(forID id: String) -> String { name(.string(id)) ?? "Unnamed" }
     static func detail(_ value: JSONValue?) -> String? { text(value, maximumBytes: ACPConfigBounds.detailBytes) }
 
     /// One line: control and format characters (bidi overrides, isolates,
@@ -312,7 +322,8 @@ enum ACPConfigText {
                 scanned += 1
                 guard scanned <= ACPConfigBounds.scannedEntries, choices.count < ACPConfigBounds.choices else { return choices }
                 guard let value = id(item["value"]), seen.insert(value).inserted else { continue }
-                choices.append(.init(id: value, name: name(item["name"]) ?? value, detail: detail(item["description"]), group: group))
+                choices.append(.init(id: value, name: name(item["name"]) ?? label(forID: value), detail: detail(item["description"]),
+                                     group: group))
             }
         }
         return choices

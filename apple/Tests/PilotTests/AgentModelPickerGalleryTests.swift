@@ -293,6 +293,88 @@ struct AgentModelPickerGalleryTests {
         #expect(picker.railButtons.filter(\.isSelectedTab).map(\.kind) == [.agent(.claude)])
     }
 
+    @Test("A favorite toggle or editability flip reconfigures rows in place, so the hovered star stays under the pointer")
+    func updateReusesRowViews() throws {
+        let (picker, recorder) = Picker.make(PickerFixtures.codex(), dark: true)
+        let before = picker.rowViews
+        let row = before[1]
+        row.setHovering(true)
+        row.callbacks.hover(true)
+        row.favoriteButton.performClick(nil)
+        #expect(recorder.actions == [.toggleFavorite(agent: .codex, modelID: "gpt-6-astra")])
+        var state = PickerFixtures.codex()
+        state.rows[1].isFavorite = true
+        picker.update(state)
+        #expect(zip(before, picker.rowViews).allSatisfy { $0 === $1 }, "Same rows: no rebuild")
+        #expect(row.isHovered && !row.favoriteButton.isHidden && row.row.isFavorite)
+        #expect(row.favoriteButton.accessibilityLabel() == "Remove from Favorites")
+        // A second click at the same point still lands on the star, not the row.
+        row.layoutSubtreeIfNeeded()
+        let star = row.convert(NSPoint(x: row.favoriteButton.frame.midX, y: row.favoriteButton.frame.midY), to: row.superview)
+        #expect(row.hitTest(star) === row.favoriteButton)
+        #expect(picker.hoveredIndex == 1 && picker.highlightedIndex == 1)
+
+        state.isEditable = false
+        picker.update(state)
+        #expect(zip(before, picker.rowViews).allSatisfy { $0 === $1 } && picker.rowViews.allSatisfy { $0.alphaValue < 1 })
+        state.isEditable = true
+        picker.update(state)
+        #expect(zip(before, picker.rowViews).allSatisfy { $0 === $1 } && row.alphaValue == 1)
+        #expect(recorder.actions.count == 1, "Updates send no actions")
+
+        // Different rows rebuild.
+        picker.update(PickerFixtures.claude())
+        #expect(!picker.rowViews.contains { $0 === row })
+    }
+
+    @Test("A disabled row ignores clicks and its shortcut and explains why")
+    func disabledRow() throws {
+        var state = PickerFixtures.codex()
+        state.rows[1].isEnabled = false
+        state.rows[1].disabledReason = AgentModelPickerController.notOfferedReason
+        let (picker, recorder) = Picker.make(state, dark: true)
+        picker.rowViews[1].press()
+        picker.select(rowAt: 1)
+        _ = picker.handleKeyEquivalent(Picker.command("2"))
+        #expect(recorder.actions.isEmpty)
+        #expect(picker.rowViews[1].alphaValue < 1 && picker.rowViews[1].toolTip == AgentModelPickerController.notOfferedReason)
+        #expect(picker.rowViews[1].accessibilityHelp() == AgentModelPickerController.notOfferedReason)
+        #expect(picker.rowViews[0].alphaValue == 1)
+        _ = picker.handleKeyEquivalent(Picker.command("1"))
+        #expect(recorder.actions == [.selectModel(agent: .codex, modelID: "gpt-6.1-sol")])
+    }
+
+    @Test("Keycaps stay boxed on highlighted and hovered rows")
+    func keycapOnHighlight() throws {
+        let (picker, _) = Picker.make(PickerFixtures.codex(), dark: true)
+        Picker.type("sol", into: picker)
+        #expect(picker.highlightedIndex == 0)
+        #expect(picker.rowViews[0].keycap.onHighlight && !picker.rowViews[1].keycap.onHighlight)
+        picker.rowViews[1].setHovering(true)
+        #expect(picker.rowViews[1].keycap.onHighlight)
+        picker.rowViews[1].setHovering(false)
+        #expect(!picker.rowViews[1].keycap.onHighlight)
+        for dark in [false, true] {
+            let plain = AgentModelPickerKeycap.fill(onHighlight: false)
+            let raised = AgentModelPickerKeycap.fill(onHighlight: true)
+            #expect(AgentChatPalette.contrastRatio(plain, on: .pickerSurface, dark: dark) >= 1.1)
+            #expect(AgentChatPalette.contrastRatio(raised, on: .pickerHighlight, dark: dark) >= 1.1,
+                    "The keycap separates from the highlight (\(dark ? "dark" : "light"))")
+        }
+    }
+
+    @Test("The surface fills the whole popover; content sits inside the chrome's safe area at its measured size")
+    func surfaceInsetsContent() throws {
+        let (picker, _) = Picker.make(PickerFixtures.codex(), dark: true)
+        let base = picker.preferredContentSize
+        picker.view.additionalSafeAreaInsets = NSEdgeInsets(top: 13, left: 13, bottom: 13, right: 13)
+        picker.view.frame = NSRect(origin: .zero, size: NSSize(width: base.width + 26, height: base.height + 26))
+        picker.view.layoutSubtreeIfNeeded()
+        #expect(picker.root.frame == NSRect(x: 13, y: 13, width: base.width, height: base.height))
+        #expect(picker.preferredContentSize == NSSize(width: base.width + 26, height: base.height + 26))
+        #expect(picker.view.accessibilityIdentifier() == "agent-model-picker")
+    }
+
     // MARK: - Trigger and palette
 
     @Test("The composer trigger reads brand + model + reasoning and collapses to the mark")

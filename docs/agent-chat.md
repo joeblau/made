@@ -500,14 +500,26 @@ and `session/set_mode`. `config_option_update` (full list or a bare
 selection is shown only after acknowledgement or an agent update; a rejected
 change keeps the previous value and draft and shows the failure under the
 composer. Advertised names and descriptions are bounded and stripped of
-control and bidi formatting characters before they are kept; `xhigh` reads
-"Extra High", and a repeated option-name prefix ("Thinking Low") is dropped.
+control and bidi formatting characters before they are kept; a choice or
+current value with no name displays its ID cleaned the same way (the raw ID is
+used only in requests). `xhigh` reads "Extra High", and a repeated option-name
+prefix ("Thinking Low") is dropped.
 
 Picking a model on another provider switches the pane to that agent (as a
 provider switch always did) and selects the model once the new session is
 ready, if it still advertises it; otherwise the composer says it is no longer
-offered. A provider that has never run shows one row, "Start <Provider> to see
-its models", which switches to it.
+offered. Picking another model on the agent that is still starting replaces
+the pending choice, so the latest pick is the one applied. A provider that has
+never run shows one row, "Start <Provider> to see its models", which switches
+to it.
+
+A row for the running agent, on its own tab or under Favorites, is enabled only
+while the session can change models (ready, not mid-turn or mid-change) and
+advertises that model. When the live session advertises no model list, its tab
+shows the cached rows dimmed with the tooltip "Not offered by the running
+session". The footer classifies a current mode the agent did not list by its
+reported ID and name, so an unlisted unrestricted mode still shows the warning
+shield.
 
 **Mode safety.** A mode whose ID or name marks it unrestricted (Claude
 `bypassPermissions`, Codex `agent-full-access`, Kimi `yolo`, or any name with
@@ -527,7 +539,7 @@ advertised; Cockpit does not maintain a hard-coded catalog or modify
 authentication to select a model, and the agent may still refuse a cached
 model. Favorites live under `agentChat.favoriteModels` as an ordered list of
 `{agent, model}` (at most 50) and show with each agent's cached name, falling
-back to the model ID.
+back to the sanitized model ID.
 
 **Conversation menu.** New Conversation, Restart Agent, and the disabled
 context item (`agent-chat.context`) live in the borderless ⋯ button

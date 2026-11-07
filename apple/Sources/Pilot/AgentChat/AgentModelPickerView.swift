@@ -20,6 +20,13 @@ struct AgentModelPickerState: Equatable {
         var isFavorite: Bool
         /// "Start <Provider> to see its models": no keycap or favorite toggle.
         var isPlaceholder: Bool
+        /// false dims the row and ignores clicks and ⌘N even when the picker
+        /// is editable (a running-agent model the session cannot select now).
+        var isEnabled = true
+        /// Tooltip for a disabled row, in place of `detail`.
+        var disabledReason: String?
+
+        var identity: String { "\(agent.rawValue)\u{1F}\(modelID)" }
     }
 
     struct Choice: Equatable {
@@ -106,13 +113,18 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
     private(set) var entries: [ListEntry] = []
     private(set) var highlightedIndex: Int?
     private(set) var isExpanded = false
-    private var hoveredIndex: Int?
+    private(set) var hoveredIndex: Int?
+    /// The popover chrome's safe-area insets (full-size content); the content
+    /// keeps its measured size inside them.
+    private(set) var chromeInsets = NSEdgeInsets()
 
     private let listScroll = NSScrollView()
     private let listDocument = AgentModelPickerFlippedView()
     private let reasoningScroll = NSScrollView()
     private let reasoningDocument = AgentModelPickerFlippedView()
-    private var root: AgentModelPickerRootView { view as! AgentModelPickerRootView }
+    private var surface: AgentModelPickerSurfaceView { view as! AgentModelPickerSurfaceView }
+    /// Hosts every control, inset from the surface by the popover's safe area.
+    var root: AgentModelPickerRootView { surface.content }
 
     init(state: AgentModelPickerState, onAction: @escaping (AgentModelPickerAction) -> Void) {
         self.state = state
@@ -129,11 +141,12 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
     var keycapCount: Int { rowViews.filter { !$0.keycap.isHidden }.count }
 
     override func loadView() {
-        let root = AgentModelPickerRootView()
-        root.controller = self
-        root.setAccessibilityIdentifier("agent-model-picker")
-        root.setAccessibilityLabel("Model picker")
-        view = root
+        let surface = AgentModelPickerSurfaceView()
+        surface.content.controller = self
+        surface.onSafeAreaChange = { [weak self] insets in self?.chromeInsetsChanged(insets) }
+        surface.setAccessibilityIdentifier("agent-model-picker")
+        surface.setAccessibilityLabel("Model picker")
+        view = surface
         configureSearchField()
         for scroll in [listScroll, reasoningScroll] {
             scroll.drawsBackground = false
@@ -159,6 +172,7 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
         NotificationCenter.default.addObserver(self, selector: #selector(zoomChanged), name: .cockpitUIZoomDidChange, object: nil)
         render(rowsChanged: true)
         view.frame = NSRect(origin: .zero, size: preferredContentSize)
+        layoutContent()
     }
 
     override func viewDidAppear() {
@@ -170,8 +184,7 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
     /// position and Show more survive while the row identities are unchanged.
     func update(_ state: AgentModelPickerState) {
         guard state != self.state else { return }
-        let identities = { (rows: [AgentModelPickerState.Row]) in rows.map { "\($0.agent.rawValue)\u{1F}\($0.modelID)" } }
-        let rowsChanged = identities(state.rows) != identities(self.state.rows) || state.selectedTab != self.state.selectedTab
+        let rowsChanged = state.rows.map(\.identity) != self.state.rows.map(\.identity) || state.selectedTab != self.state.selectedTab
         let tabsChanged = state.tabs != self.state.tabs
         self.state = state
         guard isViewLoaded else { return }
@@ -196,20 +209,33 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
         let scrollOrigin = listScroll.contentView.bounds.origin
         if rowsChanged {
             highlightedIndex = nil
-            hoveredIndex = nil
             isExpanded = false
         }
         renderRail()
         renderList()
         renderReasoning()
         renderFooter()
-        preferredContentSize = NSSize(width: metrics.width, height: metrics.height(footer: isFooterVisible))
+        updatePreferredContentSize()
         view.needsLayout = true
-        view.needsDisplay = true
+        root.needsLayout = true
+        root.needsDisplay = true
         layoutContent()
         listScroll.contentView.scroll(to: rowsChanged ? .zero : scrollOrigin)
         listScroll.reflectScrolledClipView(listScroll.contentView)
+        restoreHoverUnderPointer()
         updateKeyViewLoop()
+    }
+
+    private func updatePreferredContentSize() {
+        let insets = chromeInsets
+        preferredContentSize = NSSize(width: metrics.width + insets.left + insets.right,
+                                      height: metrics.height(footer: isFooterVisible) + insets.top + insets.bottom)
+    }
+
+    private func chromeInsetsChanged(_ insets: NSEdgeInsets) {
+        guard !NSEdgeInsetsEqual(insets, chromeInsets) else { return }
+        chromeInsets = insets
+        updatePreferredContentSize()
     }
 
     private func configureSearchField() {
@@ -243,7 +269,7 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
             railButtons = state.tabs.map { tab in
                 let button = AgentModelPickerRailButton(tab: tab)
                 button.onPress = { [weak self] in self?.selectTab(tab.kind) }
-                view.addSubview(button)
+                root.addSubview(button)
                 return button
             }
         }
@@ -261,23 +287,35 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
             lastGroup = row.group
             entries.append(.row(index))
         }
-        rowViews.forEach { $0.removeFromSuperview() }
         groupLabels.forEach { $0.removeFromSuperview() }
         var shortcut = 0
-        rowViews = visibleRows.enumerated().map { index, row in
-            var number: Int?
-            if !row.isPlaceholder, shortcut < AgentModelPickerMetrics.shortcutCount {
-                shortcut += 1
-                number = shortcut
+        let shortcuts: [Int?] = visibleRows.map { row in
+            guard !row.isPlaceholder, shortcut < AgentModelPickerMetrics.shortcutCount else { return nil }
+            shortcut += 1
+            return shortcut
+        }
+        // Same rows in the same order (a favorite toggled, a model selected,
+        // editability flipped): reconfigure in place so hover, the visible
+        // star and VoiceOver focus survive. Anything else rebuilds.
+        let reusable = rowViews.map(\.row.identity) == visibleRows.map(\.identity)
+            && rowViews.allSatisfy { $0.scale == metrics.scale }
+        if reusable {
+            for (index, view) in rowViews.enumerated() {
+                view.configure(row: visibleRows[index], shortcut: shortcuts[index], enabled: isEnabled(visibleRows[index]))
             }
-            let view = AgentModelPickerRowView(row: row, shortcut: number, enabled: state.isEditable, scale: metrics.scale)
-            view.callbacks = .init(
-                select: { [weak self] in self?.select(rowAt: index) },
-                toggleFavorite: { [weak self] in self?.onAction(.toggleFavorite(agent: row.agent, modelID: row.modelID)) },
-                hover: { [weak self] inside in self?.hover(index, inside: inside) }
-            )
-            listDocument.addSubview(view)
-            return view
+        } else {
+            rowViews.forEach { $0.removeFromSuperview() }
+            hoveredIndex = nil
+            rowViews = visibleRows.enumerated().map { index, row in
+                let view = AgentModelPickerRowView(row: row, shortcut: shortcuts[index], enabled: isEnabled(row), scale: metrics.scale)
+                view.callbacks = .init(
+                    select: { [weak self] in self?.select(rowAt: index) },
+                    toggleFavorite: { [weak self] in self?.onAction(.toggleFavorite(agent: row.agent, modelID: row.modelID)) },
+                    hover: { [weak self] inside in self?.hover(index, inside: inside) }
+                )
+                listDocument.addSubview(view)
+                return view
+            }
         }
         groupLabels = entries.compactMap { entry in
             guard case .group(let title) = entry else { return nil }
@@ -336,7 +374,7 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
     func layoutContent() {
         guard isViewLoaded else { return }
         let m = metrics
-        let bounds = view.bounds
+        let bounds = root.bounds
         let footerTop = isFooterVisible ? bounds.height - m.footer : bounds.height
         let middleMaxX = isReasoningVisible ? bounds.width - m.reasoning : bounds.width
         root.metrics = m
@@ -418,10 +456,12 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
     }
 
     func select(rowAt index: Int) {
-        guard visibleRows.indices.contains(index), state.isEditable else { return }
+        guard visibleRows.indices.contains(index), isEnabled(visibleRows[index]) else { return }
         let row = visibleRows[index]
         onAction(.selectModel(agent: row.agent, modelID: row.modelID))
     }
+
+    func isEnabled(_ row: AgentModelPickerState.Row) -> Bool { state.isEditable && row.isEnabled }
 
     /// ⌘1–⌘4: the Nth non-placeholder visible row.
     func selectShortcut(_ number: Int) -> Bool {
@@ -459,6 +499,19 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
         hoveredIndex = inside ? index : (hoveredIndex == index ? nil : hoveredIndex)
         if inside { highlightedIndex = index }
         applyHighlight()
+    }
+
+    /// A rebuilt row gets no `mouseEntered` while the pointer rests on it,
+    /// so the row under a still pointer is marked hovered here.
+    private func restoreHoverUnderPointer() {
+        // Only when the pointer is really over this (visible) window.
+        guard hoveredIndex == nil, let window = view.window, window.isVisible,
+              NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0) == window.windowNumber else { return }
+        let point = window.mouseLocationOutsideOfEventStream
+        guard listScroll.bounds.contains(listScroll.convert(point, from: nil)),
+              let index = rowViews.firstIndex(where: { $0.bounds.contains($0.convert(point, from: nil)) }) else { return }
+        rowViews[index].setHovering(true)
+        hover(index, inside: true)
     }
 
     private func applyHighlight() {
@@ -562,6 +615,44 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
 
 extension AgentModelPickerFastToggle {
     var isFastOn: Bool { fast.isOn }
+}
+
+/// The popover's content view: paints the picker surface edge to edge,
+/// under the popover arrow too (full-size content), and keeps `content`
+/// inside the safe area the chrome reports.
+@MainActor
+final class AgentModelPickerSurfaceView: NSView {
+    let content = AgentModelPickerRootView()
+    var onSafeAreaChange: (NSEdgeInsets) -> Void = { _ in }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        addSubview(content)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var isFlipped: Bool { true }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        content.frame = safeAreaRect
+    }
+
+    override func layout() {
+        content.frame = safeAreaRect
+        onSafeAreaChange(safeAreaInsets)
+        super.layout()
+    }
+
+    /// Esc anywhere in the popover dismisses through the picker, never the
+    /// popover window's own handling.
+    override func cancelOperation(_ sender: Any?) { content.cancelOperation(sender) }
+
+    override func draw(_ dirtyRect: NSRect) {
+        AgentChatPalette.color(.pickerSurface).setFill()
+        bounds.fill()
+    }
 }
 
 /// Draws the surface and hairlines; routes ⌘1–⌘4 and Esc.

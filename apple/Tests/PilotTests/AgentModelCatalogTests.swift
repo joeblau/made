@@ -119,10 +119,13 @@ struct AgentModelCatalogTests {
         catalog.addFavorite(.init(agent: .claude, modelID: "opus"))
         catalog.addFavorite(.init(agent: .claude, modelID: "retired-model"))
         catalog.addFavorite(.init(agent: .grok, modelID: "grok-4.7"))
+        catalog.addFavorite(.init(agent: .grok, modelID: "grok\u{202E}\n5"))
         let entries = catalog.favoriteEntries()
-        #expect(entries.map(\.name) == ["6.1 Sol", "Opus 5.5", "retired-model", "grok-4.7"])
+        // The fallback ID is sanitized for display like an advertised name.
+        #expect(entries.map(\.name) == ["6.1 Sol", "Opus 5.5", "retired-model", "grok-4.7", "grok 5"])
+        #expect(entries.last?.favorite.modelID == "grok\u{202E}\n5")
         #expect(entries.first?.detail == "Latest workhorse model for coding and everyday work.")
-        #expect(entries.map(\.favorite.agent) == [.codex, .claude, .claude, .grok])
+        #expect(entries.map(\.favorite.agent) == [.codex, .claude, .claude, .grok, .grok])
     }
 
     @Test
