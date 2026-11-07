@@ -965,10 +965,9 @@ private final class NewTabMessageView: NSView {
     override func layout() {
         super.layout()
         let titleHeight = title.intrinsicContentSize.height
-        let titleWidth = min(bounds.width - 24, ceil(title.attributedStringValue.size().width) + 4)
         let spinnerSize: CGFloat = isLoading ? 16 : 0
-        let total = titleWidth + (spinnerSize > 0 ? spinnerSize + 6 : 0)
-        let x = (bounds.width - total) / 2
+        let titleWidth = max(0, bounds.width - 24 - (spinnerSize > 0 ? spinnerSize + 6 : 0))
+        let x: CGFloat = 12
         spinner.frame = NSRect(x: x, y: 8 + (titleHeight - 16) / 2, width: 16, height: 16)
         title.frame = NSRect(x: x + (spinnerSize > 0 ? spinnerSize + 6 : 0), y: 8, width: titleWidth, height: titleHeight)
         detail.frame = NSRect(x: 12, y: 12 + titleHeight, width: bounds.width - 24, height: max(0, bounds.height - titleHeight - 20))

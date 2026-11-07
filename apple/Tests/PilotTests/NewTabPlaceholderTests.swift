@@ -254,6 +254,10 @@ struct NewTabPlaceholderTests {
         guard let path = ProcessInfo.processInfo.environment["MADE_NEW_TAB_REVIEW_OUTPUT"] else { return }
         let directory = URL(fileURLWithPath: path)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        view.wantsLayer = true
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            view.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
         view.displayIfNeeded()
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: bitmap) }
