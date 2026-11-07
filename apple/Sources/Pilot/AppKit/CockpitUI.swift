@@ -6,12 +6,43 @@ import QuartzCore
 enum CockpitCardStyle {
     static let cornerRadius: CGFloat = 12
     static var fillColor: NSColor { .quaternaryLabelColor.withAlphaComponent(0.08) }
+
+    /// A recessed fill that is darker than the page in both appearances.
+    static func wellFill(for appearance: NSAppearance) -> NSColor {
+        NSColor.black.withAlphaComponent(isDark(appearance) ? 0.38 : 0.06)
+    }
+
+    /// A hairline that keeps adjacent wells apart without a visible border.
+    static func wellEdge(for appearance: NSAppearance) -> NSColor {
+        isDark(appearance) ? NSColor.white.withAlphaComponent(0.06) : NSColor.black.withAlphaComponent(0.06)
+    }
+
+    static func isDark(_ appearance: NSAppearance) -> Bool {
+        appearance.bestMatch(from: [.darkAqua, .aqua, .vibrantDark, .vibrantLight,
+                                    .accessibilityHighContrastDarkAqua, .accessibilityHighContrastAqua]).map {
+            [.darkAqua, .vibrantDark, .accessibilityHighContrastDarkAqua].contains($0)
+        } ?? false
+    }
 }
 
 /// A lightweight card surface for native lists. AppKit still owns selection,
 /// keyboard navigation, row reuse and accessibility.
 @MainActor
 final class CockpitCardRowView: NSTableRowView {
+    /// `.card` is the standard rounded card. `.well` is a capsule recessed
+    /// below the surrounding page: darker than the background, with a hairline
+    /// edge, so a list of launch targets reads as separate buttons.
+    enum Shape { case card, well }
+
+    let shape: Shape
+
+    init(shape: Shape = .card) {
+        self.shape = shape
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
     override func drawBackground(in dirtyRect: NSRect) {
         drawCard(selected: false)
     }
@@ -22,10 +53,21 @@ final class CockpitCardRowView: NSTableRowView {
     }
 
     private func drawCard(selected: Bool) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 3),
-                                xRadius: CockpitCardStyle.cornerRadius, yRadius: CockpitCardStyle.cornerRadius)
-        CockpitCardStyle.fillColor.setFill()
-        path.fill()
+        let rect = bounds.insetBy(dx: 4, dy: 3)
+        let radius = shape == .well ? rect.height / 2 : CockpitCardStyle.cornerRadius
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        switch shape {
+        case .card:
+            CockpitCardStyle.fillColor.setFill()
+            path.fill()
+        case .well:
+            CockpitCardStyle.wellFill(for: effectiveAppearance).setFill()
+            path.fill()
+            let edge = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: radius - 0.5, yRadius: radius - 0.5)
+            edge.lineWidth = 1
+            CockpitCardStyle.wellEdge(for: effectiveAppearance).setStroke()
+            edge.stroke()
+        }
         if selected {
             NSColor.controlAccentColor.withAlphaComponent(isEmphasized ? 0.22 : 0.12).setFill()
             path.fill()
