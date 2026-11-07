@@ -335,7 +335,7 @@ actor AgenticUsageLoader {
         try Task.checkCancellation()
         var records = Self.deduplicate(all)
         try Task.checkCancellation()
-        records.sort { $0.timestamp < $1.timestamp }
+        try Self.sortRecords(&records)
         try Task.checkCancellation()
         cache = nextCache
         if cacheChanged || droppedDeletedFiles { cacheDirty = true }
@@ -605,7 +605,7 @@ actor AgenticUsageLoader {
                 provider: job.provider,
                 readOffset: readOffset,
                 byteCount: job.size - readOffset,
-                initialCommittedOffset: readOffset,
+                initialCommittedOffset: resumed?.committedOffset ?? 0,
                 state: &state
             )
             let committedRecordCount = state.records.count
@@ -668,6 +668,8 @@ actor AgenticUsageLoader {
         if readOffset > 0 { try handle.seek(toOffset: UInt64(readOffset)) }
         var remaining = byteCount
         var bytesRead = 0
+        // An append can stop before a newline; keep the previous committed
+        // boundary until a complete line arrives in the newly read region.
         var committedOffset = initialCommittedOffset
         while remaining != 0 {
             try Task.checkCancellation()
@@ -677,7 +679,7 @@ actor AgenticUsageLoader {
             bytesRead += chunk.count
             let completeByteCount = try consume(chunk, provider: provider, state: &state)
             if completeByteCount > 0 {
-                committedOffset = initialCommittedOffset + chunkOffset + completeByteCount
+                committedOffset = readOffset + chunkOffset + completeByteCount
             }
             remaining = remaining.map { $0 - chunk.count }
         }
@@ -1079,6 +1081,22 @@ actor AgenticUsageLoader {
             let seconds = number > 1e12 ? number / 1000 : number
             return Date(timeIntervalSince1970: seconds)
         }
+    }
+
+    /// Sorting can dominate a large merge. Check within the comparison loop
+    /// so cancellation does not wait for the entire corpus to be ordered.
+    nonisolated static func sortRecords(
+        _ records: inout [AgenticUsageRecord],
+        checkCancellation: () throws -> Void = { try Task.checkCancellation() }
+    ) throws {
+        try checkCancellation()
+        var comparisons = 0
+        try records.sort {
+            comparisons += 1
+            if comparisons.isMultiple(of: 4096) { try checkCancellation() }
+            return $0.timestamp < $1.timestamp
+        }
+        try checkCancellation()
     }
 
     // MARK: - Dedup
