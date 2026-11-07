@@ -284,6 +284,30 @@ struct AgenticUsageIncrementalTests {
         #expect(completed.records == (try await fullScan(root)))
     }
 
+    @Test("Repeated partial-line appends retain the committed offset and stay incremental")
+    func repeatedPartialAppendsReadOnlyNewBytes() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("history.jsonl")
+        let line = Self.kimi(2)
+        try write(Self.kimi(1) + "\n" + String(line.prefix(20)), to: url)
+        let cacheURL = root.appendingPathComponent("cache.json")
+        var loader = AgenticUsageLoader(sources: [source(root)], cacheURL: cacheURL)
+        _ = try await loader.load()
+
+        for fragment in [String(line.dropFirst(20).prefix(20)), String(line.dropFirst(40)), "\n"] {
+            let byteCount = try append(fragment, to: url)
+            let result = try await loader.load()
+            #expect(result.parsedByteCount == byteCount)
+            #expect(result.records == (try await fullScan(root)))
+            let unchanged = try await loader.load()
+            #expect(unchanged.parsedByteCount == 0)
+            #expect(!unchanged.changed)
+            await loader.flushCacheWrites()
+            loader = AgenticUsageLoader(sources: [source(root)], cacheURL: cacheURL)
+        }
+    }
+
     @Test("Codex appends retain the current model and cumulative token cursor")
     func codexStateMatchesFullScan() async throws {
         let root = try makeRoot()

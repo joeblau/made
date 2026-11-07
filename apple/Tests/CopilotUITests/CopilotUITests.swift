@@ -22,13 +22,5 @@ final class CopilotUITests: XCTestCase {
 
         // Primary screen: the workspace list.
         snapshot("01-Workspaces")
-
-        // Best-effort: drill into the first workspace if one is present.
-        // Resilient — never fails the run if the cell isn't there yet.
-        let firstCell = app.cells.firstMatch
-        if firstCell.waitForExistence(timeout: 5) {
-            firstCell.tap()
-            snapshot("02-Workspace-Detail")
-        }
     }
 }

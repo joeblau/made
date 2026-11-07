@@ -8,6 +8,8 @@ final class WorkspaceStore {
     let modelContext: ModelContext
     private let defaults: UserDefaults
     let workspaceGroups: WorkspaceGroups
+    /// Which global modes the sidebar lists. A hidden mode cannot be entered.
+    let sidebarVisibility: SidebarFeatureVisibility
     var changeCount: Int = 0
     var selectedWorkspaceID: UUID? {
         didSet {
@@ -382,17 +384,14 @@ final class WorkspaceStore {
 
     /// ⌘0: flip into Notes mode (ensuring there's a note to show) or back
     /// out to the previously selected workspace.
-    func toggleNotesMode() {
-        if isNotesMode {
-            isNotesMode = false
-        } else {
-            enterNotesMode()
-        }
-    }
+    func toggleNotesMode() { toggleMode(.notes) }
 
-    func enterNotesMode() {
+    @discardableResult
+    func enterNotesMode() -> Bool {
+        guard isSidebarFeatureVisible(.notes) else { return false }
         ensureAtLeastOneNote()
         isNotesMode = true
+        return true
     }
 
     @discardableResult
@@ -486,53 +485,23 @@ final class WorkspaceStore {
 
     /// ⇧⌘0: flip into Remote Desktop mode (selecting a connection if one
     /// exists) or back out to the previously selected workspace.
-    func toggleRemoteDesktopMode() {
-        if isRemoteDesktopMode {
-            isRemoteDesktopMode = false
-        } else {
-            enterRemoteDesktopMode()
-        }
-    }
+    func toggleRemoteDesktopMode() { toggleMode(.remoteDesktop) }
 
-    func enterRemoteDesktopMode() {
+    @discardableResult
+    func enterRemoteDesktopMode() -> Bool {
+        guard isSidebarFeatureVisible(.remoteDesktop) else { return false }
         if selectedRemoteConnection == nil {
             selectedRemoteConnectionID = remoteConnections.first?.id
         }
         isRemoteDesktopMode = true
+        return true
     }
 
-    // MARK: - Docker
-
-    /// ⌃⌘0: flip into Docker mode or back out to the selected workspace. Unlike
-    /// Notes and Remote Desktop there is nothing to seed first — the container
-    /// list is live daemon state, owned by `DockerStore`, not persisted here.
-    func toggleDockerMode() {
-        isDockerMode.toggle()
-    }
-
-    func enterDockerMode() {
-        isDockerMode = true
-    }
-
-    // MARK: - Agentic Use
-
-    /// Flip into Agentic Use mode or back out to the selected workspace. Like
-    /// Docker there is nothing to seed first — the usage analytics are derived
-    /// state, owned by `AgenticUsageStore`, not persisted here.
-    func toggleAgenticUseMode() {
-        isAgenticUseMode.toggle()
-    }
-
-    func enterAgenticUseMode() {
-        isAgenticUseMode = true
-    }
-
-    func enterRunnersMode() {
-        isRunnersMode = true
-    }
-
-    func enterMockupsMode() {
+    @discardableResult
+    func enterMockupsMode() -> Bool {
+        guard isSidebarFeatureVisible(.mockups) else { return false }
         isMockupsMode = true
+        return true
     }
 
     @discardableResult
@@ -628,11 +597,13 @@ final class WorkspaceStore {
     init(
         modelContext: ModelContext,
         workspaceGroups: WorkspaceGroups = WorkspaceGroups(),
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        sidebarVisibility: SidebarFeatureVisibility? = nil
     ) {
         self.defaults = defaults
         self.modelContext = modelContext
         self.workspaceGroups = workspaceGroups
+        self.sidebarVisibility = sidebarVisibility ?? SidebarFeatureVisibility(defaults: defaults)
         if let stored = defaults.string(forKey: "selectedWorkspaceID") {
             self.selectedWorkspaceID = UUID(uuidString: stored)
         }
@@ -652,6 +623,9 @@ final class WorkspaceStore {
         if let selectedWorkspaceID, !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
             self.selectedWorkspaceID = workspaces.first?.id
         }
+        // A mode persisted as active but since hidden must not reopen at launch.
+        leaveHiddenModes()
+        self.sidebarVisibility.onHiddenChange = { [weak self] _ in self?.leaveHiddenModes() }
     }
 
     private func cleanupBadDirectories() {

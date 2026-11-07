@@ -441,9 +441,9 @@ final class CockpitStateView: NSView {
     required init?(coder: NSCoder) { nil }
 }
 
-/// Page toolbar content split into separate glass capsules, one per control
-/// group (for example: filter · view picker · refresh). The window's feature
-/// toolbar item drops its shared bezel when it hosts this view.
+/// Page toolbar content split into control groups. Segmented controls supply
+/// their own capsule; other groups receive a glass surface. The window's
+/// feature toolbar item drops its shared bezel when it hosts this view.
 @MainActor
 final class CockpitToolbarGroups: NSStackView {
     static let capsuleHeight: CGFloat = 32
@@ -462,6 +462,12 @@ final class CockpitToolbarGroups: NSStackView {
             view.removeFromSuperview()
         }
         for group in groups {
+            // AppKit owns the segmented control's bezel, padding, and size.
+            // Another glass capsule makes its selection pill look undersized.
+            if group.count == 1, let segmented = group.first as? NSSegmentedControl {
+                addArrangedSubview(segmented)
+                continue
+            }
             let row = NSStackView(views: group)
             row.orientation = .horizontal
             row.alignment = .centerY

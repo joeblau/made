@@ -245,15 +245,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 
     func select(_ selection: SidebarSelection) {
-        switch selection {
-        case .notes: store.enterNotesMode()
-        case .remoteDesktop: store.enterRemoteDesktopMode()
-        case .docker: store.enterDockerMode()
-        case .agenticUse: store.enterAgenticUseMode()
-        case .runners: store.enterRunnersMode()
-        case .mockups: store.enterMockupsMode()
-        case .workspace(let id): store.selectWorkspace(id)
-        }
+        if case .workspace(let id) = selection { store.selectWorkspace(id) } else if let feature = SidebarFeature(selection) { store.enterMode(feature) }
         refresh()
         observe()
         focusSelectedPane()
@@ -330,15 +322,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         onSelectionChange?(selectedWorkspace, selectedPane)
     }
 
-    private var selectedGlobalMode: SidebarSelection? {
-        if store.isNotesMode { return .notes }
-        if store.isRemoteDesktopMode { return .remoteDesktop }
-        if store.isDockerMode { return .docker }
-        if store.isAgenticUseMode { return .agenticUse }
-        if store.isRunnersMode { return .runners }
-        if store.isMockupsMode { return .mockups }
-        return nil
-    }
+    private var selectedGlobalMode: SidebarSelection? { store.activeSidebarFeature?.selection }
 
     private func observe() {
         guard windowVisible else { return }
@@ -651,7 +635,8 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         notesKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.window?.isKeyWindow == true,
                   event.modifierFlags.intersection([.command, .option, .control, .shift]) == .command,
-                  event.charactersIgnoringModifiers == "0" else { return event }
+                  event.charactersIgnoringModifiers == "0",
+                  self.store.isSidebarFeatureVisible(.notes) else { return event }
             self.store.toggleNotesMode(); self.refresh(); return nil
         }
     }

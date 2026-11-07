@@ -119,7 +119,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
                 workspace.effectiveRootPath.map { WorkspaceBranchStore.Target(id: workspace.id, rootPath: $0) }
             })
         }
-        var next: [Row] = [.mode(.notes), .mode(.remoteDesktop), .mode(.docker), .mode(.agenticUse), .mode(.runners), .mode(.mockups)]
+        var next: [Row] = store.sidebarVisibility.visibleFeatures.map { .mode($0.selection) }
         let pinned = workspaces.filter(\.isPinned)
         if !pinned.isEmpty {
             next.append(.heading("Pinned"))
@@ -160,12 +160,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     }
 
     private func selectedRowValue() -> Row? {
-        if store.isNotesMode { return .mode(.notes) }
-        if store.isRemoteDesktopMode { return .mode(.remoteDesktop) }
-        if store.isDockerMode { return .mode(.docker) }
-        if store.isAgenticUseMode { return .mode(.agenticUse) }
-        if store.isRunnersMode { return .mode(.runners) }
-        if store.isMockupsMode { return .mode(.mockups) }
+        if let feature = store.activeSidebarFeature { return .mode(feature.selection) }
         return rows.first { if case .workspace(let id, _) = $0 { return id == store.selectedWorkspaceID }; return false }
     }
 
@@ -178,6 +173,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             _ = CockpitUIZoomController.shared.factor
             _ = store.selectedWorkspaceID
             _ = store.isWorkspaceDetailVisible
+            _ = store.sidebarVisibility.hidden
             _ = store.workspaceGroups.groups
             _ = branches.branches
             for workspace in store.workspaces { _ = workspace.name; _ = workspace.badgeCount; _ = workspace.isPinned; _ = workspace.effectiveRootPath }
@@ -291,7 +287,9 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             let image = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
             image.contentTintColor = .controlAccentColor
             image.widthAnchor.constraint(equalToConstant: 18).isActive = true
-            return shellStack([image, shellLabel(title)], orientation: .horizontal)
+            let stack = shellStack([image, shellLabel(title)], orientation: .horizontal)
+            stack.setAccessibilityIdentifier("sidebar.mode." + (SidebarFeature(mode)?.rawValue ?? "workspace"))
+            return stack
         case .heading(let title):
             let label = shellLabel(title, secondary: true)
             label.font = CockpitTypography.font(size: 11, weight: .semibold)
@@ -306,15 +304,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     }
 
     private static func presentation(_ selection: SidebarSelection) -> (String, String) {
-        switch selection {
-        case .notes: ("Notes", "note.text")
-        case .remoteDesktop: ("Remote Desktop", "macbook.and.iphone")
-        case .docker: ("Docker", "shippingbox")
-        case .agenticUse: ("Agentic Use", "chart.bar.xaxis")
-        case .runners: ("Runners", "server.rack")
-        case .mockups: ("Mock-ups", "ipad.and.iphone")
-        case .workspace: ("Workspace", "terminal")
-        }
+        guard let feature = SidebarFeature(selection) else { return ("Workspace", "terminal") }
+        return (feature.title, feature.symbolName)
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {

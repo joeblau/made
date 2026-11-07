@@ -8,6 +8,11 @@ enum DroneCLIMain {
         } catch let error as DroneCLIUsageError {
             FileHandle.standardError.write(Data("drone: \(error.rawValue)\n\(DroneCLI.usage)\n".utf8))
             exit(64)
+        } catch DroneWorkerError.rollbackFailed {
+            FileHandle.standardError.write(Data(
+                "drone: install failed and rollback could not complete; releases retained; run drone doctor\n".utf8
+            ))
+            exit(1)
         } catch DroneWorkerError.notInstalled {
             FileHandle.standardError.write(Data("drone: worker is not installed\n".utf8))
             exit(1)
@@ -24,7 +29,11 @@ enum DroneCLIUsageError: String, Error {
 }
 
 struct DroneCLI {
-    static let usage = "usage: drone <install|uninstall|start|stop|restart|status|doctor|pairings|approve|reject|version>"
+    static let usage = """
+    usage: drone <install|uninstall|start|stop|restart|status|doctor|pairings|approve|reject|controllers|version>
+           drone grant-tools <controller-uuid> <workspace-uuid> <files,jobs,git> <seconds:1-900>
+           drone revoke <controller-uuid>
+    """
 
     private let paths: DronePaths
 
@@ -35,6 +44,10 @@ struct DroneCLI {
     func run(arguments: [String]) throws {
         guard let command = arguments.first else {
             print(Self.usage)
+            return
+        }
+        if ["controllers", "grant-tools", "revoke"].contains(command) {
+            try runOwnerCommand(arguments)
             return
         }
         guard arguments.count == 1 || (["approve", "reject"].contains(command) && arguments.count == 2) else {
@@ -65,7 +78,7 @@ struct DroneCLI {
         case "doctor":
             let report = doctor(launchd: launchd)
             print(report.rendered)
-            if report.state != .listening && report.state != .paired { exit(2) }
+            if ![.disabled, .listening, .paired].contains(report.state) { exit(2) }
             if !report.healthy { exit(2) }
         case "pairings":
             let response = try DroneControlClient(paths: paths).status()
@@ -90,6 +103,25 @@ struct DroneCLI {
         }
     }
 
+    private func runOwnerCommand(_ arguments: [String]) throws {
+        let request: DroneControlRequest
+        do { request = try DroneOwnerCommand.parse(arguments) } catch {
+            throw DroneCLIUsageError.unexpectedArguments
+        }
+        let response = try DroneControlClient(paths: paths, timeout: 10).send(request)
+        switch request.command {
+        case "grant-tools":
+            guard let lease = response.toolLease, lease.controllerID == request.controllerID,
+                  lease.workspaceID == request.workspaceID, lease.expiresAt.isFinite,
+                  lease.expiresAt > Date().timeIntervalSince1970 else { throw DroneWorkerError.invalidResponse }
+            print(String(decoding: try DroneControlCodec.encode(lease), as: UTF8.self))
+        case "controllers":
+            for controller in response.controllers ?? [] { print(controller.uuidString) }
+        case "revoke": print("revoked")
+        default: throw DroneCLIUsageError.unknownCommand
+        }
+    }
+
     private func sourceDirectory() throws -> URL {
         guard let executable = Bundle.main.executableURL?.resolvingSymlinksInPath() else {
             throw DroneWorkerError.invalidInstallation
@@ -99,13 +131,13 @@ struct DroneCLI {
 
     private func status(launchd: DroneLaunchd) -> DroneStatusReport {
         let response = try? DroneControlClient(paths: paths).status()
-        let loaded = launchd.isLoaded
-        let state = DroneStatusEvaluator.state(response: response, launchdLoaded: loaded)
+        let loaded = try? launchd.isLoaded
+        let state = loaded.map { DroneStatusEvaluator.state(response: response, launchdLoaded: $0) } ?? .unhealthy
         return DroneStatusReport(
             state: state,
             response: response,
             installed: FileManager.default.fileExists(atPath: paths.launchAgent.path),
-            launchdLoaded: loaded
+            launchdLoaded: loaded ?? false
         )
     }
 
@@ -136,12 +168,16 @@ struct DroneStatusReport {
             "state=\(state.rawValue)",
             "installed=\(installed)",
             "launchd=\(launchdLoaded)",
-            "execution=\(response?.executionEnabled == true ? "enabled" : "disabled")",
+            "execution=\(response?.executionEnabled == true ? "configured" : "disabled")",
         ]
         if let response {
             lines.append("version=\(response.workerVersion)")
             lines.append("protocol=\(response.protocolVersion)")
             lines.append("pid=\(response.processIdentifier)")
+            if response.executionEnabled {
+                lines.append("listener=\(response.workerHealth?.listenerReady == true ? "ready" : "unavailable")")
+                lines.append("pairing_store=\(response.workerHealth?.storageHealthy == true ? "ok" : "unavailable")")
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -156,7 +192,8 @@ struct DroneDoctorReport {
 
     var state: DroneOperationalState { status.state }
     var healthy: Bool {
-        status.installed && status.launchdLoaded && socketHealthy && permissionsValid
+        [.disabled, .listening, .paired].contains(status.state)
+            && status.installed && status.launchdLoaded && socketHealthy && permissionsValid
             && signaturesValid && logsBounded
     }
 

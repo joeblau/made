@@ -10,8 +10,15 @@ ROOT="$BUILD_DIR/worker"
 LABEL="app.blau.drone.smoke.$$"
 DOMAIN="gui/$(id -u)"
 SECRET="pairing-material-that-must-never-be-printed"
+MANUAL_ROOT="$(mktemp -d /tmp/drone-stop.XXXXXX)"
+manual_pid=""
 
 cleanup() {
+  if [[ -n "$manual_pid" ]]; then
+    kill -KILL "$manual_pid" >/dev/null 2>&1 || true
+    wait "$manual_pid" 2>/dev/null || true
+  fi
+  rm -rf "$MANUAL_ROOT"
   /bin/launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
   rm -rf "$BUILD_DIR"
 }
@@ -31,6 +38,28 @@ DISABLE_SWIFTLINT=1 xcodebuild build -quiet \
   CODE_SIGN_IDENTITY=- \
   DEVELOPMENT_TEAM= \
   ENABLE_HARDENED_RUNTIME=NO
+
+# Direct shutdown must complete without launchd's eventual SIGKILL fallback.
+/usr/bin/env -u BLAU_DRONE_WORKSPACE -u BLAU_DRONE_PERMISSIONS \
+  BLAU_DRONE_ROOT="$MANUAL_ROOT" "$PRODUCTS/droned" &
+manual_pid=$!
+for _ in {1..100}; do
+  [[ -S "$MANUAL_ROOT/run/control.sock" ]] && break
+  sleep 0.02
+done
+[[ -S "$MANUAL_ROOT/run/control.sock" ]]
+kill -TERM "$manual_pid"
+for _ in {1..100}; do
+  if ! kill -0 "$manual_pid" 2>/dev/null; then break; fi
+  sleep 0.02
+done
+if kill -0 "$manual_pid" 2>/dev/null; then
+  echo "droned did not exit after graceful SIGTERM" >&2
+  exit 1
+fi
+wait "$manual_pid"
+manual_pid=""
+[[ ! -e "$MANUAL_ROOT/run/control.sock" ]]
 
 export BLAU_DRONE_ROOT="$ROOT"
 export BLAU_DRONE_LABEL="$LABEL"
@@ -60,9 +89,9 @@ worker_pid() {
   status_output | awk -F= '$1 == "pid" { print $2 }'
 }
 
-[[ "$("$DRONE" --version)" == *"protocol 1; execution disabled"* ]]
+[[ "$("$DRONE" --version)" == *"protocol 1; execution opt-in"* ]]
 "$DRONE" install
-wait_for_state listening >/dev/null
+wait_for_state disabled >/dev/null
 first_pid="$(worker_pid)"
 [[ -n "$first_pid" ]]
 kill -0 "$first_pid"
@@ -70,15 +99,15 @@ kill -0 "$first_pid"
 mkdir -p "$ROOT/state/pairings"
 printf '%s' "$SECRET" > "$ROOT/state/pairings/test-peer"
 chmod 600 "$ROOT/state/pairings/test-peer"
-paired_status="$(wait_for_state paired)"
+paired_status="$(wait_for_state disabled)"
 [[ "$paired_status" != *"$SECRET"* ]]
 [[ "$paired_status" != *"test-peer"* ]]
 "$DRONE" doctor >/dev/null
 
 "$DRONE" install
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 "$DRONE" install
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 [[ "$(< "$ROOT/state/pairings/test-peer")" == "$SECRET" ]]
 [[ "$(stat -f %Lp "$ROOT/state/pairings/test-peer")" == 600 ]]
 
@@ -103,7 +132,7 @@ for _ in {1..200}; do
 done
 [[ -n "$recovered_pid" ]]
 kill -0 "$recovered_pid"
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 
 "$DRONE" stop
 wait_for_state stopped >/dev/null
@@ -114,7 +143,7 @@ fi
 [[ ! -e "$ROOT/run/control.sock" ]]
 
 "$DRONE" start
-wait_for_state paired >/dev/null
+wait_for_state disabled >/dev/null
 running_pid="$(worker_pid)"
 "$DRONE" doctor >/dev/null
 log_bytes=0

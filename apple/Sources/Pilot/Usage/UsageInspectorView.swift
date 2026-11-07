@@ -4,6 +4,7 @@ import Observation
 enum SettingsTab {
     static let storageKey = "settings.selectedTab"
     static let general = "general"
+    static let sidebar = "sidebar"
     static let usage = "usage"
     static let drones = "drones"
 }

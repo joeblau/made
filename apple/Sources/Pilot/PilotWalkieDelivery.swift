@@ -16,7 +16,7 @@ struct PilotWalkieDelivery {
 
     func capture(workspaceID: UUID?) -> Target? {
         if workspaceID == WorkspaceStore.remoteDesktopWorkspaceID {
-            guard let connection = store.selectedRemoteConnection,
+            guard store.isSidebarFeatureVisible(.remoteDesktop), let connection = store.selectedRemoteConnection,
                   let sessionID = remoteSessionID(connection.id) else { return nil }
             return Target(workspaceID: workspaceID, destination: .remoteDesktop(
                 connectionID: connection.id, sessionID: sessionID
