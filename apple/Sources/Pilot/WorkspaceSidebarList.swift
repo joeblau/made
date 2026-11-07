@@ -119,7 +119,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
                 workspace.effectiveRootPath.map { WorkspaceBranchStore.Target(id: workspace.id, rootPath: $0) }
             })
         }
-        var next: [Row] = [.mode(.notes), .mode(.remoteDesktop), .mode(.docker), .mode(.agenticUse), .mode(.runners)]
+        var next: [Row] = [.mode(.notes), .mode(.remoteDesktop), .mode(.docker), .mode(.agenticUse), .mode(.runners), .mode(.mockups)]
         let pinned = workspaces.filter(\.isPinned)
         if !pinned.isEmpty {
             next.append(.heading("Pinned"))
@@ -165,6 +165,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         if store.isDockerMode { return .mode(.docker) }
         if store.isAgenticUseMode { return .mode(.agenticUse) }
         if store.isRunnersMode { return .mode(.runners) }
+        if store.isMockupsMode { return .mode(.mockups) }
         return rows.first { if case .workspace(let id, _) = $0 { return id == store.selectedWorkspaceID }; return false }
     }
 
@@ -311,6 +312,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         case .docker: ("Docker", "shippingbox")
         case .agenticUse: ("Agentic Use", "chart.bar.xaxis")
         case .runners: ("Runners", "server.rack")
+        case .mockups: ("Mock-ups", "ipad.and.iphone")
         case .workspace: ("Workspace", "terminal")
         }
     }

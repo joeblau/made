@@ -117,6 +117,7 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
         view.addItem(command("Toggle Docker", key: "0", modifiers: [.command, .control]) { $0.store.toggleDockerMode(); $0.refresh() })
         view.addItem(command("Toggle Agentic Use") { $0.store.toggleAgenticUseMode(); $0.refresh() })
         view.addItem(command("Toggle Runners") { $0.store.isRunnersMode.toggle(); $0.refresh() })
+        view.addItem(command("Toggle Mock-ups") { $0.store.isMockupsMode.toggle(); $0.refresh() })
         view.addItem(.separator())
         let layout = submenu("Layout", in: view)
         layout.addItem(command("Focus or Restore Selected Pane", requiresPane: true) { window in

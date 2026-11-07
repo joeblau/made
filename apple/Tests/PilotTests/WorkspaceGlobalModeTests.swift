@@ -89,6 +89,29 @@ struct WorkspaceGlobalModeTests {
         #expect(store.isWorkspaceDetailVisible)
     }
 
+    @Test("Mock-ups is exclusive with the other global modes")
+    func mockupsIsExclusive() throws {
+        let fixture = try makeFixture()
+        let store = fixture.store
+        defer { clearModes(store) }
+        store.addWorkspace()
+        let workspace = try #require(store.workspaces.first)
+
+        store.enterRunnersMode()
+        store.enterMockupsMode()
+        #expect(store.isMockupsMode)
+        #expect(!store.isRunnersMode)
+        #expect(!store.isWorkspaceDetailVisible)
+
+        store.enterNotesMode()
+        #expect(!store.isMockupsMode)
+
+        store.enterMockupsMode()
+        store.selectWorkspace(workspace.id)
+        #expect(!store.isMockupsMode)
+        #expect(store.isWorkspaceDetailVisible)
+    }
+
     @Test("Selecting a workspace exits Runners")
     func selectingAWorkspaceExitsRunners() throws {
         let fixture = try makeFixture()
@@ -208,5 +231,6 @@ struct WorkspaceGlobalModeTests {
         store.isDockerMode = false
         store.isAgenticUseMode = false
         store.isRunnersMode = false
+        store.isMockupsMode = false
     }
 }
