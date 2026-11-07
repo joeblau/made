@@ -67,13 +67,17 @@ final class AgentChatSession {
     private(set) var transcript = AgentTranscript()
     private(set) var permissionQueue: [ACPPermissionRequest] = []
     private(set) var agentInfo: ACPAgentInfo?
-    private(set) var modelState: ACPModelState?
-    var modelName: String? { modelState?.currentName }
-    private(set) var isChangingModel = false
+    /// Advertised configuration, the option being changed, and a model picked
+    /// on another provider: written only by AgentChatSessionConfig.swift.
+    var config: ACPSessionConfig?
+    var changingConfigOptionID: String?
+    var pendingModel: PendingModel?
+    /// Asks the user before an unrestricted mode is selected; the default refuses.
+    @ObservationIgnored var confirmUnrestrictedMode: @MainActor (ChatAgent, ACPConfigOption.Choice) async -> Bool = { _, _ in false }
     private(set) var attachments: [AgentChatAttachment] = []
     private(set) var isImportingAttachments = false
     private(set) var isPreparingPrompt = false
-    private(set) var composerError: String?
+    var composerError: String?
     private(set) var context: ACPContextUsage?
     private(set) var lastTurnUsage: NormalizedTurnUsage?
     private(set) var sessionUsage: NormalizedTurnUsage?
@@ -95,12 +99,12 @@ final class AgentChatSession {
     @ObservationIgnored var steerTimeout: Duration = .seconds(15)
     var draft = ""
 
-    @ObservationIgnored private var connection: ACPConnection?
-    @ObservationIgnored private var rootSessionID: String?
+    @ObservationIgnored private(set) var connection: ACPConnection?
+    @ObservationIgnored private(set) var rootSessionID: String?
     @ObservationIgnored private var lifecycleTask: Task<Void, Never>?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
-    @ObservationIgnored private var generation = 0
-    @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private(set) var generation = 0
+    @ObservationIgnored let defaults: UserDefaults
     @ObservationIgnored private let resolveLaunch: LaunchResolver
     @ObservationIgnored private let attachmentDirectory: URL
     @ObservationIgnored private var attachmentImportTask: Task<Void, Never>?
@@ -184,7 +188,7 @@ final class AgentChatSession {
     /// open turn ends as cancelled, open approvals as `.agentStopped`, and
     /// unsent steer or queued text returns to the draft.
     func shutDown() {
-        isChangingModel = false
+        changingConfigOptionID = nil
         isPreparingPrompt = false
         finishOpenTurn(stopReason: "cancelled")
         record(transcript.stopAllSessions(stopReason: "cancelled", now: now()))
@@ -220,6 +224,7 @@ final class AgentChatSession {
 
     func switchAgent(to newAgent: ChatAgent) {
         guard newAgent != agent else { return }
+        pendingModel = nil
         shutDown()
         agent = newAgent
         AgentChatPaneStore.setAgent(newAgent, for: paneID, defaults: defaults)
@@ -284,30 +289,6 @@ final class AgentChatSession {
         Task.detached {
             await pending?.value
             try? FileManager.default.removeItem(at: directory)
-        }
-    }
-
-    func selectModel(_ id: String) {
-        guard phase == .ready, !isChangingModel, !isPreparingPrompt, let connection, let rootSessionID,
-              let state = modelState, id != state.currentID,
-              let request = state.request(sessionID: rootSessionID, modelID: id) else { return }
-        isChangingModel = true
-        composerError = nil
-        let generation = generation
-        Task {
-            do {
-                let result = try await connection.request(request.method, params: request.params, timeout: .seconds(30))
-                guard generation == self.generation else { return }
-                if let updated = ACPModelState(result) {
-                    modelState = updated
-                } else if state.selection == .legacy {
-                    modelState?.currentID = id
-                } else { composerError = "The agent did not confirm the selected model. Please try again." }
-            } catch {
-                guard generation == self.generation else { return }
-                composerError = "Could not change model: " + redactInline(error.localizedDescription)
-            }
-            if generation == self.generation { isChangingModel = false }
         }
     }
 
@@ -603,8 +584,9 @@ final class AgentChatSession {
                 sessionResult = result
             }
             guard generation == self.generation else { return }
-            modelState = sessionResult.flatMap(ACPModelState.init)
+            applyConfiguration(sessionResult.flatMap(ACPSessionConfig.init))
             phase = .ready
+            applyPendingModel()
         } catch let issue as ChatAgentSetupIssue {
             guard generation == self.generation else { return }
             phase = .needsSetup(issue)
@@ -703,9 +685,7 @@ final class AgentChatSession {
             if notification.sessionID == rootSessionID {
                 switch notification.update {
                 case .context(let usage): context = usage
-                case .modelConfiguration(let state):
-                    if state != nil || modelState?.selection != .legacy { modelState = state }
-                case .currentModel(let id): modelState?.currentID = id
+                case .configuration, .currentModel, .currentMode: applyConfigurationUpdate(notification.update)
                 default: break
                 }
             }
@@ -875,8 +855,8 @@ final class AgentChatSession {
     private func resetConversationState() {
         transcript.reset()
         agentInfo = nil
-        modelState = nil
-        isChangingModel = false
+        config = nil
+        changingConfigOptionID = nil
         composerError = nil
         context = nil
         lastTurnUsage = nil
