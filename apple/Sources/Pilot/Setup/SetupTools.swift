@@ -35,11 +35,23 @@ struct SetupTool: Identifiable, Sendable {
 final class SetupTools {
     private(set) var results: [String: Bool] = [:]
     private(set) var isChecking = false
+    @ObservationIgnored private let checker: (@MainActor (SetupTool) async -> Bool)?
+
+    init(checker: (@MainActor (SetupTool) async -> Bool)? = nil) {
+        self.checker = checker
+    }
 
     func refresh() async {
         guard !isChecking else { return }
         isChecking = true
         defer { isChecking = false }
+        if let checker {
+            for tool in SetupTool.all {
+                guard !Task.isCancelled else { return }
+                results[tool.id] = await checker(tool)
+            }
+            return
+        }
         // Never run Apple's git/xcrun shims without an installed toolchain:
         // invoking them on a fresh Mac would pop an unsolicited installer.
         let developerDirectory = await Self.output("/usr/bin/xcode-select", ["-p"])

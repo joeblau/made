@@ -52,6 +52,13 @@ cat > "$work/apple/bin/fetch-runner-model.sh" <<'TOOL'
 #!/bin/bash
 printf 'runner-model %s\n' "$*" >> "$CI_TEST_LOG"
 TOOL
+cat > "$work/apple/bin/check-cockpit-ui-boundary.py" <<'TOOL'
+import os
+from pathlib import Path
+with Path(os.environ["CI_TEST_LOG"]).open("a") as log:
+    log.write("cockpit-ui-boundary\n")
+raise SystemExit(int(os.environ.get("CI_TEST_BOUNDARY_FAILURE", "0")))
+TOOL
 cat > "$work/apple/bin/test-drone-protocol.sh" <<'TOOL'
 #!/bin/bash
 printf 'drone-protocol\n' >> "$CI_TEST_LOG"
@@ -92,6 +99,7 @@ reset_log
 "$work/apple/bin/test.sh" all
 expect_calls 1 '^icons validate$'
 expect_calls 1 '^runner-model verify$'
+expect_calls 2 '^cockpit-ui-boundary$'
 expect_calls 1 '^drone-protocol$'
 expect_calls 1 '^test-drone-launchd.sh$'
 expect_calls 1 '^test-drone-jobs.sh$'
@@ -126,6 +134,7 @@ expect_calls 0 '^xcrun xcresulttool'
 # Standalone suites still build what they need.
 reset_log
 "$work/apple/bin/test.sh" pilot
+expect_calls 1 '^cockpit-ui-boundary$'
 expect_calls 1 '^xcodebuild '
 expect_calls 1 '^xcodebuild DISABLE_SWIFTLINT=1 test .*-scheme PilotTests '
 reset_log
@@ -169,6 +178,21 @@ reset_log
 status=0
 "$work/apple/bin/test.sh" bogus 2>/dev/null || status=$?
 [[ "$status" == 2 ]] || fail "unknown suite exited $status, expected 2"
+expect_calls 0 '^xcodebuild '
+
+# A presentation regression fails before any application or hosted-test build.
+reset_log
+if CI_TEST_BOUNDARY_FAILURE=1 "$work/apple/bin/build-ci.sh"; then
+  fail "a failed Cockpit boundary check must fail build-ci.sh"
+fi
+expect_calls 1 '^cockpit-ui-boundary$'
+expect_calls 0 '^xcodebuild '
+expect_calls 0 '^icons '
+reset_log
+if CI_TEST_BOUNDARY_FAILURE=1 "$work/apple/bin/test.sh" pilot; then
+  fail "a failed Cockpit boundary check must fail the hosted Pilot test lane"
+fi
+expect_calls 1 '^cockpit-ui-boundary$'
 expect_calls 0 '^xcodebuild '
 
 # An explicit root relocates both scripts together.

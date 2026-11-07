@@ -172,8 +172,9 @@ public final class FrameSender: @unchecked Sendable {
     /// Invoked when a client advertises its decode capabilities (handshake).
     public var onCapability: ((FrameLink.Capability) -> Void)?
 
-    public init() {
-        let isTesting = ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
+    public init(usesEphemeralIdentity: Bool = false) {
+        let isTesting = usesEphemeralIdentity
+            || ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
         localKey = isTesting
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())

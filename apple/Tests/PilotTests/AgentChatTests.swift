@@ -129,6 +129,12 @@ struct AgentChatTests {
         """#))
         #expect(kimi.silentAuthMethodID == nil)
         #expect(kimi.name == "Kimi Code CLI")
+
+        let cursor = ACPAgentInfo(try json(#"""
+        {"authMethods":[{"id":"cursor_login","name":"Cursor Login",
+         "description":"Authenticate using existing Cursor login credentials. Run 'agent login' first if not logged in."}]}
+        """#))
+        #expect(cursor.silentAuthMethodID == "cursor_login")
     }
 
     @Test
@@ -280,7 +286,7 @@ struct AgentChatTests {
 
     @Test
     func configurationPointsAdaptersAtTheInstalledCLI() throws {
-        let bin = try temporaryBin(executables: ["claude-agent-acp", "claude", "grok"])
+        let bin = try temporaryBin(executables: ["claude-agent-acp", "claude", "grok", "cursor-agent", "agent"])
         defer { try? FileManager.default.removeItem(at: bin) }
 
         let claude = try ChatAgentLauncher.configuration(
@@ -295,6 +301,12 @@ struct AgentChatTests {
             for: .grok, workingDirectory: "/tmp", shellEnvironment: ["PATH": bin.path], fallbackDirectories: []
         ).get()
         #expect(grok.arguments == ["agent", "stdio"])
+
+        let cursor = try ChatAgentLauncher.configuration(
+            for: .cursor, workingDirectory: "/tmp", shellEnvironment: ["PATH": bin.path], fallbackDirectories: []
+        ).get()
+        #expect(cursor.executable == bin.appendingPathComponent("cursor-agent"))
+        #expect(cursor.arguments == ["acp"])
     }
 
     @Test

@@ -1,4 +1,4 @@
-import SwiftUI
+import AppKit
 
 // Find in Page for both browser engines: the pane-local request state, the
 // in-pane Liquid Glass find bar, and the Edit menu commands that drive it.
@@ -121,150 +121,81 @@ enum BrowserFindCommandTarget {
     }
 }
 
-/// Edit ▸ Find…, Find Next, Find Previous, plus View ▸ Focus Selected Pane,
-/// whose ⌘F yields to Find while a browser is selected. Both follow the key
-/// scene's workspace so Main and Extendo never steal each other's shortcut.
-struct PilotBrowserFindCommands: Commands {
-    @FocusedValue(Workspace.self) private var focusedWorkspace
-    let store: WorkspaceStore
-
-    var body: some Commands {
-        CommandGroup(after: .pasteboard) {
-            Divider()
-
-            Button("Find…") {
-                findTarget?.showFindBar()
-            }
-            .keyboardShortcut(findTarget == nil ? nil : KeyboardShortcut("f", modifiers: .command))
-            .disabled(findTarget == nil)
-
-            Button("Find Next") {
-                findTarget?.findAgain(forward: true)
-            }
-            .keyboardShortcut("g", modifiers: .command)
-            .disabled(findTarget?.canFindAgain != true)
-
-            Button("Find Previous") {
-                findTarget?.findAgain(forward: false)
-            }
-            .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(findTarget?.canFindAgain != true)
-        }
-
-        CommandGroup(after: .sidebar) {
-            Button("Focus Selected Pane") {
-                guard let workspace = store.selectedWorkspace,
-                      let pane = workspace.selectedPane else { return }
-                workspace.focusPane(pane)
-            }
-            .keyboardShortcut(
-                BrowserFindCommandTarget.focusPaneOwnsCommandF(selectedPane: focusedWorkspace?.selectedPane)
-                    ? KeyboardShortcut("f", modifiers: .command)
-                    : nil
-            )
-            .disabled(store.selectedWorkspace?.selectedPane == nil)
-        }
-    }
-
-    private var findTarget: BrowserState? {
-        BrowserFindCommandTarget.state(for: focusedWorkspace?.selectedPane)
-    }
-}
-
-/// The in-pane find bar: a glass search field, the result count, and glass
-/// previous/next/done controls. It sits above the page on the pane's own
-/// window background, so its glass never samples page content.
-struct BrowserFindBar: View {
+@MainActor
+final class BrowserFindBar: NSView, NSSearchFieldDelegate {
     let state: BrowserState
+    private let field = NSSearchField()
+    private let summary = NSTextField(labelWithString: "")
+    private var focusRequest = -1
+    private var previous: BrowserNativeButton!
+    private var next: BrowserNativeButton!
 
-    @FocusState private var isFieldFocused: Bool
+    init(state: BrowserState) {
+        self.state = state
+        super.init(frame: .zero)
+        field.placeholderString = "Find in page"
+        field.setAccessibilityLabel("Find in Page")
+        field.setAccessibilityIdentifier("browser.find-field")
+        field.delegate = self
+        field.sendsSearchStringImmediately = true
+        field.sendsWholeSearchString = false
+        previous = BrowserNativeButton("Previous Match", symbol: "chevron.up") { [weak state] in state?.findInPage(forward: false) }
+        next = BrowserNativeButton("Next Match", symbol: "chevron.down") { [weak state] in state?.findInPage(forward: true) }
+        let done = BrowserNativeButton("Done") { [weak state] in state?.hideFindBar() }
+        previous.setAccessibilityIdentifier("browser.find-previous")
+        next.setAccessibilityIdentifier("browser.find-next")
+        done.setAccessibilityIdentifier("browser.find-done")
+        summary.textColor = .secondaryLabelColor
+        summary.setAccessibilityIdentifier("browser.find-summary")
+        let stack = NSStackView(views: [field, summary, previous, next, done])
+        stack.spacing = 6
+        BrowserNativeUI.pin(stack, to: self, inset: 6)
+        field.widthAnchor.constraint(greaterThanOrEqualToConstant: 100).isActive = true
+        setContentHuggingPriority(.required, for: .vertical)
+        setAccessibilityIdentifier("browser.find-bar")
+        setAccessibilityLabel("Find in Page")
+        synchronize()
+    }
 
-    var body: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            TextField("Find in Page", text: Bindable(state).findBarText, prompt: Text("Find in page"))
-                .focused($isFieldFocused)
-                .onSubmit { state.findInPage(forward: true) }
-                .onKeyPress(.return, phases: .down) { press in
-                    // Return is Next (onSubmit); Shift-Return is Previous.
-                    guard press.modifiers.contains(.shift) else { return .ignored }
-                    state.findInPage(forward: false)
-                    return .handled
-                }
-                .onChange(of: state.findBarText) {
-                    state.findInPage(forward: true)
-                }
-                .accessibilityLabel("Find in Page")
-                .accessibilityIdentifier("browser.find-field")
-                .liquidGlassField(systemImage: "magnifyingglass", isFocused: isFieldFocused)
-                .frame(minWidth: 160, maxWidth: 320)
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
-            Text(summary)
-                .font(.callout)
-                .monospacedDigit()
-                .foregroundStyle(GlassLegibleText.secondaryColor)
-                .lineLimit(1)
-                .accessibilityIdentifier("browser.find-summary")
-                .accessibilityHidden(summary.isEmpty)
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        synchronize()
+    }
 
-            Spacer(minLength: 0)
-
-            CompatGlassContainer(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    Button {
-                        state.findInPage(forward: false)
-                    } label: {
-                        Label("Previous Match", systemImage: "chevron.up")
-                            .labelStyle(.iconOnly)
-                    }
-                    .compatGlassIconButton(controlSize: .small)
-                    .disabled(state.findBarText.isEmpty)
-                    .help("Previous Match (⇧⌘G)")
-                    .accessibilityIdentifier("browser.find-previous")
-
-                    Button {
-                        state.findInPage(forward: true)
-                    } label: {
-                        Label("Next Match", systemImage: "chevron.down")
-                            .labelStyle(.iconOnly)
-                    }
-                    .compatGlassIconButton(controlSize: .small)
-                    .disabled(state.findBarText.isEmpty)
-                    .help("Next Match (⌘G)")
-                    .accessibilityIdentifier("browser.find-next")
-
-                    Button("Done") {
-                        state.hideFindBar()
-                    }
-                    .compatGlassButtonStyle()
-                    .controlSize(.small)
-                    .accessibilityIdentifier("browser.find-done")
-                }
-            }
-        }
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.small)
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-        .frame(maxWidth: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-        .onExitCommand { state.hideFindBar() }
-        .onAppear {
-            isFieldFocused = true
-            // Reopening with a kept draft highlights its matches again.
+    func synchronize() {
+        field.font = CockpitTypography.font(size: 13)
+        summary.font = CockpitTypography.font(size: 12)
+        if field.currentEditor() == nil { field.stringValue = state.findBarText }
+        summary.stringValue = BrowserFindSummary.text(query: state.findQuery, matchCount: state.findMatchCount,
+            activeOrdinal: state.activeFindMatchOrdinal, countsMatches: state.findCountsMatches)
+        previous.isEnabled = !state.findBarText.isEmpty
+        next.isEnabled = !state.findBarText.isEmpty
+        if focusRequest != state.findFieldFocusRequestID, let window {
+            focusRequest = state.findFieldFocusRequestID
+            window.makeFirstResponder(field)
+            field.selectText(nil)
             if state.findQuery.isEmpty { state.findInPage() }
         }
-        .onChange(of: state.findFieldFocusRequestID) {
-            isFieldFocused = true
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Find in Page")
-        .accessibilityIdentifier("browser.find-bar")
     }
 
-    private var summary: String {
-        BrowserFindSummary.text(
-            query: state.findQuery,
-            matchCount: state.findMatchCount,
-            activeOrdinal: state.activeFindMatchOrdinal,
-            countsMatches: state.findCountsMatches
-        )
+    func controlTextDidChange(_ notification: Notification) {
+        state.findBarText = field.stringValue
+        state.findInPage()
     }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        if commandSelector == #selector(NSResponder.cancelOperation(_:)) {
+            state.hideFindBar()
+            return true
+        }
+        if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+            state.findInPage(forward: NSApp.currentEvent?.modifierFlags.contains(.shift) != true)
+            return true
+        }
+        return false
+    }
+
 }

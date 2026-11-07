@@ -111,7 +111,6 @@ enum InspectorTab: String, Codable, CaseIterable {
     case actions = "Actions"
     case tasks = "Tasks"
     case pullRequests = "PRs"
-    case filesystem = "Files"
     case usage = "Usage"
 
     var systemImageName: String {
@@ -119,7 +118,6 @@ enum InspectorTab: String, Codable, CaseIterable {
         case .actions: "gearshape.2"
         case .tasks: "checklist"
         case .pullRequests: "arrow.triangle.pull"
-        case .filesystem: "folder"
         case .usage: "chart.bar.xaxis"
         }
     }
@@ -709,6 +707,7 @@ final class Pane {
     var terminalDroneIDRaw: String?
     var terminalRemoteSessionIDRaw: String?
     var terminalDroneNameRaw: String?
+    var androidTargetRaw: String?
 
     @Relationship(deleteRule: .cascade)
     var browserState: BrowserState?
@@ -845,12 +844,16 @@ final class Pane {
     /// clears its preference and evicts/stops the session immediately after a
     /// successful save.
     func tearDownRuntimeResources(preservingDevicePreference: Bool = false) {
-        if kind == .terminal {
+        if kind.isTerminalTool {
             let session = terminalSession
             TerminalSessionProvider.shared.invalidate(pane: self, session: session)
             Task { _ = await session.close() }
         }
-        if preservingDevicePreference, kind == .device { return }
+        if preservingDevicePreference, kind.isAppleTool {
+            let paneID = id
+            MainActor.assumeIsolated { SimulatorRegistry.shared.remove(paneID: paneID) }
+            return
+        }
         stopRuntimeResources(isDestructive: true)
     }
 
@@ -858,7 +861,7 @@ final class Pane {
     /// Local tmux stays attached on the next surface; a Drone detaches and keeps
     /// its remote session available for restoration.
     func suspendRuntimeResources() {
-        if kind == .terminal {
+        if kind.isTerminalTool {
             let session = terminalSession
             Task { await session.suspend() }
         }
@@ -870,23 +873,20 @@ final class Pane {
         let paneKind = kind
         MainActor.assumeIsolated {
             switch paneKind {
-            case .device:
+            case .device, .simulator:
+                SimulatorRegistry.shared.remove(paneID: paneID)
                 if isDestructive {
                     DeviceCaptureRegistry.shared.remove(paneID: paneID)
                 } else {
                     DeviceCaptureRegistry.shared.suspend(paneID: paneID)
                 }
-            case .simulator:
-                SimulatorRegistry.shared.remove(paneID: paneID)
             case .android:
                 AndroidDeviceRegistry.shared.remove(paneID: paneID)
-            case .terminal:
+            case .terminal, .agentChat:
                 if isDestructive {
                     TerminalFastCommandStore.removeCommand(for: paneID)
+                    AgentChatRegistry.shared.remove(paneID: paneID)
                 }
-            case .agentChat:
-                // Workspace switches keep the agent mid-turn; only deletion stops it.
-                if isDestructive { AgentChatRegistry.shared.remove(paneID: paneID) }
             case .browser, .editor:
                 break
             }
@@ -930,30 +930,30 @@ final class Workspace {
     var frontmostTerminalPane: Pane? {
         if let frontmostTerminalPaneID,
            let pane = sortedPanes.first(where: {
-               $0.id == frontmostTerminalPaneID && $0.kind == .terminal && !$0.isCollapsed
+               $0.id == frontmostTerminalPaneID && $0.kind == .terminal && !$0.isCollapsed && !$0.isChoosingMode
            }) {
             return pane
         }
 
-        if let selectedPane, selectedPane.kind == .terminal, !selectedPane.isCollapsed {
+        if let selectedPane, selectedPane.kind == .terminal, !selectedPane.isCollapsed, !selectedPane.isChoosingMode {
             return selectedPane
         }
 
-        return sortedPanes.first { $0.kind == .terminal && !$0.isCollapsed }
-            ?? sortedPanes.first { $0.kind == .terminal }
+        return sortedPanes.first { $0.kind == .terminal && !$0.isCollapsed && !$0.isChoosingMode }
+            ?? sortedPanes.first { $0.kind == .terminal && !$0.isChoosingMode }
     }
 
     var leftmostTerminalPane: Pane? {
-        sortedPanes.first { $0.kind == .terminal && !$0.isCollapsed }
-            ?? sortedPanes.first { $0.kind == .terminal }
+        sortedPanes.first { $0.kind == .terminal && !$0.isCollapsed && !$0.isChoosingMode }
+            ?? sortedPanes.first { $0.kind == .terminal && !$0.isChoosingMode }
     }
 
     var rootTrackingTerminalPane: Pane? {
-        if let selectedPane, selectedPane.kind == .terminal, !selectedPane.isCollapsed {
+        if let selectedPane, selectedPane.kind.isTerminalTool, !selectedPane.isCollapsed, !selectedPane.isChoosingMode {
             return selectedPane
         }
 
-        return frontmostTerminalPane ?? leftmostTerminalPane
+        return frontmostTerminalPane ?? leftmostTerminalPane ?? sortedPanes.first { $0.kind == .agentChat }
     }
 
     var effectiveRootPath: String? {
@@ -1008,13 +1008,14 @@ final class Workspace {
         kind: PaneKind,
         side: Side,
         browserEngine: BrowserEngine = .webKit,
-        terminalDestination: TerminalDestination = .local
+        terminalDestination: TerminalDestination = .local,
+        chooseModeOnOpen: Bool = false
     ) -> Pane {
         let maxOrder = panes.map(\.sortOrder).max() ?? -1
         let pane = Pane(
             kind: kind,
             sortOrder: maxOrder + 1,
-            currentDirectory: kind == .terminal ? inheritedDirectoryForNewTerminal() : "",
+            currentDirectory: kind.isTerminalTool ? inheritedDirectoryForNewTerminal() : "",
             browserEngine: browserEngine,
             terminalDestination: terminalDestination
         )
@@ -1044,27 +1045,24 @@ final class Workspace {
 
         panes.append(pane)
         selectedPaneID = pane.id
-        if kind == .terminal {
+        if kind == .terminal && !chooseModeOnOpen {
             frontmostTerminalPaneID = pane.id
         }
         syncDefaultRootPathIfNeeded()
         _ = modelContext?.saveReporting(operation: "Adding pane")
+        pane.isChoosingMode = chooseModeOnOpen
         return pane
-    }
-
-    @discardableResult
-    func addBrowserPane(engine: BrowserEngine = .webKit, side: Side) -> Pane {
-        addPane(kind: .browser, side: side, browserEngine: engine)
     }
 
     @discardableResult
     func removePane(
         _ pane: Pane,
+        allowEmpty: Bool = false,
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {
-        guard panes.count > 1 else { return false }
+        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }) else { return false }
         let context = modelContext
-        let deletedDevicePaneID = pane.kind == .device ? pane.id : nil
+        let deletedDevicePaneID = pane.kind.isAppleTool ? pane.id : nil
         pane.tearDownRuntimeResources(preservingDevicePreference: true)
         panes.removeAll { $0.id == pane.id }
         if selectedPaneID == pane.id {

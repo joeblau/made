@@ -1,193 +1,300 @@
-import SwiftUI
+import AppKit
 @testable import Pilot
 
-struct SnapshotWebPreview: View {
-    var compact = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 10 : 18) {
-            HStack {
-                Image(systemName: "circle.hexagongrid.fill").foregroundStyle(.indigo)
-                Text("orbit").font(.system(size: compact ? 18 : 23, weight: .bold, design: .rounded))
-                Spacer()
-                Text("Workspace").font(.system(size: 11)).foregroundStyle(.secondary)
-                Text("AS").font(.system(size: 10, weight: .bold)).padding(7)
-                    .background(Color.indigo.opacity(0.15), in: Circle())
-            }
-            Divider()
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Good morning, Alex").font(.system(size: compact ? 22 : 30, weight: .bold, design: .rounded))
-                Text("A little progress, every day.").foregroundStyle(.secondary)
-            }
-            HStack(spacing: 12) {
-                metric("Projects", value: "12", symbol: "square.stack.3d.up")
-                metric("In progress", value: "8", symbol: "chart.line.uptrend.xyaxis")
-                if !compact { metric("Completed", value: "24", symbol: "checkmark.circle") }
-            }
-            HStack {
-                Text("Your projects").font(.headline)
-                Spacer()
-                Text("+ New project").foregroundStyle(.indigo).font(.system(size: 11, weight: .semibold))
-            }
-            ForEach(Array(["Website refresh", "Mobile experience", "Public API"].enumerated()), id: \.offset) { index, name in
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        RoundedRectangle(cornerRadius: 5).fill([Color.indigo, .orange, .mint][index])
-                            .frame(width: 28, height: 28)
-                            .overlay(Image(systemName: ["globe", "iphone", "curlybraces"][index]).font(.system(size: 13)).foregroundStyle(.white))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(name).font(.system(size: 13, weight: .semibold))
-                            Text(["Design review", "Ready for testing", "In development"][index]).font(.system(size: 10)).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Text(["8/12", "14/16", "6/10"][index]).font(.system(size: 11)).foregroundStyle(.secondary)
-                    }
-                    ProgressView(value: [0.67, 0.87, 0.6][index]).tint([Color.indigo, .orange, .mint][index])
-                }
-                .padding(compact ? 10 : 18)
-                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.07)))
-            }
-            if !compact {
-                Text("Recent activity").font(.headline)
-                Label("Sam completed the onboarding flow", systemImage: "checkmark.circle.fill")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-                Label("Morgan shared a new design review", systemImage: "bubble.left")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }
-        .font(.system(size: 13))
-        .padding(compact ? 20 : 30)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+/// Fictional native previews, never live terminal/browser/capture connections.
+@MainActor
+enum SnapshotUI {
+    static func label(_ text: String, size: CGFloat = 13, weight: NSFont.Weight = .regular,
+                      color: NSColor = .labelColor, mono: Bool = false) -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: text)
+        field.font = mono ? .monospacedSystemFont(ofSize: size, weight: weight) : .systemFont(ofSize: size, weight: weight)
+        field.textColor = color
+        field.maximumNumberOfLines = 0
+        field.setContentHuggingPriority(.required, for: .vertical)
+        return field
     }
 
-    private func metric(_ title: String, value: String, symbol: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Image(systemName: symbol).foregroundStyle(.indigo)
-            Text(value).font(.system(size: compact ? 22 : 28, weight: .semibold, design: .rounded))
-            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(compact ? 10 : 14)
-        .background(Color.indigo.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+    static func symbol(_ name: String, color: NSColor = .secondaryLabelColor, size: CGFloat = 16) -> NSImageView {
+        let image = NSImageView(image: NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? NSImage())
+        image.contentTintColor = color
+        image.symbolConfiguration = .init(pointSize: size, weight: .regular)
+        image.translatesAutoresizingMaskIntoConstraints = false
+        image.widthAnchor.constraint(equalToConstant: size + 2).isActive = true
+        image.heightAnchor.constraint(equalToConstant: size + 2).isActive = true
+        return image
     }
-}
 
-struct SnapshotDevice: View {
-    var body: some View {
-        VStack(spacing: 18) {
-            HStack {
-                Label("iPhone · Orbit", systemImage: "iphone")
-                Spacer()
-                Label("Connected", systemImage: "circle.fill").foregroundStyle(.green)
-            }.font(.system(size: 12)).padding(18)
-            Spacer(minLength: 0)
-            VStack(spacing: 0) {
-                HStack {
-                    Text("9:41").fontWeight(.semibold)
-                    Spacer()
-                    Capsule().fill(.black).frame(width: 82, height: 23)
-                    Spacer()
-                    Image(systemName: "wifi")
-                    Image(systemName: "battery.100percent")
-                }.font(.system(size: 10)).padding(.horizontal, 20).frame(height: 42)
-                SnapshotWebPreview(compact: true)
-                Capsule().fill(.primary).frame(width: 94, height: 4).padding(.bottom, 12)
-            }
-            .frame(width: 306, height: 660)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 36))
-            .overlay(RoundedRectangle(cornerRadius: 36).stroke(Color.primary.opacity(0.7), lineWidth: 7))
-            .shadow(color: .black.opacity(0.15), radius: 20, y: 12)
-            Spacer(minLength: 0)
-            Text("USB · 60 fps · 1170 × 2532").font(.system(size: 11)).foregroundStyle(.secondary).padding(.bottom, 18)
+    static func stack(_ orientation: NSUserInterfaceLayoutOrientation, _ views: [NSView],
+                      spacing: CGFloat = 12, padding: CGFloat = 0) -> NSStackView {
+        let stack = NSStackView(views: views)
+        stack.orientation = orientation
+        stack.distribution = .fill
+        stack.clipsToBounds = true
+        stack.alignment = orientation == .vertical ? .leading : .centerY
+        stack.spacing = spacing
+        stack.edgeInsets = NSEdgeInsets(top: padding, left: padding, bottom: padding, right: padding)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return stack
+    }
+
+    static func spacer() -> NSView {
+        let view = NSView()
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        return view
+    }
+
+    static func divider(vertical: Bool = false) -> NSView {
+        let view = SnapshotBackgroundView(color: .separatorColor)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        (vertical ? view.widthAnchor : view.heightAnchor).constraint(equalToConstant: 1).isActive = true
+        return view
+    }
+
+    static func pin(_ child: NSView, in parent: NSView, inset: CGFloat = 0) {
+        child.translatesAutoresizingMaskIntoConstraints = false
+        parent.addSubview(child)
+        NSLayoutConstraint.activate([
+            child.leadingAnchor.constraint(equalTo: parent.leadingAnchor, constant: inset),
+            child.trailingAnchor.constraint(equalTo: parent.trailingAnchor, constant: -inset),
+            child.topAnchor.constraint(equalTo: parent.topAnchor, constant: inset),
+            child.bottomAnchor.constraint(equalTo: parent.bottomAnchor, constant: -inset),
+        ])
+    }
+
+    static func card(_ child: NSView, tint: NSColor = .controlBackgroundColor, inset: CGFloat = 12) -> NSView {
+        let background = SnapshotBackgroundView(color: tint, radius: 10)
+        pin(child, in: background, inset: inset)
+        return background
+    }
+
+    static func expand(_ views: [NSView], in stack: NSStackView) {
+        for view in views {
+            view.widthAnchor.constraint(equalTo: stack.widthAnchor,
+                                        constant: -stack.edgeInsets.left - stack.edgeInsets.right).isActive = true
         }
     }
 }
 
-struct SnapshotRemoteDesktop: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            // Mirrors RemoteDesktopView's glass group tabs and standard actions.
-            HStack(spacing: 12) {
-                HStack(spacing: 8) {
-                    PilotSegmentedControl(
-                        "Remote Desktop Group",
-                        selection: .constant("Build lab"),
-                        options: ["Build lab", "Design studio"],
-                        title: { $0 },
-                        systemImage: { _ in "square.grid.2x2" },
-                        controlSize: .small
-                    )
-                    .fixedSize()
-                    Button {} label: { Image(systemName: "plus") }
-                        .compatGlassIconButton(controlSize: .small)
-                }
-                Spacer()
-                Button {} label: { Image(systemName: "pencil") }
-                    .compatGlassIconButton(controlSize: .small)
-                Text("4/4").foregroundStyle(.secondary)
-                Button {} label: { Label("Add Computer", systemImage: "plus") }
-                    .compatGlassButtonStyle().controlSize(.small)
-            }.font(.system(size: 12)).padding(.horizontal, 12).padding(.vertical, 8)
-            GeometryReader { geometry in
-                let size = NSSize(width: (geometry.size.width - 1) / 2, height: (geometry.size.height - 1) / 2)
-                Grid(horizontalSpacing: 1, verticalSpacing: 1) {
-                    GridRow {
-                        remote("studio-mini-01", size: size) {
-                            miniTerminal("Release build", lines: ["$ swift build -c release", "Compiling OrbitCore…",
-                                                                 "Linking Orbit.app", "✓ Build complete (12.4s)", "",
-                                                                 "$ swift test", "✓ 128 tests passed", "✓ Ready for distribution"])
-                        }
-                        remote("studio-mini-02", size: size) {
-                            GeometryReader { viewport in
-                                SnapshotWebPreview(compact: true)
-                                    .frame(width: 900, height: 620)
-                                    .scaleEffect(min(viewport.size.width / 900, viewport.size.height / 620), anchor: .topLeading)
-                            }
-                        }
-                    }
-                    GridRow {
-                        remote("linux-build-01", size: size) {
-                            miniTerminal("Container services", lines: ["$ docker compose up -d", "✓ orbit-web      Healthy",
-                                                                       "✓ orbit-api      Healthy", "✓ orbit-db       Healthy",
-                                                                       "✓ orbit-cache    Healthy", "",
-                                                                       "Listening on localhost:3000", "All services are ready."])
-                        }
-                        remote("studio-mini-03", size: size) {
-                            miniTerminal("Integration tests", lines: ["$ bun test --coverage", "✓ auth             24 passed",
-                                                                      "✓ projects         32 passed", "✓ activity         44 passed",
-                                                                      "✓ invitations      28 passed", "", "128 pass · 0 fail",
-                                                                      "Coverage 96.8%  (+2.1%)"])
-                        }
-                    }
-                }
-            }
+final class SnapshotBackgroundView: NSView {
+    let color: NSColor
+    let radius: CGFloat
+
+    init(color: NSColor, radius: CGFloat = 0) {
+        self.color = color
+        self.radius = radius
+        super.init(frame: .zero)
+        clipsToBounds = true
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        color.setFill()
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+}
+
+final class SnapshotWebPreview: NSView {
+    init(compact: Bool = false) {
+        super.init(frame: .zero)
+        let header = SnapshotUI.stack(.horizontal, [
+            SnapshotUI.symbol("circle.hexagongrid.fill", color: .systemIndigo),
+            SnapshotUI.label("orbit", size: compact ? 18 : 23, weight: .bold),
+            SnapshotUI.spacer(), SnapshotUI.label("Workspace", size: 11, color: .secondaryLabelColor),
+        ])
+        let metrics = SnapshotUI.stack(.horizontal, [
+            Self.metric("Projects", value: "12", compact: compact),
+            Self.metric("In progress", value: "8", compact: compact),
+        ])
+        metrics.distribution = .fillEqually
+        if !compact { metrics.addArrangedSubview(Self.metric("Completed", value: "24", compact: false)) }
+        let title = SnapshotUI.stack(.horizontal, [
+            SnapshotUI.label("Your projects", weight: .semibold), SnapshotUI.spacer(),
+            SnapshotUI.label("+ New project", size: 11, color: .systemIndigo),
+        ])
+        let colors: [NSColor] = [.systemIndigo, .systemOrange, .systemMint]
+        let names = ["Website refresh", "Mobile experience", "Public API"]
+        let details = ["Design review", "Ready for testing", "In development"]
+        var rows: [NSView] = [header, SnapshotUI.divider(), metrics, title]
+        for index in names.indices {
+            let row = SnapshotUI.stack(.horizontal, [
+                SnapshotUI.symbol(["globe", "iphone", "curlybraces"][index], color: colors[index], size: 24),
+                SnapshotUI.stack(.vertical, [
+                    SnapshotUI.label(names[index], weight: .semibold),
+                    SnapshotUI.label(details[index], size: 10, color: .secondaryLabelColor),
+                ], spacing: 4),
+                SnapshotUI.spacer(), SnapshotUI.label(["8/12", "14/16", "6/10"][index], size: 11),
+            ])
+            let progress = NSProgressIndicator()
+            progress.isIndeterminate = false
+            progress.minValue = 0
+            progress.maxValue = 1
+            progress.doubleValue = [0.67, 0.87, 0.6][index]
+            let content = SnapshotUI.stack(.vertical, [row, progress], spacing: 10)
+            SnapshotUI.expand([row, progress], in: content)
+            rows.append(SnapshotUI.card(content, tint: .labelColor.withAlphaComponent(0.035), inset: compact ? 10 : 18))
         }
+        if !compact {
+            rows += [SnapshotUI.label("Recent activity", weight: .semibold),
+                     SnapshotUI.label("✓ Sam completed the onboarding flow", size: 12, color: .secondaryLabelColor),
+                     SnapshotUI.label("◌ Morgan shared a new design review", size: 12, color: .secondaryLabelColor)]
+        }
+        rows.append(SnapshotUI.spacer())
+        let content = SnapshotUI.stack(.vertical, rows, spacing: compact ? 12 : 18, padding: compact ? 20 : 30)
+        SnapshotUI.expand(rows, in: content)
+        SnapshotUI.pin(content, in: self)
     }
 
-    private func remote<Content: View>(_ name: String, size: NSSize, @ViewBuilder content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Label(name, systemImage: "desktopcomputer")
-                Spacer()
-                Circle().fill(.green).frame(width: 6, height: 6)
-                Text("Connected").foregroundStyle(.secondary)
-            }.font(.system(size: 11)).padding(10).background(.quaternary.opacity(0.4))
-            content().frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
-        }.frame(width: size.width, height: size.height).clipped()
+    required init?(coder: NSCoder) { nil }
+
+    private static func metric(_ title: String, value: String, compact: Bool) -> NSView {
+        SnapshotUI.card(SnapshotUI.stack(.vertical, [
+            SnapshotUI.symbol("chart.bar", color: .systemIndigo),
+            SnapshotUI.label(value, size: compact ? 22 : 28, weight: .semibold),
+            SnapshotUI.label(title, size: 10),
+        ], spacing: 10), tint: .systemIndigo.withAlphaComponent(0.06))
+    }
+}
+
+final class SnapshotDevice: NSView {
+    init() {
+        super.init(frame: .zero)
+        let header = SnapshotUI.stack(.horizontal, [
+            SnapshotUI.label("iPhone · Orbit", size: 12), SnapshotUI.spacer(),
+            SnapshotUI.label("● Connected", size: 12, color: .systemGreen),
+        ], padding: 18)
+        let status = SnapshotUI.stack(.horizontal, [
+            SnapshotUI.label("9:41", size: 10, weight: .semibold), SnapshotUI.spacer(),
+            SnapshotUI.symbol("wifi", size: 11), SnapshotUI.symbol("battery.100percent", size: 14),
+        ], padding: 18)
+        let screen = SnapshotUI.stack(.vertical, [status, SnapshotWebPreview(compact: true)], spacing: 0)
+        SnapshotUI.expand(screen.arrangedSubviews, in: screen)
+        let phone = SnapshotUI.card(screen, tint: .textBackgroundColor, inset: 7)
+        phone.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        phone.heightAnchor.constraint(equalToConstant: 700).isActive = true
+        let center = SnapshotUI.stack(.horizontal, [SnapshotUI.spacer(), phone, SnapshotUI.spacer()])
+        center.distribution = .equalCentering
+        let content = SnapshotUI.stack(.vertical, [header, center, SnapshotUI.spacer()], spacing: 12)
+        SnapshotUI.expand([header, center], in: content)
+        SnapshotUI.pin(content, in: self)
     }
 
-    private func miniTerminal(_ title: String, lines: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.primary)
-            Divider()
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                Text(line.isEmpty ? " " : line).foregroundStyle(line.hasPrefix("✓") ? Color.green : .secondary)
+    required init?(coder: NSCoder) { nil }
+}
+
+final class SnapshotRemoteDesktop: NSView {
+    init() {
+        super.init(frame: .zero)
+        let header = SnapshotUI.stack(.horizontal, [
+            SnapshotUI.label("Development machines", size: 16, weight: .semibold), SnapshotUI.spacer(),
+            SnapshotUI.label("4 connected", size: 12, color: .secondaryLabelColor),
+        ], padding: 18)
+        let names = ["Build Mac", "Linux CI", "Design Mac", "Preview VM"]
+        var rows: [NSView] = [header]
+        for rowIndex in 0..<2 {
+            let cells = (0..<2).map { column -> NSView in
+                let index = rowIndex * 2 + column
+                let preview = SnapshotUI.stack(.vertical, [
+                    SnapshotUI.stack(.horizontal, [
+                        SnapshotUI.symbol(index.isMultiple(of: 2) ? "desktopcomputer" : "server.rack", color: .controlAccentColor),
+                        SnapshotUI.label(names[index], size: 13, weight: .semibold), SnapshotUI.spacer(),
+                        SnapshotUI.label("● Connected", size: 10, color: .systemGreen),
+                    ]),
+                    SnapshotUI.divider(),
+                    SnapshotUI.label(index.isMultiple(of: 2) ? "$ swift test" : "$ bun run build", size: 17, weight: .semibold, mono: true),
+                    SnapshotUI.label("~/Projects/orbit-web\n\nBuilding for production…\n\n✓ ProjectRoutesTests\n✓ ActivityEventsTests\n✓ TeamInvitationsTests\n\nAll checks passed.",
+                                     size: 12, color: .secondaryLabelColor, mono: true),
+                    SnapshotUI.spacer(),
+                    SnapshotUI.label(index.isMultiple(of: 2) ? "macOS · Apple silicon" : "Linux · x86_64", size: 10, color: .tertiaryLabelColor),
+                ], spacing: 8)
+                SnapshotUI.expand(preview.arrangedSubviews, in: preview)
+                return SnapshotUI.card(preview, tint: .textBackgroundColor)
             }
-            Spacer(minLength: 0)
-        }.font(.system(size: 12, design: .monospaced)).padding(22)
-            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Color(nsColor: .textBackgroundColor))
+            let row = SnapshotUI.stack(.horizontal, cells, spacing: 14)
+            row.distribution = .fillEqually
+            row.heightAnchor.constraint(equalToConstant: 380).isActive = true
+            rows.append(row)
+        }
+        rows.append(SnapshotUI.spacer())
+        let content = SnapshotUI.stack(.vertical, rows, spacing: 14, padding: 12)
+        SnapshotUI.expand(rows, in: content)
+        SnapshotUI.pin(content, in: self)
     }
+
+    required init?(coder: NSCoder) { nil }
+}
+
+final class SnapshotTerminal: NSView {
+    enum Variant { case agent, review, tests }
+
+    init(variant: Variant) {
+        super.init(frame: .zero)
+        let title = variant == .review ? "› Codex" : variant == .tests ? "$ swift test" : "✳ Claude Code"
+        var rows: [NSView] = [
+            SnapshotUI.label(title, size: 19, weight: .semibold, color: variant == .agent ? .systemOrange : .controlAccentColor, mono: true),
+            SnapshotUI.label(variant == .tests ? "~/Projects/atlas-api" : "~/Projects/orbit-web · feat/activity-timeline",
+                             size: 12, color: .secondaryLabelColor, mono: true),
+            SnapshotUI.divider(),
+        ]
+        if variant == .tests {
+            rows.append(SnapshotUI.label("Building for debugging…\nBuild complete! (1.42s)", size: 12, color: .secondaryLabelColor, mono: true))
+            for name in ["ProjectRoutes", "ActivityEvents", "TeamInvitations", "CursorPagination"] {
+                rows.append(SnapshotUI.label("✓ \(name)Tests\n  12 tests passed in 0.08 seconds", size: 12, color: .systemGreen, mono: true))
+            }
+            rows.append(SnapshotUI.label("Test Suite 'All tests' passed\nExecuted 60 tests, with 0 failures.", size: 12, mono: true))
+        } else {
+            rows += [
+                SnapshotUI.label(variant == .agent ? "❯ Build a project activity timeline.\n  Keep filters in sync with the URL." : "❯ Review the activity timeline and\n  add coverage for the new filters.", size: 12, weight: .medium, mono: true),
+                SnapshotUI.label("● Read \(variant == .agent ? "3" : "5") files", size: 12, color: .systemCyan, mono: true),
+                SnapshotUI.label("  src/components/ActivityTimeline.tsx\n  src/hooks/useProjectEvents.ts\n  tests/activity.test.ts", size: 12, color: .secondaryLabelColor, mono: true),
+                SnapshotUI.label(variant == .agent ? "● Updated ActivityTimeline.tsx" : "● Added tests/activity.test.ts", size: 12, color: .systemGreen, mono: true),
+                SnapshotUI.card(SnapshotUI.label("+ const events = useProjectEvents(id)\n+ const visible = filterEvents(events)\n+ return <Timeline events={visible} />", size: 12, color: .systemGreen, mono: true),
+                                tint: .systemGreen.withAlphaComponent(0.06)),
+                SnapshotUI.label("● bun test\n  ✓ project filters          12 passed\n  ✓ activity timeline        24 passed\n  ✓ keyboard navigation       8 passed", size: 12, color: .secondaryLabelColor, mono: true),
+                SnapshotUI.label("✓ All checks passed", size: 12, color: .systemGreen, mono: true),
+            ]
+        }
+        rows.append(SnapshotUI.spacer())
+        rows.append(SnapshotUI.card(SnapshotUI.label("❯ \(variant == .tests ? "_" : "Ask a follow-up…")",
+                                                   size: 12, color: .secondaryLabelColor, mono: true)))
+        let content = SnapshotUI.stack(.vertical, rows, spacing: 18, padding: 20)
+        SnapshotUI.expand(rows, in: content)
+        SnapshotUI.pin(content, in: self)
+    }
+
+    required init?(coder: NSCoder) { nil }
+}
+
+final class SnapshotCode: NSView {
+    init() {
+        super.init(frame: .zero)
+        let lines = ["import Foundation", "", "struct Project: Codable, Identifiable {", "    let id: UUID", "    var name: String",
+                     "    var status: Status", "    var updatedAt: Date", "", "    enum Status: String, Codable {",
+                     "        case planning", "        case inProgress", "        case complete", "    }", "}", "",
+                     "actor ProjectService {", "    private let database: Database", "", "    init(database: Database) {",
+                     "        self.database = database", "    }", "", "    func activity(", "        for projectID: UUID,",
+                     "        after cursor: String? = nil", "    ) async throws -> ActivityPage {", "        let events = try await database",
+                     "            .events(for: projectID)", "            .after(cursor)", "            .limit(50)", "            .fetch()", "",
+                     "        return ActivityPage(", "            events: events,", "            nextCursor: events.last?.cursor",
+                     "        )", "    }", "}"]
+        var rows = lines.enumerated().map { index, line -> NSView in
+            let number = SnapshotUI.label(String(index + 1), size: 12, color: .tertiaryLabelColor, mono: true)
+            number.alignment = .right
+            number.widthAnchor.constraint(equalToConstant: 26).isActive = true
+            let color: NSColor = line.contains("func") || line.contains("struct") || line.contains("actor") ? .systemPurple : .labelColor
+            return SnapshotUI.stack(.horizontal, [number, SnapshotUI.label(line.isEmpty ? " " : line, size: 12, color: color, mono: true), SnapshotUI.spacer()], spacing: 18)
+        }
+        rows.append(SnapshotUI.spacer())
+        let content = SnapshotUI.stack(.vertical, rows, spacing: 6, padding: 18)
+        SnapshotUI.expand(rows, in: content)
+        SnapshotUI.pin(content, in: self)
+    }
+
+    required init?(coder: NSCoder) { nil }
 }

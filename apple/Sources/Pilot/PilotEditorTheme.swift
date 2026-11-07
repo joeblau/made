@@ -1,16 +1,15 @@
 import AppKit
 import CodeEditSourceEditor
-import SwiftUI
 
 /// Syntax-highlighting themes for the editor pane, hand-tuned to read like
 /// Xcode's Default Dark/Light presets. CodeEditSourceEditor wants an
 /// `EditorTheme` of raw `NSColor` values (not SwiftUI `Color`), so everything
-/// here is built from sRGB literals and resolved per `ColorScheme`.
+/// here is built from sRGB literals and resolved per native appearance.
 @MainActor
 enum PilotEditorTheme {
     /// Picks the dark or light variant for the current appearance.
-    static func theme(for colorScheme: ColorScheme) -> EditorTheme {
-        colorScheme == .dark ? dark : light
+    static func theme(for appearance: NSAppearance) -> EditorTheme {
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
     }
 
     // MARK: - Dark (Xcode Default Dark Reminiscent)

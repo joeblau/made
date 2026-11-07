@@ -64,8 +64,9 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         }
     }
 
-    init(role: Role, displayName: String) {
-        let isTesting = ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
+    init(role: Role, displayName: String, usesEphemeralIdentity: Bool = false) {
+        let isTesting = usesEphemeralIdentity
+            || ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
         let identity = isTesting
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())

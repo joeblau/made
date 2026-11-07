@@ -1,4 +1,4 @@
-import SwiftUI
+import AppKit
 
 /// One pinned workspace on the empty-detail quick-jump row.
 ///
@@ -35,73 +35,5 @@ struct PinnedQuickJumpTarget: Identifiable, Equatable {
                     shortcutNumber: index + 1
                 )
             }
-    }
-}
-
-/// Quick-jump buttons for pinned workspaces, shown under the empty detail area.
-///
-/// An empty detail area is exactly when someone has not learned the ⌘-number
-/// shortcuts yet, so each button states its own. Renders nothing when nothing is
-/// pinned, leaving the plain "select from the sidebar" state untouched.
-struct PinnedQuickJumpRow: View {
-    let workspaces: [Workspace]
-    let onSelect: (UUID) -> Void
-
-    var body: some View {
-        let pinned = PinnedQuickJumpTarget.targets(in: workspaces)
-        if !pinned.isEmpty {
-            VStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Text("Pinned")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-
-                // Neighboring glass buttons render in one container (shared
-                // sampling, no glass on glass); spacing 0 keeps each capsule
-                // distinct rather than merging across the grid gap.
-                CompatGlassContainer(spacing: 0) {
-                    LazyVGrid(
-                        columns: [GridItem(
-                            .adaptive(minimum: 150, maximum: 240),
-                            spacing: LiquidGlassMetrics.Spacing.xSmall
-                        )],
-                        spacing: LiquidGlassMetrics.Spacing.xSmall
-                    ) {
-                        ForEach(pinned) { target in
-                            quickJumpButton(target)
-                        }
-                    }
-                }
-                .frame(maxWidth: 520)
-            }
-            .padding(.top, LiquidGlassMetrics.Spacing.xSmall)
-            .accessibilityIdentifier("workspace.pinned-quick-jump")
-        }
-    }
-
-    private func quickJumpButton(_ target: PinnedQuickJumpTarget) -> some View {
-        Button {
-            onSelect(target.id)
-        } label: {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Image(systemName: "pin.fill")
-                    .scaledFont(size: 9)
-                    .foregroundStyle(.secondary)
-                Text(target.name)
-                    .lineLimit(1)
-                Spacer(minLength: LiquidGlassMetrics.Spacing.xxSmall)
-                // The shortcut is the point of this row, so it
-                // stays at secondary contrast, not tertiary.
-                Text(verbatim: "⌘\(target.shortcutNumber)")
-                    .scaledFont(size: 10)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Capsule())
-        }
-        // Peer choices with no single primary (BTN-1): all
-        // secondary glass, capsule-shaped.
-        .compatGlassButtonStyle()
-        .buttonBorderShape(.capsule)
-        .help("Jump to \(target.name)")
     }
 }

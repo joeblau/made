@@ -15,7 +15,6 @@ enum SnapshotScene: String, CaseIterable, Codable {
     case actions
     case tasks
     case pullRequests = "pull-requests"
-    case files
     case usage
     case device
 
@@ -37,7 +36,6 @@ enum SnapshotScene: String, CaseIterable, Codable {
         case .actions: .actions
         case .tasks: .tasks
         case .pullRequests: .pullRequests
-        case .files: .filesystem
         case .usage: .usage
         default: nil
         }
@@ -67,7 +65,6 @@ enum SnapshotScene: String, CaseIterable, Codable {
         case .actions: "Workflow results alongside the project"
         case .tasks: "Project tasks alongside an agent session"
         case .pullRequests: "Pull requests ready for review"
-        case .files: "The project file tree beside the workspace"
         case .usage: "Provider plan usage and credit balances"
         case .device: "Orbit preview on the web and an iPhone"
         }

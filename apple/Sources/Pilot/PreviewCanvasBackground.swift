@@ -1,49 +1,48 @@
-import SwiftUI
+import AppKit
 
-/// A quiet, Photoshop-style canvas that distinguishes the preview workspace
-/// from true black pixels in a device or simulator screen.
-struct PreviewCanvasBackground: View {
+/// A quiet checkerboard distinguishes the preview stage from true black pixels
+/// in a device screen. Only damaged tiles are painted during live resize.
+@MainActor
+final class PreviewCanvasBackground: NSView {
     private static let tileSize: CGFloat = 12
-    private static let base = Color(
-        .sRGB,
-        red: 0.045,
-        green: 0.045,
-        blue: 0.050,
-        opacity: 1
-    )
-    private static let alternate = Color(
-        .sRGB,
-        red: 0.064,
-        green: 0.064,
-        blue: 0.072,
-        opacity: 1
-    )
+    private static let base = NSColor(srgbRed: 0.045, green: 0.045, blue: 0.050, alpha: 1)
+    private static let alternate = NSColor(srgbRed: 0.064, green: 0.064, blue: 0.072, alpha: 1)
 
-    var body: some View {
-        Canvas(opaque: true, rendersAsynchronously: false) { context, size in
-            let bounds = CGRect(origin: .zero, size: size)
-            context.fill(Path(bounds), with: .color(Self.base))
+    override var isOpaque: Bool { true }
 
-            let columns = Int(ceil(size.width / Self.tileSize))
-            let rows = Int(ceil(size.height / Self.tileSize))
-            var alternateTiles = Path()
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(false)
+    }
 
-            for row in 0..<rows {
-                for column in 0..<columns where (row + column).isMultiple(of: 2) {
-                    alternateTiles.addRect(
-                        CGRect(
-                            x: CGFloat(column) * Self.tileSize,
-                            y: CGFloat(row) * Self.tileSize,
-                            width: Self.tileSize,
-                            height: Self.tileSize
-                        )
-                    )
-                }
+    convenience init() { self.init(frame: .zero) }
+    required init?(coder: NSCoder) { nil }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: bounds).addClip()
+        Self.base.setFill()
+        let renderRect = bounds.intersection(dirtyRect)
+        guard !renderRect.isEmpty else { return }
+        renderRect.fill()
+        let firstColumn = Int(floor(renderRect.minX / Self.tileSize))
+        let lastColumn = Int(ceil(renderRect.maxX / Self.tileSize))
+        let firstRow = Int(floor(renderRect.minY / Self.tileSize))
+        let lastRow = Int(ceil(renderRect.maxY / Self.tileSize))
+        let tiles = NSBezierPath()
+        for row in firstRow..<lastRow {
+            for column in firstColumn..<lastColumn where (row + column).isMultiple(of: 2) {
+                tiles.appendRect(NSRect(
+                    x: CGFloat(column) * Self.tileSize,
+                    y: CGFloat(row) * Self.tileSize,
+                    width: Self.tileSize,
+                    height: Self.tileSize
+                ))
             }
-
-            context.fill(alternateTiles, with: .color(Self.alternate))
         }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        Self.alternate.setFill()
+        tiles.fill()
     }
 }

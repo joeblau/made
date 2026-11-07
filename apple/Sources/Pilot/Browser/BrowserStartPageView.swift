@@ -1,324 +1,271 @@
 import AppKit
-import SwiftUI
 
-struct BrowserStartPageView: View {
+@MainActor
+final class BrowserStartPageViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate {
     let rootPath: String?
     let onSelect: (LocalServer) -> Void
+    private let state: BrowserState
+    private let table = BrowserStartPageTable()
+    private let enginePicker = NSSegmentedControl()
+    private let shortcuts = BrowserNativeUI.label("S Safari · C Chrome · 1–9 Open", secondary: true)
+    private let heading = BrowserNativeUI.label("Local Servers")
+    private let zoomObservation = BrowserNativeObservation()
+    private let status = BrowserNativeUI.label("Looking for dev servers…", secondary: true)
+    private var servers: [LocalServer] = []
+    private var liveness: [Int: Bool] = [:]
+    private var task: Task<Void, Never>?
+    private var scanningDelayTask: Task<Void, Never>?
+    private var hasScanned = false
+    private var generation = 0
+    private var active = false
+    private var selected = false
 
-    @State private var servers: [LocalServer] = []
-    @State private var liveness: [Int: Bool] = [:]
-    @State private var hasScanned = false
-    @State private var keyHandler = StartPageKeyHandler()
-    /// Shown only when a scan outlasts a short grace period, so a fast scan
-    /// never flashes a loading row (MOT-5).
-    @State private var showsScanningState = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
-            Spacer(minLength: 0)
-            if hasScanned {
-                if servers.isEmpty {
-                    emptyState
-                        .padding(LiquidGlassMetrics.Spacing.large)
-                        .transition(.opacity)
-                } else {
-                    serverList
-                        .transition(.opacity)
-                }
-            } else if showsScanningState {
-                scanningState
-                    .padding(LiquidGlassMetrics.Spacing.large)
-                    .transition(.opacity)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        .animation(LiquidGlassMetrics.spring, value: hasScanned)
-        .animation(LiquidGlassMetrics.spring, value: servers)
-        .animation(LiquidGlassMetrics.stateChange, value: showsScanningState)
-        .task(id: rootPath ?? "") { await refresh() }
-        .task {
-            try? await Task.sleep(for: .milliseconds(400))
-            guard !Task.isCancelled else { return }
-            showsScanningState = true
-        }
-        .onAppear { syncKeyHandler() }
-        .onChange(of: servers) { syncKeyHandler() }
-        .onDisappear { keyHandler.remove() }
+    init(rootPath: String?, state: BrowserState, onSelect: @escaping (LocalServer) -> Void) {
+        self.rootPath = rootPath
+        self.state = state
+        self.onSelect = onSelect
+        super.init(nibName: nil, bundle: nil)
     }
 
-    private func syncKeyHandler() {
-        let snapshot = servers
-        keyHandler.onDigit = { digit in
-            guard digit >= 1, digit <= snapshot.count else { return false }
-            onSelect(snapshot[digit - 1])
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override func loadView() {
+        let stack = BrowserStartPageStack()
+        stack.onKey = { [weak self] in self?.handleKey($0) ?? false }
+        table.onKey = stack.onKey
+        stack.orientation = .vertical
+        stack.spacing = 8
+        stack.alignment = .leading
+        stack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        status.isHidden = !hasScanned
+        enginePicker.segmentCount = 2
+        enginePicker.setLabel("Safari", forSegment: 0)
+        enginePicker.setLabel("Chrome", forSegment: 1)
+        enginePicker.trackingMode = .selectOne
+        enginePicker.segmentStyle = .rounded
+        enginePicker.controlSize = .small
+        enginePicker.target = self
+        enginePicker.action = #selector(engineChanged)
+        enginePicker.setAccessibilityLabel("Browser engine")
+        enginePicker.setToolTip("Press S for Safari", forSegment: 0)
+        stack.addArrangedSubview(enginePicker)
+        stack.addArrangedSubview(shortcuts)
+        stack.addArrangedSubview(heading)
+        stack.addArrangedSubview(status)
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("server"))
+        column.resizingMask = .autoresizingMask
+        table.addTableColumn(column)
+        table.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
+        table.headerView = nil
+        table.rowHeight = 52
+        table.intercellSpacing = NSSize(width: 0, height: 2)
+        table.style = .fullWidth
+        table.dataSource = self
+        table.delegate = self
+        table.target = self
+        table.action = #selector(openSelected)
+        table.doubleAction = #selector(openSelected)
+        table.setAccessibilityLabel("Local development servers")
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.documentView = table
+        stack.addArrangedSubview(scroll)
+        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+        status.widthAnchor.constraint(equalTo: scroll.widthAnchor).isActive = true
+        heading.widthAnchor.constraint(equalTo: scroll.widthAnchor).isActive = true
+        shortcuts.widthAnchor.constraint(equalTo: scroll.widthAnchor).isActive = true
+        shortcuts.lineBreakMode = .byWordWrapping
+        shortcuts.maximumNumberOfLines = 0
+        enginePicker.widthAnchor.constraint(lessThanOrEqualTo: scroll.widthAnchor).isActive = true
+        enginePicker.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        status.maximumNumberOfLines = 0
+        status.lineBreakMode = .byWordWrapping
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
+        view = stack
+        synchronizeEngine()
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        zoomObservation.start { [weak self] in
+            guard let self else { return }
+            self.enginePicker.font = CockpitTypography.font(size: 12)
+            self.shortcuts.font = CockpitTypography.font(size: 11)
+            self.heading.font = CockpitTypography.font(size: 13, weight: .semibold)
+            self.status.font = CockpitTypography.font(size: 12)
+            self.table.rowHeight = 52 * CockpitUIZoomController.shared.factor
+            self.table.reloadData()
+        }
+    }
+
+    func setPresentation(isActive: Bool, isSelected: Bool) {
+        selected = isSelected
+        synchronizeEngine()
+        if isActive != active {
+            active = isActive
+            generation += 1
+            task?.cancel()
+            scanningDelayTask?.cancel()
+            task = nil
+            if isActive { refresh() }
+        }
+    }
+
+    func focusInput() { view.window?.makeFirstResponder(table) }
+
+    private func synchronizeEngine() {
+        enginePicker.selectedSegment = state.engine == .webKit ? 0 : 1
+        enginePicker.setEnabled(ChromiumBrowserCreationPolicy.isCreationEnabled, forSegment: 1)
+        enginePicker.setToolTip(ChromiumBrowserCreationPolicy.unavailableReason?.message ?? "Press C for Chrome", forSegment: 1)
+    }
+
+    @objc private func engineChanged() {
+        selectEngine(enginePicker.selectedSegment == 1 ? .chromium : .webKit)
+        focusInput()
+    }
+
+    private func selectEngine(_ engine: BrowserEngine) {
+        guard engine == .webKit || ChromiumBrowserCreationPolicy.isCreationEnabled else { synchronizeEngine(); return }
+        state.engine = engine
+        _ = state.modelContext?.saveReporting(operation: "Choosing browser engine")
+        synchronizeEngine()
+    }
+
+    private func handleKey(_ event: NSEvent) -> Bool {
+        guard active, selected, !view.isHiddenOrHasHiddenAncestor,
+              view.window?.attachedSheet == nil, !event.isARepeat,
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return false }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "s": selectEngine(.webKit); return true
+        case "c": selectEngine(.chromium); return true
+        default:
+            guard let digit = StartPageKeyHandler.digit(for: event), digit <= servers.count else { return false }
+            onSelect(servers[digit - 1])
             return true
         }
-        keyHandler.install()
     }
 
-    private var sectionHeader: some View {
-        Text("Local")
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-    }
+    func setActive(_ active: Bool) { setPresentation(isActive: active, isSelected: selected) }
 
-    private var scanningState: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            sectionHeader
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Looking for dev servers…")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    /// Left-aligned (TYPE-1) with a leading symbol and the next step, so the
-    /// empty start page explains itself instead of showing one gray line
-    /// (MOT-6).
-    private var emptyState: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            sectionHeader
-            HStack(alignment: .firstTextBaseline, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Image(systemName: "server.rack")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    Text("No dev servers found in this workspace.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    // Secondary, not tertiary: the next step is the useful
-                    // part, and tertiary text is under 2.5:1 (TYPE-3).
-                    Text("Start a local server, or enter a URL in the address bar.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private var serverList: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.small) {
-            sectionHeader
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.large)
-            // Scroll when the workspace has more dev servers than fit: an
-            // unbounded card list's ideal height outgrows the pane and
-            // pushes the whole pane layout down. The ScrollView spans the
-            // full pane width with the padding inside it, so the overlay
-            // scroll indicator at the edge never covers card content.
-            ScrollView {
-                VStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                    ForEach(Array(servers.enumerated()), id: \.element.id) { index, server in
-                        LocalServerCard(
-                            hotkey: index < 9 ? index + 1 : nil,
-                            server: server,
-                            isLive: liveness[server.port] ?? false,
-                            onTap: { onSelect(server) }
-                        )
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.large)
-                .padding(.bottom, LiquidGlassMetrics.Spacing.large)
-            }
-        }
-    }
-
-    private func refresh() async {
+    private func refresh() {
         let path = rootPath ?? ""
-        let discovered = await LocalServerScanner.scan(rootPath: path)
-        servers = discovered
-        hasScanned = true
-        await LocalServerLivenessMonitor.monitor(servers: discovered) { latest in
-            // The monitor re-probes every couple of seconds; only touch state
-            // when a port actually flips so a stable server list doesn't
-            // re-render the start page (and re-layout the pane) forever.
-            if latest != liveness { liveness = latest }
+        let currentGeneration = generation
+        if !hasScanned {
+            // Fast scans never flash a loading row.
+            scanningDelayTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(400))
+                guard !Task.isCancelled, self?.generation == currentGeneration else { return }
+                self?.status.isHidden = false
+            }
         }
+        task = Task { @MainActor [weak self] in
+            let discovered = await LocalServerScanner.scan(rootPath: path)
+            guard !Task.isCancelled, self?.generation == currentGeneration else { return }
+            self?.scanningDelayTask?.cancel()
+            self?.scanningDelayTask = nil
+            self?.hasScanned = true
+            self?.status.isHidden = false
+            self?.servers = discovered
+            self?.status.stringValue = discovered.isEmpty
+                ? "No dev servers found in this workspace. Start a local server, or enter a URL in the address bar."
+                : "Choose a server, or use its 1–9 shortcut."
+            self?.table.reloadData()
+            await LocalServerLivenessMonitor.monitor(servers: discovered) { [weak self] latest in
+                guard let self, self.generation == currentGeneration, self.liveness != latest else { return }
+                let changedRows = IndexSet(self.servers.indices.filter {
+                    self.liveness[self.servers[$0].port] != latest[self.servers[$0].port]
+                })
+                self.liveness = latest
+                self.table.reloadData(forRowIndexes: changedRows, columnIndexes: IndexSet(integer: 0))
+            }
+        }
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { servers.count }
+
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? { CockpitCardRowView() }
+
+    func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
+        guard servers.indices.contains(row) else { return nil }
+        let server = servers[row]
+        let name = BrowserNativeUI.label(server.name)
+        name.font = CockpitTypography.font(size: 13, weight: .medium)
+        name.lineBreakMode = .byTruncatingTail
+        name.maximumNumberOfLines = 1
+        let address = BrowserNativeUI.label(server.displayURL, secondary: true)
+        address.font = CockpitTypography.font(size: 11)
+        address.lineBreakMode = .byTruncatingHead
+        address.maximumNumberOfLines = 1
+        let labels = NSStackView(views: [name, address])
+        labels.orientation = .vertical
+        labels.alignment = .leading
+        labels.spacing = 2
+        for label in [name, address] {
+            label.widthAnchor.constraint(equalTo: labels.widthAnchor).isActive = true
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
+        labels.setHuggingPriority(.defaultLow, for: .horizontal)
+        let hotkey = BrowserNativeUI.label(row < 9 ? String(row + 1) : "", secondary: true)
+        hotkey.font = CockpitTypography.font(size: 12, weight: .semibold, monospaced: true)
+        hotkey.setContentHuggingPriority(.required, for: .horizontal)
+        hotkey.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        let live = liveness[server.port] == true
+        let indicator = NSImageView(image: NSImage(systemSymbolName: "circle.fill", accessibilityDescription: live ? "Listening" : "Not listening") ?? NSImage())
+        indicator.contentTintColor = live ? .systemGreen : .tertiaryLabelColor
+        indicator.widthAnchor.constraint(equalToConstant: 10).isActive = true
+        indicator.heightAnchor.constraint(equalToConstant: 10).isActive = true
+        let content = NSStackView(views: [labels, hotkey, indicator])
+        content.orientation = .horizontal
+        content.distribution = .fill
+        content.spacing = 8
+        content.edgeInsets = NSEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+        content.toolTip = server.url.absoluteString
+        content.setAccessibilityLabel("\(server.name), \(server.displayURL), \(live ? "listening" : "not listening")")
+        return content
+    }
+
+    @objc private func openSelected() {
+        guard servers.indices.contains(table.selectedRow) else { return }
+        onSelect(servers[table.selectedRow])
+    }
+
+    isolated deinit {
+        zoomObservation.stop()
+        task?.cancel()
+        scanningDelayTask?.cancel()
     }
 }
 
-private struct LocalServerCard: View {
-    let hotkey: Int?
-    let server: LocalServer
-    let isLive: Bool
-    let onTap: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
-
-    /// Content card, not a control: a quiet semantic fill, no glass (glass is
-    /// for the control layer) and no border (LAY-2).
-    private static let cornerRadius = LiquidGlassMetrics.Radius.card
-    private static let padding = LiquidGlassMetrics.Spacing.small
-
-    var body: some View {
-        Button(action: onTap) {
-            // A narrow pane drops the decorative preview instead of letting
-            // the card's minimum width overflow the pane, which clipped the
-            // "Local" header and the cards' leading edge (LAY-6). Narrower
-            // still, the hotkey badge goes too, so the URL keeps its port.
-            ViewThatFits(in: .horizontal) {
-                cardContent(showsThumbnail: true, showsHotkey: true)
-                cardContent(showsThumbnail: false, showsHotkey: true)
-                cardContent(showsThumbnail: false, showsHotkey: false)
-            }
-            .padding(Self.padding)
-            .background(
-                // `.quinary` is 253 on 255 in light mode, too faint to show
-                // the tap target; one step up reads as a card (BTN-5).
-                colorScheme == .light ? AnyShapeStyle(.fill.quaternary) : AnyShapeStyle(.fill.quinary),
-                in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-            )
-        }
-        // Whole-card tap target: hover wash plus press dim/scale (BTN-5).
-        .buttonStyle(.liquidGlassPressable(cornerRadius: Self.cornerRadius))
-    }
-
-    private func cardContent(showsThumbnail: Bool, showsHotkey: Bool) -> some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
-            if showsThumbnail {
-                BrowserPreviewThumbnail(
-                    name: server.name,
-                    displayURL: server.displayURL,
-                    // Concentric with the card: outer = inner + padding (LAY-4).
-                    cornerRadius: LiquidGlassMetrics.Radius.inner(
-                        outer: Self.cornerRadius,
-                        padding: Self.padding
-                    )
-                )
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(server.name)
-                    .scaledFont(size: 15, weight: .semibold)
-                    .lineLimit(1)
-                // Truncate from the front: "…host:5173" keeps the port, which
-                // is what tells two local servers apart.
-                Text(server.displayURL)
-                    .scaledFont(size: 13)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-            Spacer(minLength: 0)
-            if showsHotkey, let hotkey {
-                Text("\(hotkey)")
-                    .scaledFont(size: 12, weight: .semibold, design: .monospaced)
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 20, minHeight: 20)
-                    .padding(.horizontal, LiquidGlassMetrics.Spacing.xxSmall)
-                    .background(
-                        .fill.tertiary,
-                        in: RoundedRectangle(
-                            cornerRadius: LiquidGlassMetrics.Radius.control,
-                            style: .continuous
-                        )
-                    )
-            }
-            Circle()
-                .fill(isLive ? .green : Color(nsColor: .tertiaryLabelColor))
-                .frame(width: 8, height: 8)
-                .animation(LiquidGlassMetrics.stateChange, value: isLive)
-        }
+/// Shortcuts are scoped to the server list's responder chain. Address fields,
+/// terminals, inspectors and loaded web apps receive normal text input.
+@MainActor
+private final class BrowserStartPageStack: NSStackView {
+    var onKey: ((NSEvent) -> Bool)?
+    override var acceptsFirstResponder: Bool { true }
+    override func keyDown(with event: NSEvent) {
+        if onKey?(event) != true { super.keyDown(with: event) }
     }
 }
 
-/// A miniature page preview. It uses the text background color rather than
-/// hard-coded white so it follows dark mode instead of glaring (COL-2).
-private struct BrowserPreviewThumbnail: View {
-    let name: String
-    let displayURL: String
-    let cornerRadius: CGFloat
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                Circle().fill(.red).frame(width: 5, height: 5)
-                Circle().fill(.yellow).frame(width: 5, height: 5)
-                Circle().fill(.green).frame(width: 5, height: 5)
-                Spacer(minLength: 0)
-            }
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                Capsule().fill(Color.secondary.opacity(0.35)).frame(height: 3)
-                Capsule().fill(Color.secondary.opacity(0.25)).frame(width: 38, height: 3)
-            }
-            Spacer(minLength: 0)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(name)
-                    .scaledFont(size: 8, weight: .semibold)
-                    .lineLimit(1)
-                Text(displayURL)
-                    .scaledFont(size: 6.5)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(LiquidGlassMetrics.Spacing.xSmall)
-        .frame(width: 96, height: 60)
-        .background(
-            Color(nsColor: .textBackgroundColor),
-            in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        )
-        .foregroundStyle(.primary)
-        .accessibilityHidden(true)
+@MainActor
+private final class BrowserStartPageTable: NSTableView {
+    var onKey: ((NSEvent) -> Bool)?
+    override func keyDown(with event: NSEvent) {
+        if onKey?(event) != true { super.keyDown(with: event) }
     }
 }
 
-// StartPageKeyHandler — installs an `NSEvent` local key-down monitor while
-// the start page is on screen and forwards 1-9 keypresses to the matching
-// server card. Skipped while a text editor (address bar, terminal field
-// editor) is the first responder so typing isn't hijacked.
-//
-// AppKit's `addLocalMonitorForEvents` always invokes the handler on the
-// main thread, so the `@unchecked Sendable` annotation is safe — we just
-// avoid wrapping the class in `@MainActor` so the closure doesn't try to
-// cross isolation with a non-Sendable `NSEvent`.
-final class StartPageKeyHandler: @unchecked Sendable {
-    /// Returns `true` if the digit was consumed (start page navigated). When
-    /// `false`, the event is passed through so default handling fires (e.g.
-    /// system beep for an unbound key).
-    var onDigit: ((Int) -> Bool)?
-    private var monitor: Any?
-
-    func install() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            return self.handle(event)
-        }
-    }
-
-    func remove() {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-        }
-        monitor = nil
-    }
-
-    deinit {
-        if let monitor {
-            NSEvent.removeMonitor(monitor)
-        }
-    }
-
-    private func handle(_ event: NSEvent) -> NSEvent? {
-        if let responder = NSApp.keyWindow?.firstResponder, Self.isTextEditor(responder) {
-            return event
-        }
-        let blockedModifiers: NSEvent.ModifierFlags = [.command, .control, .option]
-        guard event.modifierFlags.intersection(blockedModifiers).isEmpty,
-              let digit = Self.digit(for: event) else { return event }
-
-        let handled = onDigit?(digit) ?? false
-        return handled ? nil : event
-    }
-
+@MainActor
+private enum StartPageKeyHandler {
     /// Maps a `keyDown` event to a 1...9 digit. Uses hardware `keyCode`
     /// first so layout/IME quirks (AZERTY top row, Dvorak, etc.) don't
     /// break the shortcut, then falls back to the character value to
     /// cover the numeric keypad.
-    private static func digit(for event: NSEvent) -> Int? {
+    static func digit(for event: NSEvent) -> Int? {
         // kVK_ANSI_1...9 keycodes in digit order. 5 and 6 are swapped
         // on the hardware (kVK_ANSI_5 = 23, kVK_ANSI_6 = 22).
         let digitRowKeyCodes: [UInt16] = [18, 19, 20, 21, 23, 22, 26, 28, 25]
@@ -334,20 +281,4 @@ final class StartPageKeyHandler: @unchecked Sendable {
         return nil
     }
 
-    /// Only treats *actual* text-input responders as "editors". The earlier
-    /// `className.contains("Text")` heuristic was too eager — SwiftUI and
-    /// AppKit ship plenty of internal responder classes with "Text" in the
-    /// name (text input contexts, toolbar item hosts, layout managers) that
-    /// can land as `firstResponder` even when nothing is actually being
-    /// typed into, which made every digit key fall through to default
-    /// handling.
-    private static func isTextEditor(_ responder: NSResponder) -> Bool {
-        // NSText is the abstract base of NSTextView; an NSTextField's field
-        // editor is an NSTextView, so this covers SwiftUI TextField focus.
-        if responder is NSText { return true }
-        // Ghostty's terminal view implements NSTextInputClient — keys typed
-        // into it should reach the terminal, not the start page.
-        if String(describing: type(of: responder)).contains("Ghostty") { return true }
-        return false
-    }
 }

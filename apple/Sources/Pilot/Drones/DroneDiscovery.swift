@@ -25,10 +25,15 @@ final class DroneDiscovery {
     private(set) var browseState: BrowseState = .idle
     var onCandidatesChange: ([DroneDiscoveryCandidate]) -> Void = { _ in }
 
+    @ObservationIgnored private let allowsNetwork: Bool
     @ObservationIgnored private var browser: NWBrowser?
 
+    init(allowsNetwork: Bool = true) {
+        self.allowsNetwork = allowsNetwork
+    }
+
     func start() {
-        guard browser == nil else { return }
+        guard allowsNetwork, browser == nil else { return }
         let parameters = NWParameters()
         parameters.includePeerToPeer = false
         let browser = NWBrowser(

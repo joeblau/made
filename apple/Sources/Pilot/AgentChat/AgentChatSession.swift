@@ -48,7 +48,13 @@ final class AgentChatSession {
     private(set) var transcript = AgentTranscript()
     private(set) var permissionQueue: [ACPPermissionRequest] = []
     private(set) var agentInfo: ACPAgentInfo?
-    private(set) var modelName: String?
+    private(set) var modelState: ACPModelState?
+    var modelName: String? { modelState?.currentName }
+    private(set) var isChangingModel = false
+    private(set) var attachments: [AgentChatAttachment] = []
+    private(set) var isImportingAttachments = false
+    private(set) var isPreparingPrompt = false
+    private(set) var composerError: String?
     private(set) var context: ACPContextUsage?
     private(set) var lastTurnUsage: NormalizedTurnUsage?
     private(set) var sessionUsage: NormalizedTurnUsage?
@@ -61,25 +67,30 @@ final class AgentChatSession {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let resolveLaunch: LaunchResolver
+    @ObservationIgnored private let attachmentDirectory: URL
+    @ObservationIgnored private var attachmentImportTask: Task<Void, Never>?
 
     init(
         paneID: UUID,
         agent: ChatAgent,
         workingDirectory: String?,
         defaults: UserDefaults = .standard,
-        resolveLaunch: @escaping LaunchResolver = AgentChatSession.loginShellLaunchResolver
+        resolveLaunch: @escaping LaunchResolver = AgentChatSession.loginShellLaunchResolver,
+        attachmentDirectory: URL? = nil
     ) {
         self.paneID = paneID
         self.agent = agent
         self.workingDirectory = workingDirectory
         self.defaults = defaults
         self.resolveLaunch = resolveLaunch
+        self.attachmentDirectory = attachmentDirectory ?? AgentChatAttachmentStore.directory(paneID: paneID)
     }
 
     var pendingPermission: ACPPermissionRequest? { permissionQueue.first }
 
     var canSend: Bool {
-        phase == .ready && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        phase == .ready && !isChangingModel && !isImportingAttachments && !isPreparingPrompt
+            && (!draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
     }
 
     // MARK: - Lifecycle
@@ -111,6 +122,8 @@ final class AgentChatSession {
     /// Stops the agent process. The transcript stays visible and the session
     /// ID stays saved, so `start()` can pick the conversation back up.
     func shutDown() {
+        isChangingModel = false
+        isPreparingPrompt = false
         generation += 1
         lifecycleTask?.cancel()
         eventTask?.cancel()
@@ -151,11 +164,118 @@ final class AgentChatSession {
 
     // MARK: - Conversation
 
+    func addAttachments(_ inputs: [AgentChatAttachmentInput]) {
+        guard !inputs.isEmpty else { return }
+        guard !isImportingAttachments && !isPreparingPrompt else { composerError = "Wait for the current attachments to finish loading."; return }
+        guard attachments.count + inputs.count <= AgentChatAttachmentStore.maximumCount else {
+            composerError = AgentChatAttachmentError.tooMany.localizedDescription
+            return
+        }
+        composerError = nil
+        isImportingAttachments = true
+        let directory = attachmentDirectory
+        let worker = Task.detached(priority: .userInitiated) {
+            var imported: [AgentChatAttachment] = []
+            var errors: [String] = []
+            for input in inputs {
+                do {
+                    try Task.checkCancellation()
+                    imported.append(try await AgentChatAttachmentStore.importMedia(input, into: directory))
+                } catch is CancellationError { break } catch { errors.append(error.localizedDescription) }
+            }
+            return (imported, errors)
+        }
+        attachmentImportTask = Task { [weak self] in
+            let (imported, errors) = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: { worker.cancel() }
+            guard let self, !Task.isCancelled else {
+                for item in imported { AgentChatAttachmentStore.remove(item) }
+                return
+            }
+            attachments.append(contentsOf: imported)
+            composerError = errors.isEmpty ? nil : errors.joined(separator: "\n")
+            isImportingAttachments = false
+            attachmentImportTask = nil
+        }
+    }
+
+    func removeAttachment(id: UUID) {
+        guard !isPreparingPrompt else { return }
+        guard let item = attachments.first(where: { $0.id == id }) else { return }
+        attachments.removeAll { $0.id == id }
+        composerError = nil
+        Task.detached { AgentChatAttachmentStore.remove(item) }
+    }
+
+    func clearComposerError() { composerError = nil }
+
+    func removeAttachmentStorage() {
+        attachmentImportTask?.cancel()
+        let pending = attachmentImportTask
+        attachmentImportTask = nil
+        let directory = attachmentDirectory
+        Task.detached {
+            await pending?.value
+            try? FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    func selectModel(_ id: String) {
+        guard phase == .ready, !isChangingModel, !isPreparingPrompt, let connection, let rootSessionID,
+              let state = modelState, id != state.currentID,
+              let request = state.request(sessionID: rootSessionID, modelID: id) else { return }
+        isChangingModel = true
+        composerError = nil
+        let generation = generation
+        Task {
+            do {
+                let result = try await connection.request(request.method, params: request.params, timeout: .seconds(30))
+                guard generation == self.generation else { return }
+                if let updated = ACPModelState(result) {
+                    modelState = updated
+                } else if state.selection == .legacy {
+                    modelState?.currentID = id
+                } else { composerError = "The agent did not confirm the selected model. Please try again." }
+            } catch {
+                guard generation == self.generation else { return }
+                composerError = "Could not change model: \(error.localizedDescription)"
+            }
+            if generation == self.generation { isChangingModel = false }
+        }
+    }
+
     func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard phase == .ready, !text.isEmpty, let connection, let rootSessionID else { return }
+        guard canSend, connection != nil, rootSessionID != nil else { return }
+        let media = attachments
+        guard !media.isEmpty else { submit(text: text, media: [], blocks: []); return }
+        let supportsImages = agentInfo?.supportsImages == true
+        let generation = generation
+        isPreparingPrompt = true
+        composerError = nil
+        Task {
+            do {
+                let blocks = try await Task.detached {
+                    try media.map { try $0.promptContent(supportsImages: supportsImages) }
+                }.value
+                guard generation == self.generation else { return }
+                isPreparingPrompt = false
+                submit(text: text, media: media, blocks: blocks)
+            } catch {
+                guard generation == self.generation else { return }
+                isPreparingPrompt = false
+                composerError = "Could not prepare attachments: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func submit(text: String, media: [AgentChatAttachment], blocks: [JSONValue]) {
+        guard phase == .ready, let connection, let rootSessionID else { return }
         draft = ""
-        transcript.appendUser(text)
+        attachments = []
+        composerError = nil
+        transcript.appendUser(text, attachments: media)
         phase = .prompting
         let generation = generation
         let agent = agent
@@ -163,7 +283,7 @@ final class AgentChatSession {
             do {
                 let result = try await connection.request(
                     ACP.Method.prompt,
-                    params: ACP.promptParams(sessionID: rootSessionID, text: text)
+                    params: ACP.promptParams(sessionID: rootSessionID, text: text, attachments: blocks)
                 )
                 guard generation == self.generation else { return }
                 recordUsage(result, agent: agent)
@@ -255,7 +375,7 @@ final class AgentChatSession {
                 sessionResult = result
             }
             guard generation == self.generation else { return }
-            modelName = sessionResult.flatMap(ACPSessionResult.modelName)
+            modelState = sessionResult.flatMap(ACPModelState.init)
             phase = .ready
         } catch let issue as ChatAgentSetupIssue {
             guard generation == self.generation else { return }
@@ -332,6 +452,14 @@ final class AgentChatSession {
             if notification.sessionID == rootSessionID, case .context(let usage) = notification.update {
                 context = usage
             }
+            if notification.sessionID == rootSessionID {
+                switch notification.update {
+                case .modelConfiguration(let state):
+                    if state != nil || modelState?.selection != .legacy { modelState = state }
+                case .currentModel(let id): modelState?.currentID = id
+                default: break
+                }
+            }
             transcript.apply(notification, rootSessionID: rootSessionID)
         case .request(let id, let method, let params):
             let connection = connection
@@ -375,7 +503,9 @@ final class AgentChatSession {
     private func resetConversationState() {
         transcript.reset()
         agentInfo = nil
-        modelName = nil
+        modelState = nil
+        isChangingModel = false
+        composerError = nil
         context = nil
         lastTurnUsage = nil
         sessionUsage = nil
@@ -451,6 +581,7 @@ enum AgentChatPaneStore {
 /// Owns each agent chat pane's session for the life of the pane, so switching
 /// workspaces or tabs never restarts an agent mid-turn.
 @MainActor
+@Observable
 final class AgentChatRegistry {
     static let shared = AgentChatRegistry()
 
@@ -476,7 +607,14 @@ final class AgentChatRegistry {
     /// Called when the pane is deleted: stops the agent and forgets the
     /// pane's preferences. The agent's own session history is left alone.
     func remove(paneID: UUID) {
-        sessions.removeValue(forKey: paneID)?.shutDown()
+        let session = sessions.removeValue(forKey: paneID)
+        session?.shutDown()
+        if let session {
+            session.removeAttachmentStorage()
+        } else {
+            let directory = AgentChatAttachmentStore.directory(paneID: paneID)
+            Task.detached { try? FileManager.default.removeItem(at: directory) }
+        }
         AgentChatPaneStore.remove(paneID: paneID)
     }
 }

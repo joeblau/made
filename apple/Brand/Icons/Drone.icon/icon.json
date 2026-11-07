@@ -1,0 +1,171 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.03529,0.05098,0.20784,1.00000",
+          "srgb:0.09804,0.10980,0.60784,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.01569,0.03137,0.11765,1.00000",
+          "srgb:0.06275,0.09020,0.27451,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
+    },
+    {
+      "appearance": "tinted",
+      "value": {
+        "solid": "srgb:0.13725,0.16471,0.23137,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "04 Nose sensor",
+      "layers": [
+        {
+          "name": "04 Amber sensor",
+          "image-name": "04 Amber sensor.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.1
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.22
+      }
+    },
+    {
+      "name": "03 Airframe glass",
+      "layers": [
+        {
+          "name": "03 Fuselage facets",
+          "image-name": "03 Fuselage facets.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.92941,0.94902,0.98039,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.18
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.12
+      }
+    },
+    {
+      "name": "02 Swept wings",
+      "layers": [
+        {
+          "name": "02 Wing and tail facets",
+          "image-name": "02 Wing and tail facets.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.77255,0.82353,0.90196,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.12
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "name": "01 Wingman structure",
+      "layers": [
+        {
+          "name": "01 Aircraft silhouette",
+          "image-name": "01 Aircraft silhouette.svg",
+          "fill": "none",
+          "glass": false,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.37647,0.44314,0.54510,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": false,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.12
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared",
+    "circles": [
+      "watchOS"
+    ]
+  }
+}

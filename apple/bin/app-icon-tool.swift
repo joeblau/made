@@ -192,6 +192,7 @@ private func renderedImage(from source: NSImage, pixels: Int, appearance: Appear
 }
 
 private func generate() throws {
+    try runIconPython("build-icon-layers.py")
     let master = try loadMaster()
     for output in outputs {
         let destination = appleRoot.appendingPathComponent(output.relativePath)
@@ -201,7 +202,7 @@ private func generate() throws {
         }
         try data.write(to: destination, options: .atomic)
     }
-    print("Generated \(outputs.count) app-icon images from \(masterURL.path)")
+    print("Generated native vector layers and \(outputs.count) legacy catalog images from \(masterURL.path)")
 }
 
 private func validateCatalog(at relativePath: String) throws {
@@ -280,10 +281,31 @@ private func validateSafeArea() throws {
 
 private func validateProjectSelection() throws {
     let project = try String(contentsOf: appleRoot.appendingPathComponent("project.yml"), encoding: .utf8)
-    let expectedOccurrences = 4
-    let occurrenceCount = project.components(separatedBy: "ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon").count - 1
-    guard occurrenceCount == expectedOccurrences else {
-        try fail("project.yml must explicitly select AppIcon for all four application targets")
+    guard let targetSection = project.range(of: "\ntargets:\n") else {
+        try fail("project.yml must define application targets")
+    }
+    let targets = String(project[targetSection.upperBound...])
+    let selections = [
+        "Pilot": "Cockpit", "Copilot": "Walkie", "Plotter": "Kneeboard", "Wingman Watch App": "AppIcon"
+    ]
+    for (target, icon) in selections {
+        let escaped = NSRegularExpression.escapedPattern(for: target)
+        let pattern = "(?ms)^  \(escaped):\\n(?:(?!^  \\S).)*"
+        guard let range = targets.range(of: pattern, options: .regularExpression),
+              targets[range].contains("ASSETCATALOG_COMPILER_APPICON_NAME: \(icon)\n") else {
+            try fail("project.yml must select \(icon) for \(target)")
+        }
+    }
+}
+
+private func runIconPython(_ script: String, arguments: [String] = []) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["python3", appleRoot.appendingPathComponent("bin/\(script)").path] + arguments
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        try fail("\(script) failed with status \(process.terminationStatus)")
     }
 }
 
@@ -294,7 +316,8 @@ private func validate() throws {
     for catalog in iOSCatalogs { try validateCatalog(at: catalog) }
     try validateCatalog(at: watchCatalog)
     try validateProjectSelection()
-    print("Validated app-icon dimensions, opacity, RGB color, safe area, appearances, and target selection")
+    try runIconPython("composer-icons.py", arguments: ["validate"])
+    print("Validated native layered icons, legacy catalog dimensions, opacity, RGB color, safe area, and target selection")
 }
 
 do {

@@ -1,9 +1,46 @@
-import Foundation
+import AppKit
 import XCTest
 @testable import Pilot
 
 @MainActor
 final class TerminalSessionTests: XCTestCase {
+    func testExplicitPaneFocusTargetsTheRequestedInput() {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let previous = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let target = NSTextField(frame: NSRect(x: 0, y: 120, width: 200, height: 24))
+        window.contentView?.addSubview(previous)
+        window.contentView?.addSubview(target)
+        XCTAssertTrue(window.makeFirstResponder(previous))
+
+        TerminalPaneInputFocus.move(to: target, in: window)
+
+        XCTAssertTrue(window.firstResponder === target.currentEditor())
+        XCTAssertFalse(window.firstResponder === previous)
+    }
+
+    func testDisconnectedDroneClearsPreviousInputWithoutConnecting() {
+        let pane = Pane(kind: .terminal, terminalDestination: .drone(droneID: UUID()))
+        let controller = DroneTerminalViewController(pane: pane)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 500, height: 300),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { controller.closePane(); window.close() }
+        window.contentView?.addSubview(controller.view)
+        let previous = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        window.contentView?.addSubview(previous)
+        XCTAssertTrue(window.makeFirstResponder(previous))
+
+        // Loading the native view leaves it disconnected; activation is the
+        // only operation that restores a session or starts network activity.
+        controller.focusPaneInput()
+
+        XCTAssertFalse(window.firstResponder === previous)
+        XCTAssertNil(window.firstResponder as? NSTextView)
+    }
+
     func testLegacyPaneDefaultsToLocalDestination() {
         let pane = Pane(kind: .terminal)
         XCTAssertEqual(pane.terminalDestination, .local)

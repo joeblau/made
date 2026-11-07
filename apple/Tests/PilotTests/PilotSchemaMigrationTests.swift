@@ -1,4 +1,5 @@
 import Foundation
+import CoreData
 import SwiftData
 import Testing
 @testable import Pilot
@@ -6,6 +7,51 @@ import Testing
 @Suite("Pilot schema migration", .serialized)
 @MainActor
 struct PilotSchemaMigrationTests {
+    @Test("Opening choices persist and restored panes skip the chooser")
+    func openingChoicesSurviveReopening() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pilot-opening-choices-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("choices.store")
+        let expected: [UUID: (PaneKind, BrowserEngine?, AndroidPaneTarget)] = try autoreleasepool {
+            let container = try makeCurrentContainer(at: storeURL)
+            let workspace = Workspace(name: "Opening choices")
+            workspace.panes = []
+            container.mainContext.insert(workspace)
+            var saved: [UUID: (PaneKind, BrowserEngine?, AndroidPaneTarget)] = [:]
+            for kind: PaneKind in [.terminal, .browser, .simulator, .android] {
+                for index in 0...1 {
+                    if kind == .browser && index == 1 && !ChromiumBrowserCreationPolicy.isCreationEnabled { continue }
+                    let pane = workspace.addPane(kind: kind, side: .right, chooseModeOnOpen: true)
+                    #expect(workspace.selectedPane?.isChoosingMode == true)
+                    let picker = CockpitPaneModePicker(pane: pane)
+                    picker.selectMode(at: index)
+                    #expect(!pane.isChoosingMode)
+                    if kind == .terminal { #expect(pane.kind == (index == 0 ? .terminal : .agentChat)) }
+                    if kind == .simulator { #expect(pane.kind == (index == 0 ? .simulator : .device)) }
+                    if kind == .android { #expect(pane.androidTarget == (index == 0 ? .simulator : .device)) }
+                    if kind == .browser { #expect(pane.browserState?.engine == (index == 0 ? .webKit : .chromium)) }
+                    saved[pane.id] = (pane.kind, pane.browserState?.engine, pane.androidTarget)
+                }
+            }
+            try container.mainContext.save()
+            return saved
+        }
+        try autoreleasepool {
+            let container = try makeCurrentContainer(at: storeURL)
+            let panes = try container.mainContext.fetch(FetchDescriptor<Pane>())
+            #expect(panes.count == expected.count)
+            for pane in panes {
+                let saved = try #require(expected[pane.id])
+                #expect(pane.kind == saved.0)
+                #expect(pane.browserState?.engine == saved.1)
+                #expect(pane.androidTarget == saved.2)
+                #expect(!pane.isChoosingMode)
+            }
+        }
+    }
+
     /// A plan that knows only V1 — how shipped builds stamped users' stores
     /// before `ExtensionWorkspaceLink` existed.
     private enum V1OnlyPlan: SchemaMigrationPlan {
@@ -16,6 +62,82 @@ struct PilotSchemaMigrationTests {
     private enum V2OnlyPlan: SchemaMigrationPlan {
         static var schemas: [any VersionedSchema.Type] { [PilotSchemaV2.self] }
         static var stages: [MigrationStage] { [] }
+    }
+
+    private enum V3OnlyPlan: SchemaMigrationPlan {
+        static var schemas: [any VersionedSchema.Type] { [PilotSchemaV3.self] }
+        static var stages: [MigrationStage] { [] }
+    }
+
+    @Test("Shipped V3 workspaces migrate to Android target persistence without losing their state")
+    func v3WorkspacesSurviveAndroidTargetMigration() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pilot-v3-migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("Pilot.store")
+        let paneID = UUID()
+        let workspaceID = UUID()
+        try autoreleasepool {
+            let schema = Schema(versionedSchema: PilotSchemaV3.self)
+            let container = try ModelContainer(for: schema, migrationPlan: V3OnlyPlan.self,
+                configurations: ModelConfiguration(schema: schema, url: storeURL))
+            let workspace = PilotSchemaV3.Workspace()
+            workspace.id = workspaceID
+            workspace.name = "Existing workspace"
+            let pane = PilotSchemaV3.Pane()
+            pane.id = paneID
+            pane.currentDirectory = "/projects/existing"
+            pane.terminalDestinationRaw = "drone"
+            pane.terminalRemoteSessionIDRaw = "existing-session"
+            pane.workspace = workspace
+            workspace.panes = [pane]
+            workspace.selectedPaneID = paneID
+            let extensionWorkspace = PilotSchemaV3.Workspace()
+            extensionWorkspace.name = "Existing extension"
+            let link = PilotSchemaV3.ExtensionWorkspaceLink()
+            link.sourceWorkspaceID = workspaceID
+            link.workspace = extensionWorkspace
+            let note = PilotSchemaV3.Note()
+            note.body = "Keep the existing note"
+            container.mainContext.insert(workspace)
+            container.mainContext.insert(link)
+            container.mainContext.insert(note)
+            try container.mainContext.save()
+        }
+
+        // This is the Pane checksum from the shipped store, independent of the
+        // current model. A fixture built from accidentally changed V3 types must fail.
+        let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(
+            ofType: NSSQLiteStoreType, at: storeURL)
+        let hashes = try #require(metadata[NSStoreModelVersionHashesKey] as? [String: Data])
+        #expect(hashes["Pane"]?.map { String(format: "%02x", $0) }.joined()
+            == "f6f412fb7a75bf3bbdaa4dbea51d886ae5fccc9b0cb261877e99583249c96cae")
+
+        try autoreleasepool {
+            let container = try makeCurrentContainer(at: storeURL)
+            let context = container.mainContext
+            let workspaces = try context.fetch(FetchDescriptor<Workspace>())
+            #expect(workspaces.count == 2)
+            let workspace = try #require(workspaces.first { $0.id == workspaceID })
+            #expect(workspace.name == "Existing workspace")
+            #expect(workspace.selectedPaneID == paneID)
+            let pane = try #require(workspace.panes.first)
+            #expect(pane.id == paneID)
+            #expect(pane.currentDirectory == "/projects/existing")
+            #expect(pane.terminalDestinationRaw == "drone")
+            #expect(pane.terminalRemoteSessionIDRaw == "existing-session")
+            #expect(pane.androidTargetRaw == nil)
+            let links = try context.fetch(FetchDescriptor<ExtensionWorkspaceLink>())
+            #expect(links.count == 1)
+            #expect(links.first?.sourceWorkspaceID == workspaceID)
+            #expect(links.first?.workspace?.name == "Existing extension")
+            #expect(try context.fetch(FetchDescriptor<Note>()).first?.body == "Keep the existing note")
+            pane.androidTargetRaw = "android-fixture"
+            try context.save()
+        }
+        let reopened = try makeCurrentContainer(at: storeURL)
+        #expect(try reopened.mainContext.fetch(FetchDescriptor<Pane>()).first?.androidTargetRaw == "android-fixture")
     }
 
     @Test("Notes written at V1 stay readable through the live class after migration")
@@ -53,7 +175,7 @@ struct PilotSchemaMigrationTests {
         #expect(notes.first?.displayTitle == "Keeps this note")
     }
 
-    @Test("V2 browsers default to WebKit in V3 and Chromium survives reopen")
+    @Test("V2 browsers default to WebKit after migration and Chromium survives reopen")
     func v2BrowserEngineMigratesAndChromiumRoundTrips() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -90,7 +212,7 @@ struct PilotSchemaMigrationTests {
         }
 
         try autoreleasepool {
-            let schema = Schema(versionedSchema: PilotSchemaV3.self)
+            let schema = Schema(versionedSchema: PilotSchemaV4.self)
             let container = try ModelContainer(
                 for: schema,
                 migrationPlan: PilotMigrationPlan.self,
@@ -107,7 +229,7 @@ struct PilotSchemaMigrationTests {
         }
 
         try autoreleasepool {
-            let schema = Schema(versionedSchema: PilotSchemaV3.self)
+            let schema = Schema(versionedSchema: PilotSchemaV4.self)
             let container = try ModelContainer(
                 for: schema,
                 migrationPlan: PilotMigrationPlan.self,
@@ -265,7 +387,7 @@ struct PilotSchemaMigrationTests {
     }
 
     private func makeCurrentContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: PilotSchemaV3.self)
+        let schema = Schema(versionedSchema: PilotSchemaV4.self)
         let configuration = ModelConfiguration(schema: schema, url: storeURL)
         return try ModelContainer(
             for: schema,

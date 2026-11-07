@@ -32,6 +32,9 @@ struct FileItem: Identifiable, Hashable {
 @Observable
 final class FileFinder {
     private(set) var results: [FileItem] = []
+    /// The normalized query that produced the currently published results.
+    /// Presentation uses this to distinguish a new ranking from an index refresh.
+    private(set) var resultsQuery = ""
     private(set) var isIndexing: Bool = false
 
     @ObservationIgnored private var index: [FileItem] = []
@@ -189,6 +192,7 @@ final class FileFinder {
         guard queryGeneration == generation else { return }
         filterTask = nil
         results = computed
+        resultsQuery = query
     }
 
     /// Filters/sorts `items` against `query` and returns the top slice. Pure and

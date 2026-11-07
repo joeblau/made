@@ -1,190 +1,95 @@
 import AVFoundation
 import AppKit
-import SwiftUI
+import Observation
 
-/// The iPhone Simulator pane. Switches on session status: a native picker, a
-/// "needs full Xcode" notice, a boot/start overlay, or the live, interactive
-/// framebuffer (just the device screen, touch/keyboard forwarded via HID).
-struct SimulatorPaneView: View {
-    let paneID: UUID
-    let isActive: Bool
-    let isSelected: Bool
+@MainActor
+final class SimulatorPaneViewController: CapturePaneController {
+    private let session: SimulatorSession
+    private var copiedCount: Int
+    private var captureHost: SimulatorCaptureHostView?
 
-    @State private var showsCopiedToast = false
-    @State private var toastDismissWorkItem: DispatchWorkItem?
-
-    var body: some View {
-        let session = SimulatorRegistry.shared.session(for: paneID)
-        ZStack {
-            PreviewCanvasBackground()
-            switch session.status {
-            case .streaming:
-                SimulatorCaptureContainerView(session: session)
-            case .picking:
-                SimulatorPickerView(session: session)
-            case .toolingMissing:
-                SimulatorToolingMissingView()
-            case .booting, .starting, .failed:
-                SimulatorStatusOverlay(session: session)
-            }
-
-            if showsCopiedToast {
-                DevicePaneToast(text: "Screenshot Copied", systemImage: "checkmark.circle.fill")
-                    .transition(.opacity.combined(with: .scale(scale: 0.85)))
-                    .allowsHitTesting(false)
-                    .zIndex(20)
-            }
-        }
-        .onChange(of: session.clipboardCopyCount) { _, _ in
-            flashCopiedToast()
-        }
-        .onAppear {
-            if session.status == .picking, session.devices.isEmpty {
-                session.refreshDevices()
-            }
-        }
-        .onDisappear {
-            toastDismissWorkItem?.cancel()
-        }
+    override init(pane: Pane) {
+        session = SimulatorRegistry.shared.session(for: pane.id)
+        copiedCount = session.clipboardCopyCount
+        super.init(pane: pane)
     }
 
-    private func flashCopiedToast() {
-        toastDismissWorkItem?.cancel()
-        withAnimation(.snappy(duration: 0.18)) {
-            showsCopiedToast = true
+    required init?(coder: NSCoder) { nil }
+
+    override func presentationDidChange(isActive: Bool) {
+        if isActive, session.status == .picking, session.devices.isEmpty { session.refreshDevices() }
+        captureHost?.isHidden = !isActive
+    }
+
+    override func renderPresentation() {
+        if copiedCount != session.clipboardCopyCount {
+            copiedCount = session.clipboardCopyCount
+            showToast("Screenshot Copied")
         }
-        let work = DispatchWorkItem {
-            withAnimation(.snappy(duration: 0.3)) {
-                showsCopiedToast = false
-            }
-        }
-        toastDismissWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
-    }
-}
-
-// MARK: - Picker
-
-private struct SimulatorPickerView: View {
-    let session: SimulatorSession
-
-    var body: some View {
-        VStack(spacing: 0) {
-            DevicePickerHeader(
-                title: "iPhone Simulator",
-                systemImage: "ipad.landscape.and.ipod",
-                isRefreshing: session.isRefreshing,
-                refreshHelp: "Re-scan installed simulators",
-                refresh: { session.refreshDevices() }
-            )
-
-            if session.devices.isEmpty {
-                emptyState
-            } else {
-                List {
-                    ForEach(session.devices) { group in
-                        Section(group.displayName) {
-                            ForEach(group.devices) { device in
-                                Button {
-                                    session.boot(device)
-                                } label: {
-                                    deviceRow(device)
-                                }
-                                .buttonStyle(.liquidGlassPressable)
-                            }
-                        }
-                    }
-                }
-                .listStyle(.inset)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private func deviceRow(_ device: SimDevice) -> some View {
-        DevicePickerRow(
-            systemImage: device.deviceTypeIdentifier?.contains("iPad") == true ? "ipad" : "iphone",
-            title: device.name,
-            badge: device.isBooted ? "Booted" : nil,
-            trailingSystemImage: device.isBooted ? "play.fill" : "chevron.right"
-        )
-    }
-
-    @ViewBuilder
-    private var emptyState: some View {
-        if session.isRefreshing {
-            DevicePaneMessage("Looking for simulators…", systemImage: "iphone", isLoading: true)
-        } else if let error = session.lastError {
-            DevicePaneMessage("Couldn't List Simulators", systemImage: "exclamationmark.triangle", detail: error)
-        } else {
-            DevicePaneMessage(
-                "No Simulators Found",
-                systemImage: "iphone",
-                detail: "Create one in Xcode (Window → Devices and Simulators), then Refresh."
-            )
-        }
-    }
-}
-
-// MARK: - Tooling missing
-
-private struct SimulatorToolingMissingView: View {
-    var body: some View {
-        // `onCanvas` also fixes the light-appearance contrast: this block
-        // previously skipped the dark scheme, so its secondary text rendered
-        // dark gray on the dark canvas (COL-2, TYPE-3).
-        DevicePaneMessage(
-            "Full Xcode Required",
-            systemImage: "wrench.and.screwdriver",
-            detail: "The iOS Simulator needs a full Xcode install (the Command Line Tools alone can't run simctl).\n\nInstall Xcode, then run:\nsudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
-            onCanvas: true
-        )
-    }
-}
-
-// MARK: - Status overlay (booting / starting / failed)
-
-private struct SimulatorStatusOverlay: View {
-    let session: SimulatorSession
-
-    var body: some View {
         switch session.status {
-        case .booting(let name):
-            DevicePaneMessage("Booting \(name)…", systemImage: "iphone", isLoading: true, onCanvas: true)
-        case .starting(let name):
-            DevicePaneMessage("Connecting to \(name)…", systemImage: "iphone", isLoading: true, onCanvas: true)
-        case .failed(let message):
-            DevicePaneMessage(
-                "Simulator Unavailable",
-                systemImage: "exclamationmark.triangle",
-                detail: message,
-                onCanvas: true
-            ) {
-                Button("Back to Devices") { session.chooseAnotherDevice() }
-                    .compatGlassProminentButtonStyle()
+        case .streaming:
+            present(key: "streaming") {
+                let host = captureHost ?? SimulatorCaptureHostView(session: session)
+                captureHost = host
+                return host
             }
-        default:
-            PreviewCanvasBackground()
+        case .picking:
+            renderPicker()
+        case .toolingMissing:
+            present(key: "tooling") {
+                CapturePaneMessage("Full Xcode Required", symbol: "wrench.and.screwdriver",
+                    detail: "The iOS Simulator needs a full Xcode install. Install Xcode, then run:\nsudo xcode-select -s /Applications/Xcode.app/Contents/Developer",
+                    dark: true, actions: [CapturePaneAction(title: "Refresh", symbol: "arrow.clockwise", perform: { [weak self] in self?.session.refreshDevices() })])
+            }
+        case .booting(let name):
+            present(key: "booting-\(name)") { CapturePaneMessage("Booting \(name)…", symbol: "iphone", loading: true, dark: true) }
+        case .starting(let name):
+            present(key: "starting-\(name)") { CapturePaneMessage("Connecting to \(name)…", symbol: "iphone", loading: true, dark: true) }
+        case .failed(let message):
+            present(key: "failed-\(message)") {
+                CapturePaneMessage("Simulator Unavailable", symbol: "exclamationmark.triangle", detail: message, dark: true,
+                    actions: [CapturePaneAction(title: "Back to Devices", symbol: "list.bullet", perform: { [weak self] in self?.session.chooseAnotherDevice() })])
+            }
         }
     }
-}
 
-// MARK: - Live capture host (interactive)
-
-private struct SimulatorCaptureContainerView: NSViewRepresentable {
-    let session: SimulatorSession
-
-    func makeNSView(context: Context) -> SimulatorCaptureHostView {
-        SimulatorCaptureHostView(session: session)
+    private func renderPicker() {
+        var items: [CapturePickerItem] = []
+        for group in session.devices {
+            items.append(CapturePickerItem(id: group.id, title: group.displayName, group: true))
+            for device in group.devices {
+                items.append(CapturePickerItem(id: device.id, title: device.name, detail: device.isBooted ? "Booted" : nil,
+                    symbol: device.deviceTypeIdentifier?.contains("iPad") == true ? "ipad" : "iphone",
+                    select: { [weak self] in self?.session.boot(device) }))
+            }
+        }
+        let message: NSView?
+        if !items.isEmpty {
+            message = nil
+        } else if session.isRefreshing {
+            message = CapturePaneMessage("Looking for simulators…", symbol: "iphone", loading: true)
+        } else if let error = session.lastError {
+            message = CapturePaneMessage("Couldn't List Simulators", symbol: "exclamationmark.triangle", detail: error)
+        } else {
+            message = CapturePaneMessage("No Simulators Found", symbol: "iphone", detail: "Create one in Xcode (Window → Devices and Simulators), then Refresh.")
+        }
+        presentPicker(title: "iPhone Simulator", refreshing: session.isRefreshing,
+            refresh: { [weak self] in self?.session.refreshDevices() }, items: items, message: message)
     }
 
-    func updateNSView(_ nsView: SimulatorCaptureHostView, context: Context) {}
+    override func toolbarActions() -> [CapturePaneAction] {
+        let streaming = session.status == .streaming
+        return [
+            CapturePaneAction(title: session.isRecording ? "Stop Recording" : "Record Screen", symbol: session.isRecording ? "stop.circle.fill" : "record.circle", enabled: streaming || session.isRecording, perform: { [weak self] in self?.session.toggleRecording() }),
+            CapturePaneAction(title: "Home", symbol: "square.grid.3x3.fill", enabled: streaming, perform: { [weak self] in self?.session.goHome() }),
+            CapturePaneAction(title: "Take Screenshot", symbol: "camera.viewfinder", enabled: streaming, perform: { [weak self] in self?.session.takeScreenshot() }),
+            CapturePaneAction(title: "Copy Screenshot", symbol: "clipboard", enabled: streaming, perform: { [weak self] in self?.session.copyScreenshotToClipboard() }),
+            CapturePaneAction(title: "Choose Device", symbol: "list.bullet", perform: { [weak self] in self?.session.chooseAnotherDevice() }),
+            CapturePaneAction(title: "Shutdown Simulator", symbol: "power", enabled: session.bootedUDID != nil, perform: { [weak self] in self?.session.shutdownSimulator() }),
+        ]
+    }
 }
 
-/// Hosts the session's display layer and forwards pointer/keyboard input to the
-/// simulator as normalized 0…1 coordinates (via HID). Flipped so the local
-/// origin is top-left, matching the framebuffer.
 final class SimulatorCaptureHostView: NSView {
     private let session: SimulatorSession
     private var pressed = false
@@ -221,11 +126,6 @@ final class SimulatorCaptureHostView: NSView {
     override func layout() {
         super.layout()
         session.displayLayer.frame = bounds
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        if window != nil { window?.makeFirstResponder(self) }
     }
 
     // MARK: coordinate mapping

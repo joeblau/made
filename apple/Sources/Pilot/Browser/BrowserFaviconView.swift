@@ -1,5 +1,5 @@
 import AppKit
-import SwiftUI
+import Observation
 
 /// SwiftData's transient fields do not publish changes. Keep favicon updates
 /// in an observable runtime object so an already collapsed tab can refresh.
@@ -9,7 +9,7 @@ final class BrowserFaviconMetadata {
     var urls: [String] = []
 }
 
-/// Runtime-only state for one `BrowserState`, observable by SwiftUI. See
+/// Runtime-only state for one `BrowserState`, observed by native controllers. See
 /// `BrowserState.runtime`.
 @Observable
 final class BrowserRuntimeState {
@@ -54,49 +54,64 @@ final class BrowserRuntimeState {
     var downloadProgress: Double? = nil
 }
 
-struct BrowserFaviconView: View {
+@MainActor
+final class BrowserFaviconView: NSImageView {
     let state: BrowserState
+    private let observation = BrowserNativeObservation()
+    private var task: Task<Void, Never>?
+    private var requestedURLs: [URL] = []
+    private var generation = 0
 
-    @State private var loadedURLs: [URL] = []
-    @State private var image: NSImage?
-
-    private var candidateURLs: [URL] {
-        BrowserFaviconURLCandidates.urls(
-            pageURL: state.faviconPageURL,
-            advertisedURLs: state.faviconURLs
-        )
+    init(state: BrowserState) {
+        self.state = state
+        super.init(frame: NSRect(x: 0, y: 0, width: 16, height: 16))
+        imageScaling = .scaleProportionallyUpOrDown
+        setAccessibilityElement(false)
+        image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
     }
 
-    var body: some View {
-        let urls = candidateURLs
-        Group {
-            if loadedURLs == urls, let image {
-                Image(nsImage: image)
-                    .renderingMode(.original)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                Image(systemName: "globe")
-                    .resizable()
-                    .scaledToFit()
-            }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+    override var intrinsicContentSize: NSSize { NSSize(width: 16, height: 16) }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window == nil {
+            observation.stop()
+            task?.cancel()
+            task = nil
+            requestedURLs = []
+            generation += 1
+        } else {
+            observation.start { [weak self] in self?.refresh() }
         }
-        .frame(width: 16, height: 16)
-        .accessibilityHidden(true)
-        .task(id: urls) {
-            image = nil
-            loadedURLs = []
+    }
+
+    private func refresh() {
+        let urls = BrowserFaviconURLCandidates.urls(pageURL: state.faviconPageURL, advertisedURLs: state.faviconURLs)
+        guard urls != requestedURLs else { return }
+        requestedURLs = urls
+        generation += 1
+        let generation = generation
+        task?.cancel()
+        image = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)
+        task = Task { @MainActor [weak self] in
             for url in urls {
                 guard !Task.isCancelled else { return }
                 let data = await BrowserFaviconCache.shared.data(for: url)
-                guard !Task.isCancelled else { return }
-                if let data, let favicon = NSImage(data: data), favicon.isValid {
-                    image = favicon
-                    loadedURLs = urls
+                guard !Task.isCancelled, self?.generation == generation else { return }
+                if let data, let image = NSImage(data: data), image.isValid {
+                    self?.image = image
                     return
                 }
             }
         }
+    }
+
+    isolated deinit {
+        observation.stop()
+        task?.cancel()
     }
 }
 

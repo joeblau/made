@@ -1,0 +1,231 @@
+{
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.03529,0.05098,0.20784,1.00000",
+          "srgb:0.09804,0.10980,0.60784,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.01569,0.03137,0.11765,1.00000",
+          "srgb:0.06275,0.09020,0.27451,1.00000"
+        ],
+        "orientation": {
+          "start": {
+            "x": 0.5,
+            "y": 0
+          },
+          "stop": {
+            "x": 0.5,
+            "y": 1
+          }
+        }
+      }
+    },
+    {
+      "appearance": "tinted",
+      "value": {
+        "solid": "srgb:0.13725,0.16471,0.23137,1.00000"
+      }
+    }
+  ],
+  "groups": [
+    {
+      "name": "04 Flight signals",
+      "layers": [
+        {
+          "name": "08 Control stick",
+          "image-name": "08 Control stick.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.95294,0.96078,0.97647,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "name": "07 Heading chevron",
+          "image-name": "07 Heading chevron.svg",
+          "fill": "none",
+          "glass": false,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "name": "06 Horizon",
+          "image-name": "06 Horizon.svg",
+          "fill": "none",
+          "glass": false,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:1.00000,1.00000,1.00000,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.1
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.08
+      }
+    },
+    {
+      "name": "03 Flight glass",
+      "layers": [
+        {
+          "name": "05 HUD glass",
+          "image-name": "05 HUD glass.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 0.84,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.77647,0.83922,0.91373,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "name": "04 Instrument glass",
+          "image-name": "04 Instrument glass.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.91373,0.93333,0.96863,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.16
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.34
+      }
+    },
+    {
+      "name": "02 Faceted airframe",
+      "layers": [
+        {
+          "name": "03 Canopy and frame facets",
+          "image-name": "03 Canopy and frame facets.svg",
+          "fill": "none",
+          "glass": true,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.74510,0.79608,0.86667,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.1
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    },
+    {
+      "name": "01 Structure",
+      "layers": [
+        {
+          "name": "02 Canopy field",
+          "image-name": "02 Canopy field.svg",
+          "fill": "none",
+          "glass": false,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.44706,0.49804,0.59608,1.00000"
+              }
+            }
+          ]
+        },
+        {
+          "name": "01 Cockpit shell",
+          "image-name": "01 Cockpit shell.svg",
+          "fill": "none",
+          "glass": false,
+          "opacity": 1,
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "srgb:0.20392,0.23137,0.31373,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": false,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.08
+      },
+      "translucency": {
+        "enabled": false,
+        "value": 0
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared",
+    "circles": [
+      "watchOS"
+    ]
+  }
+}

@@ -119,6 +119,7 @@ final class AndroidDeviceSession {
         guard self.target != target else { return }
         self.target = target
         devices = devices.filter(target.includes)
+        bootableAVDs = []
         invalidateAVDSerialCache()
         if status == .picking {
             refreshDevices()
@@ -154,6 +155,10 @@ final class AndroidDeviceSession {
         Task {
             let scan = await Self.scan(target: target, cache: cache)
             self.isRefreshing = false
+            guard self.target == target else {
+                self.refreshDevices()
+                return
+            }
             var merged = scan.cache
             if generation != self.avdCacheGeneration {
                 // The serial cache was invalidated mid-scan; names carried

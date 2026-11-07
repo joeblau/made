@@ -1,5 +1,4 @@
 import Foundation
-import SwiftUI
 
 /// Lifecycle state as reported by `/containers/json`. Docker's vocabulary is
 /// fixed; anything new maps to `.unknown` rather than failing the decode, so one
@@ -25,16 +24,6 @@ enum DockerContainerState: String, Sendable, CaseIterable {
         }
     }
 
-    /// Status dot colour: green for healthy, amber for transient, grey for
-    /// stopped, red for a container that died on its own.
-    var indicatorColor: Color {
-        switch self {
-        case .running: .green
-        case .restarting, .removing, .paused: .orange
-        case .dead: .red
-        case .created, .exited, .unknown: .secondary
-        }
-    }
 }
 
 /// One published or exposed port.

@@ -1,721 +1,590 @@
-import SwiftUI
+import AppKit
+import Observation
 
-struct RunnersView: View {
-    @Bindable var store: RunnersStore
-    @State private var showsAddScope = false
-    @State private var editingRunner: GitHubRunner?
-    @State private var hoveredScopeID: RunnerScope.ID?
-    @AppStorage("runners.layout") private var layout: RunnerLayout = .fleet
+@MainActor
+final class RunnersViewController: NSViewController, CockpitPanePresenting, CockpitPageToolbarProviding, NSSearchFieldDelegate,
+                                   NSCollectionViewDataSource, NSCollectionViewDelegateFlowLayout {
+    let store: RunnersStore
+    private let isLive: Bool
+    private let defaults: UserDefaults
+    private let observation = RRObservation()
+    private let tabs = NSStackView()
+    private lazy var tabStrip = CockpitTabStrip(stack: tabs)
+    private let summary = RRUI.label("", size: 13, weight: .semibold)
+    private let updated = RRUI.label("", size: 11, color: .secondaryLabelColor)
+    private let error = RRUI.label("", size: 12, color: .systemOrange)
+    private let search = NSSearchField(string: "")
+    private let layoutPicker = NSSegmentedControl(labels: ["3D Fleet", "Compact", "Cards"], trackingMode: .selectOne, target: nil, action: nil)
+    private let refresh = RRButton("Refresh", symbol: "arrow.clockwise", action: {})
+    private let toolbar = NSStackView()
+    private let filters = CockpitToolbarGroups()
+    var pageToolbarView: NSView { loadViewIfNeeded(); return filters }
+    private let toolbarSpacer = RRUI.spacer()
+    private let body = NSView()
+    private let collection = NSCollectionView()
+    private let collectionScroll = NSScrollView()
+    private let collectionLayout = NSCollectionViewFlowLayout()
+    private lazy var fleet = RunnerFleetViewController()
+    private var visibleRunners: [GitHubRunner] = []
+    private var rowSignatures: [String] = []
+    private var active = false
+    private var refreshTask: Task<Void, Never>?
+    private var footnoteTimer: Timer?
+    private var previousScope: String?
+    private var currentContent: NSView?
+    private var layout: RunnerLayout
+    private var zoomObservation: RRZoomObservation?
 
-    var body: some View {
-        VStack(spacing: 0) {
-            // With no sources the empty state's "Add Runner Source" is the one
-            // action (BTN-1); a lone "+" chip strip above it would repeat it.
-            if !store.scopes.isEmpty {
-                tabBar
-            }
-            if store.selectedScope != nil {
-                summaryBar
-                if let error = store.snapshot.error { errorBanner(error) }
-                content
-            } else {
-                ContentUnavailableView {
-                    Label("Your Runner Fleet", systemImage: "server.rack")
-                } description: {
-                    Text("Add an enterprise, organization, or repository to see its self-hosted runners.")
-                } actions: {
-                    Button("Add Runner Source", systemImage: "plus") { showsAddScope = true }
-                        .compatGlassProminentButtonStyle()
+    init(store: RunnersStore, defaults: UserDefaults = .standard, isLive: Bool = true) {
+        self.store = store
+        self.defaults = defaults
+        self.isLive = isLive
+        layout = RunnerLayout(rawValue: defaults.string(forKey: "runners.layout") ?? "") ?? .fleet
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+
+    isolated deinit {
+        refreshTask?.cancel()
+        footnoteTimer?.invalidate()
+    }
+
+    override func loadView() {
+        view = RRBackgroundView()
+        tabs.orientation = .horizontal
+        tabs.alignment = .centerY
+        tabs.spacing = 6
+        tabStrip.setAccessibilityIdentifier("runners.sources")
+        search.placeholderString = "Filter runners"
+        search.setAccessibilityLabel("Filter runners")
+        search.delegate = self
+        search.sendsSearchStringImmediately = true
+        search.widthAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
+        search.widthAnchor.constraint(lessThanOrEqualToConstant: 240).isActive = true
+        let preferredSearchWidth = search.widthAnchor.constraint(equalToConstant: 180)
+        preferredSearchWidth.priority = .defaultHigh
+        preferredSearchWidth.isActive = true
+        layoutPicker.target = self
+        layoutPicker.action = #selector(changeLayout)
+        layoutPicker.selectedSegment = RunnerLayout.allCases.firstIndex(of: layout) ?? 0
+        layoutPicker.setAccessibilityLabel("Runner layout")
+        refresh.perform = { [weak self] in self?.refreshSelected() }
+        filters.setAccessibilityIdentifier("runners.toolbar-controls")
+        layoutPicker.segmentStyle = .capsule
+        layoutPicker.controlSize = .small
+        refresh.title = ""
+        refresh.imagePosition = .imageOnly
+        refresh.isBordered = false
+        refresh.toolTip = "Refresh"
+        refresh.setAccessibilityLabel("Refresh")
+        filters.setGroups([[search], [layoutPicker], [refresh]])
+        toolbar.orientation = .horizontal
+        toolbar.alignment = .centerY
+        toolbar.spacing = 10
+        toolbar.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+        for control in [summary, toolbarSpacer] { toolbar.addArrangedSubview(control) }
+        let footer = RRUI.stack([updated], axis: .horizontal)
+        footer.edgeInsets = NSEdgeInsets(top: 4, left: 12, bottom: 8, right: 12)
+        let stack = RRUI.stack([tabStrip, toolbar, error, body, footer], spacing: 8)
+        RRUI.fillWidth(stack)
+        RRUI.pin(stack, to: view)
+        collection.collectionViewLayout = collectionLayout
+        collection.dataSource = self
+        collection.delegate = self
+        collection.isSelectable = true
+        collection.backgroundColors = [.clear]
+        collection.register(RunnerCollectionItem.self, forItemWithIdentifier: RunnerCollectionItem.identifier)
+        collectionLayout.minimumInteritemSpacing = 12
+        collectionLayout.minimumLineSpacing = 12
+        collectionLayout.sectionInset = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        collectionScroll.documentView = collection
+        collectionScroll.hasVerticalScroller = true
+        collectionScroll.drawsBackground = false
+        zoomObservation = RRZoomObservation { [weak self] in
+            guard let self else { return }
+            RRUI.zoomControls(in: self.view)
+            RRUI.zoomControls(in: self.filters)
+            self.tabStrip.needsLayout = true
+            self.updateCollectionSize()
+        }
+        render()
+    }
+
+    override func viewWillAppear() { super.viewWillAppear(); updatePresentation(isActive: true, isSelected: true) }
+    override func viewDidDisappear() { super.viewDidDisappear(); updatePresentation(isActive: false, isSelected: false) }
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        updateCollectionSize()
+    }
+
+    func updatePresentation(isActive: Bool, isSelected: Bool) {
+        if isActive { _ = view }
+        guard active != isActive else { return }
+        active = isActive
+        guard isViewLoaded else { return }
+        if active {
+            render()
+            observation.start(tracking: { [weak self] in
+                guard let self else { return }
+                _ = self.store.scopes
+                _ = self.store.selectedScopeID
+                _ = self.store.snapshots
+                _ = self.store.refreshing
+                _ = self.store.presentations
+                _ = self.store.searchText
+            }, changed: { [weak self] in self?.render() })
+            refreshSelected()
+            footnoteTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.active else { return }
+                    self.updateFootnote()
                 }
-                .legibleSecondaryHierarchy()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-        .sheet(isPresented: $showsAddScope) {
-            AddRunnerScopeSheet { scope in
-                store.add(scope)
-                Task { await store.refresh(scope) }
-            }
-        }
-        .sheet(item: $editingRunner) { runner in
-            if let scope = store.selectedScope {
-                RunnerDetailsSheet(runner: runner, presentation: store.presentation(for: runner)) { presentation in
-                    store.savePresentation(presentation, runner: runner, scope: scope)
-                }
-            }
-        }
-        .task { await store.refreshSelected() }
-        .onChange(of: store.selectedScopeID) {
-            Task { await store.refreshSelected() }
-        }
-    }
-
-    /// Scope tabs are compact Liquid Glass chips; the selected tab carries the
-    /// accent tint as a state signal (COL-4). They stay separate buttons rather
-    /// than a segmented control because each has a context menu and the strip scrolls.
-    private var tabBar: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-            GlassChipScroller {
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    ForEach(store.scopes) { scope in
-                        scopeTab(scope)
-                    }
-                    Button { showsAddScope = true } label: {
-                        Label("Add a runner source", systemImage: "plus")
-                    }
-                    .compatGlassIconButton(controlSize: .small)
-                    .help("Add an enterprise, organization, or repository")
-                }
-                .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-                .animation(LiquidGlassMetrics.spring, value: store.selectedScopeID)
-            }
-        }
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-    }
-
-    private func scopeTab(_ scope: RunnerScope) -> some View {
-        let isSelected = store.selectedScopeID == scope.id
-        let isHovering = hoveredScopeID == scope.id
-        return Button {
-            store.selectedScopeID = scope.id
-            store.searchText = ""
-        } label: {
-            Label(scope.name, systemImage: scope.kind.symbol)
-                .font(.subheadline.weight(.medium))
-                .padding(.leading, isSelected ? 12 : 0)
-        }
-        .buttonStyle(.liquidGlassChip(isSelected: isSelected, compact: true))
-        .overlay(alignment: .leading) {
-            if isSelected {
-                Button { store.remove(scope) } label: {
-                    Image(systemName: "xmark")
-                        .scaledFont(size: 8, weight: .bold)
-                        .frame(width: 12, height: 12)
-                }
-                .buttonStyle(.liquidGlassPressable(cornerRadius: 6))
-                .foregroundStyle(.secondary)
-                .padding(.leading, 4)
-                .opacity(isHovering ? 1 : 0)
-                .disabled(!isHovering)
-                .allowsHitTesting(isHovering)
-                .accessibilityHidden(!isHovering)
-                .accessibilityLabel("Remove Tab")
-                .help("Remove Tab")
-            }
-        }
-        .animation(LiquidGlassMetrics.stateChange, value: isHovering)
-        .onHover { inside in
-            if inside {
-                hoveredScopeID = scope.id
-            } else if hoveredScopeID == scope.id {
-                hoveredScopeID = nil
-            }
-        }
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
-        .contextMenu {
-            if let url = scope.settingsURL { Link("Open Runner Settings on GitHub", destination: url) }
-            Button("Remove Tab", role: .destructive) { store.remove(scope) }
-        }
-    }
-
-    private var summaryBar: some View {
-        let counts = store.snapshot.runners.reduce(into: [GitHubRunner.State: Int]()) { counts, runner in
-            counts[runner.state, default: 0] += 1
-        }
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 16) {
-                summaryCounts(counts).fixedSize()
-                searchControls
-            }
-            VStack(alignment: .leading, spacing: 12) {
-                summaryCounts(counts)
-                searchControls
-            }
-        }
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-        .padding(.vertical, LiquidGlassMetrics.Spacing.xSmall)
-    }
-
-    private func summaryCounts(_ counts: [GitHubRunner.State: Int]) -> some View {
-        HStack(spacing: 16) {
-            // While filtering, the headline says how many cards match, so it
-            // never reads "12 runners" over a grid of four.
-            Text(store.visibleRunners.count == store.snapshot.runners.count
-                 ? "\(store.snapshot.runners.count) runners"
-                 : "\(store.visibleRunners.count) of \(store.snapshot.runners.count) runners")
-                .font(.headline)
-                .contentTransition(.numericText())
-            ForEach(GitHubRunner.State.allCases, id: \.rawValue) { state in
-                HStack(spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    Circle().fill(state.color).frame(width: 8, height: 8)
-                    Text("\(counts[state, default: 0]) \(state.rawValue.lowercased())")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
-
-    private var searchControls: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
-            Spacer(minLength: 0)
-            TextField("Filter runners", text: $store.searchText)
-                .liquidGlassField(systemImage: "magnifyingglass")
-                .font(.subheadline)
-                .frame(maxWidth: 200)
-
-            PilotSegmentedControl(
-                "Layout",
-                selection: $layout,
-                options: RunnerLayout.allCases,
-                title: { $0.title },
-                systemImage: { $0.symbol },
-                showsTitles: false
-            )
-            .fixedSize()
-            .help("Switch between the 3D fleet, compact tiles, and detailed cards")
-
-            // The spinner runs inside the refresh control, so the filter
-            // field and layout picker never shift while a refresh is running.
-            Button { Task { await store.refreshSelected() } } label: {
-                Label {
-                    Text("Refresh runners")
-                } icon: {
-                    InspectorRefreshGlyph(isRefreshing: store.isRefreshing)
-                }
-            }
-            .compatGlassIconButton()
-            .disabled(store.isRefreshing)
-            .help("Refresh runners")
-        }
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack(alignment: .top, spacing: LiquidGlassMetrics.Spacing.small) {
-            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                Text(message)
-                if store.snapshot.updatedAt != nil { Text("Showing the last successful refresh.").foregroundStyle(.secondary) }
-            }
-            Spacer()
-            Button("Retry") { Task { await store.refreshSelected() } }
-                .compatGlassButtonStyle()
-                .disabled(store.isRefreshing)
-        }
-        .font(.subheadline)
-        .padding(LiquidGlassMetrics.Spacing.small)
-        // Content, not glass: a quiet warning wash. Its radius is the Retry
-        // capsule's (~12pt) plus the 12pt inset, so the corner nesting stays
-        // concentric (LAY-4).
-        .background(
-            Color.orange.opacity(0.1),
-            in: RoundedRectangle(
-                cornerRadius: LiquidGlassMetrics.Radius.field + LiquidGlassMetrics.Spacing.small,
-                style: .continuous
-            )
-        )
-        .padding(.horizontal, LiquidGlassMetrics.Spacing.large)
-        .padding(.bottom, LiquidGlassMetrics.Spacing.small)
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        let runners = store.visibleRunners
-        if store.snapshot.updatedAt == nil && store.isRefreshing {
-            ProgressView("Loading runners…").frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if store.snapshot.runners.isEmpty {
-            ContentUnavailableView(
-                store.snapshot.error == nil ? "No Runners" : "Runners Unavailable",
-                systemImage: "server.rack",
-                description: Text(store.snapshot.error == nil
-                    ? "No self-hosted runners are registered for this \(store.selectedScope?.kind.title.lowercased() ?? "scope")."
-                    : "Resolve the access or connection issue above, then try again.")
-            )
-            .legibleSecondaryHierarchy()
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if runners.isEmpty {
-            ContentUnavailableView.search(text: store.searchText)
-                .legibleSecondaryHierarchy()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if layout == .fleet {
-            RunnerFleetView(
-                runners: runners,
-                scopeName: store.selectedScope?.name ?? "",
-                name: store.displayName(for:),
-                hardware: store.hardware(for:),
-                edit: { editingRunner = $0 }
-            )
-            .overlay(alignment: .bottomLeading) {
-                updatedFootnote.padding(LiquidGlassMetrics.Spacing.xSmall).environment(\.colorScheme, .dark)
             }
         } else {
-            ScrollView {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: layout.minimumWidth), spacing: layout.spacing)],
-                    spacing: layout.spacing
-                ) {
-                    ForEach(runners) { runner in
-                        let name = store.displayName(for: runner)
-                        let hardware = store.hardware(for: runner)
-                        switch layout {
-                        case .compact:
-                            RunnerTile(runner: runner, name: name, hardware: hardware) { editingRunner = runner }
-                        case .cards, .fleet:
-                            RunnerCard(runner: runner, name: name, hardware: hardware) { editingRunner = runner }
-                        }
-                    }
-                }
-                .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-                .padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
-                updatedFootnote.padding(.bottom, LiquidGlassMetrics.Spacing.xSmall)
-            }
+            observation.stop()
+            refreshTask?.cancel()
+            refreshTask = nil
+            footnoteTimer?.invalidate()
+            footnoteTimer = nil
+            if fleet.parent != nil { fleet.setPresentationActive(false) }
+            for case let item as RunnerCollectionItem in collection.visibleItems() { item.stopHover() }
         }
     }
 
-    @ViewBuilder
-    private var updatedFootnote: some View {
-        if let updatedAt = store.snapshot.updatedAt {
-            TimelineView(.periodic(from: .now, by: 30)) { _ in
-                Text("Updated \(Date().timeIntervalSince(updatedAt) < 60 ? "just now" : RelativeTime.string(from: updatedAt)) · Refreshes every 30s")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    private func render() {
+        guard isViewLoaded else { return }
+        renderTabs()
+        let counts = store.snapshot.runners.reduce(into: [GitHubRunner.State: Int]()) { $0[$1.state, default: 0] += 1 }
+        let runners = store.visibleRunners
+        summary.stringValue = "\(runners.count) of \(store.snapshot.runners.count) runners · \(counts[.idle, default: 0]) idle · \(counts[.busy, default: 0]) busy · \(counts[.offline, default: 0]) offline"
+        if search.stringValue != store.searchText { search.stringValue = store.searchText }
+        refresh.isEnabled = isLive && !store.isRefreshing
+        refresh.toolTip = store.isRefreshing ? "Refreshing…" : "Refresh"
+        error.stringValue = store.snapshot.error.map { $0 + (store.snapshot.updatedAt == nil ? "" : " Showing the last successful refresh.") } ?? ""
+        error.isHidden = error.stringValue.isEmpty
+        updateFootnote()
+        if previousScope != store.selectedScopeID {
+            previousScope = store.selectedScopeID
+            if active { refreshSelected() }
+        }
+        if store.selectedScope == nil {
+            showState("Your Runner Fleet", message: "Add an enterprise, organization, or repository to see its self-hosted runners.", add: true)
+        } else if store.snapshot.updatedAt == nil && store.isRefreshing {
+            showState("Loading runners…", message: "Fetching runner status from GitHub.")
+        } else if store.snapshot.runners.isEmpty {
+            showState(store.snapshot.error == nil ? "No Runners" : "Runners Unavailable",
+                      message: store.snapshot.error == nil ? "No self-hosted runners are registered for this source." : "Resolve the access or connection issue above, then refresh.")
+        } else if runners.isEmpty {
+            showState("No Matching Runners", message: "Try a different name, platform, status, or label.")
+        } else if layout == .fleet {
+            if fleet.parent == nil { addChild(fleet) }
+            fleet.onEdit = { [weak self] in self?.edit($0) }
+            fleet.configure(runners: runners, scopeName: store.selectedScope?.name ?? "",
+                            name: store.displayName(for:), hardware: store.hardware(for:))
+            show(fleet.view)
+            fleet.setPresentationActive(active)
+        } else {
+            if fleet.parent != nil { fleet.setPresentationActive(false) }
+            let oldIDs = visibleRunners.map(\.id)
+            let signatures = runners.map { runner in
+                "\(runner.id)|\(store.displayName(for: runner))|\(store.hardware(for: runner).rawValue)|\(runner.state.rawValue)|\(runner.labels.map(\.name).joined(separator: ","))|\(layout.rawValue)"
             }
+            visibleRunners = runners
+            show(collectionScroll)
+            updateCollectionSize()
+            if oldIDs != runners.map(\.id) {
+                collection.reloadData()
+            } else {
+                let changes = signatures.indices.filter { !rowSignatures.indices.contains($0) || signatures[$0] != rowSignatures[$0] }
+                collection.reloadItems(at: Set(changes.map { IndexPath(item: $0, section: 0) }))
+            }
+            rowSignatures = signatures
         }
     }
-}
 
-private struct RunnerCard: View {
-    let runner: GitHubRunner
-    let name: String
-    let hardware: RunnerHardware
-    let edit: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
-            HStack(alignment: .top) {
-                RunnerHardwareImage(hardware: hardware)
-                    .runnerThumbnail(size: 64, cornerRadius: RunnerSurface.cardThumbnailRadius)
-                Spacer()
-                RunnerStatusBadge(state: runner.state)
+    private func renderTabs() {
+        defer { tabStrip.needsLayout = true }
+        RRUI.clear(tabs)
+        for scope in store.scopes {
+            let button = RRButton(scope.name, symbol: scope.kind.symbol) { [weak self] in
+                self?.store.selectedScopeID = scope.id
+                self?.store.searchText = ""
+                self?.render()
             }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(name).font(.headline).lineLimit(1).help(name)
-                Text(hardware.title).font(.subheadline).foregroundStyle(.secondary)
-                Text([runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption).foregroundStyle(.secondary)
+            button.setButtonType(.pushOnPushOff)
+            button.state = scope.id == store.selectedScopeID ? .on : .off
+            let menu = NSMenu()
+            menu.autoenablesItems = false
+            if let url = scope.settingsURL {
+                menu.addItem(RRMenuItem("Open Runner Settings on GitHub", enabled: isLive) { [weak self] in
+                    guard self?.isLive == true else { return }
+                    NSWorkspace.shared.open(url)
+                })
             }
-            Text(runner.labelLine)
-                .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .frame(height: 32, alignment: .topLeading)
-                .help(runner.labels.map(\.name).joined(separator: ", "))
-            HStack {
-                // The GitHub name only adds information once the runner is renamed (HIER-2).
-                if name != runner.name {
-                    Text(runner.name).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: LiquidGlassMetrics.Spacing.xSmall)
-                Button(action: edit) { Label("Edit \(name)", systemImage: "pencil") }
-                    .compatGlassIconButton(controlSize: .small)
-                    .help("Edit device name and hardware image")
+            menu.addItem(RRMenuItem("Remove Tab", enabled: isLive) { [weak self] in self?.remove(scope) })
+            button.menu = menu
+            tabs.addArrangedSubview(button)
+            if scope.id == store.selectedScopeID {
+                let close = RRButton("", symbol: "xmark") { [weak self] in self?.remove(scope) }
+                close.isEnabled = isLive
+                close.setAccessibilityLabel("Remove \(scope.name) source")
+                tabs.addArrangedSubview(close)
             }
         }
-        .padding(RunnerSurface.cardPadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            Color.secondary.opacity(0.07),
-            in: RoundedRectangle(cornerRadius: RunnerSurface.cardRadius, style: .continuous)
-        )
-        .contextMenu { Button("Edit Device…", action: edit) }
-    }
-}
-
-/// Image, name, and status only, so a large fleet fits on one screen. The
-/// remaining card details appear in a popover after a short hover.
-private struct RunnerTile: View {
-    let runner: GitHubRunner
-    let name: String
-    let hardware: RunnerHardware
-    let edit: () -> Void
-    @State private var isHovering = false
-    @State private var isHoveringEdit = false
-    @State private var showsDetails = false
-
-    /// The details popover is transient, so while it is open the next click
-    /// only dismisses it. It stays closed while the pointer is on the edit
-    /// button, or that button could never be clicked after a short dwell.
-    private var wantsDetails: Bool { isHovering && !isHoveringEdit }
-
-    var body: some View {
-        HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-            RunnerHardwareImage(hardware: hardware, size: 32)
-                .runnerThumbnail(size: 48, cornerRadius: RunnerSurface.tileThumbnailRadius)
-                // Only the image dims for an offline runner; dimming the whole
-                // tile took the secondary "Offline" badge to about 2:1 (TYPE-3).
-                .opacity(runner.state == .offline ? 0.6 : 1)
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Text(name)
-                    .font(.callout.weight(.semibold))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                    RunnerStatusBadge(state: runner.state)
-                    Spacer(minLength: 0)
-                    // Sits beside the badge so the name keeps the full width.
-                    Button(action: openEditor) { Label("Edit \(name)", systemImage: "pencil") }
-                        .compatGlassIconButton(controlSize: .small)
-                        .onHover { isHoveringEdit = $0 }
-                        .opacity(isHovering ? 1 : 0)
-                        .help("Edit device name and hardware image")
-                }
-            }
-        }
-        .padding(RunnerSurface.tilePadding)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            Color.secondary.opacity(isHovering ? 0.12 : 0.07),
-            in: RoundedRectangle(cornerRadius: RunnerSurface.tileRadius, style: .continuous)
-        )
-        .contentShape(RoundedRectangle(cornerRadius: RunnerSurface.tileRadius, style: .continuous))
-        .onHover { isHovering = $0 }
-        // Hover wash and the edit control fade rather than snap (BTN-5).
-        .animation(LiquidGlassMetrics.stateChange, value: isHovering)
-        .task(id: wantsDetails) {
-            guard wantsDetails else {
-                showsDetails = false
-                return
-            }
-            // A delay keeps the popover from flashing while the pointer crosses the grid.
-            try? await Task.sleep(for: .milliseconds(450))
-            if !Task.isCancelled { showsDetails = true }
-        }
-        .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
-            RunnerDetailsPopover(runner: runner, name: name, hardware: hardware)
-        }
-        .contextMenu { Button("Edit Device…", action: openEditor) }
-        .accessibilityElement(children: .combine)
-        .accessibilityAction(named: "Edit Device", openEditor)
+        let add = RRButton("Add Source", symbol: "plus") { [weak self] in self?.addSource() }
+        add.isEnabled = isLive
+        tabs.addArrangedSubview(add)
     }
 
-    private func openEditor() {
-        showsDetails = false
-        edit()
-    }
-}
-
-struct RunnerDetailsPopover: View {
-    let runner: GitHubRunner
-    let name: String
-    let hardware: RunnerHardware
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.small) {
-                RunnerHardwareImage(hardware: hardware)
-                    .runnerThumbnail(size: 56, cornerRadius: LiquidGlassMetrics.Radius.field)
-                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    Text(name).font(.headline).lineLimit(2)
-                    RunnerStatusBadge(state: runner.state)
-                }
-            }
-            Grid(
-                alignment: .leadingFirstTextBaseline,
-                horizontalSpacing: LiquidGlassMetrics.Spacing.small,
-                verticalSpacing: LiquidGlassMetrics.Spacing.xSmall
-            ) {
-                detailRow("Hardware", hardware.title)
-                detailRow("Platform", [runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))
-                if name != runner.name { detailRow("Runner", runner.name) }
-                if !runner.labels.isEmpty {
-                    GridRow {
-                        Text("Labels").foregroundStyle(GlassLegibleText.secondaryColor)
-                        Text(runner.labelLine)
-                            .font(.caption.monospaced())
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-            .font(.caption)
-        }
-        .padding(LiquidGlassMetrics.Spacing.medium)
-        .frame(width: 300, alignment: .leading)
+    private func remove(_ scope: RunnerScope) {
+        guard isLive else { return }
+        store.remove(scope)
+        render()
     }
 
-    private func detailRow(_ title: String, _ value: String) -> some View {
-        GridRow {
-            // Row titles are secondary on popover glass (TYPE-3). Set
-            // directly: `legibleSecondaryHierarchy()` does not reach text
-            // that names `.secondary` itself.
-            Text(title).foregroundStyle(GlassLegibleText.secondaryColor)
-            Text(value).textSelection(.enabled)
+    private func updateFootnote() {
+        if let date = store.snapshot.updatedAt {
+            updated.stringValue = "Updated \(Date().timeIntervalSince(date) < 60 ? "just now" : RelativeTime.string(from: date))" + (isLive ? " · Refreshes every 30s" : "")
+        } else { updated.stringValue = "" }
+    }
+
+    private func show(_ content: NSView) {
+        guard currentContent !== content else { return }
+        currentContent?.removeFromSuperview()
+        currentContent = content
+        RRUI.pin(content, to: body)
+    }
+
+    private func showState(_ title: String, message: String, add: Bool = false) {
+        if fleet.parent != nil { fleet.setPresentationActive(false) }
+        let stack = RRUI.stack([RRUI.label(title, size: 21, weight: .semibold), RRUI.label(message, color: .secondaryLabelColor)], spacing: 14)
+        stack.alignment = .centerX
+        if add {
+            let button = RRButton("Add Runner Source", symbol: "plus") { [weak self] in self?.addSource() }
+            button.isEnabled = isLive
+            stack.addArrangedSubview(button)
+        }
+        let container = NSView()
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            stack.widthAnchor.constraint(lessThanOrEqualToConstant: 480),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: container.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -20),
+        ])
+        show(container)
+    }
+
+    private func updateCollectionSize() {
+        let available = max(240, collectionScroll.contentSize.width - 24)
+        let columns = max(1, floor((available + 12) / (layout.minimumWidth * RRUI.zoom + 12)))
+        let size = NSSize(width: floor((available - (columns - 1) * 12) / columns), height: (layout == .compact ? 88 : 226) * RRUI.zoom)
+        if collectionLayout.itemSize != size { collectionLayout.itemSize = size; collectionLayout.invalidateLayout() }
+    }
+
+    private func refreshSelected() {
+        guard isLive, !store.isRefreshing else { return }
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.store.refreshSelected()
+            guard !Task.isCancelled else { return }
+            self.render()
         }
     }
-}
 
-private struct RunnerStatusBadge: View {
-    let state: GitHubRunner.State
+    func controlTextDidChange(_ obj: Notification) { store.searchText = search.stringValue; render() }
+    @objc private func changeLayout() {
+        guard RunnerLayout.allCases.indices.contains(layoutPicker.selectedSegment) else { return }
+        layout = RunnerLayout.allCases[layoutPicker.selectedSegment]
+        if isLive { defaults.set(layout.rawValue, forKey: "runners.layout") }
+        render()
+    }
 
-    var body: some View {
-        // The dot carries the state color; the word stays primary, because
-        // green or orange text on its own 12% wash measured about 2:1 (TYPE-3).
-        Label {
-            Text(state.rawValue)
-        } icon: {
-            Image(systemName: state == .busy ? "circle.dotted.circle.fill" : "circle.fill")
-                .foregroundStyle(state.color)
+    private func addSource() {
+        guard isLive, let parent = view.window, parent.attachedSheet == nil else { return }
+        let alert = NSAlert()
+        alert.messageText = "Add Runner Source"
+        alert.addButton(withTitle: "Add Source")
+        alert.addButton(withTitle: "Cancel")
+        let form = RunnerSourceForm()
+        alert.accessoryView = form
+        alert.buttons[0].isEnabled = false
+        form.onValidityChanged = { [weak alert] valid in alert?.buttons.first?.isEnabled = valid }
+        alert.beginSheetModal(for: parent) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let scope = form.scope else { return }
+            self?.store.add(scope)
+            self?.render()
         }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.primary)
-            .padding(.horizontal, LiquidGlassMetrics.Spacing.xSmall)
-            .padding(.vertical, LiquidGlassMetrics.Spacing.xxSmall)
-            .background(state.color.opacity(0.12), in: Capsule())
+        alert.window.makeFirstResponder(form.name)
+    }
+
+    private func edit(_ runner: GitHubRunner) {
+        guard isLive, let parent = view.window, parent.attachedSheet == nil, let scope = store.selectedScope else { return }
+        let alert = NSAlert()
+        alert.messageText = "Edit Device"
+        alert.informativeText = runner.name
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let form = RunnerPresentationForm(runner: runner, presentation: store.presentation(for: runner))
+        alert.accessoryView = form
+        alert.beginSheetModal(for: parent) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.store.savePresentation(form.presentation, runner: runner, scope: scope)
+            self?.render()
+        }
+        alert.window.makeFirstResponder(form.name)
+    }
+
+    func numberOfSections(in collectionView: NSCollectionView) -> Int { 1 }
+    func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int { visibleRunners.count }
+    func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
+        let item = collectionView.makeItem(withIdentifier: RunnerCollectionItem.identifier, for: indexPath)
+        guard let card = item as? RunnerCollectionItem, visibleRunners.indices.contains(indexPath.item) else { return item }
+        let runner = visibleRunners[indexPath.item]
+        card.configure(runner: runner, name: store.displayName(for: runner), hardware: store.hardware(for: runner), compact: layout == .compact, canEdit: isLive) { [weak self] in self?.edit(runner) }
+        return card
     }
 }
 
 private enum RunnerLayout: String, CaseIterable {
     case fleet, compact, cards
-
-    var title: String {
-        switch self {
-        case .fleet: "3D Fleet"
-        case .compact: "Compact"
-        case .cards: "Cards"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .fleet: "cube"
-        case .compact: "square.grid.3x3"
-        case .cards: "square.grid.2x2"
-        }
-    }
-
     var minimumWidth: CGFloat { self == .compact ? 236 : 240 }
-    var spacing: CGFloat { LiquidGlassMetrics.Spacing.small }
 }
 
-private struct RunnerHardwareImage: View {
-    let hardware: RunnerHardware
-    var size: CGFloat = 38
+@MainActor
+private final class RunnerCollectionItem: NSCollectionViewItem {
+    static let identifier = NSUserInterfaceItemIdentifier("runner.card")
+    private var hoverTask: Task<Void, Never>?
+    private var popover: NSPopover?
 
-    var body: some View {
-        Group {
-            if let asset = hardware.assetName {
-                Image(asset).renderingMode(.template).resizable().scaledToFit()
-            } else {
-                Image(systemName: hardware.symbol).resizable().scaledToFit()
-            }
+    override func loadView() { view = RunnerCardSurface() }
+    override func prepareForReuse() { super.prepareForReuse(); stopHover() }
+    func stopHover() { hoverTask?.cancel(); hoverTask = nil; popover?.close(); popover = nil }
+
+    func configure(runner: GitHubRunner, name: String, hardware: RunnerHardware, compact: Bool, canEdit: Bool, edit: @escaping () -> Void) {
+        stopHover()
+        let surface = view as! RunnerCardSurface
+        for child in surface.subviews { child.removeFromSuperview() }
+        let image = runnerImage(hardware, size: compact ? 44 : 58)
+        let heading = RRUI.label(name, size: compact ? 13 : 15, weight: .semibold)
+        heading.maximumNumberOfLines = 1
+        heading.lineBreakMode = .byTruncatingMiddle
+        heading.toolTip = name
+        let status = RRUI.label("● \(runner.state.rawValue)", size: 11, weight: .medium, color: runner.state.fleetColor)
+        let editButton = RRButton("", symbol: "pencil") { [weak self] in self?.stopHover(); edit() }
+        editButton.isEnabled = canEdit
+        editButton.setAccessibilityLabel("Edit \(name)")
+        editButton.toolTip = "Edit Device…"
+        // A fixed round button pinned to the card's trailing edge, not floating
+        // after the status text at whatever width the name happens to be.
+        editButton.borderShape = .circle
+        editButton.controlSize = .small
+        editButton.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            editButton.widthAnchor.constraint(equalToConstant: 26),
+            editButton.heightAnchor.constraint(equalToConstant: 26),
+        ])
+        editButton.setContentHuggingPriority(.required, for: .horizontal)
+        let stack: NSStackView
+        if compact {
+            image.alphaValue = runner.state == .offline ? 0.6 : 1
+            let text = RRUI.stack([heading, status], spacing: 6)
+            text.setContentHuggingPriority(.init(1), for: .horizontal)
+            text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            stack = RRUI.stack([image, text, editButton], axis: .horizontal, spacing: 12)
+            stack.distribution = .fill
+        } else {
+            let footer = RRUI.stack([RRUI.label(name == runner.name ? "" : runner.name, size: 11, color: .secondaryLabelColor), RRUI.spacer(), editButton], axis: .horizontal)
+            footer.distribution = .fill
+            let labels = RRUI.label(runner.labels.map(\.name).joined(separator: " · "), size: 11, color: .secondaryLabelColor)
+            labels.maximumNumberOfLines = 2
+            labels.toolTip = runner.labels.map(\.name).joined(separator: ", ")
+            stack = RRUI.stack([
+                RRUI.stack([image, RRUI.spacer(), status], axis: .horizontal), heading,
+                RRUI.label(hardware.title, size: 12, color: .secondaryLabelColor),
+                RRUI.label([runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "), size: 11, color: .secondaryLabelColor),
+                labels, footer,
+            ], spacing: 8)
+            footer.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
-        .foregroundStyle(.primary)
-        .frame(width: size, height: size)
-        .accessibilityLabel(hardware.title)
-    }
-}
-
-/// Card and tile geometry. Each thumbnail sits one padding-width from its
-/// surface's corner, so its radius is the surface radius minus that padding
-/// (LAY-4: outer = inner + padding).
-private enum RunnerSurface {
-    static let cardPadding = LiquidGlassMetrics.Spacing.xSmall
-    static let cardThumbnailRadius = LiquidGlassMetrics.Radius.control
-    static let cardRadius = cardThumbnailRadius + cardPadding
-
-    static let tilePadding = LiquidGlassMetrics.Spacing.xSmall
-    static let tileThumbnailRadius = LiquidGlassMetrics.Radius.control
-    static let tileRadius = tileThumbnailRadius + tilePadding
-}
-
-private extension View {
-    /// The tinted square every hardware image sits in, so the card, tile,
-    /// popover, and edit sheet share one thumbnail treatment.
-    func runnerThumbnail(size: CGFloat, cornerRadius: CGFloat) -> some View {
-        frame(width: size, height: size)
-            .background(
-                Color.accentColor.opacity(0.08),
-                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            )
-    }
-}
-
-private struct AddRunnerScopeSheet: View {
-    let add: (RunnerScope) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var kind: RunnerScope.Kind = .enterprise
-    @State private var name = ""
-    @FocusState private var isNameFocused: Bool
-
-    private var scope: RunnerScope? { RunnerScope.parse(name, kind: kind) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.large) {
-            Text("Add Runner Source").font(.title2.weight(.semibold))
-            Picker("Source", selection: $kind) {
-                ForEach(RunnerScope.Kind.allCases, id: \.self) { kind in Text(kind.title).tag(kind) }
+        RRUI.pin(stack, to: surface, inset: 12)
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.addItem(RRMenuItem("Edit Device…", enabled: canEdit) { [weak self] in self?.stopHover(); edit() })
+        surface.menu = menu
+        surface.onDoubleClick = edit
+        surface.setAccessibilityRole(.button)
+        surface.setAccessibilityLabel("\(name), \(hardware.title), \(runner.state.rawValue)")
+        surface.onHover = { [weak self, weak surface, weak editButton] inside, point in
+            guard let self else { return }
+            self.stopHover()
+            guard compact, inside, let surface,
+                  !(editButton.map { $0.bounds.contains($0.convert(point, from: surface)) } ?? false) else { return }
+            self.hoverTask = Task { @MainActor [weak self, weak surface] in
+                try? await Task.sleep(for: .milliseconds(450))
+                guard !Task.isCancelled, let self, let surface, surface.window != nil else { return }
+                let popover = NSPopover()
+                popover.behavior = .transient
+                popover.contentViewController = RunnerDetailsViewController(runner: runner, name: name, hardware: hardware)
+                self.popover = popover
+                popover.show(relativeTo: surface.bounds, of: surface, preferredEdge: .maxY)
             }
-            .legibleSegmentedPicker()
-            .labelsHidden()
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                // Persistent label above the field; the placeholder is only
-                // an example value (FORM-1/FORM-2).
-                Text(kind.title).font(.subheadline.weight(.medium))
-                // Helper text sits tight under its own field (FORM-5).
-                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    TextField(kind.inputPlaceholder, text: $name)
-                        .focused($isNameFocused)
-                        .onSubmit(submit)
-                        .liquidGlassField(isFocused: isNameFocused)
-                    Text(kind == .enterprise
-                         ? "Uses your GitHub CLI account. Enterprise runners need the manage_runners:enterprise token scope."
-                         : "Uses your GitHub CLI account. You’ll need access to view this source’s self-hosted runners.")
-                        // System secondary measured 3.95:1 on the light sheet
-                        // (TYPE-3); a sheet-wide `legibleSecondaryHierarchy()`
-                        // does not reach text that names `.secondary` itself.
-                        .font(.caption).foregroundStyle(GlassLegibleText.secondaryColor)
-                }
-            }
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .compatGlassButtonStyle()
-                Button("Add Source", action: submit)
-                    .keyboardShortcut(.defaultAction)
-                    .compatGlassProminentButtonStyle()
-                    .disabled(scope == nil)
-            }
-            .padding(.top, LiquidGlassMetrics.Spacing.xxSmall)
-        }
-        .padding(LiquidGlassMetrics.Spacing.xLarge)
-        .frame(width: 420)
-        .onAppear { isNameFocused = true }
-    }
-
-    private func submit() {
-        guard let scope else { return }
-        add(scope)
-        dismiss()
-    }
-}
-
-private struct RunnerDetailsSheet: View {
-    let runner: GitHubRunner
-    let save: (RunnerPresentation) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var presentation: RunnerPresentation
-
-    init(runner: GitHubRunner, presentation: RunnerPresentation, save: @escaping (RunnerPresentation) -> Void) {
-        self.runner = runner
-        self.save = save
-        _presentation = State(initialValue: presentation)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.large) {
-            HStack(spacing: LiquidGlassMetrics.Spacing.medium) {
-                RunnerHardwareImage(hardware: presentation.hardware ?? .inferred(for: runner))
-                    .runnerThumbnail(size: 56, cornerRadius: LiquidGlassMetrics.Radius.field)
-                VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xxSmall) {
-                    Text("Edit Device").font(.title2.weight(.semibold))
-                    Text(runner.name).font(.subheadline).foregroundStyle(GlassLegibleText.secondaryColor)
-                }
-            }
-            // Persistent labels stacked above each control (FORM-1), matching
-            // Add Runner Source; the placeholder is only the GitHub name the
-            // device falls back to (FORM-2).
-            VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.medium) {
-                stackedRow("Display name") {
-                    TextField("Display name", text: $presentation.name, prompt: Text(runner.name))
-                        .labelsHidden()
-                        .liquidGlassField()
-                }
-                stackedRow("Hardware") {
-                    // A glass menu rather than the unglazed system pop-up,
-                    // so it matches the glass field above it.
-                    Menu {
-                        Picker("Hardware", selection: $presentation.hardware) {
-                            Text(automaticHardwareTitle).tag(nil as RunnerHardware?)
-                            ForEach(RunnerHardware.allCases) { hardware in
-                                Text(hardware.title).tag(Optional(hardware))
-                            }
-                        }
-                        .pickerStyle(.inline)
-                        .labelsHidden()
-                    } label: {
-                        Text(presentation.hardware?.title ?? automaticHardwareTitle)
-                    }
-                    .menuStyle(.button)
-                    .compatGlassButtonStyle()
-                    .fixedSize()
-                    .accessibilityLabel("Hardware")
-                    .accessibilityValue(presentation.hardware?.title ?? automaticHardwareTitle)
-                }
-            }
-            Text("Device names and images are saved in Cockpit. Runner labels come from GitHub.")
-                .font(.caption).foregroundStyle(GlassLegibleText.secondaryColor)
-            HStack(spacing: LiquidGlassMetrics.Spacing.xSmall) {
-                Button("Reset to Defaults") { presentation = RunnerPresentation() }
-                    .compatGlassButtonStyle()
-                Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .compatGlassButtonStyle()
-                Button("Save") { save(presentation); dismiss() }
-                    .keyboardShortcut(.defaultAction)
-                    .compatGlassProminentButtonStyle()
-            }
-        }
-        .padding(LiquidGlassMetrics.Spacing.xLarge)
-        .frame(width: 440)
-        // The "Display name" and "Hardware" labels, the runner name, and the
-        // footnote measured 3.95:1 in system secondary on the light sheet
-        // (TYPE-3), so they set the legible gray directly. A sheet-wide
-        // `legibleSecondaryHierarchy()` left explicit `.secondary` text at
-        // 3.95:1 and turned the Hardware menu's glass into a solid
-        // primary-colored pill (2.0:1 dark, 2.8:1 light).
-    }
-
-    private var automaticHardwareTitle: String {
-        "Automatic (\(RunnerHardware.inferred(for: runner).title))"
-    }
-
-    /// A visible label above its control; the control's own title stays its
-    /// VoiceOver name, so the visible label is hidden from VoiceOver.
-    private func stackedRow<Control: View>(
-        _ title: LocalizedStringKey,
-        @ViewBuilder control: () -> Control
-    ) -> some View {
-        VStack(alignment: .leading, spacing: LiquidGlassMetrics.Spacing.xSmall) {
-            Text(title)
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(GlassLegibleText.secondaryColor)
-                .accessibilityHidden(true)
-            control()
         }
     }
 }
 
-private extension GitHubRunner {
-    /// Labels as one wrapping line. Hyphenated labels ("mac-mini") never
-    /// break at their hyphen, and each separator stays with the label before
-    /// it, so a wrap lands between labels instead of mid-label or before a
-    /// dangling "·".
-    var labelLine: String {
-        labels
-            .map { $0.name.replacingOccurrences(of: "-", with: "-\u{2060}") }
-            .joined(separator: "\u{00A0}· ")
+@MainActor
+final class RunnerDetailsViewController: NSViewController {
+    private let runner: GitHubRunner
+    private let name: String
+    private let hardware: RunnerHardware
+    init(runner: GitHubRunner, name: String, hardware: RunnerHardware) {
+        self.runner = runner; self.name = name; self.hardware = hardware
+        super.init(nibName: nil, bundle: nil)
+    }
+    required init?(coder: NSCoder) { nil }
+    override func loadView() {
+        let stack = RRUI.stack([
+            RRUI.stack([runnerImage(hardware, size: 52), RRUI.stack([
+                RRUI.label(name, size: 15, weight: .semibold),
+                RRUI.label("● \(runner.state.rawValue)", size: 12, color: runner.state.fleetColor),
+            ])], axis: .horizontal),
+            RRUI.label("Hardware: \(hardware.title)", size: 12),
+            RRUI.label("Platform: \([runner.platform, runner.architecture].compactMap { $0 }.joined(separator: " · "))", size: 12),
+        ], spacing: 12)
+        if name != runner.name { stack.addArrangedSubview(RRUI.label("Runner: \(runner.name)", size: 12)) }
+        if !runner.labels.isEmpty {
+            let labels = RRUI.label("Labels: \(runner.labels.map(\.name).joined(separator: ", "))", size: 11)
+            labels.isSelectable = true
+            stack.addArrangedSubview(labels)
+        }
+        let detailHeight = min(480, 190 + CGFloat(runner.labels.map(\.name).joined(separator: ", ").count / 40 + 1) * 16)
+        preferredContentSize = NSSize(width: 340 * RRUI.zoom, height: detailHeight * RRUI.zoom)
+        view = RRBackgroundView(frame: NSRect(origin: .zero, size: preferredContentSize))
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        let document = RRDocumentView()
+        scroll.documentView = document
+        document.translatesAutoresizingMaskIntoConstraints = false
+        RRUI.pin(stack, to: document, inset: 16)
+        NSLayoutConstraint.activate([
+            document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+            document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+        ])
+        RRUI.pin(scroll, to: view)
     }
 }
 
-private extension GitHubRunner.State {
-    var color: Color {
-        switch self {
-        case .idle: .green
-        case .busy: .orange
-        case .offline: .secondary
-        }
+@MainActor
+private func runnerImage(_ hardware: RunnerHardware, size: CGFloat) -> NSImageView {
+    let view = NSImageView()
+    view.image = hardware.assetName.flatMap { NSImage(named: $0) } ?? NSImage(systemSymbolName: hardware.symbol, accessibilityDescription: hardware.title)
+    view.imageScaling = .scaleProportionallyUpOrDown
+    view.contentTintColor = .labelColor
+    view.widthAnchor.constraint(equalToConstant: size).isActive = true
+    view.heightAnchor.constraint(equalToConstant: size).isActive = true
+    view.setAccessibilityLabel(hardware.title)
+    return view
+}
+
+@MainActor
+private final class RunnerCardSurface: NSView {
+    var onHover: (Bool, NSPoint) -> Void = { _, _ in }
+    var onDoubleClick: () -> Void = {}
+    private var tracking: NSTrackingArea?
+    override var acceptsFirstResponder: Bool { true }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 14
     }
+    required init?(coder: NSCoder) { nil }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateBackground(false) }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+        updateBackground(false)
+    }
+    override func mouseEntered(with event: NSEvent) { updateBackground(true); onHover(true, convert(event.locationInWindow, from: nil)) }
+    override func mouseMoved(with event: NSEvent) { onHover(true, convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) { updateBackground(false); onHover(false, .zero) }
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        if event.clickCount == 2 { onDoubleClick() } else { super.mouseDown(with: event) }
+    }
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36 { onDoubleClick() } else { super.keyDown(with: event) }
+    }
+    override func accessibilityPerformPress() -> Bool { onDoubleClick(); return true }
+    private func updateBackground(_ hovered: Bool) { layer?.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(hovered ? 0.12 : 0.07).cgColor }
+}
+
+@MainActor
+private final class RunnerSourceForm: NSView, NSTextFieldDelegate {
+    let name = NSTextField(string: "")
+    private let kind = NSPopUpButton()
+    private let help = RRUI.label("", size: 11, color: .secondaryLabelColor)
+    var onValidityChanged: (Bool) -> Void = { _ in }
+    var scope: RunnerScope? { RunnerScope.parse(name.stringValue, kind: RunnerScope.Kind.allCases[kind.indexOfSelectedItem]) }
+    override init(frame frameRect: NSRect) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 420 * RRUI.zoom, height: 160 * RRUI.zoom))
+        kind.addItems(withTitles: RunnerScope.Kind.allCases.map(\.title))
+        kind.target = self
+        kind.action = #selector(update)
+        kind.setAccessibilityLabel("Runner source type")
+        name.delegate = self
+        name.setAccessibilityLabel("Source name")
+        let stack = RRUI.stack([kind, RRUI.label("Source name", weight: .medium), name, help], spacing: 10)
+        RRUI.fillWidth(stack)
+        RRUI.pin(stack, to: self)
+        RRUI.zoomControls(in: self)
+        update()
+    }
+    required init?(coder: NSCoder) { nil }
+    func controlTextDidChange(_ obj: Notification) { update() }
+    @objc private func update() {
+        let selected = RunnerScope.Kind.allCases[kind.indexOfSelectedItem]
+        name.placeholderString = selected.inputPlaceholder
+        help.stringValue = selected == .enterprise
+            ? "Uses your GitHub CLI account. Enterprise runners need the manage_runners:enterprise token scope."
+            : "Uses your GitHub CLI account. You need access to view this source's self-hosted runners."
+        onValidityChanged(scope != nil)
+    }
+}
+
+@MainActor
+private final class RunnerPresentationForm: NSView {
+    let name = NSTextField(string: "")
+    private let hardware = NSPopUpButton()
+    var presentation: RunnerPresentation {
+        RunnerPresentation(name: name.stringValue, hardware: hardware.indexOfSelectedItem == 0 ? nil : RunnerHardware.allCases[hardware.indexOfSelectedItem - 1])
+    }
+    init(runner: GitHubRunner, presentation: RunnerPresentation) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 420 * RRUI.zoom, height: 210 * RRUI.zoom))
+        name.stringValue = presentation.name
+        name.placeholderString = runner.name
+        name.setAccessibilityLabel("Display name")
+        hardware.addItem(withTitle: "Automatic (\(RunnerHardware.inferred(for: runner).title))")
+        hardware.addItems(withTitles: RunnerHardware.allCases.map(\.title))
+        hardware.selectItem(at: presentation.hardware.flatMap { RunnerHardware.allCases.firstIndex(of: $0).map { $0 + 1 } } ?? 0)
+        hardware.setAccessibilityLabel("Hardware")
+        let reset = RRButton("Reset to Defaults") { [weak name, weak hardware] in name?.stringValue = ""; hardware?.selectItem(at: 0) }
+        let stack = RRUI.stack([
+            RRUI.label("Display name", weight: .medium), name,
+            RRUI.label("Hardware", weight: .medium), hardware,
+            RRUI.label("Device names and images are saved in Cockpit. Runner labels come from GitHub.", size: 11, color: .secondaryLabelColor), reset,
+        ], spacing: 8)
+        RRUI.fillWidth(stack)
+        RRUI.pin(stack, to: self)
+        RRUI.zoomControls(in: self)
+    }
+    required init?(coder: NSCoder) { nil }
 }

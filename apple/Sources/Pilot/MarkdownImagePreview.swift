@@ -1,6 +1,5 @@
 import AppKit
 import ImageIO
-import SwiftUI
 
 /// Shared geometry between Markdown styling (which reserves the space) and the
 /// text-view overlays (which draw the decoded image inside that space).
@@ -196,8 +195,23 @@ final class MarkdownImagePreviewView: NSView {
     }
 
     override func viewWillMove(toSuperview newSuperview: NSView?) {
-        if newSuperview == nil { loadTask?.cancel() }
+        if newSuperview == nil { cancelLoading() }
         super.viewWillMove(toSuperview: newSuperview)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { cancelLoading() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { startLoading() }
+    }
+
+    private func cancelLoading() {
+        loadTask?.cancel()
+        loadTask = nil
     }
 
     func startLoading() {

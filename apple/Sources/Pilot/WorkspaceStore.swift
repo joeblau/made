@@ -1,5 +1,6 @@
 import SwiftData
-import SwiftUI
+import Foundation
+import Observation
 
 @Observable
 @MainActor
@@ -31,6 +32,7 @@ final class WorkspaceStore {
     /// out of Notes returns to whatever workspace was selected.
     var isNotesMode: Bool = false {
         didSet {
+            guard oldValue != isNotesMode else { return }
             defaults.set(isNotesMode, forKey: "notesMode")
             // Notes, Remote Desktop, Docker, Agentic Use, and Runners are all
             // full-detail global modes; entering one exits the others.
@@ -47,6 +49,7 @@ final class WorkspaceStore {
     /// (toggled with ⇧⌘0). Mutually exclusive with the other global modes.
     var isRemoteDesktopMode: Bool = false {
         didSet {
+            guard oldValue != isRemoteDesktopMode else { return }
             defaults.set(isRemoteDesktopMode, forKey: "remoteDesktopMode")
             if isRemoteDesktopMode {
                 isNotesMode = false
@@ -61,6 +64,7 @@ final class WorkspaceStore {
     /// with ⌃⌘0). Mutually exclusive with the other global modes.
     var isDockerMode: Bool = false {
         didSet {
+            guard oldValue != isDockerMode else { return }
             defaults.set(isDockerMode, forKey: "dockerMode")
             if isDockerMode {
                 isNotesMode = false
@@ -75,6 +79,7 @@ final class WorkspaceStore {
     /// Mutually exclusive with the other global modes.
     var isAgenticUseMode: Bool = false {
         didSet {
+            guard oldValue != isAgenticUseMode else { return }
             defaults.set(isAgenticUseMode, forKey: "agenticUseMode")
             if isAgenticUseMode {
                 isNotesMode = false
@@ -87,6 +92,7 @@ final class WorkspaceStore {
 
     var isRunnersMode: Bool = false {
         didSet {
+            guard oldValue != isRunnersMode else { return }
             defaults.set(isRunnersMode, forKey: "runnersMode")
             if isRunnersMode {
                 isNotesMode = false
@@ -685,7 +691,7 @@ final class WorkspaceStore {
         selectWorkspace(workspace.id)
     }
 
-    func requestDeleteWorkspace(_ workspace: Workspace) {
+    func requestDeleteWorkspace(_ workspace: Workspace, canDelete: @escaping @MainActor () -> Bool = { true }) {
         let linkedPanes = extensionWorkspaceLinks
             .filter { $0.sourceWorkspaceID == workspace.id }
             .compactMap(\.workspace).flatMap(\.panes)
@@ -698,7 +704,7 @@ final class WorkspaceStore {
                     .filter { $0.sourceWorkspaceID == workspace.id }
                     .compactMap(\.workspace).flatMap(\.panes) + workspace.panes
                 // Do not destroy a newly added terminal that was never checked.
-                guard Set(currentPanes.map(\.id)).isSubset(of: originalIDs) else { return }
+                guard Set(currentPanes.map(\.id)).isSubset(of: originalIDs), canDelete() else { return }
                 self.deleteWorkspace(workspace)
             }
         }
@@ -712,7 +718,7 @@ final class WorkspaceStore {
         let wasSelected = selectedWorkspaceID == workspace.id
         let deletedLinks = extensionWorkspaceLinks.filter { $0.sourceWorkspaceID == workspace.id }
         let deletedPanes = deletedLinks.compactMap(\.workspace).flatMap(\.panes) + workspace.panes
-        let deletedDevicePaneIDs = Set(deletedPanes.filter { $0.kind == .device }.map(\.id))
+        let deletedDevicePaneIDs = Set(deletedPanes.filter { $0.kind.isAppleTool }.map(\.id))
         for pane in deletedPanes {
             pane.tearDownRuntimeResources(preservingDevicePreference: true)
         }
@@ -955,17 +961,4 @@ enum DemoReviewFixture {
     }
 }
 
-/// Opens the review-only Secure Messaging window once for
-/// `-demoSecureMessaging YES`.
-struct DemoSecureMessagingOpener: View {
-    @Environment(\.openWindow) private var openWindow
-
-    var body: some View {
-        Color.clear
-            .task {
-                guard DemoReviewFixture.flag("demoSecureMessaging") else { return }
-                openWindow(id: DemoReviewFixture.secureMessagingWindowID)
-            }
-    }
-}
 #endif

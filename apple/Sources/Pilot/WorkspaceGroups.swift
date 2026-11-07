@@ -1,4 +1,5 @@
-import SwiftUI
+import Foundation
+import Observation
 
 struct WorkspaceGroup: Codable, Equatable, Identifiable {
     var id = UUID()
@@ -108,7 +109,7 @@ final class WorkspaceGroups {
 
     func moveItems(workspaceIDs: [UUID], fromOffsets: IndexSet, toOffset: Int) {
         order = items(workspaceIDs: workspaceIDs)
-        order.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        order.moveWorkspaceElements(fromOffsets: fromOffsets, toOffset: toOffset)
         save()
     }
 
@@ -131,7 +132,7 @@ final class WorkspaceGroups {
         guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
         let available = Set(workspaceIDs)
         var members = groups[index].workspaceIDs.filter { available.contains($0) }
-        members.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        members.moveWorkspaceElements(fromOffsets: fromOffsets, toOffset: toOffset)
         groups[index].workspaceIDs = members
         save()
     }
@@ -183,5 +184,15 @@ final class WorkspaceGroups {
     private func save() {
         guard let data = try? JSONEncoder().encode(Layout(groups: groups, order: order)) else { return }
         defaults.set(data, forKey: Self.storageKey)
+    }
+}
+
+private extension Array {
+    mutating func moveWorkspaceElements(fromOffsets source: IndexSet, toOffset destination: Int) {
+        let selected = source.sorted().filter { indices.contains($0) }
+        let values = selected.map { self[$0] }
+        let insertion = Swift.max(0, Swift.min(count - values.count, destination - selected.filter { $0 < destination }.count))
+        for index in selected.reversed() { remove(at: index) }
+        insert(contentsOf: values, at: insertion)
     }
 }

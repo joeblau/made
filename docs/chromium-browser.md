@@ -108,16 +108,18 @@ The upstream index publishes the size and SHA-1. Pilot additionally requires
 the independently computed SHA-256 above. Fetching fails before extraction if
 the size, SHA-1, or SHA-256 differs.
 
-## Xcode 26 feasibility gate
+## Chromium feasibility and runtime gates
 
 The pinned distribution's macOS README requires Xcode 26 consumers to convert
 the supplied unversioned framework into a `Versions/A` framework layout with
 relative symlinks. The packaging script owns that conversion so local and CI
 builds cannot diverge.
 
+The original feasibility proof used Xcode 26, which remains the pinned
+artifact build toolchain. The current application runtime gate uses Xcode 27.
 The gate is complete only when both architectures prove all of the following:
 
-- `Chromium Embedded Framework.framework` compiles and loads with Xcode 26.
+- `Chromium Embedded Framework.framework` compiles and loads with Xcode 27.
 - A native child view loads an offline page and executes JavaScript.
 - Renderer and GPU helpers launch from the assembled app bundle.
 - Helpers retain their process-specific entitlements and effective sandbox.
@@ -138,7 +140,7 @@ Run the real-engine gate on Apple silicon after installing the pinned runtime:
 apple/bin/test-chromium-runtime.sh
 ```
 
-The command builds the `Chromium` configuration with Xcode 26 and runs one
+The command builds the `Chromium` configuration with Xcode 27 and runs one
 hosted XCTest against the assembled, signed application. It requires an Apple
 Development signing identity because XCTest injects into Pilot while hardened
 runtime and library validation remain enabled. Override the local identity and
@@ -250,7 +252,7 @@ or mutable network response.
   embedding API and would make Pilot own substantially more browser-process,
   build, and update machinery.
 - Electron was rejected because its application-shell and Node.js runtime
-  duplicate Pilot's native AppKit/SwiftUI shell and broaden the page-to-native
+  duplicate Pilot's native AppKit shell and broaden the page-to-native
   trust boundary.
 - Replacing WebKit outright was rejected because it would silently migrate
   existing panes and make the large CEF runtime mandatory for normal builds.

@@ -3,11 +3,8 @@ import AppKit
 
 /// What quitting must do about a Chromium engine in a given state.
 ///
-/// CEF has to shut down (close every browser, then `CefShutdown`) before the
-/// process exits. SwiftUI's App lifecycle instantiates its own `NSApplication`
-/// subclass and ignores `NSPrincipalClass`, so this cannot live in an
-/// overridden `-terminate:`; ``PilotAppDelegate`` applies it from
-/// `applicationShouldTerminate(_:)` instead.
+/// CEF must close browsers and finish shutdown before process exit. The
+/// application delegate keeps the normal event loop running while that completes.
 enum ChromiumTerminationPolicy: Equatable {
     /// Nothing is running, or the shutdown already finished or timed out.
     case terminateNow
@@ -59,32 +56,24 @@ private extension Duration {
     }
 }
 
-#if BLAU_CHROMIUM_CEF_ENABLED
-/// Chromium-configuration application delegate, installed through
-/// `NSApplicationDelegateAdaptor`.
-///
-/// It prepares the SwiftUI-owned `NSApp` for CEF at launch (CEF requires
-/// `CefAppProtocol` on the application object) and turns a quit into
-/// "shut CEF down, then terminate".
-///
-/// The quit is cancelled and re-issued rather than answered with
-/// `.terminateLater`: while AppKit waits for a deferred reply it runs the
-/// main run loop in the modal-panel mode, and CEF's windowed browsers do not
-/// finish closing there (observed: every close stalled until the timeout).
-/// Cancelling keeps the run loop in its normal mode, which is also how CEF's
-/// own sample and Chrome handle quitting with open browsers.
 @MainActor
 final class PilotAppDelegate: NSObject, NSApplicationDelegate {
+    private var application: PilotApp?
+    private var pendingURLs: [URL] = []
+    private var quitPreflightPending = false
+    private var quitPrepared = false
     private var shutdownPending = false
     private var shutdownFinished = false
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         // Before any Chromium pane can start the engine, so every event that
         // CEF can observe is dispatched through the wrapped -sendEvent:.
+        #if BLAU_CHROMIUM_CEF_ENABLED
         ChromiumEngine.installApplicationIntegration()
         // Before the engine starts, so a page an extension opens at startup
         // is routed too.
         WalletPopupController.shared.installExtensionPageRouting()
+        #endif
     }
 
     /// True when the quit being asked about comes from logout, restart or
@@ -103,6 +92,22 @@ final class PilotAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if quitPrepared, !isSystemPowerOffQuit, application?.validateCloseReadiness() == false {
+            quitPrepared = false
+        }
+        if !quitPrepared, !isSystemPowerOffQuit {
+            guard !quitPreflightPending else { return .terminateCancel }
+            quitPreflightPending = true
+            prepareToQuit { [weak self] approved in
+                guard let self else { return }
+                quitPreflightPending = false
+                guard approved else { return }
+                quitPrepared = true
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            }
+            return .terminateCancel
+        }
+        #if BLAU_CHROMIUM_CEF_ENABLED
         let engine = ChromiumEngine.shared
         switch ChromiumTerminationPolicy.decision(
             engineState: engine.state,
@@ -111,7 +116,7 @@ final class PilotAppDelegate: NSObject, NSApplicationDelegate {
             systemPoweringOff: isSystemPowerOffQuit
         ) {
         case .terminateNow:
-            return .terminateNow
+            return finalTerminationReply()
         case .alreadyPending:
             return .terminateCancel
         case .shutDownFirst:
@@ -128,6 +133,18 @@ final class PilotAppDelegate: NSObject, NSApplicationDelegate {
         }
         Self.startUnresponsiveMainThreadBackstop()
         return .terminateCancel
+        #else
+        return finalTerminationReply()
+        #endif
+    }
+
+    private func finalTerminationReply() -> NSApplication.TerminateReply {
+        guard !isSystemPowerOffQuit else { return .terminateNow }
+        guard application?.saveForFinalTermination() != false else {
+            quitPrepared = false
+            return .terminateCancel
+        }
+        return .terminateNow
     }
 
     /// The timeout above runs on the main thread, so it cannot help when
@@ -164,5 +181,51 @@ final class PilotAppDelegate: NSObject, NSApplicationDelegate {
         // iterating its completion list.
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hosted tests construct isolated stores/controllers themselves.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        let isolated = ProcessInfo.processInfo.environment["BLAU_COCKPIT_FIXTURE"] != nil
+            || UserDefaults.standard.bool(forKey: "demoMode")
+        application = PilotApp(isolated: isolated)
+        application?.start()
+        let urls = pendingURLs
+        pendingURLs.removeAll()
+        urls.forEach { application?.openDashboard($0) }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        application?.showMain()
+        return true
+    }
+
+    func application(_ sender: NSApplication, open urls: [URL]) {
+        guard let application else {
+            pendingURLs.append(contentsOf: urls)
+            return
+        }
+        urls.forEach { application.openDashboard($0) }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        application?.stop()
+    }
+
+    private func prepareToQuit(_ completion: @escaping @MainActor (Bool) -> Void) {
+        guard let application else { completion(true); return }
+        let finish: @MainActor (Bool) -> Void = { approved in
+            guard approved else { completion(false); return }
+            application.commitPendingEdits()
+            completion(application.modelContainer.mainContext.saveReporting(operation: "Saving Cockpit before quit"))
+        }
+        let prepareExtension: @MainActor (Bool) -> Void = { approved in
+            guard approved else { completion(false); return }
+            if let window = application.extensionWindow {
+                window.prepareForTermination(completion: finish)
+            } else { finish(true) }
+        }
+        if let window = application.mainWindow {
+            window.prepareForTermination(completion: prepareExtension)
+        } else { prepareExtension(true) }
+    }
 }
-#endif
