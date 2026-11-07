@@ -129,7 +129,7 @@ struct AgentChatPaneTests {
     }
 
     @Test("The context meter leaves the composer for a disabled item in the Conversation menu")
-    func contextMeterMovesToTheAgentMenu() async throws {
+    func contextMeterMovesToTheConversationMenu() async throws {
         let harness = try Harness(steering: false, #"""
         read -r _
         update '{"sessionUpdate":"usage_update","used":1200,"size":200000}'
@@ -142,15 +142,22 @@ struct AgentChatPaneTests {
         try await harness.waitUntil { harness.session.phase == .ready && harness.session.lastTurnUsage != nil }
         try await Task.sleep(for: .milliseconds(60))
         harness.layout()
-        let menu = try #require(harness.identified("agent-chat.agent") as? NSPopUpButton)
-        let conversation = try #require(menu.itemArray.first { $0.title == "Conversation" }?.submenu)
+        let button = try #require(harness.identified("agent-chat.conversation-menu") as? NSButton)
+        #expect(button.accessibilityLabel() == "Conversation")
+        let conversation = try #require(button.menu)
+        #expect(conversation.items.prefix(2).map(\.title) == ["New Conversation", "Restart Agent"])
         let info = try #require(conversation.items.last)
+        #expect(info.identifier == AgentChatAgentMenu.contextItemIdentifier)
         #expect(info.title == "Context 1.2k / 200k · Cache 99%")
         #expect(!info.isEnabled)
+        let trigger = try #require(harness.identified("agent-chat.agent"))
+        let root = harness.controller.view
+        #expect(root.convert(button.bounds, from: button).maxX <= root.convert(trigger.bounds, from: trigger).minX,
+                "The Conversation button sits left of the model trigger")
         let composerCard = try #require(harness.identified("agent-chat.composer-card"))
         let labels = harness.descendants(of: composerCard).compactMap { $0 as? NSTextField }
         #expect(!labels.contains { $0.stringValue.contains("200k") || $0.stringValue.contains("Cache") })
-        #expect(!(menu.toolTip ?? "").contains("Context"))
+        #expect(!(trigger.toolTip ?? "").contains("Context"))
     }
 
     @Test("j/k move a visible step cursor, Enter opens the Inspector overlay, / and Shift-Tab move focus")

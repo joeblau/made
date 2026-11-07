@@ -65,14 +65,19 @@ struct NativeAgentChatPresentationTests {
         let controller = AgentChatPaneViewController(pane: pane, session: session)
         controller.updatePresentation(isActive: true, isSelected: false)
         defer { controller.closePane() }
-        let menu = try #require(descendants(of: controller.view).compactMap { $0 as? NSPopUpButton }
+        let trigger = try #require(descendants(of: controller.view).compactMap { $0 as? AgentModelTriggerButton }
             .first { $0.accessibilityIdentifier() == "agent-chat.agent" })
+        #expect(trigger.accessibilityLabel() == "Model and provider")
         let composer = try #require(descendants(of: controller.view).compactMap { $0 as? AgentChatComposerTextView }.first)
         for agent: ChatAgent in [.cursor, .codex, .kimi, .claude] {
-            let providers = try #require(menu.itemArray.first { $0.title == "Provider" }?.submenu)
-            let item = try #require(providers.items.first { $0.representedObject as? String == agent.rawValue })
-            #expect(NSApp.sendAction(try #require(item.action), to: item.target, from: item))
+            // A provider without a cached catalog offers one row that starts it.
+            let state = AgentModelPickerController.state(session: session, catalog: controller.modelPicker.catalog,
+                                                         selectedTab: .agent(agent))
+            let row = try #require(state.rows.first)
+            #expect(row.isPlaceholder && state.isEditable)
+            controller.modelPicker.handle(.selectModel(agent: row.agent, modelID: row.modelID))
             #expect(session.agent == agent)
+            #expect(trigger.agent == agent)
             #expect(AgentChatPaneStore.agent(for: pane.id, defaults: defaults) == agent)
             #expect(session.draft == "Review this change")
             #expect(composer.superview != nil)
@@ -136,7 +141,11 @@ struct NativeAgentChatPresentationTests {
         #expect(abs(send.bounds.width - send.bounds.height) < 1, "The send action must remain circular")
         #expect(views.contains { $0.accessibilityIdentifier() == "agent-chat.stop" && $0.isHidden },
                 "Stop exists but stays hidden while nothing runs")
-        for identifier in ["agent-chat.agent", "agent-chat.attach", "agent-chat.send", "agent-chat.stop"] {
+        let trigger = try #require(views.compactMap { $0 as? AgentModelTriggerButton }.first)
+        if width <= 160 { #expect(trigger.compact && trigger.label.isHidden, "Narrow composers show the provider mark alone") }
+        if width >= 560 { #expect(!trigger.compact && trigger.label.stringValue == "Opus 5.5") }
+        for identifier in ["agent-chat.agent", "agent-chat.conversation-menu", "agent-chat.attach", "agent-chat.send",
+                           "agent-chat.stop"] {
             let control = try #require(views.first { $0.accessibilityIdentifier() == identifier })
             if control.isHidden { continue }
             let frame = card.convert(control.bounds, from: control)

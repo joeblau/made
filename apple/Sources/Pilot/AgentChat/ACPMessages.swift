@@ -17,6 +17,7 @@ enum ACP {
         static let requestPermission = "session/request_permission"
         static let setConfigOption = "session/set_config_option"
         static let setModel = "session/set_model"
+        static let setMode = "session/set_mode"
         static let steer = "_session/steering"
         static let cancelRequest = "$/cancel_request"
     }
@@ -140,71 +141,23 @@ struct ACPAgentInfo: Equatable, Sendable {
 enum ACPSessionResult {
     /// Best-effort current model name; agents report it in different places.
     static func modelName(_ result: JSONValue) -> String? {
-        ACPModelState(result)?.currentName
+        ACPSessionConfig(result)?.model?.currentName
     }
 }
 
-/// Prefer the current config-options API, with the older models API retained
-/// for installed adapters that still advertise it. Never invent model IDs.
-struct ACPModelState: Equatable, Sendable {
-    struct Choice: Equatable, Sendable {
-        var id: String
-        var name: String
-        var detail: String?
-        var group: String?
-    }
+/// The model option, under its name from before `ACPSessionConfig`.
+typealias ACPModelState = ACPConfigOption
 
-    enum Selection: Equatable, Sendable {
-        case configuration(String)
-        case legacy
-    }
-
-    var currentID: String
-    var choices: [Choice]
-    var selection: Selection?
-    var currentName: String { choices.first { $0.id == currentID }?.name ?? currentID }
-
-    init?(_ result: JSONValue) {
-        if let model = result["configOptions"]?.arrayValue?.first(where: {
-            ($0["category"]?.stringValue == "model" || $0["id"]?.stringValue == "model")
-                && ($0["type"] == nil || $0["type"]?.stringValue == "select")
-        }), let id = model["id"]?.stringValue, let current = model["currentValue"]?.stringValue {
-            currentID = current
-            selection = .configuration(id)
-            choices = []
-            for option in model["options"]?.arrayValue ?? [] {
-                let entries = option["options"]?.arrayValue ?? [option]
-                for entry in entries.prefix(500) {
-                    guard choices.count < 500, let value = entry["value"]?.stringValue,
-                          !choices.contains(where: { $0.id == value }) else { continue }
-                    choices.append(Choice(id: value, name: entry["name"]?.stringValue ?? value,
-                                          detail: entry["description"]?.stringValue,
-                                          group: option["options"] == nil ? nil : option["name"]?.stringValue))
-                }
-            }
-        } else if let models = result["models"], let current = models["currentModelId"]?.stringValue {
-            currentID = current
-            selection = .legacy
-            choices = (models["availableModels"]?.arrayValue ?? []).prefix(500).compactMap {
-                guard let id = $0["modelId"]?.stringValue else { return nil }
-                return Choice(id: id, name: $0["name"]?.stringValue ?? id, detail: $0["description"]?.stringValue)
-            }
-        } else if let current = result["_meta"]?["modelState"]?["currentModelId"]?.stringValue {
-            currentID = current
-            choices = []
-            selection = nil
-        } else { return nil }
+extension ACPConfigOption {
+    /// The model option of a session result (config options first, then the
+    /// legacy models API). Never invents model IDs.
+    init?(_ sessionResult: JSONValue) {
+        guard let model = ACPSessionConfig(sessionResult)?.model else { return nil }
+        self = model
     }
 
     func request(sessionID: String, modelID: String) -> (method: String, params: JSONValue)? {
-        guard choices.contains(where: { $0.id == modelID }) else { return nil }
-        switch selection {
-        case .configuration(let id):
-            return (ACP.Method.setConfigOption, ["sessionId": .string(sessionID), "configId": .string(id), "value": .string(modelID)])
-        case .legacy:
-            return (ACP.Method.setModel, ["sessionId": .string(sessionID), "modelId": .string(modelID)])
-        case nil: return nil
-        }
+        request(sessionID: sessionID, value: modelID)
     }
 }
 
@@ -345,8 +298,10 @@ enum ACPUpdate: Equatable, Sendable {
     case toolCallUpdate(ACPToolCallFields)
     case plan([ACPPlanEntry])
     case context(ACPContextUsage)
-    case modelConfiguration(ACPModelState?)
+    /// `config_option_update` (and the configuration parts it carries).
+    case configuration(ACPSessionConfig.Patch)
     case currentModel(String)
+    case currentMode(String)
     case subagent(ACPSubagentState)
     case other(kind: String)
 }
@@ -365,10 +320,20 @@ extension ACP {
         let parsed: ACPUpdate
         switch kind {
         case "config_option_update":
-            parsed = .modelConfiguration(ACPModelState(update))
+            // The full `configOptions` list (ACP), or only a new `currentModelId`.
+            let patch = ACPSessionConfig.Patch(update)
+            if patch.options == nil, update["models"] == nil, update["modes"] == nil,
+               let id = ACPConfigText.id(update["currentModelId"] ?? update["_meta"]?["modelState"]?["currentModelId"]) {
+                parsed = .currentModel(id)
+            } else {
+                parsed = .configuration(patch)
+            }
         case "current_model_update":
-            guard let id = boundedID(update["currentModelId"]) else { return nil }
+            guard let id = ACPConfigText.id(update["currentModelId"]) else { return nil }
             parsed = .currentModel(id)
+        case "current_mode_update":
+            guard let id = ACPConfigText.id(update["currentModeId"]) else { return nil }
+            parsed = .currentMode(id)
         case "agent_message_chunk":
             parsed = .agentMessage(contentText(update["content"]) ?? "")
         case "agent_thought_chunk":
