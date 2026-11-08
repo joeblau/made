@@ -480,7 +480,7 @@ struct AgentChatGalleryTests {
         actions.copyText = { copied.append($0) }
         for dark in [false, true] {
             let cell = ProseCellView()
-            cell.configure(item: item, isStreaming: false, followStreamingOutput: false, actions: actions)
+            cell.configure(item: item, isStreaming: false, actions: actions)
             let host = try mount(cell, height: ProseCellView.height(item: item, width: width), width: width, dark: dark)
             let storage = try #require(cell.textView.textStorage)
             var links: [URL] = []
@@ -514,7 +514,7 @@ struct AgentChatGalleryTests {
         func stream(_ message: String) {
             revision += 1
             cell.configure(item: AgentChatItem(id: "stream", content: .assistant(message), revision: revision),
-                           isStreaming: true, followStreamingOutput: false, actions: AgentChatRowActions())
+                           isStreaming: true, actions: AgentChatRowActions())
             cell.layoutSubtreeIfNeeded()
         }
         stream("A **bold")
@@ -530,35 +530,27 @@ struct AgentChatGalleryTests {
         #expect(cell.textView.selectedRange() == NSRange(location: 0, length: 1))
     }
 
-    @Test("Long streamed prose follows the end only while the reader follows")
-    func proseLongStreamFollows() throws {
+    @Test("Long prose is laid out at its full height with no scroll view of its own")
+    func proseLongMessageIsFullHeight() throws {
         let window = Gallery.window(width: 800, height: 600)
         defer { window.close() }
+        let width: CGFloat = 752
+        let message = (0..<150).map { "Line \($0)" }.joined(separator: "\n\n")
+        let item = AgentChatItem(id: "long-\(UUID())", content: .assistant(message), revision: 1)
+        let height = ProseCellView.height(item: item, width: width)
+        #expect(height > 1_200 + ProseCellView.verticalInset * 2, "No per-message cap")
         let cell = ProseCellView()
-        cell.frame = NSRect(x: 0, y: 0, width: 752, height: 1_208)
+        cell.frame = NSRect(x: 0, y: 0, width: width, height: height)
         window.contentView?.addSubview(cell)
-        var message = (0..<150).map { "Line \($0)" }.joined(separator: "\n\n")
-        var revision = 0
-        func stream(follow: Bool) {
-            revision += 1
-            cell.configure(item: AgentChatItem(id: "stream", content: .assistant(message), revision: revision),
-                           isStreaming: true, followStreamingOutput: follow, actions: AgentChatRowActions())
-            cell.layoutSubtreeIfNeeded()
-        }
-        stream(follow: true)
-        let scroll = cell.textScroll
-        #expect(cell.textView.bounds.height > 1_200)
-        #expect(abs(scroll.contentView.bounds.maxY - cell.textView.bounds.maxY) <= ProseCellView.textInset + 1)
-        scroll.contentView.scroll(to: .zero)
-        scroll.reflectScrolledClipView(scroll.contentView)
-        let selection = NSRange(location: 2, length: 5)
-        cell.textView.setSelectedRange(selection)
-        message += "\n\nBackground stream while reading earlier text"
-        stream(follow: true)
-        #expect(scroll.contentView.bounds.origin.y == 0)
-        #expect(cell.textView.selectedRange() == selection)
-        #expect(ProseCellView.height(item: AgentChatItem(id: "stream", content: .assistant(message), revision: revision), width: 752)
-            == ProseCellView.maximumTextHeight + ProseCellView.verticalInset * 2)
+        cell.configure(item: item, isStreaming: true, actions: AgentChatRowActions())
+        cell.layoutSubtreeIfNeeded()
+        let layout = try #require(cell.textView.layoutManager), container = try #require(cell.textView.textContainer)
+        let textHeight = ceil(layout.usedRect(for: container).height) + ProseCellView.textInset * 2
+        #expect(abs(height - (textHeight + ProseCellView.verticalInset * 2)) <= 1, "The row is exactly as tall as its text")
+        #expect(abs(cell.textView.frame.height - textHeight) <= 1)
+        #expect(cell.textView.frame.maxY <= cell.bounds.maxY - ProseCellView.verticalInset + 1, "All text fits the row")
+        #expect(!descendants(of: cell).contains { $0 is NSScrollView }, "A message never scrolls inside its row")
+        #expect(cell.textView.enclosingScrollView == nil, "Outside a transcript nothing scrolls the text")
     }
 
     @Test("User bubbles are right-aligned, at most 75% wide, and carry no copy affordance", arguments: widths)

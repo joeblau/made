@@ -248,21 +248,18 @@ enum AgentProseRenderer {
     }
 }
 
-/// TextKit 1 measurement matching `ProseTextView`'s layout exactly, up to
-/// `limit`: the row never shows more than `ProseCellView.maximumTextHeight`,
-/// so text past it is never laid out here.
+/// TextKit 1 measurement matching `ProseTextView`'s layout exactly. The row
+/// is as tall as the whole message: the transcript is the only scroll area,
+/// so a message never scrolls inside its row. (The cell lays out the full
+/// text for display anyway, so measuring it all costs one more pass of the
+/// same work; renderings over the off-main threshold are coalesced.)
 @MainActor
 enum ProseMeasure {
     struct Entry {
         var generation: Int
         var width: CGFloat
         var zoom: Double
-        var length: Int
         var height: CGFloat
-        /// Hash of the measured text: a capped height carries over only to a
-        /// longer rendering of the same message (one that starts with it),
-        /// never to another pane's message under the same item key.
-        var textHash: Int
     }
 
     static let storage = NSTextStorage()
@@ -279,15 +276,16 @@ enum ProseMeasure {
     /// Layout passes run (tests).
     private(set) static var measureCount = 0
 
-    static func height(_ text: NSAttributedString, width: CGFloat, limit: CGFloat) -> CGFloat {
+    static func height(_ text: NSAttributedString, width: CGFloat) -> CGFloat {
         measureCount += 1
         let box = container
-        box.size = NSSize(width: max(1, width), height: limit + 1)
+        box.size = NSSize(width: max(1, width), height: CGFloat.greatestFiniteMagnitude)
         storage.setAttributedString(text)
-        // Text that doesn't fit the bounded container overflows the cap.
-        let laidOut = layout.characterRange(forGlyphRange: layout.glyphRange(for: box), actualGlyphRange: nil)
-        guard NSMaxRange(laidOut) >= storage.length else { return limit + 1 }
-        return min(limit + 1, ceil(layout.usedRect(for: box).height))
+        layout.ensureLayout(for: box)
+        let height = ceil(layout.usedRect(for: box).height)
+        // Release the measured copy; long messages shouldn't stay resident twice.
+        storage.setAttributedString(NSAttributedString())
+        return height
     }
 }
 
@@ -376,13 +374,13 @@ final class ProseTextView: NSTextView {
 
 // MARK: - Prose cell
 
-/// Agent prose: no bubble, selectable text (capped 1200 pt inner scroll so
-/// streaming and scroll-follow behave as before), hover-only "Copy" for the
-/// whole message, bordered code blocks with per-block hover copy, colored
+/// Agent prose: no bubble, selectable text at its full height (no inner
+/// scroll view: wheel and trackpad scrolling over a message move the
+/// transcript, the conversation's only scroll area), hover-only "Copy" for
+/// the whole message, bordered code blocks with per-block hover copy, colored
 /// ```diff fences, and only http/https/mailto links.
 final class ProseCellView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.prose")
-    static let maximumTextHeight: CGFloat = 1_200
     static let leadingInset: CGFloat = 8
     /// Right gutter holding the hover "Copy" button.
     static let copyGutter: CGFloat = 34
@@ -390,14 +388,11 @@ final class ProseCellView: NSTableCellView {
     static let textInset: CGFloat = 4
 
     let textView: ProseTextView
-    let textScroll = NSScrollView()
     let copyButton = AgentChatClosureButton.link("Copy", color: .textMuted)
     private var blockButtons: [Int: AgentChatClosureButton] = [:]
     private var rendered = AgentProseRenderer.Rendered(text: NSAttributedString(), copyText: "", blocks: [])
     private var actions = AgentChatRowActions()
     private var itemKey: String?
-    private var followAfterLayout = false
-    private var preservedScrollOrigin: NSPoint?
     private var hovering = false
     private var hoveredBlock: Int?
 
@@ -422,12 +417,6 @@ final class ProseCellView: NSTableCellView {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.setAccessibilityLabel("Agent message")
-        textScroll.drawsBackground = false
-        textScroll.hasVerticalScroller = true
-        textScroll.autohidesScrollers = true
-        textScroll.scrollerStyle = .overlay
-        textScroll.borderType = .noBorder
-        textScroll.documentView = textView
         copyButton.toolTip = "Copy message"
         copyButton.setAccessibilityLabel("Copy message")
         copyButton.isHidden = true
@@ -435,7 +424,10 @@ final class ProseCellView: NSTableCellView {
             guard let self else { return }
             actions.copyText(rendered.copyText)
         }
-        addSubview(textScroll)
+        // The text view grows with streamed text before the table notes the
+        // new row height; clip it to the row instead of over the next one.
+        clipsToBounds = true
+        addSubview(textView)
         addSubview(copyButton)
     }
 
@@ -443,14 +435,11 @@ final class ProseCellView: NSTableCellView {
 
     override var isFlipped: Bool { true }
 
-    /// `item.content` is `.assistant`. `followStreamingOutput` keeps the inner
-    /// scroll pinned to the newest text while the reader is at the bottom.
-    func configure(item: AgentChatItem, isStreaming: Bool, followStreamingOutput: Bool, actions: AgentChatRowActions) {
+    /// `item.content` is `.assistant`. The row shows the whole message; the
+    /// transcript table keeps itself pinned to the end while streaming.
+    func configure(item: AgentChatItem, isStreaming: Bool, actions: AgentChatRowActions) {
         self.actions = actions
         let next = AgentProseRenderer.rendered(for: item)
-        let wasAtBottom = itemKey != item.key || textScroll.contentView.bounds.maxY >= textView.bounds.maxY - 24
-        followAfterLayout = followAfterLayout || (followStreamingOutput && wasAtBottom)
-        if !followAfterLayout { preservedScrollOrigin = textScroll.contentView.bounds.origin }
         let selection = itemKey == item.key ? textView.selectedRanges : []
         itemKey = item.key
         rendered = next
@@ -477,49 +466,33 @@ final class ProseCellView: NSTableCellView {
         max(1, width - leadingInset - copyGutter)
     }
 
-    /// Measured per rendering, not per revision: a long message reusing its
-    /// previous rendering while a newer one redacts is not laid out again,
-    /// and once a streaming message fills the cap, later (longer) revisions
-    /// stay capped without another layout pass.
+    /// The full laid-out text height (no cap), measured per rendering, not
+    /// per revision: a long message reusing its previous rendering while a
+    /// newer one redacts is not laid out again.
     static func height(item: AgentChatItem, width: CGFloat) -> CGFloat {
         let rendered = AgentProseRenderer.rendered(for: item)
         let textWidth = textWidth(for: width)
         let zoom = CockpitUIZoomController.shared.factor
-        let limit = maximumTextHeight - textInset * 2
         let textHeight: CGFloat
-        let text = rendered.text.string as NSString
         if let cached = ProseMeasure.heights[item.key], cached.width == textWidth, cached.zoom == zoom,
-           cached.generation == rendered.generation || (cached.height > limit && text.length >= cached.length
-               && text.substring(to: cached.length).hashValue == cached.textHash) {
+           cached.generation == rendered.generation {
             textHeight = cached.height
         } else {
-            textHeight = rendered.text.length == 0 ? 0 : ProseMeasure.height(rendered.text, width: textWidth, limit: limit)
+            textHeight = rendered.text.length == 0 ? 0 : ProseMeasure.height(rendered.text, width: textWidth)
             ProseMeasure.heights.set(ProseMeasure.Entry(generation: rendered.generation, width: textWidth, zoom: zoom,
-                                                        length: text.length, height: textHeight,
-                                                        textHash: (text as String).hashValue), for: item.key)
+                                                        height: textHeight), for: item.key)
         }
-        let visible = min(maximumTextHeight, textHeight + textInset * 2)
-        return max(24, visible + verticalInset * 2)
+        return max(24, textHeight + textInset * 2 + verticalInset * 2)
     }
 
     override func layout() {
         super.layout()
-        let textWidth = Self.textWidth(for: bounds.width)
-        textScroll.frame = NSRect(x: Self.leadingInset, y: Self.verticalInset, width: textWidth,
-                                  height: max(0, bounds.height - Self.verticalInset * 2))
-        textView.minSize = NSSize(width: 0, height: textScroll.contentSize.height)
+        let available = max(0, bounds.height - Self.verticalInset * 2)
+        textView.minSize = NSSize(width: 0, height: available)
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
-        textView.setFrameSize(NSSize(width: textScroll.contentSize.width, height: max(textScroll.contentSize.height, textView.frame.height)))
+        textView.frame = NSRect(x: Self.leadingInset, y: Self.verticalInset, width: Self.textWidth(for: bounds.width), height: available)
         if let container = textView.textContainer { textView.layoutManager?.ensureLayout(for: container) }
         textView.sizeToFit()
-        if followAfterLayout {
-            textView.scrollToEndOfDocument(nil)
-        } else if let origin = preservedScrollOrigin {
-            textScroll.contentView.scroll(to: origin)
-            textScroll.reflectScrolledClipView(textScroll.contentView)
-        }
-        followAfterLayout = false
-        preservedScrollOrigin = nil
         let size = copyButton.cellSize
         copyButton.frame = NSRect(x: bounds.width - size.width - 4, y: Self.verticalInset, width: size.width, height: size.height)
         positionBlockButtons()

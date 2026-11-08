@@ -18,12 +18,17 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
     let approvalCard = ApprovalCardView()
     let stopButton = AgentChatStopButton()
     let composerChip = AgentChatComposerChip()
+    let autoApproveControl = AgentChatAutoApproveControl()
+    /// Steer / Queue chip at the left, Auto-approve at the right, above the input.
+    let composerTopRow = NSStackView()
     private let transcriptScroll = NSScrollView()
     private let transcriptArea = NSView()
     private(set) lazy var modelPicker = AgentModelPickerController(session: session)
     let conversationMenuButton = AgentChatConversationMenuButton()
     /// Asks before an unrestricted mode; tests replace the sheet.
     var confirmUnrestrictedMode: @MainActor (ChatAgent, ACPConfigOption.Choice) async -> Bool = { _, _ in false }
+    /// Asks before Auto-approve turns on; tests replace the sheet.
+    var confirmAutoApprove: @MainActor (ChatAgent) async -> Bool = { _ in false }
     private let attachmentButton = NSButton()
     private let attachmentStrip = AgentChatAttachmentStrip()
     private let composerStatus = NSTextField(wrappingLabelWithString: "")
@@ -85,6 +90,13 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
             guard let self, !self.closed else { return false }
             return await self.confirmUnrestrictedMode(agent, choice)
         }
+        confirmAutoApprove = { [weak self] agent in
+            await AgentAutoApproveAlert.confirm(agent: agent, window: self?.view.window)
+        }
+        session.confirmAutoApprove = { [weak self] agent in
+            guard let self, !self.closed else { return false }
+            return await self.confirmAutoApprove(agent)
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -97,7 +109,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         configureSetup()
         configureComposer()
         let controls = makeComposerControls()
-        let editor = NSStackView(views: [composerChip, attachmentStrip, composerScroll])
+        let editor = NSStackView(views: [makeComposerTopRow(), attachmentStrip, composerScroll])
         editor.orientation = .vertical
         editor.alignment = .leading
         editor.spacing = 8
@@ -105,7 +117,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         composerChip.onRemove = { [weak self] in self?.session.clearQueuedPrompt() }
         attachmentStrip.isHidden = true
         attachmentStrip.onRemove = { [weak self] id in self?.session.removeAttachment(id: id) }
-        for child in [composerChip, attachmentStrip, composerScroll] as [NSView] {
+        for child in [composerTopRow, attachmentStrip, composerScroll] as [NSView] {
             child.widthAnchor.constraint(equalTo: editor.widthAnchor).isActive = true
         }
         for child in [editor, controls] {
@@ -152,6 +164,24 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         configureInspector()
         NotificationCenter.default.addObserver(self, selector: #selector(zoomChanged), name: .cockpitUIZoomDidChange, object: nil)
         render()
+    }
+
+    /// The row above the input: the Steer / Queue chip on the left and the
+    /// Auto-approve switch on the right. Hidden when neither shows.
+    private func makeComposerTopRow() -> NSStackView {
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.init(1), for: .horizontal)
+        composerTopRow.setViews([composerChip, spacer, autoApproveControl], in: .leading)
+        composerTopRow.orientation = .horizontal
+        composerTopRow.alignment = .centerY
+        composerTopRow.distribution = .fill
+        composerTopRow.spacing = 8
+        composerTopRow.detachesHiddenViews = true
+        composerTopRow.isHidden = true
+        autoApproveControl.isHidden = true
+        autoApproveControl.onToggle = { [weak self] on in self?.autoApproveToggled(on) }
+        return composerTopRow
     }
 
     private func makeComposerControls() -> NSStackView {
@@ -406,6 +436,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         // Keep the provider and send action usable in narrow split panes.
         let compact = composerCard.bounds.width < 240 * scale
         composerSpacer.isHidden = compact
+        autoApproveControl.update(compact: compact)
         spinner.isHidden = compact || (session.phase != .starting && session.phase != .prompting)
         if compactComposer != compact {
             compactComposer = compact
@@ -514,6 +545,9 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         } else {
             composerChip.isHidden = true
         }
+        autoApproveControl.isHidden = !session.canAutoApprove
+        autoApproveControl.update(on: session.isAutoApproveEnabled || session.isConfirmingAutoApprove)
+        composerTopRow.isHidden = composerChip.isHidden && autoApproveControl.isHidden
         let steering = turnRunning && session.canSteer
         attachmentButton.isEnabled = !session.isImportingAttachments && !session.isPreparingPrompt && !steering
         attachmentButton.toolTip = steering ? "Attachments can't be sent while steering a running turn" : "Attach photos or videos"
@@ -710,6 +744,21 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         renderAndObserve()
     }
 
+    /// On asks first (Cancel reverts the switch); off applies at once.
+    private func autoApproveToggled(_ on: Bool) {
+        onSelect?()
+        guard on else {
+            session.disableAutoApprove()
+            updateRunControls()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            await session.enableAutoApprove()
+            updateRunControls()
+        }
+    }
+
     @objc private func sendClicked() { sendDraft() }
     @objc private func stopClicked() { stopTurn() }
 
@@ -720,6 +769,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         composer.font = CockpitTypography.font(size: 14)
         emptyPrompt.font = CockpitTypography.font(size: 17, weight: .medium)
         modelLabel.font = CockpitTypography.font(size: 11)
+        autoApproveControl.updateFont()
         modelPicker.zoomChanged()
         previousPhase = nil
         renderPhase()
@@ -738,6 +788,8 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         refreshTask = nil
         timeline.stop()
         modelPicker.close()
+        // No pane shows the switch any more, so nothing may approve unseen.
+        session.disableAutoApprove()
         NotificationCenter.default.removeObserver(self)
         // Pane deletion already removes the registry session. Releasing a view
         // during application teardown must not erase its saved ACP session ID.

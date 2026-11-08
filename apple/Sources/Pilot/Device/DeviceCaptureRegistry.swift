@@ -1,10 +1,13 @@
 import Foundation
+import Observation
 
 // DeviceCaptureRegistry — keyed by Pane.id so the SwiftUI toolbar in
 // `ContentView` and the `DevicePaneView` it lives next to share the
 // same `DeviceCaptureSession`. Mirrors the pattern used by the Ghostty
 // terminal views which look themselves up by paneID.
+// Observable so pane titles re-render when a session first appears.
 @MainActor
+@Observable
 final class DeviceCaptureRegistry {
     static let shared = DeviceCaptureRegistry()
 
@@ -16,6 +19,10 @@ final class DeviceCaptureRegistry {
         let session = WirelessDeviceSession(paneID: paneID)
         wirelessSessions[paneID] = session
         return session
+    }
+
+    func existingWirelessSession(for paneID: UUID) -> WirelessDeviceSession? {
+        wirelessSessions[paneID]
     }
 
     func session(for paneID: UUID) -> DeviceCaptureSession {

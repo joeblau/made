@@ -54,6 +54,16 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     let extensionController: ExtensionWorkspaceController
     let surface: WorkspacePaneSurface
     let paneCache: CockpitPaneControllerCache
+
+    /// Title for a window showing `workspaceName`. The main surface shows only the
+    /// workspace name (the app name is redundant in its own window); the extension
+    /// surface keeps an " — Extendo" suffix so the two windows stay distinguishable.
+    static func windowTitle(workspaceName: String, surface: WorkspacePaneSurface) -> String {
+        switch surface {
+        case .main: workspaceName
+        case .extension: workspaceName + " — " + PilotWindowID.extendoTitle
+        }
+    }
     var onWindowActivate: (() -> Void)?
     var onWindowIDChange: ((CGWindowID?) -> Void)?
     var onSelectionChange: ((Workspace?, Pane?) -> Void)?
@@ -285,7 +295,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
                 bodyController.setContent(workspaceController)
                 workspaceController.refresh(isActive: active)
             }
-            window?.title = surface == .main ? workspace.name + " — Cockpit" : workspace.name + " — Extendo"
+            window?.title = Self.windowTitle(workspaceName: workspace.name, surface: surface)
         } else {
             workspaceController?.deactivate()
             workspaceController = nil

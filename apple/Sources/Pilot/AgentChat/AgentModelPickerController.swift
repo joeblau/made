@@ -114,6 +114,8 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
             refresh()
             return
         case .selectModel(let agent, let modelID):
+            // A running-agent placeholder ("Loading…") carries no model to select.
+            if agent == session.agent, modelID.isEmpty { return }
             if agent != session.agent {
                 // Another provider restarts the pane on it; a placeholder row carries no model.
                 if modelID.isEmpty { session.switchAgent(to: agent) } else { session.selectModel(modelID, on: agent) }
@@ -191,6 +193,13 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
                 state.rows = model.choices.map { row(agent, $0.id, $0.name, $0.detail, $0.group) }
             } else if let snapshot = catalog.snapshot(for: agent) {
                 state.rows = snapshot.models.map { row(agent, $0.id, $0.name, $0.detail, $0.group) }
+            } else {
+                // Never a bare "No models": say why the list is empty.
+                var placeholder = AgentModelPickerState.Row(agent: agent, modelID: "", name: runningPlaceholder(session),
+                                                            detail: nil, group: nil, isCurrent: false, isFavorite: false,
+                                                            isPlaceholder: true)
+                placeholder.isEnabled = false
+                state.rows = [placeholder]
             }
             if let level = config?.thoughtLevel, !level.choices.isEmpty {
                 state.reasoningTitle = config?.model?.currentName ?? level.name
@@ -220,6 +229,17 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
         }
         return state
     }
+
+    /// The running agent's tab when neither its session nor the catalog has
+    /// listed models: loading while it starts, a start hint while stopped.
+    static func runningPlaceholder(_ session: AgentChatSession) -> String {
+        let name = session.agent.displayName
+        switch session.phase {
+        case .starting: return "Loading \(name) models…"
+        case .ready, .prompting: return "\(name) did not list any models"
+        case .idle, .needsSetup, .failed: return "Start \(name) to see its models"
+        }
+    }
 }
 
 // MARK: - Unrestricted mode confirmation
@@ -238,6 +258,41 @@ enum AgentUnrestrictedModeAlert {
         let cancel = alert.addButton(withTitle: "Cancel")
         cancel.keyEquivalent = "\r"
         let allow = alert.addButton(withTitle: "Allow")
+        allow.keyEquivalent = ""
+        allow.hasDestructiveAction = true
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response == .alertSecondButtonReturn)
+            }
+        }
+    }
+}
+
+// MARK: - Auto-approve confirmation
+
+@MainActor
+enum AgentAutoApproveAlert {
+    nonisolated static func messageText(agent: ChatAgent) -> String {
+        "Approve \(agent.displayName) requests automatically?"
+    }
+
+    nonisolated static func informativeText(agent: ChatAgent) -> String {
+        "For the rest of this session, \(agent.displayName) will run commands and edit files without asking. "
+            + "Each request is approved once; nothing is remembered after the session ends."
+    }
+
+    /// Asks on `window`'s sheet whether the session's permission requests may
+    /// be approved automatically. Cancel is the default button; no window
+    /// means no.
+    static func confirm(agent: ChatAgent, window: NSWindow?) async -> Bool {
+        guard let window else { return false }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = messageText(agent: agent)
+        alert.informativeText = informativeText(agent: agent)
+        let cancel = alert.addButton(withTitle: "Cancel")
+        cancel.keyEquivalent = "\r"
+        let allow = alert.addButton(withTitle: "Auto-approve")
         allow.keyEquivalent = ""
         allow.hasDestructiveAction = true
         return await withCheckedContinuation { continuation in

@@ -50,7 +50,7 @@ import Foundation
 //   AgentChatRowActions (shared callbacks), AgentStatusDotView
 //   — configure(status: AgentStatusDotView.Status).
 // - AgentChatNarrativeView.swift (table cells):
-//   ProseCellView — configure(item:isStreaming:followStreamingOutput:actions:),
+//   ProseCellView — configure(item:isStreaming:actions:),
 //     height(item:width:);
 //   UserBubbleCellView — configure(item:actions:), height(item:width:);
 //   NoticeCellView — configure(item:offersSendAgain:actions:), height(item:width:);

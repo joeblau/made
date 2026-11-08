@@ -750,7 +750,8 @@ final class Pane {
         }
     }
 
-    var displayTitle: String {
+    @MainActor var displayTitle: String { // capture panes read main-actor registries
+        if let title = deviceBreadcrumbTitle { return title }
         if kind == .editor, let path = editorState?.filePath, !path.isEmpty {
             return (path as NSString).lastPathComponent
         }

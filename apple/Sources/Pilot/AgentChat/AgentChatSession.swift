@@ -35,6 +35,7 @@ final class AgentChatSession {
         case turnFinished(stopReason: String?)
         case approvalRecorded(requestID: JSONValue, agentName: String)
         case approvalResolved(requestID: JSONValue, decision: AgentChatItem.Approval.Decision)
+        case approvalAutoApproved(requestID: JSONValue)
     }
 
     typealias Decision = AgentChatItem.Approval.Decision
@@ -74,6 +75,15 @@ final class AgentChatSession {
     var pendingModel: PendingModel?
     /// Asks the user before an unrestricted mode is selected; the default refuses.
     @ObservationIgnored var confirmUnrestrictedMode: @MainActor (ChatAgent, ACPConfigOption.Choice) async -> Bool = { _, _ in false }
+    /// Session-scoped "Auto-approve": while on, permission requests that offer
+    /// an `allow_once` option are answered with it. In memory only, off for
+    /// every new session, and reset whenever the agent stops (see
+    /// "Auto-approve" below).
+    private(set) var isAutoApproveEnabled = false
+    /// True while the confirmation sheet for turning auto-approve on is up.
+    private(set) var isConfirmingAutoApprove = false
+    /// Asks the user before auto-approve turns on; the default refuses.
+    @ObservationIgnored var confirmAutoApprove: @MainActor (ChatAgent) async -> Bool = { _ in false }
     private(set) var attachments: [AgentChatAttachment] = []
     private(set) var isImportingAttachments = false
     private(set) var isPreparingPrompt = false
@@ -188,6 +198,7 @@ final class AgentChatSession {
     /// open turn ends as cancelled, open approvals as `.agentStopped`, and
     /// unsent steer or queued text returns to the draft.
     func shutDown() {
+        resetAutoApprove()
         changingConfigOptionID = nil
         isPreparingPrompt = false
         finishOpenTurn(stopReason: "cancelled")
@@ -427,7 +438,7 @@ final class AgentChatSession {
         deliver(request, result: ACP.permissionResult(optionID: nil), decision: .cancelledByUser)
     }
 
-    private func deliver(_ request: ACPPermissionRequest, result: JSONValue, decision: Decision) {
+    private func deliver(_ request: ACPPermissionRequest, result: JSONValue, decision: Decision, autoApproved: Bool = false) {
         guard permissionQueue.contains(request), let connection else { return }
         permissionQueue.removeAll { $0.requestID == request.requestID }
         let generation = generation
@@ -440,7 +451,7 @@ final class AgentChatSession {
                 return
             }
             guard generation == self.generation else { return }
-            resolveApproval(request.requestID, decision)
+            resolveApproval(request.requestID, decision, autoApproved: autoApproved)
         }
     }
 
@@ -567,6 +578,7 @@ final class AgentChatSession {
                 connection, info: info, workingDirectory: workingDirectory, resume: resume, generation: generation
             )
             guard generation == self.generation else { return }
+            let resumed = sessionResult != nil
             if sessionResult == nil {
                 let hadTranscript = !transcript.items.isEmpty
                 let result = try await newSession(connection, info: info, workingDirectory: workingDirectory)
@@ -584,7 +596,14 @@ final class AgentChatSession {
                 sessionResult = result
             }
             guard generation == self.generation else { return }
-            applyConfiguration(sessionResult.flatMap(ACPSessionConfig.init))
+            if resumed {
+                // A session/load answer may omit models and configOptions (or
+                // carry only some parts): it patches the configuration the
+                // replay or an earlier run reported instead of wiping it.
+                applyConfiguration(resumedConfiguration(sessionResult))
+            } else {
+                applyConfiguration(sessionResult.flatMap(ACPSessionConfig.init))
+            }
             phase = .ready
             applyPendingModel()
         } catch let issue as ChatAgentSetupIssue {
@@ -723,6 +742,7 @@ final class AgentChatSession {
         let name = agentName(forSession: request.sessionID)
         transcript.recordApproval(request, agentName: name, now: now())
         log(.approvalRecorded(requestID: id, agentName: name))
+        if isAutoApproveEnabled { autoApprove(request) }
     }
 
     /// `$/cancel_request`: the agent withdrew an open request. The id must
@@ -749,10 +769,11 @@ final class AgentChatSession {
         return Self.redactedLine(card.title, limit: 256)
     }
 
-    private func resolveApproval(_ requestID: JSONValue, _ decision: Decision) {
+    private func resolveApproval(_ requestID: JSONValue, _ decision: Decision, autoApproved: Bool = false) {
         guard let sessionID = openApprovals.removeValue(forKey: requestID) else { return }
-        transcript.resolveApproval(requestID: requestID, sessionID: sessionID, decision: decision)
+        transcript.resolveApproval(requestID: requestID, sessionID: sessionID, decision: decision, autoApproved: autoApproved)
         log(.approvalResolved(requestID: requestID, decision: decision))
+        if autoApproved { log(.approvalAutoApproved(requestID: requestID)) }
     }
 
     /// Every unresolved record, open or being answered, ends as `.agentStopped`.
@@ -764,6 +785,7 @@ final class AgentChatSession {
     private func connectionEnded(_ connection: ACPConnection, generation: Int) async {
         let reason = await connection.closeReason
         guard generation == self.generation else { return }
+        resetAutoApprove()
         barriers.close()
         finishOpenTurn(stopReason: nil)
         // Background subagents died with the process.
@@ -865,6 +887,53 @@ final class AgentChatSession {
         steeredItemKeys = []
         sendAgainNoticeKey = nil
         lastSubmission = nil
+    }
+
+    // MARK: Auto-approve
+
+    /// The switch is offered only while a session is up (ready or prompting).
+    var canAutoApprove: Bool { phase == .ready || phase == .prompting }
+
+    /// Takes effect at once for every later request; no confirmation.
+    func disableAutoApprove() { isAutoApproveEnabled = false }
+
+    /// Asks first (`confirmAutoApprove`; Cancel keeps it off), then answers
+    /// every request already waiting. A session that stopped or changed while
+    /// the sheet was up keeps it off.
+    func enableAutoApprove() async {
+        guard canAutoApprove, !isAutoApproveEnabled, !isConfirmingAutoApprove else { return }
+        let generation = generation
+        isConfirmingAutoApprove = true
+        let confirmed = await confirmAutoApprove(agent)
+        guard generation == self.generation else { return }
+        isConfirmingAutoApprove = false
+        guard confirmed, canAutoApprove else { return }
+        isAutoApproveEnabled = true
+        for request in permissionQueue { autoApprove(request) }
+    }
+
+    /// The option auto-approve may choose: the agent's `allow_once`, never
+    /// `allow_always` or a reject. A `switch_mode` request (leaving plan mode)
+    /// or an `exit-plan` option is a decision about the agent's mode, so it
+    /// always goes to the user, as does a request with no allow-once option.
+    nonisolated static func autoApproveOption(for request: ACPPermissionRequest) -> ACPPermissionRequest.Option? {
+        guard request.toolKind != .switchMode else { return nil }
+        return request.options.first { option in
+            option.kind == .allowOnce && !ApprovalCardView.isModeChangeOptionID(option.id)
+        }
+    }
+
+    /// Answers `request` with its allow-once option, recorded as auto-approved;
+    /// a request without one stays queued for the approval card.
+    private func autoApprove(_ request: ACPPermissionRequest) {
+        guard let option = Self.autoApproveOption(for: request) else { return }
+        deliver(request, result: ACP.permissionResult(optionID: option.id),
+                decision: .chose(optionID: option.id, name: option.name, allows: true), autoApproved: true)
+    }
+
+    private func resetAutoApprove() {
+        isAutoApproveEnabled = false
+        isConfirmingAutoApprove = false
     }
 
     private static var clientVersion: String {

@@ -84,7 +84,7 @@ final class BrowserWebView: WKWebView, BrowserPaneContent {
         }
 
         // Otherwise give the app's main menu first crack — a focused WKWebView
-        // otherwise swallows global shortcuts (⌘T, ⌘B, ⌘L, ⌘0, ⌘±, …) before
+        // otherwise swallows global shortcuts (⌘T, ⌘L, ⌘0, ⌘±, …) before
         // they ever reach the menu.
         if NSApp.mainMenu?.performKeyEquivalent(with: event) == true {
             return true

@@ -116,8 +116,10 @@ final class InspectorActionButton: NSButton {
 final class InspectorSectionHeader: NSView {
     private let titleField = InspectorNativeUI.label("", weight: .medium, color: .secondaryLabelColor)
     private let icon = NSImageView()
+    /// Only shown for a header that loads without offering a refresh button;
+    /// otherwise the refresh button swaps itself for a spinner in place.
     private let spinner = NSProgressIndicator()
-    private let refreshButton = InspectorActionButton("", symbol: "arrow.clockwise", handler: {})
+    private let refreshButton = CockpitRefreshButton(help: "Refresh", diameter: 26, action: {})
     var refresh: (() -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -127,11 +129,12 @@ final class InspectorSectionHeader: NSView {
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
-        refreshButton.handler = { [weak self] in self?.refresh?() }
+        spinner.isHidden = true
+        spinner.setAccessibilityLabel(CockpitRefreshButton.refreshingLabel)
+        refreshButton.action = { [weak self] in self?.refresh?() }
         InspectorNativeUI.pin(InspectorNativeUI.horizontal([icon, titleField, NSView(), spinner, refreshButton]), in: self, inset: 8)
         NSLayoutConstraint.activate([
             icon.widthAnchor.constraint(equalToConstant: 16),
-            refreshButton.widthAnchor.constraint(equalToConstant: 26),
             spinner.widthAnchor.constraint(equalToConstant: 16),
         ])
     }
@@ -144,11 +147,14 @@ final class InspectorSectionHeader: NSView {
         titleField.maximumNumberOfLines = 1
         titleField.toolTip = title
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
-        refreshButton.isHidden = refreshHelp == nil
-        refreshButton.toolTip = refreshHelp
-        refreshButton.setAccessibilityLabel(refreshHelp ?? "Refresh")
-        refreshButton.isEnabled = refreshEnabled && !loading
-        if loading { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        let showsRefresh = refreshHelp != nil
+        refreshButton.isHidden = !showsRefresh
+        refreshButton.help = refreshHelp ?? "Refresh"
+        refreshButton.isEnabled = refreshEnabled
+        refreshButton.isRefreshing = showsRefresh && loading
+        let showsPlainSpinner = !showsRefresh && loading
+        spinner.isHidden = !showsPlainSpinner
+        if showsPlainSpinner { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
 }
 /// The workspace owns tab selection; this controller owns only visible UI and polling.

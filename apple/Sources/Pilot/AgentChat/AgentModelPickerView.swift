@@ -752,17 +752,17 @@ final class AgentModelTriggerButton: NSButton {
         let height = 28 * scale
         guard !compact else { return NSSize(width: height, height: height) }
         let text = AgentModelPickerDrawing.fit(label).width
-        return NSSize(width: 10 * scale + 18 * scale + 6 * scale + text + 11 * scale, height: height)
+        return NSSize(width: 12 * scale + 18 * scale + 6 * scale + text + 13 * scale, height: height)
     }
 
     override func layout() {
         super.layout()
         let size = 18 * scale
-        let glyphX = compact ? (bounds.width - size) / 2 : 10 * scale
+        let glyphX = compact ? (bounds.width - size) / 2 : 12 * scale
         glyph.frame = NSRect(x: glyphX, y: (bounds.height - size) / 2, width: size, height: size)
         let height = AgentModelPickerDrawing.fit(label).height
         let x = glyph.frame.maxX + 6 * scale
-        label.frame = NSRect(x: x, y: (bounds.height - height) / 2, width: max(0, bounds.width - x - 10 * scale), height: height)
+        label.frame = NSRect(x: x, y: (bounds.height - height) / 2, width: max(0, bounds.width - x - 13 * scale), height: height)
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
@@ -770,10 +770,17 @@ final class AgentModelTriggerButton: NSButton {
     }
 
     override var focusRingMaskBounds: NSRect { bounds }
-    override func drawFocusRingMask() { NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill() }
+    /// Full capsule; a circle when compact (square bounds).
+    var capsuleRadius: CGFloat { bounds.height / 2 }
+
+    private var capsulePath: NSBezierPath {
+        NSBezierPath(roundedRect: bounds, xRadius: capsuleRadius, yRadius: capsuleRadius)
+    }
+
+    override func drawFocusRingMask() { capsulePath.fill() }
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.labelColor.withAlphaComponent(isHighlighted ? 0.14 : 0.07).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+        capsulePath.fill()
     }
 }
