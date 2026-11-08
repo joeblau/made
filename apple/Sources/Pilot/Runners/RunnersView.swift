@@ -15,7 +15,8 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
     private let error = RRUI.label("", size: 12, color: .systemOrange)
     private let search = NSSearchField(string: "")
     private let layoutPicker = NSSegmentedControl(labels: ["3D Fleet", "Compact", "Cards"], trackingMode: .selectOne, target: nil, action: nil)
-    private let refresh = RRButton("Refresh", symbol: "arrow.clockwise", action: {})
+    private let refresh = CockpitRefreshButton(help: "Refresh", diameter: CockpitToolbarGroups.capsuleHeight,
+                                               scalesWithZoom: false, action: {})
     private let toolbar = NSStackView()
     private let filters = CockpitToolbarGroups()
     var pageToolbarView: NSView { loadViewIfNeeded(); return filters }
@@ -68,16 +69,14 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
         layoutPicker.action = #selector(changeLayout)
         layoutPicker.selectedSegment = RunnerLayout.allCases.firstIndex(of: layout) ?? 0
         layoutPicker.setAccessibilityLabel("Runner layout")
-        refresh.perform = { [weak self] in self?.refreshSelected() }
+        refresh.action = { [weak self] in self?.refreshSelected() }
         filters.setAccessibilityIdentifier("runners.toolbar-controls")
         layoutPicker.segmentStyle = .capsule
         layoutPicker.controlSize = .small
-        refresh.title = ""
-        refresh.imagePosition = .imageOnly
-        refresh.isBordered = false
-        refresh.toolTip = "Refresh"
-        refresh.setAccessibilityLabel("Refresh")
-        filters.setGroups([[search], [layoutPicker], [refresh]])
+        filters.setGroups([[search], [layoutPicker]])
+        // The refresh circle is its own glass surface; wrapping it in a group
+        // capsule would stack two glass layers.
+        filters.addArrangedSubview(refresh)
         toolbar.orientation = .horizontal
         toolbar.alignment = .centerY
         toolbar.spacing = 10
@@ -159,7 +158,7 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
         summary.stringValue = "\(runners.count) of \(store.snapshot.runners.count) runners · \(counts[.idle, default: 0]) idle · \(counts[.busy, default: 0]) busy · \(counts[.offline, default: 0]) offline"
         if search.stringValue != store.searchText { search.stringValue = store.searchText }
         refresh.isEnabled = isLive && !store.isRefreshing
-        refresh.toolTip = store.isRefreshing ? "Refreshing…" : "Refresh"
+        refresh.isRefreshing = store.isRefreshing
         error.stringValue = store.snapshot.error.map { $0 + (store.snapshot.updatedAt == nil ? "" : " Showing the last successful refresh.") } ?? ""
         error.isHidden = error.stringValue.isEmpty
         updateFootnote()

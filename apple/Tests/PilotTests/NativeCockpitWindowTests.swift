@@ -91,6 +91,76 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
+    func testWorkspaceOpenTaskBadgeUpdatesAndOpensTasks() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkspace()
+        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        fixture.store.openTaskCounts[workspace.id] = 3
+        let sidebar = WorkspaceSidebarViewController(store: fixture.store, defaults: fixture.defaults, isLive: false)
+        let table = try XCTUnwrap(descendants(sidebar.view).compactMap { $0 as? NSTableView }.first)
+        let row = table.numberOfRows - 1
+        let cell = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: row))
+        let badge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceOpenTaskBadgeView }.first)
+        let gauge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceGaugeView }.first)
+        XCTAssertEqual(badge.title, "3")
+        XCTAssertEqual(badge.accessibilityLabel(), "3 open tasks")
+        XCTAssertFalse(badge.isHidden)
+        XCTAssertEqual(badge.intrinsicContentSize.width, badge.intrinsicContentSize.height, "one or two digits draw a circle")
+        cell.frame = NSRect(x: 0, y: 0, width: 240, height: 44)
+        cell.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThanOrEqual(badge.frame.minX, gauge.frame.maxX)
+        // The lone visible badge hugs the trailing edge at its own size.
+        let badgeFrame = badge.convert(badge.bounds, to: cell)
+        XCTAssertEqual(badgeFrame.maxX, cell.bounds.maxX - 4, accuracy: 1)
+        XCTAssertEqual(badgeFrame.width, WorkspaceOpenTaskBadgeView.diameter, accuracy: 0.5)
+        badge.performClick(nil)
+        XCTAssertEqual(fixture.store.selectedWorkspaceID, workspace.id)
+        XCTAssertEqual(workspace.inspectorTab, .tasks)
+        XCTAssertTrue(workspace.isInspectorPresented)
+
+        fixture.store.openTaskCounts[workspace.id] = 0
+        sidebar.refresh()
+        let updated = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: row))
+        let updatedBadge = try XCTUnwrap(descendants(updated).compactMap { $0 as? WorkspaceOpenTaskBadgeView }.first)
+        XCTAssertTrue(updatedBadge.isHidden)
+        XCTAssertFalse(updatedBadge.isEnabled)
+    }
+
+    @MainActor
+    func testWorkspaceSidebarLongNameTruncatesBeforeTaskBadge() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkspace()
+        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        workspace.name = String(repeating: "very long workspace name ", count: 8)
+        fixture.store.openTaskCounts[workspace.id] = 120
+        let sidebar = WorkspaceSidebarViewController(store: fixture.store, defaults: fixture.defaults, isLive: false)
+        let table = try XCTUnwrap(descendants(sidebar.view).compactMap { $0 as? NSTableView }.first)
+        let cell = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: table.numberOfRows - 1))
+        let badge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceOpenTaskBadgeView }.first)
+        let name = try XCTUnwrap(descendants(cell).compactMap { $0 as? NSTextField }.first { $0.stringValue == workspace.name })
+        XCTAssertEqual(badge.title, "99+")
+        XCTAssertGreaterThan(badge.intrinsicContentSize.width, badge.intrinsicContentSize.height, "wide counts draw a capsule")
+        cell.frame = NSRect(x: 0, y: 0, width: 220, height: 44)
+        cell.layoutSubtreeIfNeeded()
+        let badgeFrame = badge.convert(badge.bounds, to: cell)
+        let nameFrame = name.convert(name.bounds, to: cell)
+        XCTAssertLessThanOrEqual(nameFrame.maxX, badgeFrame.minX)
+        XCTAssertEqual(badgeFrame.width, badge.intrinsicContentSize.width, accuracy: 0.5)
+        XCTAssertEqual(badgeFrame.maxX, cell.bounds.maxX - 4, accuracy: 1)
+
+        let tableCell = try XCTUnwrap(cell as? NSTableCellView)
+        let gauge = try XCTUnwrap(descendants(cell).compactMap { $0 as? WorkspaceGaugeView }.first)
+        tableCell.backgroundStyle = .emphasized
+        XCTAssertTrue(badge.isEmphasized)
+        XCTAssertTrue(gauge.isEmphasized)
+        tableCell.backgroundStyle = .normal
+        XCTAssertFalse(badge.isEmphasized)
+        XCTAssertFalse(gauge.isEmphasized)
+    }
+
+    @MainActor
     func testCachedGlobalPageKeepsItsViewAndRelinquishesKeyboardFocusWhileHidden() throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
@@ -412,12 +482,12 @@ final class NativeCockpitWindowTests: XCTestCase {
 
     @MainActor
     func testTerminalOpeningShortcutsStayWithTheFocusedChooser() throws {
-        try assertOpeningShortcuts(tool: "Terminal", letters: ["a", "r", "A", "R"])
+        try assertOpeningShortcuts(letters: ["a", "r", "A", "R"])
     }
 
     @MainActor
-    func testMobileLaunchersOpenThePlaceholderOnTheirPlatformChoice() throws {
-        for (tool, page) in [("Simulator", NewTabPage.simulator), ("Device", .device)] {
+    func testToolbarTabSelectorOpensTheNewTabList() throws {
+        for page in [NewTabPage.simulator, .device] {
             let fixture = try Fixture()
             defer { fixture.cleanUp() }
             fixture.store.addWorkspace()
@@ -425,12 +495,12 @@ final class NativeCockpitWindowTests: XCTestCase {
             controller.showWindow(nil)
             let window = try XCTUnwrap(controller.window)
             defer { window.orderOut(nil); controller.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
-            let launcher = try XCTUnwrap(window.toolbar?.items.compactMap { $0 as? NSToolbarItemGroup }.first {
-                $0.itemIdentifier.rawValue == "cockpit.launcher"
-            })
-            let item = try XCTUnwrap(launcher.subitems.first { $0.label == tool })
+            let item = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue == "cockpit.launcher" })
+            XCTAssertFalse(item is NSToolbarItemGroup)
             XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
             let placeholder = try XCTUnwrap(window.firstResponder as? CockpitNewTabView)
+            XCTAssertEqual(placeholder.currentPage, .root, "The toolbar button opens the full New Tab list")
+            placeholder.push(page)
             XCTAssertEqual(placeholder.currentPage, page)
             XCTAssertEqual(placeholder.rows.map(\.shortcut), ["a", "g"])
             let escape = try XCTUnwrap(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
@@ -443,7 +513,7 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
-    private func assertOpeningShortcuts(tool: String, letters: [String]) throws {
+    private func assertOpeningShortcuts(letters: [String]) throws {
         let typing = Array(letters.prefix(2))
         for letter in letters {
             let fixture = try Fixture()
@@ -462,10 +532,8 @@ final class NativeCockpitWindowTests: XCTestCase {
             defer { window.orderOut(nil); controller.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
             let workspace = try XCTUnwrap(controller.selectedWorkspace)
             let originalInput = try XCTUnwrap(created.values.first)
-            let launcher = try XCTUnwrap(window.toolbar?.items.compactMap { $0 as? NSToolbarItemGroup }.first {
-                $0.itemIdentifier.rawValue == "cockpit.launcher"
-            })
-            let item = try XCTUnwrap(launcher.subitems.first { $0.label == tool })
+            let item = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue == "cockpit.launcher" })
+            XCTAssertFalse(item is NSToolbarItemGroup)
             func openPane() throws {
                 XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
                 XCTAssertTrue(window.firstResponder is CockpitNewTabView)
@@ -490,7 +558,9 @@ final class NativeCockpitWindowTests: XCTestCase {
             controller.focusSelectedPane()
             let picker = try XCTUnwrap(window.firstResponder as? CockpitNewTabView)
             XCTAssertEqual(picker.pane.id, pane.id)
-            XCTAssertEqual(picker.currentPage, .terminal, "The toolbar opens the placeholder on its category")
+            XCTAssertEqual(picker.currentPage, .root, "The toolbar opens the full New Tab list")
+            picker.push(.terminal)
+            XCTAssertEqual(picker.currentPage, .terminal)
             for flags: NSEvent.ModifierFlags in [.command, .control, .option] {
                 picker.keyDown(with: try key(letter, flags: flags))
             }
@@ -511,7 +581,7 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
-    func testCommandTAndCommandBOpenTheSameNativeChoicesAsTheToolbar() async throws {
+    func testCommandTOpensTheNativeChoicesAndNoCommandOpensABrowserDirectly() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
         fixture.store.addWorkspace()
@@ -539,10 +609,12 @@ final class NativeCockpitWindowTests: XCTestCase {
         XCTAssertTrue(picker.pane.isChoosingMode)
         XCTAssertEqual(picker.currentPage, .root)
         XCTAssertEqual(picker.rows.map(\.shortcut), ["t", "b", "s", "d", "f", "e"])
-        let browser = try XCTUnwrap(items.first { $0.title == "New Browser" } as? ShellMenuItem)
-        XCTAssertEqual(browser.keyEquivalent, "b")
-        XCTAssertEqual(browser.keyEquivalentModifierMask, .command)
-        browser.perform()
+        // New Tab is the single way to open panes: no menu item opens a
+        // browser directly, and Command-B is unbound.
+        XCTAssertFalse(items.contains { $0.title == "New Browser" || $0.title == "New Chromium Browser" })
+        XCTAssertFalse(items.contains { $0.keyEquivalent == "b" && $0.keyEquivalentModifierMask == .command })
+        controller.selectedWorkspace?.addBrowserPane(engine: .webKit, side: .right)
+        controller.refresh(); controller.focusSelectedPane()
         let pane = try XCTUnwrap(controller.selectedPane)
         XCTAssertEqual(pane.browserState?.engine, .webKit)
         XCTAssertFalse(pane.isChoosingMode)
@@ -576,37 +648,26 @@ final class NativeCockpitWindowTests: XCTestCase {
         fixture.store.addWorkspace()
         let first = try XCTUnwrap(fixture.store.selectedWorkspace)
         let launcher = WorkspacePaneLauncher(workspace: first)
-        let group = launcher.makeToolbarItem(identifier: .init("fixture.launcher"))
-        let terminal = try XCTUnwrap(group.subitems.first { $0.label == "Terminal" })
-        XCTAssertFalse(group.subitems.contains { $0 is NSMenuToolbarItem })
-        let editor = try XCTUnwrap(group.subitems.first { $0.label == "Editor" })
-        XCTAssertFalse(editor.isEnabled)
+        let item = launcher.makeToolbarItem(identifier: .init("fixture.launcher"))
+        XCTAssertFalse(item is NSToolbarItemGroup, "One tab-selector button replaces the per-kind segments")
+        XCTAssertEqual(item.label, "New Tab")
+        XCTAssertTrue(item.isEnabled)
         fixture.store.addWorkspace(directory: URL(fileURLWithPath: "/tmp"))
         let second = try XCTUnwrap(fixture.store.selectedWorkspace)
         second.rootPath = "/tmp"
         launcher.workspace = second
-        XCTAssertTrue(editor.isEnabled)
         let firstCount = first.panes.count
         let secondCount = second.panes.count
-        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(terminal.action), to: terminal.target, from: terminal))
+        XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
         XCTAssertEqual(first.panes.count, firstCount)
         XCTAssertEqual(second.panes.count, secondCount + 1)
-        XCTAssertFalse(group.subitems.contains { $0.label == "Agent Chat" })
         XCTAssertEqual(second.selectedPane?.kind, .terminal)
         XCTAssertTrue(second.selectedPane?.isChoosingMode == true)
-        XCTAssertEqual(second.selectedPane?.openingPath, [.root, .terminal])
-        for (title, kind) in [("Browser", PaneKind.browser), ("Simulator", .simulator), ("Device", .device)] {
-            let item = try XCTUnwrap(group.subitems.first { $0.label == title })
-            XCTAssertTrue(NSApp.sendAction(try XCTUnwrap(item.action), to: item.target, from: item))
-            XCTAssertEqual(second.selectedPane?.kind, kind)
-            XCTAssertEqual(second.selectedPane?.isChoosingMode, kind != .browser)
-        }
-        XCTAssertEqual(second.selectedPane?.openingPath, [.root, .device])
+        XCTAssertEqual(second.selectedPane?.openingPath, [.root])
         let terminalMenu = try XCTUnwrap(launcher.makeMenu().items.first { $0.title == "Terminal" }?.submenu)
         XCTAssertTrue(terminalMenu.items.contains { $0.title == "Agentic Terminal" })
         launcher.workspace = nil
-        XCTAssertFalse(group.isEnabled)
-        XCTAssertTrue(group.subitems.allSatisfy { !$0.isEnabled })
+        XCTAssertFalse(item.isEnabled)
         XCTAssertTrue(launcher.makeMenu().items.isEmpty)
     }
 
@@ -852,7 +913,7 @@ final class NativeCockpitWindowTests: XCTestCase {
         menus.canCheckForUpdates = { false }
         menus.install()
         let items = flattened(try XCTUnwrap(NSApp.mainMenu))
-        for title in ["New Tab", "New Browser", "Focus Address Bar", "Check for Updates…", "Focus or Restore Selected Pane", "Hide Selected Pane", "Arrange Panes Horizontally", "Stack Panes Vertically", "Reset Pane Sizes"] {
+        for title in ["New Tab", "Focus Address Bar", "Check for Updates…", "Focus or Restore Selected Pane", "Hide Selected Pane", "Arrange Panes Horizontally", "Stack Panes Vertically", "Reset Pane Sizes"] {
             let item = try XCTUnwrap(items.first { $0.title == title } as? ShellMenuItem)
             XCTAssertFalse(item.validateMenuItem(item), title)
         }

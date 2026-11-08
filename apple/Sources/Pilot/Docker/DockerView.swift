@@ -12,11 +12,11 @@ final class DockerViewController: NSViewController, NSTableViewDataSource, NSTab
     private let search = NSSearchField()
     private let stopped = NSSwitch()
     private let stoppedLabel = NSTextField(labelWithString: "Show stopped")
-    private let refreshButton = NSButton()
+    private let refreshButton = CockpitRefreshButton(help: "Refresh containers", diameter: CockpitToolbarGroups.capsuleHeight,
+                                                     scalesWithZoom: false, action: {})
     private let toolbarControls = CockpitToolbarGroups()
     private var searchWidth: NSLayoutConstraint?
     var pageToolbarView: NSView { loadViewIfNeeded(); return toolbarControls }
-    private let spinner = NSProgressIndicator()
     private let errorText = NSTextField(wrappingLabelWithString: "")
     private let dismissError = NSButton()
     private let table = NSTableView()
@@ -70,27 +70,17 @@ final class DockerViewController: NSViewController, NSTableViewDataSource, NSTab
         stoppedToggle.orientation = .horizontal
         stoppedToggle.alignment = .centerY
         stoppedToggle.spacing = 6
-        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh containers")
-        refreshButton.bezelStyle = .smallSquare
-        refreshButton.isBordered = false
-        refreshButton.symbolConfiguration = .init(pointSize: 14, weight: .regular)
-        refreshButton.target = self
-        refreshButton.action = #selector(refreshContainers)
-        refreshButton.toolTip = "Refresh containers"
+        refreshButton.action = { [weak self] in self?.refreshContainers() }
         toolbarControls.setAccessibilityIdentifier("docker.toolbar-controls")
-        toolbarControls.setGroups([[search], [stoppedToggle], [refreshButton]])
+        toolbarControls.setGroups([[search], [stoppedToggle]])
+        // The refresh circle is its own glass surface (and spinner slot); a
+        // group capsule around it would stack two glass layers.
+        toolbarControls.addArrangedSubview(refreshButton)
         searchWidth = search.widthAnchor.constraint(equalToConstant: 180)
         searchWidth?.isActive = true
         NSLayoutConstraint.activate([
             search.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
-            refreshButton.widthAnchor.constraint(equalToConstant: 28),
-            refreshButton.heightAnchor.constraint(equalToConstant: 28),
         ])
-        refreshButton.imagePosition = .imageOnly
-        refreshButton.setAccessibilityLabel("Refresh containers")
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
         status.lineBreakMode = .byTruncatingTail
         errorText.textColor = .systemOrange
         dismissError.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss error")
@@ -122,7 +112,7 @@ final class DockerViewController: NSViewController, NSTableViewDataSource, NSTab
         scroll.documentView = table
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
-        for child in [status, spinner, errorText, dismissError,
+        for child in [status, errorText, dismissError,
                       scroll, emptyTitle, emptyDetail, retry, openDocker] {
             view.addSubview(child)
         }
@@ -177,7 +167,7 @@ final class DockerViewController: NSViewController, NSTableViewDataSource, NSTab
         if search.currentEditor() == nil { search.stringValue = store.searchText }
         stopped.state = store.showsStopped ? .on : .off
         refreshButton.isEnabled = isLive && store.engine.isConnected && !store.isRefreshing
-        if store.isRefreshing || store.engine == .checking { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        refreshButton.isRefreshing = store.isRefreshing || store.engine == .checking
         errorText.stringValue = store.actionError ?? ""
         errorText.isHidden = store.actionError == nil
         dismissError.isHidden = errorText.isHidden
@@ -280,8 +270,7 @@ final class DockerViewController: NSViewController, NSTableViewDataSource, NSTab
         let width = view.bounds.width
         let zoom = CockpitUIZoomController.shared.factor
         let headerHeight: CGFloat = 46 * zoom
-        status.frame = NSRect(x: 16, y: 12, width: max(0, width - 60), height: 24 * zoom)
-        spinner.frame = NSRect(x: width - 38, y: 13, width: 16, height: 16)
+        status.frame = NSRect(x: 16, y: 12, width: max(0, width - 32), height: 24 * zoom)
         searchWidth?.constant = 180 * zoom
         search.font = CockpitTypography.font(size: 12)
         status.font = CockpitTypography.font(size: 12)
@@ -361,7 +350,7 @@ final class DockerViewController: NSViewController, NSTableViewDataSource, NSTab
         stopped.state = stopped.state == .on ? .off : .on
         toggleStopped()
     }
-    @objc private func refreshContainers() { if isLive { store.refreshNow() } }
+    private func refreshContainers() { if isLive { store.refreshNow() } }
     @objc private func clearError() { store.dismissActionError() }
     @objc private func reconnect() { if isLive { store.reconnect() } }
     @objc private func launchDocker() {

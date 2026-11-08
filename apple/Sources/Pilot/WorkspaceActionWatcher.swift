@@ -26,9 +26,10 @@ struct ActionCompletionTracker {
 }
 
 /// Background poller that badges a workspace when a GitHub Action run completes
-/// for its repo while you're looking at a *different* workspace. Complements
-/// the terminal-bell badge (which already covers "a CLI finished"). The active
-/// `RepositoryStore` only polls the selected repo, so this sweeps them all.
+/// for its repo while you're looking at a *different* workspace and tracks each
+/// repo's open-task count. Complements the terminal-bell badge (which already
+/// covers "a CLI finished"). The active inspectors only poll the selected repo,
+/// so this sweeps them all through the shared repository scheduler.
 @MainActor
 final class WorkspaceActionWatcher {
     private(set) var workflowRuns: [UUID: [BuildWorkflowRun]] = [:]
@@ -125,6 +126,9 @@ final class WorkspaceActionWatcher {
                     guard let self, self.fetchGenerations[wsID] == generation else { return }
                     self.fetchTasks[wsID] = nil
                     if case .success(let snapshot) = result {
+                        if let openTaskCount = snapshot.openTaskCount {
+                            self.store?.openTaskCounts[wsID] = openTaskCount
+                        }
                         self.workflowRuns[wsID] = snapshot.runs
                         let checkedAt = snapshot.runs.map(\.state.checkedAt).max()
                             ?? Date().timeIntervalSince1970
@@ -154,6 +158,9 @@ final class WorkspaceActionWatcher {
         let liveIDs = Set(store.workspaces.map(\.id))
         workspacesWithActiveRuns.formIntersection(liveIDs)
         workflowRuns = workflowRuns.filter { liveIDs.contains($0.key) }
+        let rootedIDs = Set(store.workspaces.compactMap { $0.effectiveRootPath == nil ? nil : $0.id })
+        let openTaskCounts = store.openTaskCounts.filter { rootedIDs.contains($0.key) }
+        if store.openTaskCounts != openTaskCounts { store.openTaskCounts = openTaskCounts }
     }
 
     private func process(workspaceID: UUID, result: Result<Set<Int>, ActionRunFetchError>) {
@@ -173,6 +180,7 @@ final class WorkspaceActionWatcher {
         let completedIDs: Set<Int>
         let hasActiveRun: Bool
         let runs: [BuildWorkflowRun]
+        let openTaskCount: Int?
     }
 
     /// Runs for the repo at `dir`. Newly-completed runs (vs. the last sweep)
@@ -218,7 +226,19 @@ final class WorkspaceActionWatcher {
         let runs = items.compactMap {
             BuildWorkflowRun.parse($0, workspaceID: workspaceID, workspaceName: workspaceName, checkedAt: fetchedAt ?? .distantPast)
         }
-        return .success(RunSnapshot(completedIDs: ids, hasActiveRun: hasActiveRun, runs: runs))
+        let openTaskCount = await Self.fetchOpenTaskCount(repository: repository)
+        return .success(RunSnapshot(completedIDs: ids, hasActiveRun: hasActiveRun, runs: runs, openTaskCount: openTaskCount))
+    }
+
+    private nonisolated static func fetchOpenTaskCount(repository: CanonicalRepository) async -> Int? {
+        guard let data = try? await RepositoryPollingScheduler.shared.data(for: .issues, repository: repository, policy: .automatic) else {
+            return nil
+        }
+        return openTaskCount(from: data)
+    }
+
+    nonisolated static func openTaskCount(from data: Data) -> Int? {
+        (try? JSONDecoder().decode([GitHubTask].self, from: data))?.count
     }
 
 }

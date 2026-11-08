@@ -82,6 +82,25 @@ extension AgentChatSession {
         if let newConfig { AgentModelCatalog(defaults: defaults).record(newConfig, for: agent) }
     }
 
+    /// The configuration after a `session/load` answer: its parts patch the
+    /// current configuration, and an answer without any keeps it as is.
+    func resumedConfiguration(_ result: JSONValue?) -> ACPSessionConfig? {
+        let patch = result.map { ACPSessionConfig.Patch($0) } ?? ACPSessionConfig.Patch()
+        guard !patch.isEmpty else { return config }
+        guard let config else { return ACPSessionConfig().applying(patch) }
+        var merged = config.applying(patch)
+        // A load answer may name the current model without listing the
+        // choices: keep the choices reported earlier and take only its value.
+        if let previous = ACPSessionConfig.modelOption(in: config.options), !previous.choices.isEmpty,
+           let index = merged.options.firstIndex(where: { $0.id == previous.id }), merged.options[index].choices.isEmpty {
+            merged.options[index].choices = previous.choices
+        }
+        if let previous = config.legacyModels, !previous.choices.isEmpty, merged.legacyModels?.choices.isEmpty == true {
+            merged.legacyModels?.choices = previous.choices
+        }
+        return merged
+    }
+
     /// Agent-initiated changes (`config_option_update`, `current_model_update`,
     /// `current_mode_update`) are displayed as reported.
     func applyConfigurationUpdate(_ update: ACPUpdate) {

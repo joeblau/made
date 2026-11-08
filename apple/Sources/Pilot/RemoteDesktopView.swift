@@ -549,20 +549,42 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
     private func showForm(error: String?) {
         viewer?.detach()
         viewer = nil
+        // A compact sign-in column: identity first, then credentials, then
+        // options, then one primary action. It stays narrow and centered
+        // however wide the card is.
+        let symbol = NSImageView(image: NSImage(systemSymbolName: "display", accessibilityDescription: nil) ?? NSImage())
+        symbol.symbolConfiguration = .init(pointSize: 26 * RRUI.zoom, weight: .regular)
+        symbol.contentTintColor = .secondaryLabelColor
+        let heading = RRUI.label("Sign in to screen sharing", size: 15, weight: .semibold)
+        let address = RRUI.label("\(connection.host):\(connection.port)", size: 12, color: .secondaryLabelColor)
+        for label in [heading, address] { label.alignment = .center; label.lineBreakMode = .byTruncatingMiddle }
+        let identity = RRUI.stack([symbol, heading, address], spacing: 4)
+        identity.alignment = .centerX
+        identity.setCustomSpacing(10, after: symbol)
+        for field in [username, password] as [NSTextField] {
+            field.controlSize = .large
+            field.bezelStyle = .roundedBezel
+        }
         let usernameGroup = RRUI.stack([
-            RRUI.label("Username (optional)", size: 12, weight: .medium), username,
+            RRUI.label("Username (optional)", size: 11, weight: .medium, color: .secondaryLabelColor), username,
         ], spacing: LiquidGlassMetrics.Spacing.xxSmall)
         let passwordGroup = RRUI.stack([
-            RRUI.label("Password", size: 12, weight: .medium), password,
+            RRUI.label("Password", size: 11, weight: .medium, color: .secondaryLabelColor), password,
         ], spacing: LiquidGlassMetrics.Spacing.xxSmall)
         RRUI.fillWidth(usernameGroup)
         RRUI.fillWidth(passwordGroup)
-        let form = RRUI.stack([
-            RRUI.label("\(connection.host):\(connection.port)", size: 12, color: .secondaryLabelColor),
-            usernameGroup, passwordGroup, save, automatic,
-        ], spacing: LiquidGlassMetrics.Spacing.small)
-        if let error { form.addArrangedSubview(RRUI.label(error, size: 12, color: .systemRed)) }
+        let options = RRUI.stack([save, automatic], spacing: 6)
+        let form = RRUI.stack([identity, usernameGroup, passwordGroup, options], spacing: 12)
+        form.setCustomSpacing(16, after: identity)
+        form.setCustomSpacing(16, after: passwordGroup)
+        form.setCustomSpacing(16, after: options)
+        if let error {
+            let message = RRUI.label(error, size: 12, color: .systemRed)
+            message.maximumNumberOfLines = 3
+            form.addArrangedSubview(message)
+        }
         let button = RRButton(error == nil ? "Connect" : "Try Again") { [weak self] in self?.connect() }
+        button.controlSize = .large
         button.isEnabled = isLive && !connection.host.trimmingCharacters(in: .whitespaces).isEmpty
         primary = button
         form.addArrangedSubview(button)
@@ -575,11 +597,25 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         let document = RemoteCredentialsDocument()
         scroll.documentView = document
         document.translatesAutoresizingMaskIntoConstraints = false
-        RRUI.pin(form, to: document, inset: 16)
+        form.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(form)
+        let preferredWidth = form.widthAnchor.constraint(equalToConstant: 300 * RRUI.zoom)
+        preferredWidth.priority = .defaultHigh
+        let snugHeight = document.heightAnchor.constraint(equalToConstant: 0)
+        snugHeight.priority = .defaultLow
         NSLayoutConstraint.activate([
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             document.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             document.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
+            snugHeight,
+            preferredWidth,
+            form.leadingAnchor.constraint(greaterThanOrEqualTo: document.leadingAnchor, constant: 20),
+            form.trailingAnchor.constraint(lessThanOrEqualTo: document.trailingAnchor, constant: -20),
+            form.centerXAnchor.constraint(equalTo: document.centerXAnchor),
+            form.topAnchor.constraint(greaterThanOrEqualTo: document.topAnchor, constant: 12),
+            form.bottomAnchor.constraint(lessThanOrEqualTo: document.bottomAnchor, constant: -12),
+            form.centerYAnchor.constraint(equalTo: document.centerYAnchor),
         ])
         RRUI.pin(scroll, to: content)
         RRUI.zoomControls(in: form)

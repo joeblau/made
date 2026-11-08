@@ -394,6 +394,8 @@ struct AgentModelPickerGalleryTests {
         #expect(trigger.label.isHidden)
         #expect(trigger.intrinsicContentSize.width == trigger.intrinsicContentSize.height)
         #expect(trigger.intrinsicContentSize.width < wide.width)
+        trigger.frame = NSRect(origin: .zero, size: wide)
+        #expect(trigger.capsuleRadius == wide.height / 2, "trigger draws a full capsule")
         for agent in ChatAgent.allCases { #expect(AgentModelPickerBrand.image(for: agent) != nil, "\(agent) has a brand mark") }
     }
 

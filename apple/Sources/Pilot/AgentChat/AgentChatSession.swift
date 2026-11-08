@@ -567,6 +567,7 @@ final class AgentChatSession {
                 connection, info: info, workingDirectory: workingDirectory, resume: resume, generation: generation
             )
             guard generation == self.generation else { return }
+            let resumed = sessionResult != nil
             if sessionResult == nil {
                 let hadTranscript = !transcript.items.isEmpty
                 let result = try await newSession(connection, info: info, workingDirectory: workingDirectory)
@@ -584,7 +585,14 @@ final class AgentChatSession {
                 sessionResult = result
             }
             guard generation == self.generation else { return }
-            applyConfiguration(sessionResult.flatMap(ACPSessionConfig.init))
+            if resumed {
+                // A session/load answer may omit models and configOptions (or
+                // carry only some parts): it patches the configuration the
+                // replay or an earlier run reported instead of wiping it.
+                applyConfiguration(resumedConfiguration(sessionResult))
+            } else {
+                applyConfiguration(sessionResult.flatMap(ACPSessionConfig.init))
+            }
             phase = .ready
             applyPendingModel()
         } catch let issue as ChatAgentSetupIssue {

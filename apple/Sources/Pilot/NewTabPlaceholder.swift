@@ -1101,15 +1101,16 @@ private final class NewTabRowView: NSView {
             serverIndicator.layer?.cornerRadius = dotSize / 2
             badge.frame = NSRect(x: serverIndicator.frame.minX - 12 - 24 * zoom, y: (height - 24 * zoom) / 2,
                                  width: 24 * zoom, height: 24 * zoom)
-            let textRight = (badge.isHidden ? serverIndicator.frame.minX : badge.frame.minX) - 12
-            // One line: name, then its port in a badge.
-            let portSize = portBadge.isHidden ? .zero : portBadge.fittingSize
-            let titleHeight = title.intrinsicContentSize.height
-            let available = max(0, textRight - 14 - (portSize.width > 0 ? portSize.width + 8 : 0))
-            let titleWidth = min(ceil(title.fittingSize.width), available)
-            title.frame = NSRect(x: 14, y: (height - titleHeight) / 2, width: titleWidth, height: titleHeight)
-            portBadge.frame = NSRect(x: title.frame.maxX + 8, y: (height - portSize.height) / 2,
+            // One line: name on the left; the port sits right before the
+            // shortcut slot, which is reserved even when empty so every
+            // row's port lines up in one trailing column.
+            let portSize = portBadge.isHidden ? .zero : portBadge.intrinsicContentSize
+            portBadge.frame = NSRect(x: badge.frame.minX - 10 - portSize.width, y: (height - portSize.height) / 2,
                                      width: portSize.width, height: portSize.height)
+            let textRight = (portBadge.isHidden ? badge.frame.minX : portBadge.frame.minX) - 12
+            let titleHeight = title.intrinsicContentSize.height
+            let titleWidth = min(ceil(title.fittingSize.width), max(0, textRight - 14))
+            title.frame = NSRect(x: 14, y: (height - titleHeight) / 2, width: titleWidth, height: titleHeight)
             return
         }
         let iconSize = 20 * zoom
@@ -1172,8 +1173,6 @@ private final class NewTabRowView: NSView {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let fill: NSColor = if isHighlighted {
                 glass == nil ? NSColor.quaternaryLabelColor.withAlphaComponent(0.35) : .clear
-            } else if row?.serverIsLive != nil {
-                NSColor.quaternaryLabelColor.withAlphaComponent(0.10)
             } else {
                 .clear
             }

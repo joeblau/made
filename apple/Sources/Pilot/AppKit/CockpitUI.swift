@@ -12,6 +12,19 @@ enum CockpitCardStyle {
 /// keyboard navigation, row reuse and accessibility.
 @MainActor
 final class CockpitCardRowView: NSTableRowView {
+    /// `.card` is the standard rounded card. `.well` draws nothing at rest and
+    /// tints a capsule when selected, for flat lists of launch targets.
+    enum Shape { case card, well }
+
+    let shape: Shape
+
+    init(shape: Shape = .card) {
+        self.shape = shape
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
     override func drawBackground(in dirtyRect: NSRect) {
         drawCard(selected: false)
     }
@@ -22,10 +35,18 @@ final class CockpitCardRowView: NSTableRowView {
     }
 
     private func drawCard(selected: Bool) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 3),
-                                xRadius: CockpitCardStyle.cornerRadius, yRadius: CockpitCardStyle.cornerRadius)
-        CockpitCardStyle.fillColor.setFill()
-        path.fill()
+        let rect = bounds.insetBy(dx: 4, dy: 3)
+        let radius = shape == .well ? rect.height / 2 : CockpitCardStyle.cornerRadius
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        switch shape {
+        case .card:
+            CockpitCardStyle.fillColor.setFill()
+            path.fill()
+        case .well:
+            // No resting fill or edge: rows sit directly on the page and only
+            // the selection tint shows the capsule.
+            break
+        }
         if selected {
             NSColor.controlAccentColor.withAlphaComponent(isEmphasized ? 0.22 : 0.12).setFill()
             path.fill()

@@ -69,16 +69,6 @@ final class CockpitMenuController: NSObject, NSMenuDelegate {
         })
         let drones = submenu("New Terminal on Drone", in: file)
         droneMenu = drones; drones.delegate = self
-        file.addItem(command("New Browser", key: "b", requiresWorkspace: true) {
-            $0.selectedWorkspace?.addBrowserPane(engine: .webKit, side: .right)
-            $0.refresh(); $0.focusSelectedPane()
-        })
-        file.addItem(ShellMenuItem("New Chromium Browser", enabledWhen: { [weak self] in
-            self?.windowProvider()?.selectedWorkspace != nil && ChromiumBrowserCreationPolicy.isCreationEnabled
-        }) { [weak self] in
-            guard let window = self?.windowProvider(), ChromiumBrowserCreationPolicy.isCreationEnabled else { return }
-            window.selectedWorkspace?.addBrowserPane(engine: .chromium, side: .right); window.refresh(); window.focusSelectedPane()
-        })
         file.addItem(responder("Open…", Selector(("openDocument:")), key: "o"))
         file.addItem(responder("Save", Selector(("saveDocument:")), key: "s"))
         file.addItem(.separator())
