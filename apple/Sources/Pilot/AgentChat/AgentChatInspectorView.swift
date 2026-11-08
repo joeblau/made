@@ -121,6 +121,7 @@ enum AgentRunTrace {
             fields.merge([
                 "type": "approval", "title": inline(approval.title), "agent": inline(approval.agentName), "subject": inline(approval.subject),
                 "toolCallID": inline(approval.toolCallID), "decision": inline(decision(approval.decision)),
+                "autoApproved": approval.autoApproved ? .bool(true) : nil,
             ]) { $1 }
         }
         return .object(fields.compactMapValues { $0 })

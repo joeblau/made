@@ -267,3 +267,38 @@ enum AgentUnrestrictedModeAlert {
         }
     }
 }
+
+// MARK: - Auto-approve confirmation
+
+@MainActor
+enum AgentAutoApproveAlert {
+    nonisolated static func messageText(agent: ChatAgent) -> String {
+        "Approve \(agent.displayName) requests automatically?"
+    }
+
+    nonisolated static func informativeText(agent: ChatAgent) -> String {
+        "For the rest of this session, \(agent.displayName) will run commands and edit files without asking. "
+            + "Each request is approved once; nothing is remembered after the session ends."
+    }
+
+    /// Asks on `window`'s sheet whether the session's permission requests may
+    /// be approved automatically. Cancel is the default button; no window
+    /// means no.
+    static func confirm(agent: ChatAgent, window: NSWindow?) async -> Bool {
+        guard let window else { return false }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = messageText(agent: agent)
+        alert.informativeText = informativeText(agent: agent)
+        let cancel = alert.addButton(withTitle: "Cancel")
+        cancel.keyEquivalent = "\r"
+        let allow = alert.addButton(withTitle: "Auto-approve")
+        allow.keyEquivalent = ""
+        allow.hasDestructiveAction = true
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { response in
+                continuation.resume(returning: response == .alertSecondButtonReturn)
+            }
+        }
+    }
+}

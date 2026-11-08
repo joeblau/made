@@ -107,6 +107,8 @@ struct AgentChatItem: Identifiable, Equatable, Sendable {
         var subject: String?
         var options: [ACPPermissionRequest.Option]
         var decision: Decision
+        /// Answered by the session's Auto-approve switch, not by the user.
+        var autoApproved = false
     }
 
     enum Content: Equatable, Sendable {
@@ -305,12 +307,14 @@ struct AgentTranscript: Equatable, Sendable {
     }
 
     /// Decides the newest pending record for `requestID` in `sessionID`.
-    mutating func resolveApproval(requestID: JSONValue, sessionID: String, decision: AgentChatItem.Approval.Decision) {
+    mutating func resolveApproval(requestID: JSONValue, sessionID: String, decision: AgentChatItem.Approval.Decision,
+                                  autoApproved: Bool = false) {
         guard let index = items.lastIndex(where: { item in
             guard case .approval(let approval) = item.content else { return false }
             return approval.decision == .pending && approval.requestID == requestID && approval.sessionID == sessionID
         }), case .approval(var approval) = items[index].content else { return }
         approval.decision = decision
+        approval.autoApproved = autoApproved
         modify(Self.rootKey, at: index) { $0.content = .approval(approval) }
     }
 

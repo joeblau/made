@@ -128,6 +128,105 @@ struct AgentChatPaneTests {
         #expect(harness.controller.table.view(atColumn: 0, row: recordRow, makeIfNecessary: true) is ApprovalRecordView)
     }
 
+    @Test("Auto-approve sits at the top right above the input once a session runs, asks first, and marks what it answers")
+    func autoApproveSwitch() async throws {
+        let harness = try Harness(steering: false, #"""
+        read -r _
+        printf '%s\n' '{"jsonrpc":"2.0","id":"p1","method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"t1","title":"Push branch","kind":"execute","rawInput":{"command":"git push origin main"}},"options":[{"optionId":"always","name":"Always allow","kind":"allow_always"},{"optionId":"allow","name":"Allow once","kind":"allow_once"},{"optionId":"reject","name":"Reject","kind":"reject_once"}]}}'
+        read -r _
+        while read -r r; do case "$r" in *session/cancel*) printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"cancelled"}}'; break ;; esac; done
+        read -r _
+        """#)
+        defer { harness.close() }
+        let controller = harness.controller
+        let control = controller.autoApproveControl
+        #expect(control.isHidden, "Hidden before the session is up")
+        #expect(controller.composerTopRow.isHidden)
+        final class Sheet { var asked = 0; var answer = false }
+        let sheet = Sheet()
+        controller.confirmAutoApprove = { agent in
+            #expect(agent == .claude)
+            sheet.asked += 1
+            return sheet.answer
+        }
+
+        try await harness.sendPrompt("Ship it")
+        let card = controller.approvalCard
+        try await harness.waitUntil { !card.isHidden && harness.session.pendingPermission != nil }
+        harness.layout()
+        #expect(!control.isHidden && !controller.composerTopRow.isHidden)
+        #expect(control.toggle.state == .off, "Off by default")
+        #expect(control.label.stringValue == "Auto-approve")
+        #expect(control.toggle.controlSize == .mini)
+        #expect(control.toggle.toolTip == "Approve the agent's requests automatically for this session")
+        #expect(control.toggle.accessibilityIdentifier() == "agent-chat.auto-approve")
+        #expect(control.toggle.accessibilityLabel() == "Auto-approve requests")
+        #expect(harness.identified("agent-chat.auto-approve") === control.toggle)
+        // Top right of the composer, directly above the input.
+        let root = controller.view
+        let input = try #require(harness.composer.enclosingScrollView)
+        let switchFrame = root.convert(control.bounds, from: control)
+        let inputFrame = root.convert(input.bounds, from: input)
+        #expect(switchFrame.minY >= inputFrame.maxY, "Above the input")
+        #expect(abs(switchFrame.maxX - inputFrame.maxX) <= 1, "Right-aligned with the input")
+        #expect(switchFrame.height > 0 && switchFrame.width > 0)
+
+        // Cancel on the sheet reverts the switch and leaves the card.
+        control.toggle.performClick(nil)
+        try await harness.waitUntil { sheet.asked == 1 && !harness.session.isConfirmingAutoApprove }
+        try await harness.waitUntil { control.toggle.state == .off }
+        #expect(!harness.session.isAutoApproveEnabled && !card.isHidden)
+
+        // Confirming answers the waiting request with allow_once and records it as auto-approved.
+        sheet.answer = true
+        control.toggle.performClick(nil)
+        try await harness.waitUntil { harness.session.isAutoApproveEnabled && card.isHidden }
+        #expect(control.toggle.state == .on)
+        try await harness.waitUntil { controller.timeline.rows.contains { if case .approvalRecord = $0 { true } else { false } } }
+        harness.layout()
+        let recordRow = try #require(controller.timeline.rows.firstIndex { if case .approvalRecord = $0 { true } else { false } })
+        guard case .approvalRecord(let item) = controller.timeline.rows[recordRow], case .approval(let approval) = item.content else {
+            Issue.record("No approval record"); return
+        }
+        #expect(approval.autoApproved)
+        #expect(approval.decision == .chose(optionID: "allow", name: "Allow once", allows: true))
+        let recordView = try #require(controller.table.view(atColumn: 0, row: recordRow, makeIfNecessary: true) as? ApprovalRecordView)
+        #expect(recordView.statusLabel.stringValue == "Auto-approved · Allow once")
+        try await captureReview(harness, name: "agent-chat-auto-approve.png")
+
+        // Off needs no confirmation.
+        control.toggle.performClick(nil)
+        #expect(!harness.session.isAutoApproveEnabled && sheet.asked == 2)
+        control.toggle.performClick(nil)
+        try await harness.waitUntil { harness.session.isAutoApproveEnabled }
+
+        // A new conversation hides the switch and starts it off.
+        harness.session.startNewConversation()
+        harness.layout()
+        try await harness.waitUntil { harness.session.phase == .ready }
+        try await harness.waitUntil { !control.isHidden }
+        #expect(!harness.session.isAutoApproveEnabled && control.toggle.state == .off)
+
+        // Closing the pane turns it off.
+        await harness.session.enableAutoApprove()
+        #expect(harness.session.isAutoApproveEnabled)
+        controller.closePane()
+        #expect(!harness.session.isAutoApproveEnabled)
+    }
+
+    private func captureReview(_ harness: Harness, name: String) async throws {
+        guard let destination = ProcessInfo.processInfo.environment["MADE_TOOL_REVIEW_OUTPUT"] else { return }
+        // Let the switch finish its toggle animation before the snapshot.
+        try await Task.sleep(for: .milliseconds(500))
+        let view = harness.controller.view
+        harness.layout()
+        let output = URL(fileURLWithPath: destination)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: bitmap) }
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name))
+    }
+
     @Test("The context meter leaves the composer for a disabled item in the Conversation menu")
     func contextMeterMovesToTheConversationMenu() async throws {
         let harness = try Harness(steering: false, #"""

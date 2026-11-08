@@ -150,8 +150,12 @@ final class ApprovalCardView: NSView {
 
     /// Options that must never be the default/primary (Return) action.
     static func isNeverDefault(_ option: ACPPermissionRequest.Option) -> Bool {
-        if option.kind == .allowAlways { return true }
-        let id = option.id.lowercased()
+        option.kind == .allowAlways || isModeChangeOptionID(option.id)
+    }
+
+    /// An option that leaves plan mode (exit-plan-*), whatever its kind.
+    nonisolated static func isModeChangeOptionID(_ id: String) -> Bool {
+        let id = id.lowercased()
         return id.hasPrefix("exit-plan") || id.hasPrefix("exit_plan") || id.hasPrefix("exitplan")
     }
 
@@ -475,6 +479,7 @@ final class ApprovalCardView: NSView {
 }
 
 /// A decided approval in the timeline: "Approved · <option name>",
+/// "Auto-approved · <name>" (answered by the Auto-approve switch),
 /// "Rejected · <name>", "Cancelled", "Withdrawn by agent", or "Stopped".
 final class ApprovalRecordView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.approval-record")
@@ -503,12 +508,12 @@ final class ApprovalRecordView: NSTableCellView {
     static var font: NSFont { AgentChatText.font(12, .medium) }
 
     /// Status text, its color, and the dot for a decision (names redacted).
-    static func status(_ decision: AgentChatItem.Approval.Decision)
+    static func status(_ decision: AgentChatItem.Approval.Decision, autoApproved: Bool = false)
         -> (text: String, color: AgentChatPalette.Token, dot: AgentStatusDotView.Status) {
         switch decision {
         case .pending: ("Waiting for approval", .live, .running)
         case .chose(_, let name, let allows):
-            allows ? ("Approved · " + redactInline(String(name.prefix(256))), .success, .done)
+            allows ? ((autoApproved ? "Auto-approved · " : "Approved · ") + redactInline(String(name.prefix(256))), .success, .done)
                 : ("Rejected · " + redactInline(String(name.prefix(256))), .failure, .failed)
         case .cancelledByUser, .autoCancelled: ("Cancelled", .textMuted, .stopped)
         case .withdrawnByAgent: ("Withdrawn by agent", .textMuted, .stopped)
@@ -522,7 +527,7 @@ final class ApprovalRecordView: NSTableCellView {
     func configure(item: AgentChatItem, actions: AgentChatRowActions, verb: AgentToolVerb? = nil) {
         self.item = item
         guard case .approval(let approval) = item.content else { return }
-        let status = Self.status(approval.decision)
+        let status = Self.status(approval.decision, autoApproved: approval.autoApproved)
         dot.configure(status: status.dot)
         AgentChatText.apply(statusLabel, text: status.text, font: Self.font, color: status.color)
         let title = String(redactInline(String(approval.title.prefix(4_096))).prefix(512))

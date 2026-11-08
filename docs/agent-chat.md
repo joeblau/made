@@ -409,7 +409,8 @@ it will run, and secrets are masked behind **Reveal secrets**.
 
 - The card shows one button per option the agent sent, in the agent's order,
   with the agent's own names (single-line redacted). Cockpit keeps no
-  allowlist and never answers on the user's behalf.
+  allowlist and never answers on the user's behalf unless the user turned on
+  [Auto-approve](#auto-approve) for the session.
 - Only the first option can be the default, and never when it is
   `allow_always`, an `exit-plan` option, or any option of a `switch_mode`
   request.
@@ -428,6 +429,31 @@ only its tooltip. An agent can withdraw an open request with
 number), and Cockpit answers the withdrawn request with error `-32800`.
 Stopping a turn, a closed connection, or a restart records open requests as
 "Stopped".
+
+### Auto-approve
+
+A small **Auto-approve** switch sits at the top right of the composer, above
+the input and opposite the Steer / Queue chip. It appears only while a session
+is up (ready or running a turn) and is hidden while the agent starts, needs
+setup, or failed.
+
+- It is session-scoped and in memory only: off for every new session, never
+  saved, and reset whenever the agent stops — a new conversation, an agent
+  switch, a restart or reconnect, a closed connection, or closing the pane.
+- Turning it on first asks on a sheet ("Approve <Agent> requests
+  automatically?"; Cancel is the default). Cancel leaves it off. Turning it
+  off needs no confirmation and applies to every later request.
+- While on, a `session/request_permission` is answered with the agent's
+  `allow_once` option. Cockpit never chooses `allow_always` or a reject
+  option on its own. A request with no `allow_once` option, a `switch_mode`
+  request (such as leaving plan mode), or an `exit-plan` option is left for
+  the user on the normal approval card, so the agent's mode never changes
+  automatically.
+- A request already waiting when the user confirms is approved the same way.
+- Each automatic answer still produces its decided record, shown as
+  "Auto-approved · <option>" and exported with `autoApproved: true` in the
+  Inspector's run trace. It follows the same rule as a manual decision: the
+  record is written only after the answer reached a live connection.
 
 ## Keyboard
 
