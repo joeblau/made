@@ -74,7 +74,7 @@ final class PilotApp {
             CockpitPersistence.backUpStore(at: url, fileManager: .default)
             do {
                 modelContainer = try CockpitPersistence.makeModelContainer(
-                    schema: schema, migrationPlan: PilotMigrationPlan.self,
+                    schema: schema, migrationPlan: PilotMigrationPlan.forStore(at: url),
                     configuration: ModelConfiguration(schema: schema, url: url))
             } catch {
                 let alert = NSAlert()

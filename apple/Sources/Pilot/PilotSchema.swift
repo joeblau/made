@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 import SwiftData
 
@@ -262,8 +263,131 @@ enum PilotSchemaV2: VersionedSchema {
     }
 }
 
-/// Frozen snapshot of the V3 store before Android target persistence.
-/// Keep its browser-engine and Drone session fields unchanged: changing this
+/// Frozen snapshot of the V3 schema shipped in v0.0.4, before #335 added Drone
+/// terminal fields to the live models without freezing V3 first.
+enum PilotSchemaV3Released: VersionedSchema {
+    static var versionIdentifier: Schema.Version { Schema.Version(3, 0, 0) }
+
+    static var models: [any PersistentModel.Type] {
+        [
+            Workspace.self,
+            Pane.self,
+            BrowserState.self,
+            EditorState.self,
+            Note.self,
+            RemoteDesktopConnection.self,
+            ExtensionWorkspaceLink.self,
+        ]
+    }
+
+    @Model
+    final class Workspace {
+        #Unique([\Workspace.id])
+
+        var id: UUID = UUID()
+        var name: String = ""
+        var selectedPaneID: UUID?
+        var frontmostTerminalPaneID: UUID?
+        var axisRaw: String = "vertical"
+        var isInspectorPresented: Bool = false
+        var inspectorTabRaw: String = "Actions"
+        var focusedPaneID: UUID?
+        var isPinned: Bool = false
+        var workspaceSortOrder: Int = 0
+        var rootPath: String = ""
+        var rootPathSourceRaw: String? = "automatic"
+        var actionBadgeCount: Int = 0
+
+        @Relationship(deleteRule: .cascade, inverse: \Pane.workspace)
+        var panes: [Pane] = []
+
+        init() {}
+    }
+
+    @Model
+    final class Pane {
+        #Unique([\Pane.id])
+
+        var id: UUID = UUID()
+        var kindRaw: String = "terminal"
+        var sortOrder: Int = 0
+        var currentDirectory: String = ""
+        var bellCount: Int = 0
+        var sizeFraction: Double = 0
+        var isCollapsed: Bool = false
+        var restoredSizeFraction: Double = 0
+        var wasCollapsedBeforeFocus: Bool = false
+
+        @Relationship(deleteRule: .cascade)
+        var browserState: BrowserState?
+
+        @Relationship(deleteRule: .cascade)
+        var editorState: EditorState?
+
+        var workspace: Workspace?
+
+        init() {}
+    }
+
+    @Model
+    final class BrowserState {
+        var urlText: String = ""
+        var engineRaw: String = "webkit"
+        var appearanceModeRaw: String = "System"
+        var navigationRequestID: Int = 0
+        var inspectorToggleRequestID: Int = 0
+
+        init() {}
+    }
+
+    @Model
+    final class EditorState {
+        var filePath: String = ""
+
+        init() {}
+    }
+
+    @Model
+    final class Note {
+        #Unique([\Note.id])
+
+        var id: UUID = UUID()
+        var body: String = ""
+        var sortOrder: Int = 0
+        var createdAt: Date = Date()
+
+        init() {}
+    }
+
+    @Model
+    final class RemoteDesktopConnection {
+        #Unique([\RemoteDesktopConnection.id])
+
+        var id: UUID = UUID()
+        var host: String = ""
+        var port: Int = 5900
+        var nickname: String = ""
+        var username: String = ""
+        var sortOrder: Int = 0
+        var createdAt: Date = Date()
+        var lastConnectedAt: Date?
+
+        init() {}
+    }
+
+    @Model
+    final class ExtensionWorkspaceLink {
+        var sourceWorkspaceID: UUID = UUID()
+
+        @Relationship(deleteRule: .cascade)
+        var workspace: Workspace?
+
+        init() {}
+    }
+}
+
+/// Frozen snapshot of the Drone-bearing V3 store written after #335 and before
+/// Android target persistence. Keep these fields unchanged: changing this
 /// checksum makes existing stores unknown to staged migration.
 enum PilotSchemaV3: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(3, 0, 0) }
@@ -407,6 +531,20 @@ enum PilotSchemaV4: VersionedSchema {
     }
 }
 
+enum PilotReleasedV3MigrationPlan: SchemaMigrationPlan {
+    static var schemas: [any VersionedSchema.Type] {
+        [PilotSchemaV1.self, PilotSchemaV2.self, PilotSchemaV3Released.self, PilotSchemaV4.self]
+    }
+
+    static var stages: [MigrationStage] {
+        [
+            .lightweight(fromVersion: PilotSchemaV1.self, toVersion: PilotSchemaV2.self),
+            .lightweight(fromVersion: PilotSchemaV2.self, toVersion: PilotSchemaV3Released.self),
+            .lightweight(fromVersion: PilotSchemaV3Released.self, toVersion: PilotSchemaV4.self),
+        ]
+    }
+}
+
 enum PilotMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
         [PilotSchemaV1.self, PilotSchemaV2.self, PilotSchemaV3.self, PilotSchemaV4.self]
@@ -420,5 +558,19 @@ enum PilotMigrationPlan: SchemaMigrationPlan {
             .lightweight(fromVersion: PilotSchemaV2.self, toVersion: PilotSchemaV3.self),
             .lightweight(fromVersion: PilotSchemaV3.self, toVersion: PilotSchemaV4.self),
         ]
+    }
+
+    /// v0.0.4 and #335 both stamped version 3, but only #335 persisted Drone
+    /// fields. The two snapshots cannot share a plan because their versions are
+    /// equal, so use the released Pane checksum to select the legacy route.
+    static func forStore(at storeURL: URL) -> any SchemaMigrationPlan.Type {
+        let releasedV3PaneHash = Data(base64Encoded: "Z+GpbKAScTIwJ3w6ORyk4XiULctiqY+Vlbvf1/Abgi8=")
+        guard let metadata = try? NSPersistentStoreCoordinator.metadataForPersistentStore(
+            ofType: NSSQLiteStoreType, at: storeURL),
+            let hashes = metadata[NSStoreModelVersionHashesKey] as? [String: Data],
+            hashes["Pane"] == releasedV3PaneHash else {
+            return Self.self
+        }
+        return PilotReleasedV3MigrationPlan.self
     }
 }
