@@ -34,6 +34,30 @@ struct PilotWalkieDeliveryTests {
         }
     }
 
+    @Test("Remote start auto-selects a connection before capturing the target")
+    func remoteStartSelectsConnectionBeforeCapture() async throws {
+        try await withFixture { store, _, connections in
+            store.selectedRemoteConnectionID = nil
+            let recorder = DeliveryRecorder()
+            let sessionID = UUID()
+            recorder.sessions[connections[0].id] = sessionID
+            let queue = PilotWalkieDeliveryQueue(delivery: recorder.delivery(store: store))
+            let recordingID = UUID()
+            let workspaceID = WorkspaceStore.remoteDesktopWorkspaceID
+
+            queue.start(.init(control: .start, workspaceID: workspaceID, recordingID: recordingID))
+            queue.receive(.init(workspaceID: workspaceID, text: "hostname", recordingID: recordingID))
+            queue.execute(.init(recordingID: recordingID, workspaceID: workspaceID))
+            await queue.waitForIdle()
+
+            let target = PilotWalkieInputState.Target(workspaceID: workspaceID, destination: .remoteDesktop(
+                connectionID: connections[0].id, sessionID: sessionID
+            ))
+            #expect(store.selectedRemoteConnection?.id == connections[0].id)
+            #expect(recorder.events == [.text(target, "hostname"), .enter(target)])
+        }
+    }
+
     @Test("Reconnection before transcript delivery never types into the new VNC session")
     func reconnectionBeforeTextRejectsDelivery() async throws {
         try await withFixture { store, _, connections in

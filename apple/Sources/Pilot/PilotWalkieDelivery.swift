@@ -53,7 +53,7 @@ struct PilotWalkieDelivery {
     }
 
     func startTarget(for command: VoiceRecordCommand) -> Target? {
-        capture(workspaceID: command.workspaceID ?? store.selectedSyncWorkspaceID)
+        capture(workspaceID: prepareSelection(for: command))
     }
 
     func start(_ command: VoiceRecordCommand, state: inout PilotWalkieInputState) {
@@ -65,13 +65,18 @@ struct PilotWalkieDelivery {
         state: inout PilotWalkieInputState,
         capturedTarget: Target?
     ) {
+        let workspaceID = prepareSelection(for: command)
+        state.begin(recordingID: command.recordingID, workspaceID: workspaceID, target: capturedTarget)
+    }
+
+    private func prepareSelection(for command: VoiceRecordCommand) -> UUID? {
         let workspaceID = command.workspaceID ?? store.selectedSyncWorkspaceID
         if workspaceID == WorkspaceStore.remoteDesktopWorkspaceID {
             store.enterRemoteDesktopMode()
         } else if let workspaceID {
             store.selectWorkspace(workspaceID)
         }
-        state.begin(recordingID: command.recordingID, workspaceID: workspaceID, target: capturedTarget)
+        return workspaceID
     }
 
     @discardableResult
