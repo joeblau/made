@@ -155,13 +155,17 @@ enum DroneWorkerProof {
             workerID: workerID,
             service: service,
             observed: observed,
-            workspace: workspace
+            workspace: workspace,
+            port: port
         )
         controller.stop()
         await service.stop()
         print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
     }
 
+}
+
+extension DroneWorkerProof {
     private static func verifyWorkerAgentCycle(
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,
@@ -169,7 +173,8 @@ enum DroneWorkerProof {
         workerID: UUID,
         service: DroneWorkerService,
         observed: ProofObserved,
-        workspace: URL
+        workspace: URL,
+        port: UInt16
     ) async throws {
         try await service.grantController(controllerID, permissions: .terminal)
         let createRequest = UUID()
@@ -358,6 +363,9 @@ enum DroneWorkerProof {
         }
     }
 
+}
+
+extension DroneWorkerProof {
     private static func verifyDurableWorkerRestart(
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,
@@ -519,6 +527,9 @@ enum DroneWorkerProof {
         await restartedService.stop()
     }
 
+}
+
+extension DroneWorkerProof {
     private static func verifyExpiredOwnerRevocation(
         controller: DroneLANTransport, connectionID: DroneConnectionID, controllerID: UUID,
         service: DroneWorkerService, observed: ProofObserved
@@ -616,6 +627,9 @@ enum DroneWorkerProof {
         another.transport.stop()
     }
 
+}
+
+extension DroneWorkerProof {
     private static func verifyControllerGrants(
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,
@@ -824,6 +838,9 @@ enum DroneWorkerProof {
         }
     }
 
+}
+
+extension DroneWorkerProof {
     private static func verifyOwnerControl(service: DroneWorkerService, port: UInt16, workspace: URL) async throws {
         guard let index = CommandLine.arguments.firstIndex(of: "--proof-cli"),
               CommandLine.arguments.indices.contains(index + 1) else {
@@ -952,6 +969,9 @@ enum DroneWorkerProof {
         expect(!stopped.listenerReady && stopped.paired, "stop lost pin evidence or reported ready")
     }
 
+}
+
+extension DroneWorkerProof {
     private static func startTrackedProcess(
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,
@@ -1043,6 +1063,9 @@ enum DroneWorkerProof {
         expect(pumpTasks[2].isCancelled, "stop left pump running")
     }
 
+}
+
+extension DroneWorkerProof {
     private static func verifyIssuedLeases(
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,
@@ -1111,7 +1134,7 @@ enum DroneWorkerProof {
             requestID: requestID,
             sessionID: DroneSessionID()
         ), on: connectionID)
-        try await expectError(requestID, code: "remoteRejected", observed: observed)
+        try await expectError(requestID, code: "invalidSession", observed: observed)
     }
 
     private static func expectUnauthorized(_ requestID: UUID, observed: ProofObserved) async throws {
@@ -1129,6 +1152,9 @@ enum DroneWorkerProof {
         }
     }
 
+}
+
+extension DroneWorkerProof {
     private static func verifyToolReplay(
         controller: DroneLANTransport,
         connectionID: DroneConnectionID,

@@ -190,6 +190,99 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(client.attachCount, 2)
     }
 
+    func testLocalCompanionInputDoesNotRequireTmux() async throws {
+        let app = try XCTUnwrap(GhosttyRuntime.shared.app)
+        let pane = Pane(kind: .terminal)
+        let terminal = GhosttyMetalView(app: app, pane: pane)
+        let viewSessionName = pane.persistentSessionName
+        defer {
+            terminal.dispose()
+            Task { _ = await PersistentTerminalSession.closeSession(sessionName: viewSessionName) }
+        }
+        XCTAssertNotNil(terminal.surface)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("companion.txt")
+        let session = LocalTerminalSession(
+            identity: TerminalSessionIdentity(
+                paneID: pane.id,
+                ownership: TerminalDestination.local.ownership,
+                generation: 1
+            ),
+            persistentSessionName: "pilot-unavailable-\(UUID().uuidString)"
+        )
+        try await Task.sleep(for: .milliseconds(200))
+
+        let inserted = await session.sendCompanion(.literal("printf companion-ok > \(output.path)"))
+        let entered = await session.sendCompanion(.enter)
+
+        XCTAssertTrue(inserted)
+        XCTAssertTrue(entered)
+        try await waitForNativeTerminal { FileManager.default.fileExists(atPath: output.path) }
+        XCTAssertEqual(try String(contentsOf: output, encoding: .utf8), "companion-ok")
+    }
+
+    func testLocalSessionRetainsTmuxBootstrapInputActivityDirectoryAndClose() async throws {
+        guard let tmux = Self.tmuxExecutablePath() else { throw XCTSkip("tmux is not installed") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionName = "pilot-test-\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let session = LocalTerminalSession(
+            identity: TerminalSessionIdentity(
+                paneID: UUID(), ownership: TerminalDestination.local.ownership, generation: 1
+            ),
+            persistentSessionName: sessionName
+        )
+        guard case .local(let bootstrap) = session.bootstrap(workingDirectory: root.path) else {
+            return XCTFail("Expected a local bootstrap")
+        }
+        XCTAssertTrue(bootstrap?.contains(sessionName) == true)
+        XCTAssertTrue(bootstrap?.contains(root.path) == true)
+        XCTAssertEqual(try Self.runTmux(tmux, ["new-session", "-d", "-s", sessionName, "-c", root.path]), 0)
+        var closed = false
+        defer {
+            if !closed { _ = try? Self.runTmux(tmux, ["kill-session", "-t", sessionName]) }
+        }
+        let output = root.appendingPathComponent("tmux.txt")
+
+        let inserted = await session.send(.literal("printf tmux-ok > \(output.path)"))
+        let entered = await session.send(.enter)
+        XCTAssertTrue(inserted)
+        XCTAssertTrue(entered)
+        try await waitForNativeTerminal { FileManager.default.fileExists(atPath: output.path) }
+        let activity = await session.foregroundActivity(unavailableActivity: .running)
+        XCTAssertEqual(activity, .idle)
+        try await waitForNativeTerminal { session.currentDirectorySnapshot() != nil }
+        XCTAssertEqual(
+            session.currentDirectorySnapshot().map {
+                URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
+            },
+            root.resolvingSymlinksInPath().standardizedFileURL.path
+        )
+        closed = await session.close()
+        XCTAssertTrue(closed)
+        XCTAssertNotEqual(try Self.runTmux(tmux, ["has-session", "-t", sessionName]), 0)
+    }
+
+    private static func tmuxExecutablePath() -> String? {
+        ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"].first {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+    }
+
+    private static func runTmux(_ executable: String, _ arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
     func testMissingDroneClientNeverUsesLocalSession() {
         let droneID = UUID()
         let provider = TerminalSessionProvider { _ in nil }

@@ -26,6 +26,14 @@ final class Pane: @unchecked Sendable {
     }
 }
 
+@MainActor
+final class GhosttyMetalView {
+    var surface: Int?
+    static func view(for paneID: UUID) -> GhosttyMetalView? { nil }
+    func pasteText(_ text: String) {}
+    func sendEnter() {}
+}
+
 enum TerminalProcessActivity: Sendable { case idle, running }
 enum TerminalFastCommandStore {
     static func executableCommand(from command: String) -> String? { fatalError("Local host fixture called") }

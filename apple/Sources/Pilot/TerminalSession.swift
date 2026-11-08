@@ -153,6 +153,7 @@ protocol CockpitTerminalSession: Sendable {
     func bootstrap(workingDirectory: String?) -> TerminalSessionBootstrap
     func restore(workingDirectory: String?) async throws -> TerminalSessionRestoration
     func send(_ input: TerminalSessionInput) async -> Bool
+    func sendCompanion(_ input: TerminalSessionInput) async -> Bool
     func runFastCommand(_ command: String) async -> Bool
     func foregroundActivity(
         unavailableActivity: TerminalProcessActivity
@@ -171,6 +172,10 @@ protocol CockpitTerminalSession: Sendable {
 extension CockpitTerminalSession {
     func resize(columns: UInt16, rows: UInt16) async -> Bool { false }
     func setOutputHandler(_ handler: @escaping @Sendable (String) -> Void) async {}
+
+    func sendCompanion(_ input: TerminalSessionInput) async -> Bool {
+        await send(input)
+    }
 
     func runFastCommand(_ command: String) async -> Bool {
         guard let command = TerminalFastCommandStore.executableCommand(from: command),
@@ -219,6 +224,27 @@ struct LocalTerminalSession: CockpitTerminalSession {
             guard let text = String(data: data, encoding: .utf8) else { return false }
             return await PersistentTerminalSession.sendLiteral(text, sessionName: persistentSessionName)
         }
+    }
+
+    func sendCompanion(_ input: TerminalSessionInput) async -> Bool {
+        if await sendGhosttyCompanion(input) { return true }
+        return await send(input)
+    }
+
+    @MainActor
+    private func sendGhosttyCompanion(_ input: TerminalSessionInput) -> Bool {
+        guard let terminal = GhosttyMetalView.view(for: identity.paneID), terminal.surface != nil else {
+            return false
+        }
+        switch input {
+        case .literal(let text):
+            terminal.pasteText(text)
+        case .enter:
+            terminal.sendEnter()
+        case .bytes:
+            return false
+        }
+        return true
     }
 
     func foregroundActivity(

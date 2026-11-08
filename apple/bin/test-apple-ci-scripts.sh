@@ -71,6 +71,10 @@ cat > "$work/apple/bin/fetch-mockup-models.sh" <<'TOOL'
 #!/bin/bash
 printf 'mockup-models %s\n' "$*" >> "$CI_TEST_LOG"
 TOOL
+cat > "$work/apple/bin/benchmark-annexb.sh" <<'TOOL'
+#!/bin/bash
+printf 'benchmark-annexb %s\n' "$*" >> "$CI_TEST_LOG"
+TOOL
 cat > "$work/apple/bin/check-cockpit-ui-boundary.py" <<'TOOL'
 import os
 from pathlib import Path
@@ -86,7 +90,7 @@ for proof in drone-launchd drone-supervisor drone-revocation drone-connection dr
   drone-jobs drone-job-tools drone-terminal drone-tools drone-worker; do
   cat > "$work/apple/bin/test-$proof.sh" <<'TOOL'
 #!/bin/bash
-printf '%s\n' "${0##*/}" >> "$CI_TEST_LOG"
+printf '%s%s\n' "${0##*/}" "${*:+ $*}" >> "$CI_TEST_LOG"
 TOOL
 done
 chmod +x "$work/tools/"* "$work/apple/bin/"*.sh "$work/apple/bin/app-icon-tool.swift"
@@ -118,6 +122,7 @@ reset_log
 "$work/apple/bin/build-ci.sh"
 "$work/apple/bin/test.sh" all
 expect_calls 1 '^icons validate$'
+expect_calls 1 '^benchmark-annexb --typecheck$'
 expect_calls 1 '^runner-model verify$'
 expect_calls 1 '^mockup-models verify$'
 expect_calls 2 '^cockpit-ui-boundary$'
@@ -132,6 +137,7 @@ expect_calls 1 '^test-drone-job-tools.sh$'
 expect_calls 1 '^test-drone-terminal.sh$'
 expect_calls 1 '^test-drone-tools.sh$'
 expect_calls 1 '^test-drone-worker.sh$'
+expect_calls 1 '^test-drone-worker.sh --tool-replay-authorization$'
 expect_calls 10 '^xcodebuild '
 expect_calls 10 '^xcodebuild DISABLE_SWIFTLINT=1 .* -quiet -project .*-configuration Debug .*-onlyUsePackageVersionsFromResolvedFile -skipPackagePluginValidation .* CODE_SIGNING_ALLOWED=NO$'
 expect_calls 0 'Chromium'

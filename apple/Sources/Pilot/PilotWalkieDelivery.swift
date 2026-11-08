@@ -100,7 +100,7 @@ struct PilotWalkieDelivery {
         switch target.destination {
         case .terminal(let paneID):
             guard let session = liveSession(for: target, paneID: paneID) else { return false }
-            return await session.send(.literal(text))
+            return await session.sendCompanion(.literal(text))
         case .remoteDesktop(let connectionID, let sessionID):
             return RemoteDesktopSessionManager.shared.existingSession(for: connectionID)?
                 .sendText(text, sessionID: sessionID) ?? false
@@ -111,7 +111,7 @@ struct PilotWalkieDelivery {
         switch target.destination {
         case .terminal(let paneID):
             guard let session = liveSession(for: target, paneID: paneID) else { return false }
-            return await session.send(.enter)
+            return await session.sendCompanion(.enter)
         case .remoteDesktop(let connectionID, let sessionID):
             return RemoteDesktopSessionManager.shared.existingSession(for: connectionID)?
                 .sendEnter(sessionID: sessionID) ?? false
