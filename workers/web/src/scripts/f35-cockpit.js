@@ -15,7 +15,10 @@ const activeCockpits = new WeakMap();
  * controller on success, or null when the canvases are missing or WebGL is
  * unavailable so the loader keeps the static fallback.
  */
-export function initCockpit(root = document) {
+export function initCockpit(root = document, {
+  Renderer = THREE.WebGLRenderer,
+  EnvironmentGenerator = THREE.PMREMGenerator,
+} = {}) {
   const existing = activeCockpits.get(root);
   if (existing) return existing;
   const sceneCanvas = root.querySelector('[data-cockpit-scene]');
@@ -51,18 +54,42 @@ export function initCockpit(root = document) {
 
   /* ============================== renderer ============================== */
   let renderer;
+  let scene;
+  let environmentDome;
+  let environmentTarget;
+  let pmrem;
+  let renderController;
+  let observer;
+  let cockpit;
+  function disposeEnvironmentBuilder() {
+    environmentDome?.geometry.dispose();
+    environmentDome?.material.dispose();
+    pmrem?.dispose();
+    environmentDome = null;
+    pmrem = null;
+  }
+  function disposeScene() {
+    renderController?.dispose();
+    for (const cleanup of listenerCleanups.splice(0)) cleanup();
+    observer?.disconnect();
+    disposeEnvironmentBuilder();
+    if (scene) disposeCockpitResources(scene, environmentTarget, renderer);
+    else renderer?.dispose();
+    if (activeCockpits.get(root) === cockpit) activeCockpits.delete(root);
+  }
   try {
-    renderer = new THREE.WebGLRenderer({ canvas: sceneCanvas, antialias: true });
+    renderer = new Renderer({ canvas: sceneCanvas, antialias: true });
   } catch {
     return null; // WebGL unavailable; the loader keeps the static fallback.
   }
+  try {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75));
-  const scene = new THREE.Scene();
+  scene = new THREE.Scene();
   scene.fog = new THREE.Fog(0xcfe0ee, 9000, 42000);
 
   const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 90000);
@@ -127,15 +154,13 @@ export function initCockpit(root = document) {
   scene.add(new THREE.Mesh(new THREE.SphereGeometry(32000, 40, 24), skyMat));
 
   const environmentScene = new THREE.Scene();
-  const environmentDome = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMat.clone());
+  environmentDome = new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), skyMat.clone());
   environmentScene.add(environmentDome);
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  const environmentTarget = pmrem.fromScene(environmentScene, 0.035, 0.1, 100);
+  pmrem = new EnvironmentGenerator(renderer);
+  environmentTarget = pmrem.fromScene(environmentScene, 0.035, 0.1, 100);
   scene.environment = environmentTarget.texture;
   scene.environmentIntensity = 0.7;
-  environmentDome.geometry.dispose();
-  environmentDome.material.dispose();
-  pmrem.dispose();
+  disposeEnvironmentBuilder();
 
   /* sun glow sprite */
   (function () {
@@ -1072,7 +1097,6 @@ export function initCockpit(root = document) {
   /* ============================== HMD overlay ============================== */
   const hg = hudCanvas.getContext('2d');
   let W = 0, H = 0, DPR = 1;
-  let renderController;
   function resize() {
     W = innerWidth;
     H = innerHeight;
@@ -1368,7 +1392,6 @@ export function initCockpit(root = document) {
   let canvasInView = true;
   let requested = false;
   let disposed = false;
-  let observer;
   function syncLoop() {
     const shouldRun = requested && !reducedMotion && pageVisible && pageActive && canvasInView && !disposed;
     if (shouldRun) renderController.resume();
@@ -1403,7 +1426,7 @@ export function initCockpit(root = document) {
     observer.observe(sceneCanvas);
   }
 
-  const cockpit = {
+  cockpit = {
     start() {
       if (disposed) return;
       requested = true;
@@ -1422,11 +1445,7 @@ export function initCockpit(root = document) {
       if (disposed) return;
       disposed = true;
       requested = false;
-      renderController.dispose();
-      for (const cleanup of listenerCleanups) cleanup();
-      observer?.disconnect();
-      disposeCockpitResources(scene, environmentTarget, renderer);
-      if (activeCockpits.get(root) === cockpit) activeCockpits.delete(root);
+      disposeScene();
     },
     get running() { return renderController.running; },
     get disposed() { return disposed; },
@@ -1441,4 +1460,8 @@ export function initCockpit(root = document) {
   }
   cockpit.start();
   return cockpit;
+  } catch (error) {
+    disposeScene();
+    throw error;
+  }
 }
