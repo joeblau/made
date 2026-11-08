@@ -127,12 +127,13 @@ enum CockpitPersistence {
         guard fileManager.fileExists(atPath: storeURL.path) else { return }
         let directory = storeURL.deletingLastPathComponent()
         let backupsRoot = directory.appendingPathComponent("Backups", isDirectory: true)
+        let storeName = storeURL.lastPathComponent
 
         // SQLite can commit edits solely to the WAL. Compare every member of
         // the store family before treating a launch as unchanged.
         guard let currentSignature = storeSignature(storeURL, fileManager: fileManager) else { return }
         if let newest = backupDirectories(in: backupsRoot, fileManager: fileManager).last,
-           storeSignature(newest.appendingPathComponent("default.store"), fileManager: fileManager) == currentSignature {
+           storeSignature(newest.appendingPathComponent(storeName), fileManager: fileManager) == currentSignature {
             return
         }
 
@@ -143,9 +144,9 @@ enum CockpitPersistence {
         do {
             try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
             for suffix in ["", "-wal", "-shm"] {
-                let source = directory.appendingPathComponent("default.store\(suffix)")
+                let source = directory.appendingPathComponent(storeName + suffix)
                 guard suffix.isEmpty || fileManager.fileExists(atPath: source.path) else { continue }
-                try fileManager.copyItem(at: source, to: staging.appendingPathComponent("default.store\(suffix)"))
+                try fileManager.copyItem(at: source, to: staging.appendingPathComponent(storeName + suffix))
             }
             let stamp = String(format: "%012lld", Int64(Date().timeIntervalSince1970))
             var bump = 0
@@ -192,6 +193,31 @@ enum CockpitPersistence {
             let modified = (attributes[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
             return "\(size)-\(modified)"
         }.joined(separator: ";")
+    }
+
+    /// The schema version the running app reads and writes. Adding a version
+    /// means a new frozen `PilotSchemaV<n>`, a stage in `PilotMigrationPlan`,
+    /// and a change here — nowhere else.
+    static var currentSchema: Schema { Schema(versionedSchema: PilotSchemaV4.self) }
+
+    /// Open the on-disk store exactly as launch does: back up the store family,
+    /// then open it with the current schema and the full migration plan so a
+    /// store written by any shipped version migrates forward. Throws rather than
+    /// substituting an empty store; the backup taken here survives a failed or
+    /// lossy migration.
+    static func openStore(at storeURL: URL, fileManager: FileManager = .default) throws -> ModelContainer {
+        backUpStore(at: storeURL, fileManager: fileManager)
+        let schema = currentSchema
+        return try makeModelContainer(
+            schema: schema, migrationPlan: PilotMigrationPlan.self,
+            configuration: ModelConfiguration(schema: schema, url: storeURL))
+    }
+
+    /// An isolated, memory-only store with the current schema (fixtures and
+    /// screenshot runs never touch the user's database).
+    static func openInMemoryStore() throws -> ModelContainer {
+        let schema = currentSchema
+        return try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
     }
 
     /// A migration, permissions, or disk error does not mean the data is corrupt.

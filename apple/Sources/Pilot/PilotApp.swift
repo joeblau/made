@@ -65,17 +65,13 @@ final class PilotApp {
         preferences = isolated ? UserDefaults(suiteName: "app.blau.pilot.fixture.\(UUID().uuidString)")! : .standard
         setupProgress = SetupProgress(defaults: preferences, bypass: isolated)
         updaterController = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil, userDriverDelegate: nil)
-        let schema = Schema(versionedSchema: PilotSchemaV4.self)
         if isolated {
-            modelContainer = try! ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
+            modelContainer = try! CockpitPersistence.openInMemoryStore()
         } else {
             CockpitPersistence.yieldToExistingInstanceIfNeeded()
             let url = CockpitPersistence.persistentStoreURL()
-            CockpitPersistence.backUpStore(at: url, fileManager: .default)
             do {
-                modelContainer = try CockpitPersistence.makeModelContainer(
-                    schema: schema, migrationPlan: PilotMigrationPlan.self,
-                    configuration: ModelConfiguration(schema: schema, url: url))
+                modelContainer = try CockpitPersistence.openStore(at: url)
             } catch {
                 let alert = NSAlert()
                 alert.alertStyle = .critical
