@@ -670,18 +670,34 @@ struct EditorDocumentSessionDiskTests {
         }
 
         // After: the session, with a main-actor ticker measuring stalls.
+        let store = PathStore()
         let session = EditorDocumentSession()
+        session.attach(store: store)
         let loadStall = await maxMainActorStall {
             #expect(await session.open(file) == .loaded(file))
         }
         #expect(session.text.utf8.count == byteCount)
+        #expect(store.persistedFileURL == file)
 
-        session.updateText(session.text + "x")
+        let edited = session.text + "x"
+        session.updateText(edited)
         let saveStall = await maxMainActorStall {
             #expect(await session.save(.interactive) == .saved)
         }
         #expect(!session.isDirty)
         #expect(try Data(contentsOf: file).count == byteCount + 1)
+
+        // Relaunch: a fresh session restores the persisted near-limit file
+        // with the saved edit, its UTF-8 encoding, and a clean buffer.
+        session.close()
+        let restoredURL = try #require(store.persistedFileURL)
+        let restored = EditorDocumentSession()
+        restored.attach(store: store)
+        #expect(await restored.open(restoredURL) == .loaded(file))
+        #expect(restored.text == edited)
+        #expect(restored.document?.encoding == .utf8)
+        #expect(!restored.isDirty)
+        #expect(store.persistedFileURL == file)
 
         let report = """
         editor-responsiveness bytes=\(byteCount) \
