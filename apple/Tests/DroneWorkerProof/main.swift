@@ -15,21 +15,21 @@ enum DroneWorkerProof {
         }
         let replayOnly = CommandLine.arguments.contains("--tool-replay-authorization") || reviewCase != nil
         try prepareWorkspace(workspace, includeGit: !replayOnly)
-        let workerIdentity = DroneIdentityStore(role: .worker, storage: ProofPairingStorage())
+        let workerIdentityStorage = ProofPairingStorage()
+        let workerIdentity = DroneIdentityStore(role: .worker, storage: workerIdentityStorage)
         let workerID = try workerIdentity.loadOrCreatePeerID().rawValue
         let workerPairingStorage = ProofPairingStorage()
-        let workerPairings = DronePairingStore(role: .worker, storage: workerPairingStorage)
         let workerTransport = DroneLANTransport(
             role: .worker,
             identityStore: workerIdentity,
-            pairingStore: workerPairings
+            pairingStore: DronePairingStore(role: .worker, storage: workerPairingStorage)
         )
         let service = try DroneWorkerService(
             workspace: workspace,
             stateDirectory: root.appendingPathComponent("state", isDirectory: true),
             transport: workerTransport,
             workerID: workerID,
-            pairingStore: workerPairings,
+            pairingStore: DronePairingStore(role: .worker, storage: workerPairingStorage),
             permissions: .all
         )
         let beforeStart = await service.healthSnapshot()
@@ -39,12 +39,15 @@ enum DroneWorkerProof {
         await service.setOnListening { observed.set(port: $0) }
         await service.start(bonjourInstanceID: "drone-proof-\(UUID().uuidString)")
 
-        let controllerIdentity = DroneIdentityStore(role: .controller, storage: ProofPairingStorage())
+        let controllerIdentityStorage = ProofPairingStorage()
+        let controllerIdentity = DroneIdentityStore(role: .controller, storage: controllerIdentityStorage)
         let controllerID = try controllerIdentity.loadOrCreatePeerID().rawValue
+        let controllerPairingStorage = ProofPairingStorage()
+        let controllerPairings = DronePairingStore(role: .controller, storage: controllerPairingStorage)
         let controller = DroneLANTransport(
             role: .controller,
             identityStore: controllerIdentity,
-            pairingStore: DronePairingStore(role: .controller, storage: ProofPairingStorage())
+            pairingStore: controllerPairings
         )
         controller.onEvent = { event in
             switch event {
@@ -92,6 +95,22 @@ enum DroneWorkerProof {
                     )
                 case "stale-approval":
                     try await verifyStaleApproval(service: service, port: port)
+                case "durable-replay":
+                    try await verifyDurableWorkerRestart(
+                        controller: controller,
+                        connectionID: connectionID,
+                        controllerID: controllerID,
+                        peerID: peerID,
+                        service: service,
+                        observed: observed,
+                        workspace: workspace,
+                        stateDirectory: root.appendingPathComponent("state", isDirectory: true),
+                        workerID: workerID,
+                        workerIdentityStorage: workerIdentityStorage,
+                        workerPairingStorage: workerPairingStorage,
+                        controllerIdentityStorage: controllerIdentityStorage,
+                        controllerPairingStorage: controllerPairingStorage
+                    )
                 default: throw ProofError.failed("unknown review regression")
                 }
             } catch {
@@ -127,6 +146,29 @@ enum DroneWorkerProof {
             return
         }
 
+        try await verifyWorkerAgentCycle(
+            controller: controller,
+            connectionID: connectionID,
+            controllerID: controllerID,
+            workerID: workerID,
+            service: service,
+            observed: observed,
+            workspace: workspace
+        )
+        controller.stop()
+        await service.stop()
+        print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
+    }
+
+    private static func verifyWorkerAgentCycle(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        controllerID: UUID,
+        workerID: UUID,
+        service: DroneWorkerService,
+        observed: ProofObserved,
+        workspace: URL
+    ) async throws {
         let createRequest = UUID()
         controller.send(DroneEnvelope(
             kind: .create,
@@ -203,9 +245,6 @@ enum DroneWorkerProof {
 
         controller.send(DroneEnvelope(kind: .close, requestID: UUID(), sessionID: sessionID), on: connectionID)
         try await Task.sleep(for: .milliseconds(100))
-        controller.stop()
-        await service.stop()
-        print("Drone worker proof passed: pairing, encrypted terminal, remote command, and agent tool cycle.")
     }
 
     private static func prepareWorkspace(_ workspace: URL, includeGit: Bool) throws {
@@ -217,6 +256,167 @@ enum DroneWorkerProof {
             try runProcess("/usr/bin/git", ["init", "-q"], directory: workspace)
             try runProcess("/usr/bin/git", ["add", "-N", "main.swift"], directory: workspace)
         }
+    }
+
+    private static func verifyDurableWorkerRestart(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        controllerID: UUID,
+        peerID: DronePeerID,
+        service: DroneWorkerService,
+        observed: ProofObserved,
+        workspace: URL,
+        stateDirectory: URL,
+        workerID: UUID,
+        workerIdentityStorage: ProofPairingStorage,
+        workerPairingStorage: ProofPairingStorage,
+        controllerIdentityStorage: ProofPairingStorage,
+        controllerPairingStorage: ProofPairingStorage
+    ) async throws {
+        let lease = try await service.issueToolLease(controllerID: controllerID, permissions: .jobs)
+        let operationID = UUID()
+        let operationKey = "durable-worker-restart-key"
+        let request = DroneToolProcessRequest(
+            executable: "sh",
+            arguments: ["-c", "printf worker-restart-output; printf x >> worker-restart-count"]
+        )
+        controller.send(DroneEnvelope(
+            kind: .toolRun,
+            requestID: operationID,
+            lease: lease,
+            idempotencyKey: operationKey,
+            body: .toolRun(request)
+        ), on: connectionID)
+        let completion = try await waitForResponse(operationID, kind: .toolCompletion, observed: observed)
+        guard case .toolCompletion(let body) = completion.body, body.status == .succeeded else {
+            throw ProofError.failed("durable worker fixture failed")
+        }
+        let countURL = workspace.appendingPathComponent("worker-restart-count")
+        expect((try? Data(contentsOf: countURL)) == Data("x".utf8), "worker fixture side effect missing")
+
+        controller.stop()
+        await service.stop()
+
+        let restartedTransport = DroneLANTransport(
+            role: .worker,
+            identityStore: DroneIdentityStore(role: .worker, storage: workerIdentityStorage),
+            pairingStore: DronePairingStore(role: .worker, storage: workerPairingStorage)
+        )
+        let restartedService = try DroneWorkerService(
+            workspace: workspace,
+            stateDirectory: stateDirectory,
+            transport: restartedTransport,
+            workerID: workerID,
+            pairingStore: DronePairingStore(role: .worker, storage: workerPairingStorage),
+            permissions: .all
+        )
+        let restartedObserved = ProofObserved()
+        await restartedService.setOnListening { restartedObserved.set(port: $0) }
+        await restartedService.start(bonjourInstanceID: "drone-proof-\(UUID().uuidString)")
+        var restartedPort: UInt16?
+        for _ in 0..<200 {
+            if let value = restartedObserved.port { restartedPort = value; break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        guard let restartedPort else { throw ProofError.failed("restarted worker did not listen") }
+
+        let restartedController = DroneLANTransport(
+            role: .controller,
+            identityStore: DroneIdentityStore(role: .controller, storage: controllerIdentityStorage),
+            pairingStore: DronePairingStore(role: .controller, storage: controllerPairingStorage)
+        )
+        restartedController.onEvent = { event in
+            switch event {
+            case .pairingRequired(let request):
+                restartedController.resolvePairing(requestID: request.id, approved: true)
+            case .connected(let id, _, _):
+                restartedObserved.set(connectionID: id)
+            case .envelope(_, _, let envelope):
+                restartedObserved.record(envelope)
+            default:
+                break
+            }
+        }
+        restartedController.connect(peerID: peerID, host: "127.0.0.1", port: restartedPort)
+        var restartedConnectionID: DroneConnectionID?
+        for _ in 0..<400 {
+            for approval in await restartedService.approvalSummaries() {
+                await restartedService.resolvePairing(requestID: approval.requestID, approved: true)
+            }
+            if let value = restartedObserved.connectionID { restartedConnectionID = value; break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        guard let restartedConnectionID else {
+            throw ProofError.failed("controller did not reauthenticate after restart")
+        }
+        let restartedFilesLease = try await restartedService.issueToolLease(
+            controllerID: controllerID,
+            permissions: .files
+        )
+        let deniedAttachID = UUID()
+        restartedController.send(DroneEnvelope(
+            kind: .toolAttach,
+            requestID: deniedAttachID,
+            lease: restartedFilesLease,
+            idempotencyKey: UUID().uuidString,
+            body: .toolAttach(DroneToolAttachBody(
+                originalRequestID: operationID,
+                nextSequence: 0,
+                offsets: DroneToolStreamOffsets()
+            ))
+        ), on: restartedConnectionID)
+        try await expectUnauthorized(deniedAttachID, observed: restartedObserved)
+        expect(restartedObserved.responses(for: operationID).isEmpty,
+               "restart replay ignored operation permissions")
+        let freshLease = try await restartedService.issueToolLease(
+            controllerID: controllerID,
+            permissions: .jobs
+        )
+        expect(freshLease.id != lease.id && freshLease.jobID != lease.jobID, "restart reused the old grant")
+        let attachID = UUID()
+        restartedController.send(DroneEnvelope(
+            kind: .toolAttach,
+            requestID: attachID,
+            lease: freshLease,
+            idempotencyKey: UUID().uuidString,
+            body: .toolAttach(DroneToolAttachBody(
+                originalRequestID: operationID,
+                nextSequence: 0,
+                offsets: DroneToolStreamOffsets()
+            ))
+        ), on: restartedConnectionID)
+        _ = try await waitForResponse(attachID, kind: .toolAttached, observed: restartedObserved)
+        for _ in 0..<400 {
+            let responses = restartedObserved.responses(for: operationID)
+            if responses.contains(where: { $0.kind == .toolCompletion }) { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let replayed = restartedObserved.responses(for: operationID)
+        expect(replayed.contains { $0.kind == .toolOutput }, "restart lost durable output")
+        expect(replayed.contains { $0.kind == .toolCompletion }, "restart lost durable completion")
+        expect(replayed.allSatisfy { $0.idempotencyKey == operationKey }, "restart changed response correlation")
+        expect(replayed.allSatisfy { $0.lease == freshLease }, "restart replay returned a stale lease")
+        expect((try? Data(contentsOf: countURL)) == Data("x".utf8), "replay repeated process side effects")
+
+        let priorCompletions = replayed.filter { $0.kind == .toolCompletion }.count
+        restartedController.send(DroneEnvelope(
+            kind: .toolRun,
+            requestID: operationID,
+            lease: freshLease,
+            idempotencyKey: operationKey,
+            body: .toolRun(request)
+        ), on: restartedConnectionID)
+        for _ in 0..<400 {
+            let count = restartedObserved.responses(for: operationID).filter { $0.kind == .toolCompletion }.count
+            if count > priorCompletions { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let retried = restartedObserved.responses(for: operationID)
+        expect(retried.filter { $0.kind == .toolCompletion }.count > priorCompletions,
+               "same-key retry did not return the durable completion")
+        expect((try? Data(contentsOf: countURL)) == Data("x".utf8), "same-key retry repeated process side effects")
+        restartedController.stop()
+        await restartedService.stop()
     }
 
     private static func verifyExpiredOwnerRevocation(
@@ -615,6 +815,19 @@ enum DroneWorkerProof {
         guard case .toolCompletion(let result) = completed.body, result.status == .succeeded else {
             throw ProofError.failed("replay fixture process failed")
         }
+        let filesOnlyLease = try await service.issueToolLease(controllerID: controllerID, permissions: .files)
+        let deniedAttachID = UUID()
+        let beforeDeniedReplay = observed.responses(for: operationID).count
+        controller.send(DroneEnvelope(
+            kind: .toolAttach, requestID: deniedAttachID, lease: filesOnlyLease,
+            idempotencyKey: UUID().uuidString,
+            body: .toolAttach(DroneToolAttachBody(
+                originalRequestID: operationID, nextSequence: 0, offsets: DroneToolStreamOffsets()
+            ))
+        ), on: connectionID)
+        try await expectUnauthorized(deniedAttachID, observed: observed)
+        expect(observed.responses(for: operationID).count == beforeDeniedReplay,
+               "files-only lease replayed process output")
         let otherLease = try await service.issueToolLease(controllerID: controllerID, permissions: .jobs)
         let cancelID = UUID()
         controller.send(DroneEnvelope(
@@ -622,7 +835,7 @@ enum DroneWorkerProof {
             idempotencyKey: UUID().uuidString,
             body: .toolCancel(DroneToolCancelBody(operationRequestID: operationID))
         ), on: connectionID)
-        try await expectUnauthorized(cancelID, observed: observed)
+        _ = try await waitForResponse(cancelID, kind: .toolCancelled, observed: observed)
         for field in 0..<7 {
             let requestID = UUID()
             let requestedLease = DroneToolLease(
@@ -658,6 +871,24 @@ enum DroneWorkerProof {
                 expect(replay.last?.kind == .toolCompletion, "original lease did not replay completion")
             }
         }
+        let freshAttachID = UUID()
+        let previousCount = observed.responses(for: operationID).count
+        controller.send(DroneEnvelope(
+            kind: .toolAttach, requestID: freshAttachID, lease: otherLease,
+            idempotencyKey: UUID().uuidString,
+            body: .toolAttach(DroneToolAttachBody(
+                originalRequestID: operationID, nextSequence: 0, offsets: DroneToolStreamOffsets()
+            ))
+        ), on: connectionID)
+        _ = try await waitForResponse(freshAttachID, kind: .toolAttached, observed: observed)
+        for _ in 0..<200 {
+            if observed.responses(for: operationID).count >= previousCount + 2 { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let freshReplay = Array(observed.responses(for: operationID).dropFirst(previousCount))
+        expect(freshReplay.contains { $0.kind == .toolOutput }, "fresh lease did not replay output")
+        expect(freshReplay.last?.kind == .toolCompletion, "fresh lease did not replay completion")
+        expect(freshReplay.allSatisfy { $0.lease == otherLease }, "replay returned a stale lease")
     }
 
     private static func waitForResponse(

@@ -1,4 +1,22 @@
+import CryptoKit
 import Foundation
+
+private final class DroneWorkspaceMutationLocks: @unchecked Sendable {
+    static let shared = DroneWorkspaceMutationLocks()
+
+    private let lock = NSLock()
+    private var workspaceLocks: [UUID: NSLock] = [:]
+
+    func withLock<T>(workspaceID: UUID, body: () throws -> T) rethrows -> T {
+        lock.lock()
+        let workspaceLock = workspaceLocks[workspaceID] ?? NSLock()
+        workspaceLocks[workspaceID] = workspaceLock
+        lock.unlock()
+        workspaceLock.lock()
+        defer { workspaceLock.unlock() }
+        return try body()
+    }
+}
 
 struct DroneWorkspaceRegistry: Sendable {
     private let roots: [UUID: URL]
@@ -78,6 +96,19 @@ enum DroneJobRequestValidator {
             try requireNoEnvironment(create.request.environment)
             guard operation.data.count <= limits.maximumFileBytes else {
                 throw DroneJobError.resourceLimit
+            }
+        case .conditionalEdit(let operation):
+            try requireNoEnvironment(create.request.environment)
+            guard !operation.oldData.isEmpty,
+                  operation.oldData.count <= limits.maximumFileBytes,
+                  operation.newData.count <= limits.maximumFileBytes,
+                  operation.maximumBytes > 0,
+                  operation.maximumBytes <= limits.maximumFileBytes
+            else { throw DroneJobError.resourceLimit }
+            if let digest = operation.expectedSHA256 {
+                guard digest.count == 64, digest.allSatisfy({ $0.isHexDigit }) else {
+                    throw DroneJobError.invalidRequest
+                }
             }
         case .listDirectory(let operation):
             try requireNoEnvironment(create.request.environment)
@@ -181,6 +212,48 @@ enum DroneWorkspaceOperations {
         workspaceID: UUID,
         operation: DroneWriteFileOperation
     ) throws -> Int {
+        try DroneWorkspaceMutationLocks.shared.withLock(workspaceID: workspaceID) {
+            try writeFileUnlocked(workspace: workspace, workspaceID: workspaceID, operation: operation)
+        }
+    }
+
+    static func conditionalEdit(
+        workspace: DroneWorkspaceRegistry,
+        workspaceID: UUID,
+        operation: DroneConditionalEditOperation
+    ) throws -> DroneFileEditResult {
+        try DroneWorkspaceMutationLocks.shared.withLock(workspaceID: workspaceID) {
+            let data = try readFile(
+                workspace: workspace,
+                workspaceID: workspaceID,
+                operation: DroneReadFileOperation(
+                    relativePath: operation.relativePath,
+                    maximumBytes: operation.maximumBytes
+                )
+            )
+            if let expected = operation.expectedSHA256 {
+                guard digest(data) == expected.lowercased() else { throw DroneProtocolError.invalidState }
+            }
+            guard let range = data.range(of: operation.oldData),
+                  data.range(of: operation.oldData, in: range.upperBound..<data.endIndex) == nil
+            else { throw DroneProtocolError.invalidState }
+            var updated = data
+            updated.replaceSubrange(range, with: operation.newData)
+            guard updated.count <= operation.maximumBytes else { throw DroneJobError.resourceLimit }
+            _ = try writeFileUnlocked(
+                workspace: workspace,
+                workspaceID: workspaceID,
+                operation: DroneWriteFileOperation(relativePath: operation.relativePath, data: updated)
+            )
+            return DroneFileEditResult(bytesWritten: updated.count, sha256: digest(updated))
+        }
+    }
+
+    private static func writeFileUnlocked(
+        workspace: DroneWorkspaceRegistry,
+        workspaceID: UUID,
+        operation: DroneWriteFileOperation
+    ) throws -> Int {
         guard operation.relativePath != "." else { throw DroneJobError.invalidRequest }
         let url = try workspace.resolve(
             operation.relativePath,
@@ -193,6 +266,10 @@ enum DroneWorkspaceOperations {
         }
         try operation.data.write(to: url, options: .atomic)
         return operation.data.count
+    }
+
+    private static func digest(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     static func listDirectory(

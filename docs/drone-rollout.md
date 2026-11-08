@@ -108,6 +108,11 @@ restart and confirm `drone doctor` succeeds before enabling further rollout.
   before execution. Retry returns the original job instead of duplicating side
   effects. Interrupted nonterminal jobs fail explicitly as `workerRestarted`;
   they are not rerun automatically.
+- Tool jobs use durable controller/request-ID correlation independent of lease
+  ID, orchestration job, and expiry. A fresh owner grant in the same
+  controller/Drone/workspace scope must pass the original operation permission
+  check before retry, cancellation, or bounded output/cursor replay.
+  Conditional edits compare and replace in one serialized workspace mutation.
 - Cancellation signals the owned process group, not unrelated user processes.
   Output, history, frame size, connection queues, sessions, jobs, path lengths,
   environments, and retained replay histories are bounded.

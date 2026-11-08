@@ -323,7 +323,21 @@ and expire on worker restart. Older clients that construct their own leases
 are rejected; `drone grant-tools` on the worker must issue an approved lease before
 using the unchanged typed calls. There is no remote first-use registration.
 The lease job ID identifies the approved orchestration session; individual
-operations retain their own durable job records.
+operations retain their own durable job records. A conditional edit is one
+durable typed job: its SHA/precondition check, unique-byte replacement, and
+atomic file replacement run under the same per-workspace typed-mutation lock.
+It is not a read job followed by an independently racing write job.
+
+Tool correlation is persisted with the job before execution and keyed by the
+authenticated controller and original request ID, not by lease ID, lease job ID,
+or expiry. After a restart, the owner must issue a fresh grant for the same
+controller, Drone, and workspace; the operation's original files/jobs/Git
+permission is checked again before retry, cancellation, or replay. Retained
+terminal results and output/cursors replay from the durable job record, and
+same-key retries return that record without executing again. Jobs interrupted
+before a terminal record fail explicitly as `workerRestarted`; retained-history
+gaps remain `outputGap` rather than silently dropping output. In-memory output
+history is only a replay fast path, not the durable authority.
 
 Authorization, resource-governance and recovery acceptance remains tracked in
 #326/#327. Keep detailed security findings and remediation evidence in private

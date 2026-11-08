@@ -461,34 +461,95 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
             // Execution ownership outlives delivery to this connection.
             try await streamTool(stream, envelope: envelope, connectionID: connectionID)
         case .toolAttach:
-            guard case .toolAttach(let attach) = envelope.body,
-                  let history = toolHistories[attach.originalRequestID],
-                  attach.nextSequence <= UInt64(history.count)
-            else { throw DroneProtocolError.invalidIdentifier }
-            try DroneToolWorkerAuthorization.authorizeReplay(
-                storedLease: history.first?.lease,
-                requestingLease: lease
-            )
-            var offsets = DroneToolStreamOffsets()
-            for event in history.prefix(Int(attach.nextSequence)) {
-                guard case .toolOutput(let output) = event.body else { throw DroneProtocolError.malformedMessage }
-                offsets[output.stream] += UInt64(output.data.count)
+            guard case .toolAttach(let attach) = envelope.body else {
+                throw DroneProtocolError.malformedMessage
             }
-            guard offsets == attach.offsets else { throw DroneProtocolError.invalidState }
-            try await send(DroneEnvelope(
-                kind: .toolAttached,
-                requestID: requestID,
-                lease: lease,
-                idempotencyKey: idempotencyKey
-            ), on: connectionID)
-            for event in history.dropFirst(Int(attach.nextSequence)) {
-                try await send(event, on: connectionID)
+            if let history = toolHistories[attach.originalRequestID] {
+                guard attach.nextSequence <= UInt64(history.count) else {
+                    throw DroneProtocolError.invalidIdentifier
+                }
+                try DroneToolWorkerAuthorization.authorizeReplay(
+                    storedLease: history.first?.lease,
+                    requestingLease: lease
+                )
+                guard let original = toolOperations[attach.originalRequestID],
+                      let permission = Self.toolPermission(for: original.kind)
+                else { throw DroneProtocolError.unauthorized }
+                try toolLeases.authorizeReplay(
+                    permission: permission,
+                    lease: lease,
+                    now: Date().timeIntervalSince1970
+                )
+                var offsets = DroneToolStreamOffsets()
+                for event in history.prefix(Int(attach.nextSequence)) {
+                    guard case .toolOutput(let output) = event.body else {
+                        throw DroneProtocolError.malformedMessage
+                    }
+                    offsets[output.stream] += UInt64(output.data.count)
+                }
+                guard offsets == attach.offsets else { throw DroneProtocolError.invalidState }
+                try await send(DroneEnvelope(
+                    kind: .toolAttached,
+                    requestID: requestID,
+                    lease: lease,
+                    idempotencyKey: idempotencyKey
+                ), on: connectionID)
+                for event in history.dropFirst(Int(attach.nextSequence)) {
+                    try await send(DroneEnvelope(
+                        kind: event.kind,
+                        requestID: event.requestID,
+                        sessionID: event.sessionID,
+                        lease: lease,
+                        idempotencyKey: event.idempotencyKey,
+                        body: event.body
+                    ), on: connectionID)
+                }
+            } else {
+                let replay = try await tools.attach(attach, context: context)
+                try toolLeases.authorizeReplay(
+                    permission: replay.permission,
+                    lease: lease,
+                    now: Date().timeIntervalSince1970
+                )
+                try await send(DroneEnvelope(
+                    kind: .toolAttached,
+                    requestID: requestID,
+                    lease: lease,
+                    idempotencyKey: idempotencyKey
+                ), on: connectionID)
+                for try await event in replay.events {
+                    let response: DroneEnvelope
+                    switch event {
+                    case .output(let output):
+                        response = DroneEnvelope(
+                            kind: .toolOutput,
+                            requestID: replay.originalRequestID,
+                            lease: lease,
+                            idempotencyKey: replay.idempotencyKey,
+                            body: .toolOutput(output)
+                        )
+                    case .completed(let completion):
+                        response = DroneEnvelope(
+                            kind: .toolCompletion,
+                            requestID: replay.originalRequestID,
+                            lease: lease,
+                            idempotencyKey: replay.idempotencyKey,
+                            body: .toolCompletion(completion)
+                        )
+                    }
+                    try await deliverTool(response, on: connectionID)
+                }
             }
         case .toolCancel:
             guard case .toolCancel(let cancel) = envelope.body else { throw DroneProtocolError.malformedMessage }
-            try DroneToolWorkerAuthorization.authorizeReplay(
-                storedLease: toolOperations[cancel.operationRequestID]?.lease,
-                requestingLease: lease
+            let permission = try await tools.operationPermission(
+                context: context,
+                operationRequestID: cancel.operationRequestID
+            )
+            try toolLeases.authorizeReplay(
+                permission: permission,
+                lease: lease,
+                now: Date().timeIntervalSince1970
             )
             try await tools.cancel(context: context, operationRequestID: cancel.operationRequestID)
             onAudit?("job.cancelled")
@@ -506,7 +567,15 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     private func registerToolOperation(_ envelope: DroneEnvelope) throws {
         guard let id = envelope.requestID else { throw DroneProtocolError.malformedMessage }
         if let existing = toolOperations[id] {
-            guard existing == envelope else { throw DroneProtocolError.idempotencyConflict }
+            guard existing.version == envelope.version,
+                  existing.kind == envelope.kind,
+                  existing.sessionID == envelope.sessionID,
+                  existing.idempotencyKey == envelope.idempotencyKey,
+                  existing.body == envelope.body,
+                  existing.lease?.controllerID == envelope.lease?.controllerID,
+                  existing.lease?.droneID == envelope.lease?.droneID,
+                  existing.lease?.workspaceID == envelope.lease?.workspaceID
+            else { throw DroneProtocolError.idempotencyConflict }
             return
         }
         if toolOperations.count >= 128, let completed = toolHistoryOrder.first {
@@ -619,6 +688,14 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         guard permissions.contains(permission) else {
             onAudit?("authorization.failed")
             throw DroneProtocolError.unauthorized
+        }
+    }
+
+    private static func toolPermission(for kind: DroneMessageKind) -> DroneControllerPermissions? {
+        switch kind {
+        case .toolRun: .jobs
+        case .toolDiff: .git
+        default: nil
         }
     }
 

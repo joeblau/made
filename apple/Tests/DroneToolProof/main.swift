@@ -183,8 +183,8 @@ enum DroneToolProof {
 
     private static func verifyReplayAuthorization(lease: DroneToolLease) throws {
         try DroneToolWorkerAuthorization.authorizeReplay(storedLease: lease, requestingLease: lease)
-        // Change each authority component independently, including the same controller
-        // attempting to reuse another job's output or extend its original lease.
+        // A fresh grant may change its ID, orchestration job and expiry, but not
+        // the authenticated controller, worker or approved workspace.
         for field in 0..<7 {
             let other = DroneToolLease(
                 id: field == 0 ? UUID() : lease.id,
@@ -199,8 +199,10 @@ enum DroneToolProof {
                     storedLease: field == 6 ? nil : lease,
                     requestingLease: other
                 )
-                throw ProofError.failed("foreign or missing replay lease accepted")
-            } catch DroneProtocolError.unauthorized {}
+                expect(![1, 2, 4, 6].contains(field), "foreign or missing replay lease accepted")
+            } catch DroneProtocolError.unauthorized {
+                expect([1, 2, 4, 6].contains(field), "fresh lease in the same scope was rejected")
+            }
         }
     }
 

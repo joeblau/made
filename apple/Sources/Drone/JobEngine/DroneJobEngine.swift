@@ -76,6 +76,10 @@ final class DroneJobEngine: @unchecked Sendable {
         try store.snapshot(id: id, controllerID: controllerID)
     }
 
+    func snapshot(controllerID: UUID, idempotencyKey: String) throws -> DroneJobSnapshot {
+        try store.snapshot(controllerID: controllerID, idempotencyKey: idempotencyKey)
+    }
+
     func events(
         id: DroneJobID,
         controllerID: UUID,
@@ -208,6 +212,13 @@ final class DroneJobEngine: @unchecked Sendable {
                 operation: operation
             )
             return ExecutionOutcome(state: .completed, result: .bytesWritten(count), failure: nil)
+        case .conditionalEdit(let operation):
+            let result = try DroneWorkspaceOperations.conditionalEdit(
+                workspace: workspaces,
+                workspaceID: job.request.workspaceID,
+                operation: operation
+            )
+            return ExecutionOutcome(state: .completed, result: .fileEdit(result), failure: nil)
         case .listDirectory(let operation):
             let entries = try DroneWorkspaceOperations.listDirectory(
                 workspace: workspaces,
@@ -332,6 +343,8 @@ final class DroneJobEngine: @unchecked Sendable {
                 workspaceID: request.workspaceID,
                 allowMissingLeaf: true
             )
+        case .conditionalEdit(let operation):
+            _ = try workspaces.resolve(operation.relativePath, workspaceID: request.workspaceID)
         case .listDirectory(let operation):
             _ = try workspaces.resolve(operation.relativePath, workspaceID: request.workspaceID)
         case .gitStatus(let operation):
