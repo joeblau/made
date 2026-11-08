@@ -1467,6 +1467,7 @@ export function initCockpit(root = document, {
     } catch {
       // The failed renderer is already unusable; preserve the initialization error.
     }
+    sceneCanvas.replaceWith(sceneCanvas.cloneNode(false));
     throw error;
   }
 }

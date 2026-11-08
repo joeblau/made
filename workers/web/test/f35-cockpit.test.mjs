@@ -29,6 +29,7 @@ class FakeCanvas extends TrackedEventTarget {
     super();
     this.width = 0;
     this.height = 0;
+    this.attributes = {};
     const gradient = { addColorStop() {} };
     this.context = new Proxy({
       createImageData: (width, height) => ({ data: new Uint8ClampedArray(width * height * 4) }),
@@ -43,13 +44,34 @@ class FakeCanvas extends TrackedEventTarget {
     assert.equal(type, '2d');
     return this.context;
   }
+
+  cloneNode(deep) {
+    assert.equal(deep, false);
+    const clone = new FakeCanvas();
+    clone.width = this.width;
+    clone.height = this.height;
+    clone.attributes = { ...this.attributes };
+    return clone;
+  }
+
+  replaceWith(replacement) {
+    this.replacement = replacement;
+    this.parent.replaceCanvas(this, replacement);
+  }
 }
 
 class FakeRoot extends TrackedEventTarget {
   constructor() {
     super();
     this.sceneCanvas = new FakeCanvas();
+    this.sceneCanvas.attributes = {
+      'aria-hidden': 'true',
+      class: 'cockpit-scene',
+      'data-cockpit-scene': '',
+    };
+    this.sceneCanvas.parent = this;
     this.hudCanvas = new FakeCanvas();
+    this.hudCanvas.parent = this;
   }
 
   querySelector(selector) {
@@ -60,6 +82,12 @@ class FakeRoot extends TrackedEventTarget {
 
   closest() {
     return this;
+  }
+
+  replaceCanvas(current, replacement) {
+    assert.equal(current, this.sceneCanvas);
+    this.sceneCanvas = replacement;
+    replacement.parent = this;
   }
 
   getBoundingClientRect() {
@@ -180,7 +208,8 @@ function browserEnvironment(t) {
 
 function sceneDependencies(state) {
   class Renderer {
-    constructor() {
+    constructor({ canvas }) {
+      this.canvas = canvas;
       this.capabilities = { getMaxAnisotropy: () => 4 };
       this.shadowMap = {};
       this.disposals = 0;
@@ -324,8 +353,12 @@ test('mid-initialization render failures roll back the real scene and permit rep
   browser.assertListenersRemoved();
 });
 
-test('environment failure after output allocation tears down the GL context before retry', (t) => {
+test('environment failure after output allocation uses a fresh canvas on retry', (t) => {
   const browser = browserEnvironment(t);
+  const root = browser.root;
+  const failedCanvas = root.sceneCanvas;
+  const hudCanvas = root.hudCanvas;
+  const canvasAttributes = { ...failedCanvas.attributes };
   const state = {
     environmentFailures: 1,
     renderers: [],
@@ -336,17 +369,24 @@ test('environment failure after output allocation tears down the GL context befo
   const dependencies = sceneDependencies(state);
 
   assert.throws(
-    () => initCockpit(browser.root, dependencies),
+    () => initCockpit(root, dependencies),
     /induced environment generation failure/,
   );
   const renderer = state.renderers[0];
   const partialTarget = state.partialEnvironmentTargets[0];
+  const retryCanvas = root.sceneCanvas;
+  assert.equal(renderer.canvas, failedCanvas);
   assert.equal(renderer.disposals, 1);
   assert.equal(renderer.contextLosses, 1);
   assert.equal(renderer.contextLostTarget, partialTarget);
   assert.deepEqual(renderer.events, ['dispose', 'context-loss']);
   assert.equal(partialTarget.contextLosses, 1);
   assert.equal(partialTarget.disposals, 0);
+  assert.notEqual(retryCanvas, failedCanvas);
+  assert.equal(failedCanvas.replacement, retryCanvas);
+  assert.deepEqual(retryCanvas.attributes, canvasAttributes);
+  assert.equal(browser.root, root);
+  assert.equal(root.hudCanvas, hudCanvas);
   assert.equal(state.environmentGenerators[0].disposals, 1);
   assert.equal(state.environmentGenerators[0].geometryDisposed, true);
   assert.equal(state.environmentGenerators[0].materialDisposed, true);
@@ -355,14 +395,16 @@ test('environment failure after output allocation tears down the GL context befo
   assert.equal(browser.frames.size, 0);
   browser.assertListenersRemoved();
 
-  const cockpit = initCockpit(browser.root, dependencies);
+  const cockpit = initCockpit(root, dependencies);
   assert.ok(cockpit);
   assert.equal(state.renderers.length, 2);
+  assert.equal(state.renderers[1].canvas, retryCanvas);
   assert.equal(state.environmentTargets.length, 1);
   cockpit.dispose();
   assert.equal(state.renderers[1].disposals, 1);
   assert.equal(state.renderers[1].contextLosses, 0);
   assert.deepEqual(state.renderers[1].events, ['dispose']);
+  assert.equal(root.sceneCanvas, retryCanvas);
   assert.equal(state.environmentGenerators[1].disposals, 1);
   assert.equal(state.environmentTargets[0].disposals, 1);
   browser.assertListenersRemoved();
