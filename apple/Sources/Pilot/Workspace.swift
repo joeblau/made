@@ -270,7 +270,7 @@ enum PersistentTerminalSession {
             executableURL: executable,
             arguments: [
                 "list-panes", "-a", "-F",
-                "#{session_name}\t#{pane_pid}\t#{cursor_flag}\t#{window_active}\t#{pane_active}",
+                "#{session_name}\\t#{pane_pid}\\t#{cursor_flag}\\t#{window_active}\\t#{pane_active}",
             ],
             timeout: .seconds(1), standardOutputLimit: 256 * 1_024, standardErrorLimit: 4096
         )) else { return nil }
@@ -287,7 +287,8 @@ enum PersistentTerminalSession {
         var runtimes: [String: PaneRuntime] = [:]
         var resolved: Set<String> = []
         for line in output.split(separator: "\n") {
-            let fields = line.split(separator: "\t", omittingEmptySubsequences: false)
+            let delimiter = line.contains("\\t") ? "\\t" : "\t"
+            let fields = line.components(separatedBy: delimiter)
             guard fields.count == 5 else { continue }
             let session = String(fields[0])
             let isActive = fields[3] == "1" && fields[4] == "1"

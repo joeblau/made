@@ -62,6 +62,28 @@ struct DroneWriteFileOperation: Codable, Equatable, Sendable {
     }
 }
 
+struct DroneConditionalEditOperation: Codable, Equatable, Sendable {
+    var relativePath: String
+    var expectedSHA256: String?
+    var oldData: Data
+    var newData: Data
+    var maximumBytes: Int
+
+    init(
+        relativePath: String,
+        expectedSHA256: String? = nil,
+        oldData: Data,
+        newData: Data,
+        maximumBytes: Int = 1_048_576
+    ) {
+        self.relativePath = relativePath
+        self.expectedSHA256 = expectedSHA256
+        self.oldData = oldData
+        self.newData = newData
+        self.maximumBytes = maximumBytes
+    }
+}
+
 struct DroneListDirectoryOperation: Codable, Equatable, Sendable {
     var relativePath: String = "."
     var maximumEntries: Int = 1_024
@@ -111,24 +133,34 @@ enum DroneJobOperation: Codable, Equatable, Sendable {
     case process(DroneProcessOperation)
     case readFile(DroneReadFileOperation)
     case writeFile(DroneWriteFileOperation)
+    case conditionalEdit(DroneConditionalEditOperation)
     case listDirectory(DroneListDirectoryOperation)
     case gitStatus(DroneGitStatusOperation)
     case gitDiff(DroneGitDiffOperation)
+}
+
+struct DroneJobToolCorrelation: Codable, Equatable, Sendable {
+    var requestID: UUID
+    var idempotencyKey: String
+    var droneID: UUID
 }
 
 struct DroneJobRequest: Codable, Equatable, Sendable {
     var workspaceID: UUID
     var operation: DroneJobOperation
     var environment: [String: String] = [:]
+    var toolCorrelation: DroneJobToolCorrelation?
 
     init(
         workspaceID: UUID,
         operation: DroneJobOperation,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        toolCorrelation: DroneJobToolCorrelation? = nil
     ) {
         self.workspaceID = workspaceID
         self.operation = operation
         self.environment = environment
+        self.toolCorrelation = toolCorrelation
     }
 }
 
@@ -164,10 +196,16 @@ struct DroneProcessResult: Codable, Equatable, Sendable {
     var standardErrorTruncated: Bool
 }
 
+struct DroneFileEditResult: Codable, Equatable, Sendable {
+    var bytesWritten: Int
+    var sha256: String
+}
+
 enum DroneJobResult: Codable, Equatable, Sendable {
     case process(DroneProcessResult)
     case file(Data)
     case bytesWritten(Int)
+    case fileEdit(DroneFileEditResult)
     case directory([DroneDirectoryEntry])
 }
 

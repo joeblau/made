@@ -65,12 +65,93 @@ struct PilotSchemaMigrationTests {
         static var stages: [MigrationStage] { [] }
     }
 
+    private enum ReleasedV3OnlyPlan: SchemaMigrationPlan {
+        static var schemas: [any VersionedSchema.Type] { [PilotSchemaV3Released.self] }
+        static var stages: [MigrationStage] { [] }
+    }
+
     private enum V3OnlyPlan: SchemaMigrationPlan {
         static var schemas: [any VersionedSchema.Type] { [PilotSchemaV3.self] }
         static var stages: [MigrationStage] { [] }
     }
 
-    @Test("Shipped V3 workspaces migrate to Android target persistence without losing their state")
+    private static let releasedV3Hashes: [String: String] = [
+        "BrowserState": "QJR3MWb9z6uJLip/CpBPMNTxY+M/ddwS61m4UWTTqWA=",
+        "EditorState": "3m6c1htkwSdxOUpQllVIPquDfTCbvNRakSqcQwLeQyE=",
+        "ExtensionWorkspaceLink": "7fscOj59gFRdGYrE71HfDMaamc4pI/QlxeD5WSokDS8=",
+        "Note": "vjT47X8WCzkRjqlid7dP1EKudAJaB7gCRUR4F1x173U=",
+        "Pane": "Z+GpbKAScTIwJ3w6ORyk4XiULctiqY+Vlbvf1/Abgi8=",
+        "RemoteDesktopConnection": "5el2iVgh/VdzoGoxoOODs3BCn7ml1NtiZHfHNR9vOIc=",
+        "Workspace": "sKES3UtuQCUIj72lln9dM59CoTrBHh0Issvh83QYTL0=",
+    ]
+
+    @Test("The released V3 snapshot matches v0.0.4 store metadata")
+    func releasedV3SnapshotMatchesShippedStores() throws {
+        let model = try #require(NSManagedObjectModel.makeManagedObjectModel(for: PilotSchemaV3Released.models))
+        let hashes = model.entityVersionHashesByName.mapValues { $0.base64EncodedString() }
+        #expect(hashes == Self.releasedV3Hashes, "\(hashes.sorted { $0.key < $1.key })")
+    }
+
+    @Test("Released pre-Drone V3 stores migrate with local terminals and preserve workspaces")
+    func releasedV3StoreMigratesWithLocalTerminals() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("pilot-released-v3-migration-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("Pilot.store")
+
+        let (workspaceID, terminalID) = try autoreleasepool {
+            let schema = Schema(versionedSchema: PilotSchemaV3Released.self)
+            let container = try ModelContainer(
+                for: schema,
+                migrationPlan: ReleasedV3OnlyPlan.self,
+                configurations: ModelConfiguration(schema: schema, url: storeURL)
+            )
+            let workspace = PilotSchemaV3Released.Workspace()
+            workspace.name = "Released V3 Workspace"
+            workspace.rootPath = "/tmp/v3-repository"
+            let terminal = PilotSchemaV3Released.Pane()
+            terminal.kindRaw = PaneKind.terminal.rawValue
+            terminal.currentDirectory = "/tmp/v3-repository"
+            terminal.workspace = workspace
+            let browser = PilotSchemaV3Released.Pane()
+            browser.kindRaw = PaneKind.browser.rawValue
+            browser.sortOrder = 1
+            browser.workspace = workspace
+            let browserState = PilotSchemaV3Released.BrowserState()
+            browserState.urlText = "https://example.com/v3"
+            browserState.engineRaw = BrowserEngine.chromium.rawValue
+            browser.browserState = browserState
+            workspace.panes = [terminal, browser]
+            let note = PilotSchemaV3Released.Note()
+            note.body = "Released V3 note"
+            container.mainContext.insert(workspace)
+            container.mainContext.insert(note)
+            try container.mainContext.save()
+            return (workspace.id, terminal.id)
+        }
+
+        let container = try makeCurrentContainer(at: storeURL)
+        let context = container.mainContext
+        let workspace = try canonicalWorkspace(in: context, id: workspaceID)
+        #expect(workspace.name == "Released V3 Workspace")
+        #expect(workspace.rootPath == "/tmp/v3-repository")
+        #expect(workspace.panes.count == 2)
+        let terminal = try #require(workspace.panes.first { $0.id == terminalID })
+        #expect(terminal.currentDirectory == "/tmp/v3-repository")
+        #expect(terminal.terminalDestination == .local)
+        #expect(terminal.terminalDestinationRaw == nil)
+        #expect(terminal.terminalDroneIDRaw == nil)
+        #expect(terminal.terminalRemoteSessionIDRaw == nil)
+        #expect(terminal.terminalDroneNameRaw == nil)
+        #expect(terminal.androidTargetRaw == nil)
+        let browser = try #require(workspace.panes.first { $0.kind == .browser })
+        #expect(browser.browserState?.engine == .chromium)
+        #expect(browser.browserState?.urlText == "https://example.com/v3")
+        #expect(try context.fetch(FetchDescriptor<Note>()).map(\.body) == ["Released V3 note"])
+    }
+
+    @Test("Drone-bearing V3 workspaces migrate to Android target persistence without losing their state")
     func v3WorkspacesSurviveAndroidTargetMigration() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("pilot-v3-migration-\(UUID().uuidString)", isDirectory: true)
@@ -79,6 +160,8 @@ struct PilotSchemaMigrationTests {
         let storeURL = directory.appendingPathComponent("Pilot.store")
         let paneID = UUID()
         let workspaceID = UUID()
+        let droneID = UUID()
+        let remoteSessionID = UUID()
         try autoreleasepool {
             let schema = Schema(versionedSchema: PilotSchemaV3.self)
             let container = try ModelContainer(for: schema, migrationPlan: V3OnlyPlan.self,
@@ -90,7 +173,9 @@ struct PilotSchemaMigrationTests {
             pane.id = paneID
             pane.currentDirectory = "/projects/existing"
             pane.terminalDestinationRaw = "drone"
-            pane.terminalRemoteSessionIDRaw = "existing-session"
+            pane.terminalDroneIDRaw = droneID.uuidString
+            pane.terminalRemoteSessionIDRaw = remoteSessionID.uuidString
+            pane.terminalDroneNameRaw = "Existing Drone"
             pane.workspace = workspace
             workspace.panes = [pane]
             workspace.selectedPaneID = paneID
@@ -126,8 +211,8 @@ struct PilotSchemaMigrationTests {
             let pane = try #require(workspace.panes.first)
             #expect(pane.id == paneID)
             #expect(pane.currentDirectory == "/projects/existing")
-            #expect(pane.terminalDestinationRaw == "drone")
-            #expect(pane.terminalRemoteSessionIDRaw == "existing-session")
+            #expect(pane.terminalDestination == .drone(
+                droneID: droneID, name: "Existing Drone", remoteSessionID: remoteSessionID))
             #expect(pane.androidTargetRaw == nil)
             let links = try context.fetch(FetchDescriptor<ExtensionWorkspaceLink>())
             #expect(links.count == 1)

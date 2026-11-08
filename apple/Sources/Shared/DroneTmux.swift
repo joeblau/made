@@ -58,6 +58,17 @@ struct DroneTmux: Sendable {
         _ = try requireSuccess(["kill-session", "-t", sessionName], environment: environment)
     }
 
+    func resize(
+        sessionName: String,
+        columns: UInt16,
+        rows: UInt16,
+        environment: [String: String]
+    ) throws {
+        _ = try requireSuccess([
+            "resize-window", "-t", sessionName, "-x", String(columns), "-y", String(rows),
+        ], environment: environment)
+    }
+
     func sendLiteral(
         _ text: String,
         sessionName: String,

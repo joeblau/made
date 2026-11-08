@@ -89,13 +89,24 @@ struct DroneToolLeaseRegistry: Sendable {
         case .toolRead, .toolEdit: permission = .files
         case .toolRun: permission = .jobs
         case .toolDiff: permission = .git
-        // Replay/cancel additionally require the original operation's full lease.
+        // Replay/cancel check the original operation's permission after resolving its durable record.
         case .toolAttach, .toolCancel: permission = []
         default: throw DroneProtocolError.unauthorized
         }
         guard grant.permissions.isSuperset(of: permission) else {
             throw DroneProtocolError.unauthorized
         }
+    }
+
+    func authorizeReplay(
+        permission: DroneControllerPermissions,
+        lease: DroneToolLease,
+        now: TimeInterval
+    ) throws {
+        guard !permission.isEmpty, let grant = grants[lease.id], grant.lease == lease,
+              lease.expiresAt.isFinite, lease.expiresAt > now,
+              grant.permissions.isSuperset(of: permission)
+        else { throw DroneProtocolError.unauthorized }
     }
 
     mutating func revoke(controllerID: UUID) {
@@ -347,7 +358,11 @@ enum DroneToolWorkerAuthorization {
         storedLease: DroneToolLease?,
         requestingLease: DroneToolLease
     ) throws {
-        guard storedLease == requestingLease else { throw DroneProtocolError.unauthorized }
+        guard let storedLease,
+              storedLease.controllerID == requestingLease.controllerID,
+              storedLease.droneID == requestingLease.droneID,
+              storedLease.workspaceID == requestingLease.workspaceID
+        else { throw DroneProtocolError.unauthorized }
     }
 
     static func authorize(

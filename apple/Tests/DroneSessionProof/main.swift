@@ -74,6 +74,10 @@ enum DroneSessionProof {
         precondition(originalConnection.sent.filter { $0.kind == .input }.count == 1)
 
         try await delayedCleanupProof(store: store, id: id, connection: factory.connections[1])
+        try await closeDuringCreateProof()
+        try await closeDuringAttachProof()
+        try await resyncAndResizeProof()
+        try await resizeOrderingProof()
 
         factory.revokeFails = true
         await store.forget(id: id)
@@ -86,7 +90,7 @@ enum DroneSessionProof {
         store.stop()
         try await presentationRecoveryProof(initiallyOffline: true)
         try await presentationRecoveryProof(initiallyOffline: false)
-        print("Drone session proof passed: offline recovery, client replacement, stable ID/key/cursor, split UTF-8, output isolation/bounds, stale input, revoke retry, initial-offline/interrupted presentation recovery.")
+        print("Drone session proof passed: recovery, stable identity/cursor, close/create/attach races, output-gap resync/replay, resize, stale input isolation, and presentation recovery.")
     }
 
     @MainActor
@@ -143,6 +147,119 @@ enum DroneSessionProof {
             precondition(replacement.contents == "new", "late cleanup removed same-generation replacement")
             try await client.sendInput(Data("kept".utf8), to: reference)
         }
+    }
+
+    @MainActor
+    private static func closeDuringCreateProof() async throws {
+        let droneID = UUID()
+        let remoteID = UUID()
+        let client = SessionRaceClient(droneID: droneID, remoteID: remoteID)
+        client.holdCreate = true
+        let identity = TerminalSessionIdentity(
+            paneID: UUID(), ownership: TerminalDestination.drone(droneID: droneID).ownership, generation: 1
+        )
+        let session = DroneTerminalSession(identity: identity, remoteSessionID: nil, client: client)
+        let restoring = Task { try await session.restore(workingDirectory: nil) }
+        await wait { client.createCount == 1 }
+        session.retire()
+        let closing = Task { await session.close() }
+        client.releaseCreate()
+        do {
+            _ = try await restoring.value
+            preconditionFailure("closed restoration succeeded")
+        } catch TerminalSessionFailure.staleGeneration {}
+        let closedAfterCreate = await closing.value
+        precondition(closedAfterCreate, "late-created session was not closed")
+        precondition(client.closedSessionIDs == [remoteID], "close targeted the wrong late-created session")
+        precondition(client.attachCount == 0, "closing session attached after creation")
+        let sent = await session.send(.literal("after-close"))
+        precondition(!sent && client.inputBytes.isEmpty, "closing session accepted input")
+    }
+
+    @MainActor
+    private static func closeDuringAttachProof() async throws {
+        let droneID = UUID()
+        let remoteID = UUID()
+        let client = SessionRaceClient(droneID: droneID, remoteID: remoteID)
+        client.holdAttach = true
+        let identity = TerminalSessionIdentity(
+            paneID: UUID(), ownership: TerminalDestination.drone(droneID: droneID).ownership, generation: 1
+        )
+        let session = DroneTerminalSession(identity: identity, remoteSessionID: remoteID, client: client)
+        let restoring = Task { try await session.restore(workingDirectory: nil) }
+        await wait { client.attachCount == 1 }
+        session.retire()
+        let closing = Task { await session.close() }
+        client.releaseAttach()
+        do {
+            _ = try await restoring.value
+            preconditionFailure("closed attachment succeeded")
+        } catch TerminalSessionFailure.staleGeneration {}
+        let closedAfterAttach = await closing.value
+        precondition(closedAfterAttach, "in-flight restoration prevented close")
+        precondition(client.closedSessionIDs == [remoteID], "restored session was not closed")
+        let sent = await session.send(.enter)
+        precondition(!sent && client.inputBytes.isEmpty && client.attachCount == 1, "close reconnected or sent Enter")
+    }
+
+    @MainActor
+    private static func resyncAndResizeProof() async throws {
+        let droneID = UUID()
+        let remoteID = UUID()
+        let client = SessionRaceClient(droneID: droneID, remoteID: remoteID)
+        client.gapNextAttach = true
+        let resumeState = DroneTerminalResumeState(sessionID: remoteID)
+        _ = resumeState.append(DroneOutputBody(
+            sequence: 0, offset: 0, data: Data("stale".utf8), isFinal: false
+        ))
+        let identity = TerminalSessionIdentity(
+            paneID: UUID(), ownership: TerminalDestination.drone(droneID: droneID).ownership, generation: 1
+        )
+        let session = DroneTerminalSession(
+            identity: identity, remoteSessionID: remoteID, client: client, resumeState: resumeState
+        )
+        _ = try await session.restore(workingDirectory: nil)
+        precondition(client.resyncCount == 1, "output gap did not request production resync")
+        precondition(client.attachCursors == [DroneTerminalCursor(sequence: 1, offset: 5)], "wrong replay cursor")
+        precondition(session.visibleContents() == "fresh", "resync retained stale output")
+        client.emit("!", sequence: 41, offset: 4_101)
+        precondition(session.visibleContents() == "fresh!", "output after snapshot did not append")
+        let resized = await session.resize(columns: 132, rows: 43)
+        precondition(resized, "session resize failed")
+        precondition(client.resizes == [DroneResizeBody(columns: 132, rows: 43)], "resize did not reach client")
+    }
+
+    @MainActor
+    private static func resizeOrderingProof() async throws {
+        let droneID = UUID()
+        let connection = ResizeOrderingConnection()
+        let client = DroneRemoteTerminalClient(droneID: droneID, controllerID: UUID(), connection: connection)
+        let reference = DroneTerminalSessionReference(droneID: droneID, sessionID: UUID(), generation: 1)
+        await client.setOutputHandler({ _ in true }, for: reference)
+        let handler = Task {
+            while !Task.isCancelled {
+                do {
+                    await client.handle(try await connection.receive())
+                } catch {
+                    break
+                }
+            }
+        }
+        defer { handler.cancel() }
+        let older = Task { try await client.resize(columns: 80, rows: 24, for: reference) }
+        await wait { connection.resizes.count == 1 }
+        let newer = Task { try await client.resize(columns: 132, rows: 43, for: reference) }
+        await Task.yield()
+        precondition(connection.resizes.count == 1, "newer resize overtook unacknowledged request")
+        connection.releaseResize(at: 0)
+        await wait { connection.resizes.count == 2 }
+        connection.releaseResize(at: 1)
+        try await older.value
+        try await newer.value
+        precondition(connection.resizes == [
+            DroneResizeBody(columns: 80, rows: 24),
+            DroneResizeBody(columns: 132, rows: 43),
+        ], "resize completion order changed the final dimensions")
     }
 
     @MainActor
@@ -262,6 +379,168 @@ private final class SessionConnection: DroneConnection, @unchecked Sendable {
         lock.withLock { closed = true }
         continuation.finish()
     }
+}
+
+private final class ResizeOrderingConnection: DroneConnection, @unchecked Sendable {
+    let peer = DroneAuthenticatedPeer(
+        identityFingerprint: "resize-fixture", hardware: .unknown, hello: DroneHello(selectedVersion: 1)
+    )
+    private let lock = NSLock()
+    private var pending: [DroneEnvelope] = []
+    private var storedResizes: [DroneResizeBody] = []
+    private let stream: AsyncThrowingStream<DroneEnvelope, any Error>
+    private let continuation: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation
+
+    var resizes: [DroneResizeBody] { lock.withLock { storedResizes } }
+
+    init() {
+        (stream, continuation) = AsyncThrowingStream.makeStream()
+    }
+
+    func send(_ envelope: DroneEnvelope) async throws {
+        guard envelope.kind == .resize, case .resize(let body) = envelope.body else { return }
+        lock.withLock {
+            storedResizes.append(body)
+            pending.append(envelope)
+        }
+    }
+
+    func releaseResize(at index: Int) {
+        let envelope = lock.withLock { pending[index] }
+        continuation.yield(DroneEnvelope(
+            kind: .ack,
+            requestID: envelope.requestID,
+            sessionID: envelope.sessionID
+        ))
+    }
+
+    func receive() async throws -> DroneEnvelope {
+        var iterator = stream.makeAsyncIterator()
+        guard let envelope = try await iterator.next() else { throw DroneTransportError.disconnected }
+        return envelope
+    }
+
+    func close() {
+        continuation.finish()
+    }
+}
+
+private final class SessionRaceClient: DroneTerminalClient, @unchecked Sendable {
+    let droneID: UUID
+    private let remoteID: UUID
+    private let lock = NSLock()
+    private var createContinuation: CheckedContinuation<UUID, Never>?
+    private var attachContinuation: CheckedContinuation<Void, Never>?
+    private var outputHandler: (@Sendable (DroneOutputBody) -> Bool)?
+    private var storedCreateCount = 0
+    private var storedAttachCount = 0
+    private var storedClosedSessionIDs: [UUID] = []
+    private var storedInputBytes = Data()
+    private var storedAttachCursors: [DroneTerminalCursor] = []
+    private var storedResyncCount = 0
+    private var storedResizes: [DroneResizeBody] = []
+    var holdCreate = false
+    var holdAttach = false
+    var gapNextAttach = false
+
+    var createCount: Int { lock.withLock { storedCreateCount } }
+    var attachCount: Int { lock.withLock { storedAttachCount } }
+    var closedSessionIDs: [UUID] { lock.withLock { storedClosedSessionIDs } }
+    var inputBytes: Data { lock.withLock { storedInputBytes } }
+    var attachCursors: [DroneTerminalCursor] { lock.withLock { storedAttachCursors } }
+    var resyncCount: Int { lock.withLock { storedResyncCount } }
+    var resizes: [DroneResizeBody] { lock.withLock { storedResizes } }
+
+    init(droneID: UUID, remoteID: UUID) {
+        self.droneID = droneID
+        self.remoteID = remoteID
+    }
+
+    func createTerminal(workingDirectory: String?, generation: UInt64, requestID: UUID) async throws -> UUID {
+        let shouldHold = lock.withLock { () -> Bool in
+            storedCreateCount += 1
+            return holdCreate
+        }
+        if shouldHold {
+            _ = await withCheckedContinuation { continuation in
+                lock.withLock { createContinuation = continuation }
+            }
+        }
+        return remoteID
+    }
+
+    func attachTerminal(_ reference: DroneTerminalSessionReference) async throws {
+        try await attachTerminal(reference, after: .zero)
+    }
+
+    func attachTerminal(_ reference: DroneTerminalSessionReference, after cursor: DroneTerminalCursor) async throws {
+        let action = lock.withLock { () -> (hold: Bool, gap: Bool) in
+            storedAttachCount += 1
+            storedAttachCursors.append(cursor)
+            defer { gapNextAttach = false }
+            return (holdAttach, gapNextAttach)
+        }
+        if action.gap { throw DroneRemoteTerminalError.remote(code: "outputGap") }
+        if action.hold {
+            await withCheckedContinuation { continuation in
+                lock.withLock { attachContinuation = continuation }
+            }
+        }
+    }
+
+    func releaseCreate() {
+        let continuation = lock.withLock { () -> CheckedContinuation<UUID, Never>? in
+            defer { createContinuation = nil }
+            return createContinuation
+        }
+        continuation?.resume(returning: remoteID)
+    }
+
+    func releaseAttach() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            defer { attachContinuation = nil }
+            return attachContinuation
+        }
+        continuation?.resume()
+    }
+
+    func resynchronize(_ reference: DroneTerminalSessionReference) async throws {
+        lock.withLock { storedResyncCount += 1 }
+        emit("fresh", sequence: 40, offset: 4_096)
+    }
+
+    func resize(columns: UInt16, rows: UInt16, for reference: DroneTerminalSessionReference) async throws {
+        lock.withLock { storedResizes.append(DroneResizeBody(columns: columns, rows: rows)) }
+    }
+
+    func emit(_ text: String, sequence: UInt64, offset: UInt64) {
+        let handler = lock.withLock { outputHandler }
+        _ = handler?(DroneOutputBody(
+            sequence: sequence, offset: offset, data: Data(text.utf8), isFinal: false
+        ))
+    }
+
+    func sendInput(_ data: Data, to reference: DroneTerminalSessionReference) async throws {
+        lock.withLock { storedInputBytes.append(data) }
+    }
+
+    func close(_ reference: DroneTerminalSessionReference) async throws {
+        lock.withLock { storedClosedSessionIDs.append(reference.sessionID) }
+    }
+
+    func setOutputHandler(
+        _ handler: @escaping @Sendable (DroneOutputBody) -> Bool,
+        for reference: DroneTerminalSessionReference
+    ) async {
+        lock.withLock { outputHandler = handler }
+    }
+
+    func foregroundActivity(for reference: DroneTerminalSessionReference) async throws -> TerminalProcessActivity {
+        .idle
+    }
+    func currentDirectory(for reference: DroneTerminalSessionReference) async throws -> String? { nil }
+    func interrupt(_ reference: DroneTerminalSessionReference) async throws {}
+    func detach(_ reference: DroneTerminalSessionReference) async throws {}
 }
 
 private final class DisplayRecorder: @unchecked Sendable {

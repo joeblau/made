@@ -111,6 +111,14 @@ final class DroneJobStore: @unchecked Sendable {
         return try authorizedJob(id: id, controllerID: controllerID).snapshot
     }
 
+    func snapshot(controllerID: UUID, idempotencyKey: String) throws -> DroneJobSnapshot {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = JobKey(controllerID: controllerID, idempotencyKey: idempotencyKey)
+        guard let id = keys[key], let job = jobs[id] else { throw DroneJobError.jobNotFound }
+        return job.snapshot
+    }
+
     func controllerID(for id: DroneJobID) throws -> UUID {
         lock.lock()
         defer { lock.unlock() }

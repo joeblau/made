@@ -439,7 +439,14 @@ final class NativeSettingsTextField: NSTextField {
 
 @MainActor
 final class NativeSettingsTextView: NSTextView {
-    convenience init() { self.init(frame: .zero, textContainer: nil) }
+    convenience init() {
+        let storage = NSTextStorage()
+        let layout = NSLayoutManager()
+        let container = NSTextContainer()
+        storage.addLayoutManager(layout)
+        layout.addTextContainer(container)
+        self.init(frame: .zero, textContainer: container)
+    }
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         super.init(frame: frameRect, textContainer: container)

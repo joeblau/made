@@ -97,7 +97,7 @@ export function disposeCockpitResources(scene, environmentTarget, renderer) {
   for (const material of materials) material.dispose();
   for (const geometry of geometries) geometry.dispose();
   for (const target of renderTargets) target.dispose();
-  environmentTarget.dispose();
+  environmentTarget?.dispose();
   scene.environment = null;
   scene.clear();
   renderer.dispose();

@@ -11,14 +11,24 @@ struct PilotWalkieInputState {
     struct Target: Equatable {
         let workspaceID: UUID?
         let destination: Destination
+        let terminalIdentity: TerminalSessionIdentity?
 
-        init(workspaceID: UUID?, destination: Destination) {
+        init(
+            workspaceID: UUID?,
+            destination: Destination,
+            terminalIdentity: TerminalSessionIdentity? = nil
+        ) {
             self.workspaceID = workspaceID
             self.destination = destination
+            self.terminalIdentity = terminalIdentity
         }
 
-        init(workspaceID: UUID?, paneID: UUID) {
-            self.init(workspaceID: workspaceID, destination: .terminal(paneID: paneID))
+        init(workspaceID: UUID?, paneID: UUID, terminalIdentity: TerminalSessionIdentity? = nil) {
+            self.init(
+                workspaceID: workspaceID,
+                destination: .terminal(paneID: paneID),
+                terminalIdentity: terminalIdentity
+            )
         }
 
         var paneID: UUID? {
@@ -54,7 +64,7 @@ struct PilotWalkieInputState {
 
     var isRecording: Bool { activeRecording != nil }
 
-    /// Ghostty's direct text input is unbracketed. Keep dictated line breaks,
+    /// Literal terminal input is unbracketed. Keep dictated line breaks,
     /// Escape, and other controls from submitting or editing terminal input
     /// before the user explicitly holds volume up to send Enter.
     static func textForTerminal(_ transcript: String) -> String {

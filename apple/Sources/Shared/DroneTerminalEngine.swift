@@ -326,6 +326,12 @@ actor DroneTerminalEngine: DroneTerminalServicing {
               rows <= DroneLimits.maxTerminalRows
         else { throw DroneTerminalError.malformedInput }
         try requirePTY(session).resize(columns: columns, rows: rows)
+        try tmux.resize(
+            sessionName: session.record.tmuxName,
+            columns: columns,
+            rows: rows,
+            environment: terminalEnvironment(requested: session.record.environment)
+        )
         session.record.columns = columns
         session.record.rows = rows
         try persist()

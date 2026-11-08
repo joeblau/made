@@ -19,6 +19,12 @@ xcrun swiftc \
   "$APPLE_ROOT/Sources/Shared/DroneTmux.swift" \
   "$APPLE_ROOT/Sources/Shared/DronePTY.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneTerminalEngine.swift" \
+  "$APPLE_ROOT/Sources/Pilot/Drones/DroneModels.swift" \
+  "$APPLE_ROOT/Sources/Pilot/Drones/DroneTransport.swift" \
+  "$APPLE_ROOT/Sources/Pilot/Drones/DroneRemoteTerminalClient.swift" \
+  "$APPLE_ROOT/Sources/Pilot/TerminalSession.swift" \
+  "$APPLE_ROOT/Sources/Pilot/TerminalRuntimeCache.swift" \
+  "$APPLE_ROOT/Tests/DroneSessionProof/HostFixtures.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneToolProtocol.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneToolClient.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneAgentDriver.swift" \
@@ -44,7 +50,7 @@ xcrun swiftc -parse-as-library -swift-version 6 -o "$BUILD_DIR/drone" \
 # Run review regressions in the normal worker lane as well as the isolated
 # authorization mode. A single --review-case remains available for iteration.
 if [[ $# -eq 0 || "${1:-}" == "--tool-replay-authorization" ]]; then
-  for review_case in expiry disconnect stale-approval; do
+  for review_case in expiry disconnect stale-approval durable-replay; do
     "$BUILD_DIR/DroneWorkerProof" --review-case "$review_case" --proof-cli "$BUILD_DIR/drone"
   done
 fi

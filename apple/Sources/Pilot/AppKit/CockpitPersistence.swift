@@ -208,8 +208,9 @@ enum CockpitPersistence {
     static func openStore(at storeURL: URL, fileManager: FileManager = .default) throws -> ModelContainer {
         backUpStore(at: storeURL, fileManager: fileManager)
         let schema = currentSchema
+        // Released pre-Drone V3 stores need their own plan; others use the default.
         return try makeModelContainer(
-            schema: schema, migrationPlan: PilotMigrationPlan.self,
+            schema: schema, migrationPlan: PilotMigrationPlan.forStore(at: storeURL),
             configuration: ModelConfiguration(schema: schema, url: storeURL))
     }
 

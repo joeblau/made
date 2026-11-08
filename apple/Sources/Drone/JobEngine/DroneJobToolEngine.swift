@@ -1,13 +1,18 @@
 import CryptoKit
 import Foundation
 
+struct DroneToolReplay {
+    let originalRequestID: UUID
+    let idempotencyKey: String
+    let permission: DroneControllerPermissions
+    let events: AsyncThrowingStream<DroneToolEvent, Error>
+}
+
 actor DroneJobToolEngine: DroneToolEngine {
     private let jobs: DroneJobEngine
     private struct EditEntry {
         let fingerprint: String
         let task: Task<DroneToolEditResult, Error>
-        var finished = false
-        let expiresAt: TimeInterval
     }
 
     private var edits: [String: EditEntry] = [:]
@@ -16,7 +21,7 @@ actor DroneJobToolEngine: DroneToolEngine {
     private let now: @Sendable () -> TimeInterval
     private struct OperationEntry {
         let jobID: DroneJobID
-        let lease: DroneToolLease
+        let controllerID: UUID
     }
 
     private var operations: [String: OperationEntry] = [:]
@@ -57,20 +62,16 @@ actor DroneJobToolEngine: DroneToolEngine {
         context: DroneToolRequestContext
     ) async throws -> DroneToolEditResult {
         try DroneToolValidation.validate(edit: request)
-        let key = try scopedKey(context)
+        let key = try correlationKey(context)
         let fingerprint = try Self.fingerprint(request)
-        edits = edits.filter { !$0.value.finished || $0.value.expiresAt > now() }
         if let existing = edits[key] {
             guard existing.fingerprint == fingerprint else { throw DroneProtocolError.idempotencyConflict }
             return try await existing.task.value
         }
         guard edits.count < maximumRetainedEntries else { throw DroneProtocolError.resourceLimit }
         let task = Task { try await self.performEdit(request, context: context) }
-        edits[key] = EditEntry(
-            fingerprint: fingerprint, task: task,
-            expiresAt: min(context.lease.expiresAt, now() + DroneLimits.idempotencyLifetime)
-        )
-        defer { edits[key]?.finished = true }
+        edits[key] = EditEntry(fingerprint: fingerprint, task: task)
+        defer { edits.removeValue(forKey: key) }
         return try await task.value
     }
 
@@ -78,28 +79,18 @@ actor DroneJobToolEngine: DroneToolEngine {
         _ request: DroneToolEditRequest,
         context: DroneToolRequestContext
     ) async throws -> DroneToolEditResult {
-        let read = try await complete(
-            operation: .readFile(DroneReadFileOperation(relativePath: request.path)),
-            context: context,
-            keySuffix: "-read"
+        let snapshot = try await complete(
+            operation: .conditionalEdit(DroneConditionalEditOperation(
+                relativePath: request.path,
+                expectedSHA256: request.expectedSHA256,
+                oldData: request.oldData,
+                newData: request.newData,
+                maximumBytes: DroneLimits.maxToolReadBytes
+            )),
+            context: context
         )
-        guard case .file(let data)? = read.result else { throw DroneJobError.storeCorrupted }
-        if let expected = request.expectedSHA256 {
-            guard Self.digest(data) == expected.lowercased() else { throw DroneProtocolError.invalidState }
-        }
-        guard let range = data.range(of: request.oldData),
-              data.range(of: request.oldData, in: range.upperBound..<data.endIndex) == nil
-        else { throw DroneProtocolError.invalidState }
-        var updated = data
-        updated.replaceSubrange(range, with: request.newData)
-        let written = try await complete(
-            operation: .writeFile(DroneWriteFileOperation(relativePath: request.path, data: updated)),
-            context: context,
-            keySuffix: "-write"
-        )
-        guard case .bytesWritten = written.result else { throw DroneJobError.storeCorrupted }
-        let result = DroneToolEditResult(bytesWritten: updated.count, sha256: Self.digest(updated))
-        return result
+        guard case .fileEdit(let result)? = snapshot.result else { throw DroneJobError.storeCorrupted }
+        return DroneToolEditResult(bytesWritten: result.bytesWritten, sha256: result.sha256)
     }
 
     func run(
@@ -139,25 +130,95 @@ actor DroneJobToolEngine: DroneToolEngine {
         return stream(snapshot.id, context: context, outputKind: .diff, outputLimit: request.maxBytes)
     }
 
+    func attach(
+        _ attach: DroneToolAttachBody,
+        context: DroneToolRequestContext
+    ) async throws -> DroneToolReplay {
+        try validate(context)
+        let snapshot = try durableOperation(lease: context.lease, requestID: attach.originalRequestID)
+        guard let correlation = snapshot.request.toolCorrelation else {
+            throw DroneProtocolError.invalidIdentifier
+        }
+        let outputKind: OutputKind
+        let outputLimit: Int
+        let permission: DroneControllerPermissions
+        switch snapshot.request.operation {
+        case .process(let operation):
+            outputKind = .process
+            outputLimit = operation.standardOutputLimit
+            permission = .jobs
+        case .gitDiff(let operation):
+            outputKind = .diff
+            outputLimit = operation.outputLimit
+            permission = .git
+        default:
+            throw DroneProtocolError.invalidIdentifier
+        }
+        return DroneToolReplay(
+            originalRequestID: correlation.requestID,
+            idempotencyKey: correlation.idempotencyKey,
+            permission: permission,
+            events: stream(
+                snapshot.id,
+                context: context,
+                outputKind: outputKind,
+                outputLimit: outputLimit,
+                cursor: attach
+            )
+        )
+    }
+
+    func operationPermission(
+        context: DroneToolRequestContext,
+        operationRequestID: UUID
+    ) throws -> DroneControllerPermissions {
+        try validate(context)
+        let snapshot = try durableOperation(lease: context.lease, requestID: operationRequestID)
+        switch snapshot.request.operation {
+        case .process: return .jobs
+        case .gitDiff: return .git
+        default: throw DroneProtocolError.invalidIdentifier
+        }
+    }
+
     func cancel(context: DroneToolRequestContext, operationRequestID: UUID) async throws {
-        _ = try scopedKey(context)
-        let key = try operationKey(lease: context.lease, requestID: operationRequestID)
-        guard let entry = operations[key] else { throw DroneProtocolError.invalidIdentifier }
-        _ = try jobs.cancelJob(id: entry.jobID, controllerID: context.lease.controllerID)
+        try validate(context)
+        let snapshot = try durableOperation(lease: context.lease, requestID: operationRequestID)
+        _ = try jobs.cancelJob(id: snapshot.id, controllerID: context.lease.controllerID)
     }
 
     /// Trusted worker-owner cancellation. Unlike remote tool calls, local
     /// revocation remains authoritative after a granted lease expires.
     func cancelOwnedOperation(lease: DroneToolLease, operationRequestID: UUID) throws {
-        let key = try operationKey(lease: lease, requestID: operationRequestID)
-        guard let entry = operations[key], entry.lease == lease else {
-            throw DroneProtocolError.invalidIdentifier
-        }
-        _ = try jobs.cancelJob(id: entry.jobID, controllerID: entry.lease.controllerID)
+        let snapshot = try durableOperation(lease: lease, requestID: operationRequestID)
+        _ = try jobs.cancelJob(id: snapshot.id, controllerID: lease.controllerID)
     }
 
-    private func operationKey(lease: DroneToolLease, requestID: UUID) throws -> String {
-        try Self.fingerprint(lease) + requestID.uuidString
+    private func durableOperation(lease: DroneToolLease, requestID: UUID) throws -> DroneJobSnapshot {
+        let key = try operationKey(controllerID: lease.controllerID, requestID: requestID)
+        let snapshot: DroneJobSnapshot
+        do {
+            snapshot = try jobs.snapshot(controllerID: lease.controllerID, idempotencyKey: key)
+        } catch DroneJobError.jobNotFound {
+            throw DroneProtocolError.invalidIdentifier
+        }
+        guard now() - snapshot.createdAt < DroneLimits.idempotencyLifetime else {
+            throw DroneProtocolError.invalidIdentifier
+        }
+        guard snapshot.request.workspaceID == lease.workspaceID,
+              snapshot.request.toolCorrelation?.requestID == requestID,
+              snapshot.request.toolCorrelation?.droneID == lease.droneID
+        else { throw DroneProtocolError.unauthorized }
+        return snapshot
+    }
+
+    private func operationKey(controllerID: UUID, requestID: UUID) throws -> String {
+        try Self.fingerprint([controllerID.uuidString, requestID.uuidString])
+    }
+
+    private func correlationKey(_ context: DroneToolRequestContext) throws -> String {
+        try validate(context)
+        return try operationKey(controllerID: context.lease.controllerID, requestID: context.requestID)
     }
 
     private func createTracked(
@@ -165,12 +226,11 @@ actor DroneJobToolEngine: DroneToolEngine {
         context: DroneToolRequestContext,
         environment: [String: String] = [:]
     ) throws -> DroneJobSnapshot {
-        _ = try scopedKey(context)
-        let key = try operationKey(lease: context.lease, requestID: context.requestID)
-        // Completed jobs remain in the durable store; only live cancellation mappings are needed.
+        let key = try correlationKey(context)
+        // The in-memory table bounds local observers; durable correlation survives eviction and restart.
         for (key, entry) in operations {
             do {
-                if try jobs.snapshot(id: entry.jobID, controllerID: entry.lease.controllerID).state.isTerminal {
+                if try jobs.snapshot(id: entry.jobID, controllerID: entry.controllerID).state.isTerminal {
                     operations.removeValue(forKey: key)
                 }
             } catch DroneJobError.jobNotFound {
@@ -182,13 +242,12 @@ actor DroneJobToolEngine: DroneToolEngine {
         }
         if let entry = operations[key] {
             let existing = try jobs.snapshot(id: entry.jobID, controllerID: context.lease.controllerID)
-            guard existing.idempotencyKey == (try scopedKey(context)),
-                  existing.request.operation == operation, existing.request.environment == environment
+            guard existing.request == request(operation: operation, context: context, environment: environment)
             else { throw DroneProtocolError.idempotencyConflict }
             return existing
         }
         let snapshot = try create(operation: operation, context: context, environment: environment)
-        operations[key] = OperationEntry(jobID: snapshot.id, lease: context.lease)
+        operations[key] = OperationEntry(jobID: snapshot.id, controllerID: context.lease.controllerID)
         return snapshot
     }
 
@@ -197,27 +256,44 @@ actor DroneJobToolEngine: DroneToolEngine {
         case diff
     }
 
+    private func request(
+        operation: DroneJobOperation,
+        context: DroneToolRequestContext,
+        environment: [String: String]
+    ) -> DroneJobRequest {
+        DroneJobRequest(
+            workspaceID: context.lease.workspaceID,
+            operation: operation,
+            environment: environment,
+            toolCorrelation: DroneJobToolCorrelation(
+                requestID: context.requestID,
+                idempotencyKey: context.idempotencyKey,
+                droneID: context.lease.droneID
+            )
+        )
+    }
+
     private func create(
         operation: DroneJobOperation,
         context: DroneToolRequestContext,
-        keySuffix: String = "",
         environment: [String: String] = [:]
     ) throws -> DroneJobSnapshot {
-        try jobs.createJob(DroneJobCreate(
-            controllerID: context.lease.controllerID,
-            idempotencyKey: try scopedKey(context) + keySuffix,
-            request: DroneJobRequest(
-                workspaceID: context.lease.workspaceID, operation: operation, environment: environment
-            )
-        ))
+        do {
+            return try jobs.createJob(DroneJobCreate(
+                controllerID: context.lease.controllerID,
+                idempotencyKey: try correlationKey(context),
+                request: request(operation: operation, context: context, environment: environment)
+            ))
+        } catch DroneJobError.idempotencyConflict {
+            throw DroneProtocolError.idempotencyConflict
+        }
     }
 
     private func complete(
         operation: DroneJobOperation,
-        context: DroneToolRequestContext,
-        keySuffix: String = ""
+        context: DroneToolRequestContext
     ) async throws -> DroneJobSnapshot {
-        let created = try create(operation: operation, context: context, keySuffix: keySuffix)
+        let created = try create(operation: operation, context: context)
         for _ in 0..<6_000 {
             let snapshot = try jobs.snapshot(id: created.id, controllerID: context.lease.controllerID)
             if snapshot.state.isTerminal {
@@ -233,11 +309,12 @@ actor DroneJobToolEngine: DroneToolEngine {
         _ id: DroneJobID,
         context: DroneToolRequestContext,
         outputKind: OutputKind,
-        outputLimit: Int
+        outputLimit: Int,
+        cursor: DroneToolAttachBody? = nil
     ) -> AsyncThrowingStream<DroneToolEvent, Error> {
         let reader = OutputReader(
             jobs: jobs, id: id, controllerID: context.lease.controllerID,
-            kind: outputKind, limit: outputLimit, pageSize: eventPageSize
+            kind: outputKind, limit: outputLimit, pageSize: eventPageSize, cursor: cursor
         )
         // Pull-based delivery retains at most one bounded event page, not a producer task's queue.
         return AsyncThrowingStream(unfolding: { try await reader.next() })
@@ -249,6 +326,9 @@ actor DroneJobToolEngine: DroneToolEngine {
         let controllerID: UUID
         let kind: OutputKind
         let pageSize: Int
+        let replaySequence: UInt64
+        let expectedOffsets: DroneToolStreamOffsets
+        var cursorValidated: Bool
         var remaining: Int
         var latestSequence: UInt64 = 0
         var sequence: UInt64 = 0
@@ -260,17 +340,21 @@ actor DroneJobToolEngine: DroneToolEngine {
         var finished = false
 
         init(jobs: DroneJobEngine, id: DroneJobID, controllerID: UUID,
-             kind: OutputKind, limit: Int, pageSize: Int) {
+             kind: OutputKind, limit: Int, pageSize: Int, cursor: DroneToolAttachBody?) {
             self.jobs = jobs
             self.id = id
             self.controllerID = controllerID
             self.kind = kind
             self.remaining = limit
             self.pageSize = pageSize
+            replaySequence = cursor?.nextSequence ?? 0
+            expectedOffsets = cursor?.offsets ?? DroneToolStreamOffsets()
+            cursorValidated = cursor == nil
         }
 
         func next() async throws -> DroneToolEvent? {
             try Task.checkCancellation()
+            try validateCursor()
             while queued.isEmpty && !finished {
                 try Task.checkCancellation()
                 let page = try jobs.events(
@@ -301,6 +385,7 @@ actor DroneJobToolEngine: DroneToolEngine {
                     default: break
                     }
                 }
+                try validateCursor()
                 let snapshot = try jobs.snapshot(id: id, controllerID: controllerID)
                 // A terminal snapshot can be newer than this page. Drain through its terminal event.
                 if snapshot.state.isTerminal && latestSequence >= snapshot.latestSequence {
@@ -309,6 +394,8 @@ actor DroneJobToolEngine: DroneToolEngine {
                     }
                     pending.removeAll()
                     pendingOrder.removeAll()
+                    guard sequence >= replaySequence else { throw DroneProtocolError.invalidState }
+                    try validateCursor()
                     let status: DroneToolCompletionStatus = switch snapshot.state {
                     case .completed: .succeeded
                     case .cancelled: .cancelled
@@ -326,14 +413,22 @@ actor DroneJobToolEngine: DroneToolEngine {
                     try await Task.sleep(for: .milliseconds(10))
                 }
             }
+            try validateCursor()
             return queued.isEmpty ? nil : queued.removeFirst()
         }
 
+        private func validateCursor() throws {
+            guard !cursorValidated, sequence == replaySequence else { return }
+            guard offsets == expectedOffsets else { throw DroneProtocolError.invalidState }
+            cursorValidated = true
+        }
+
         private func emit(_ data: Data, stream: DroneToolStream, truncated: Bool) {
-            queued.append(.output(DroneToolOutputBody(
+            let body = DroneToolOutputBody(
                 sequence: sequence, offset: offsets[stream], stream: stream,
                 data: data, truncated: truncated
-            )))
+            )
+            if sequence >= replaySequence { queued.append(.output(body)) }
             sequence += 1
             offsets[stream] += UInt64(data.count)
         }
@@ -347,7 +442,7 @@ actor DroneJobToolEngine: DroneToolEngine {
         throw DroneProtocolError.unauthorized
     }
 
-    private func scopedKey(_ context: DroneToolRequestContext) throws -> String {
+    private func validate(_ context: DroneToolRequestContext) throws {
         guard context.lease.expiresAt.isFinite, context.lease.expiresAt > now() else {
             throw DroneProtocolError.unauthorized
         }
@@ -356,9 +451,6 @@ actor DroneJobToolEngine: DroneToolEngine {
             (48...57).contains($0) || (65...90).contains($0)
                 || (97...122).contains($0) || $0 == 45 || $0 == 95
         }) else { throw DroneProtocolError.invalidIdentifier }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        return Self.digest(try encoder.encode(context.lease) + Data(key.utf8))
     }
 
     private static func fingerprint(_ value: some Encodable) throws -> String {
