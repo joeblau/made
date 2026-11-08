@@ -8,14 +8,94 @@ private enum NativeEditorAcceptanceError: Error {
     case timedOut(String)
 }
 
+private final class NativeEditorAcceptanceTimeoutBox<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, any Error>?
+    private var outcome: Result<Value, any Error>?
+
+    func install(_ continuation: CheckedContinuation<Value, any Error>) {
+        let resolved = lock.withLock { () -> Result<Value, any Error>? in
+            if let outcome { return outcome }
+            self.continuation = continuation
+            return nil
+        }
+        if let resolved { continuation.resume(with: resolved) }
+    }
+
+    func finish(with outcome: Result<Value, any Error>) {
+        let continuation = lock.withLock { () -> CheckedContinuation<Value, any Error>? in
+            guard self.outcome == nil else { return nil }
+            self.outcome = outcome
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(with: outcome)
+    }
+}
+
 @MainActor
 private final class NativeEditorAcceptanceProbe {
     var running = true
 }
 
+private func nativeEditorAcceptanceBlockThread() {
+    Thread.sleep(forTimeInterval: 0.005)
+}
+
+private actor NativeEditorAcceptanceGate {
+    private var started = false
+    private var released = false
+    private var startWaiters: [CheckedContinuation<Void, Never>] = []
+    private(set) var observedCancellation = false
+
+    func start() {
+        started = true
+        startWaiters.forEach { $0.resume() }
+        startWaiters.removeAll()
+    }
+
+    func waitForStart() async {
+        guard !started else { return }
+        await withCheckedContinuation { startWaiters.append($0) }
+    }
+
+    func shouldRelease() -> Bool { released }
+    func release() { released = true }
+    func markCancelled() { observedCancellation = true }
+}
+
 @MainActor
 @Suite("Native editor acceptance", .serialized)
 struct NativeEditorAcceptanceTests {
+    @Test("Timeout cancels without waiting for noncooperative work", .timeLimit(.minutes(1)))
+    func timeoutDoesNotWaitForNoncooperativeWork() async {
+        let gate = NativeEditorAcceptanceGate()
+        let operation = Task.detached { () -> Bool in
+            await gate.start()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+            while ContinuousClock.now < deadline {
+                if Task.isCancelled { await gate.markCancelled() }
+                if await gate.shouldRelease() { return true }
+                nativeEditorAcceptanceBlockThread()
+            }
+            return true
+        }
+        await gate.waitForStart()
+        let clock = ContinuousClock()
+        let started = clock.now
+        do {
+            _ = try await value(of: operation, timeout: .milliseconds(20))
+            Issue.record("Expected the noncooperative operation to time out")
+        } catch {
+            #expect(error is NativeEditorAcceptanceError)
+        }
+        #expect(clock.now - started < .milliseconds(500))
+        await gate.release()
+        #expect(await operation.value)
+        #expect(await gate.observedCancellation)
+    }
+
     @Test("Near-limit save stays responsive and restores the saved native buffer", .timeLimit(.minutes(2)))
     func nearLimitSaveRestoresNativeEditor() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -184,17 +264,24 @@ struct NativeEditorAcceptanceTests {
     }
 
     private func value<T: Sendable>(of task: Task<T, Never>, timeout: Duration) async throws -> T {
-        try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { await task.value }
-            group.addTask {
-                try await Task.sleep(for: timeout)
-                throw NativeEditorAcceptanceError.timedOut("Timed out after \(timeout)")
+        let box = NativeEditorAcceptanceTimeoutBox<T>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                box.install(continuation)
+                let watchdog = Task.detached {
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    task.cancel()
+                    box.finish(with: .failure(NativeEditorAcceptanceError.timedOut("Timed out after \(timeout)")))
+                }
+                Task.detached {
+                    let value = await task.value
+                    watchdog.cancel()
+                    box.finish(with: .success(value))
+                }
             }
-            guard let result = try await group.next() else {
-                throw NativeEditorAcceptanceError.timedOut("No result")
-            }
-            group.cancelAll()
-            return result
+        } onCancel: {
+            task.cancel()
+            box.finish(with: .failure(CancellationError()))
         }
     }
 
