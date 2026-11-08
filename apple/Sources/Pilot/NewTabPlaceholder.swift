@@ -217,6 +217,7 @@ extension Pane {
     /// The tab title: the launcher path while choosing ("New Tab", "Terminal",
     /// "Browser / Safari"); an agent chat keeps the path that opens it,
     /// "Terminal / Agent"; every other pane uses its own title.
+    @MainActor
     var tabTitle: String {
         if isChoosingMode { return NewTabPage.breadcrumb(openingPath) }
         if kind == .agentChat { return NewTabPage.breadcrumb([.root, .terminal]) + " / Agent" }
