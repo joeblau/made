@@ -184,12 +184,15 @@ function sceneDependencies(state) {
       this.capabilities = { getMaxAnisotropy: () => 4 };
       this.shadowMap = {};
       this.disposals = 0;
+      this.contextLosses = 0;
       this.renderCalls = 0;
+      this.events = [];
       state.renderers.push(this);
     }
 
     setPixelRatio() {}
     setSize() {}
+    setRenderTarget(target) { this.renderTarget = target; }
 
     render(scene) {
       this.renderCalls++;
@@ -203,18 +206,35 @@ function sceneDependencies(state) {
 
     dispose() {
       this.disposals++;
+      this.events.push('dispose');
+    }
+
+    forceContextLoss() {
+      this.contextLosses++;
+      this.contextLostTarget = this.renderTarget;
+      if (this.renderTarget) this.renderTarget.contextLosses++;
+      this.events.push('context-loss');
     }
   }
 
   class EnvironmentGenerator {
-    constructor() {
+    constructor(renderer) {
+      this.renderer = renderer;
       this.disposals = 0;
       state.environmentGenerators.push(this);
     }
 
     fromScene(environmentScene) {
+      const target = {
+        texture: { isTexture: true },
+        disposals: 0,
+        contextLosses: 0,
+        dispose() { this.disposals++; },
+      };
       if (state.environmentFailures > 0) {
         state.environmentFailures--;
+        state.partialEnvironmentTargets.push(target);
+        this.renderer.setRenderTarget(target);
         const dome = environmentScene.children[0];
         this.geometryDisposed = false;
         this.materialDisposed = false;
@@ -222,11 +242,6 @@ function sceneDependencies(state) {
         dome.material.addEventListener('dispose', () => { this.materialDisposed = true; });
         throw new Error('induced environment generation failure');
       }
-      const target = {
-        texture: { isTexture: true },
-        disposals: 0,
-        dispose() { this.disposals++; },
-      };
       state.environmentTargets.push(target);
       return target;
     }
@@ -242,6 +257,8 @@ function sceneDependencies(state) {
 function assertFailedSceneRolledBack(browser, state, attempt) {
   const renderer = state.renderers[attempt - 1];
   assert.equal(renderer.disposals, 1);
+  assert.equal(renderer.contextLosses, 1);
+  assert.deepEqual(renderer.events, ['dispose', 'context-loss']);
   assert.equal(renderer.scene.children.length, 0);
   assert.equal(renderer.scene.environment, null);
   assert.ok(renderer.resources.geometries.size > 50);
@@ -279,6 +296,7 @@ test('mid-initialization render failures roll back the real scene and permit rep
   assert.ok(cockpit);
   assert.equal(initCockpit(browser.root, dependencies), cockpit);
   assert.equal(state.renderers.length, 3);
+  assert.equal(state.renderers[2].contextLosses, 0);
   assert.equal(cockpit.running, false);
   assert.equal(browser.frames.size, 0);
 
@@ -299,19 +317,21 @@ test('mid-initialization render failures roll back the real scene and permit rep
   assert.equal(cockpit.running, false);
   assert.equal(browser.frames.size, 0);
   assert.equal(state.renderers[2].disposals, 1);
+  assert.equal(state.renderers[2].contextLosses, 0);
+  assert.deepEqual(state.renderers[2].events, ['dispose']);
   assert.equal(state.environmentTargets[2].disposals, 1);
   assert.equal(browser.observers[2].disconnected, true);
   browser.assertListenersRemoved();
 });
 
-
-test('environment generation failure releases temporary GPU resources before retry', (t) => {
+test('environment failure after output allocation tears down the GL context before retry', (t) => {
   const browser = browserEnvironment(t);
   const state = {
     environmentFailures: 1,
     renderers: [],
     environmentGenerators: [],
     environmentTargets: [],
+    partialEnvironmentTargets: [],
   };
   const dependencies = sceneDependencies(state);
 
@@ -319,7 +339,14 @@ test('environment generation failure releases temporary GPU resources before ret
     () => initCockpit(browser.root, dependencies),
     /induced environment generation failure/,
   );
-  assert.equal(state.renderers[0].disposals, 1);
+  const renderer = state.renderers[0];
+  const partialTarget = state.partialEnvironmentTargets[0];
+  assert.equal(renderer.disposals, 1);
+  assert.equal(renderer.contextLosses, 1);
+  assert.equal(renderer.contextLostTarget, partialTarget);
+  assert.deepEqual(renderer.events, ['dispose', 'context-loss']);
+  assert.equal(partialTarget.contextLosses, 1);
+  assert.equal(partialTarget.disposals, 0);
   assert.equal(state.environmentGenerators[0].disposals, 1);
   assert.equal(state.environmentGenerators[0].geometryDisposed, true);
   assert.equal(state.environmentGenerators[0].materialDisposed, true);
@@ -334,6 +361,8 @@ test('environment generation failure releases temporary GPU resources before ret
   assert.equal(state.environmentTargets.length, 1);
   cockpit.dispose();
   assert.equal(state.renderers[1].disposals, 1);
+  assert.equal(state.renderers[1].contextLosses, 0);
+  assert.deepEqual(state.renderers[1].events, ['dispose']);
   assert.equal(state.environmentGenerators[1].disposals, 1);
   assert.equal(state.environmentTargets[0].disposals, 1);
   browser.assertListenersRemoved();

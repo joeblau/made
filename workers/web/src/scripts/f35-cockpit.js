@@ -1462,6 +1462,11 @@ export function initCockpit(root = document, {
   return cockpit;
   } catch (error) {
     disposeScene();
+    try {
+      renderer.forceContextLoss();
+    } catch {
+      // The failed renderer is already unusable; preserve the initialization error.
+    }
     throw error;
   }
 }
