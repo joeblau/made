@@ -66,7 +66,7 @@ struct PaneInitRegressionTests {
     // R8: Agent chat init has no persistent per-kind state; the agent choice
     // and ACP session live in AgentChatPaneStore, the process in
     // AgentChatRegistry, so adding the kind needed no schema migration.
-    @Test
+    @Test @MainActor
     func agentChatKindInitHasNoPerKindState() {
         let pane = Pane(kind: .agentChat)
         #expect(pane.kind == .agentChat)

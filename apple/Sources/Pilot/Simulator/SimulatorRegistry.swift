@@ -1,10 +1,13 @@
 import Foundation
+import Observation
 
 /// SimulatorRegistry — keyed by `Pane.id` so the `ContentView` toolbar and the
 /// `SimulatorPaneView` next to it share one `SimulatorSession`. Mirrors
 /// `DeviceCaptureRegistry`. `remove(paneID:)` stops mirroring but deliberately
 /// leaves the simulator booted (another tool may be using it).
+// Observable so pane titles re-render when a session first appears.
 @MainActor
+@Observable
 final class SimulatorRegistry {
     static let shared = SimulatorRegistry()
 

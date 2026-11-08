@@ -1,15 +1,18 @@
 import Foundation
+import Observation
 
 /// AndroidDeviceRegistry — keyed by `Pane.id` so the `ContentView` toolbar and
 /// the `AndroidPaneView` next to it share one `AndroidDeviceSession`. Mirrors
 /// `SimulatorRegistry`. `remove(paneID:)` stops mirroring but deliberately
 /// leaves the device untouched.
+// Observable so pane titles re-render when a session first appears.
 @MainActor
+@Observable
 final class AndroidDeviceRegistry {
     static let shared = AndroidDeviceRegistry()
 
     private var sessions: [UUID: AndroidDeviceSession] = [:]
-    private var targets: [UUID: AndroidPaneTarget] = [:]
+    @ObservationIgnored private var targets: [UUID: AndroidPaneTarget] = [:]
 
     func configure(target: AndroidPaneTarget, for paneID: UUID) {
         targets[paneID] = target
