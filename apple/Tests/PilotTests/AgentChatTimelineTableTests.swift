@@ -278,20 +278,21 @@ struct AgentChatTimelineTableTests {
         #expect(ActivityCardView().isAccessibilityElement())
     }
 
-    @Test("Prose height is measured once per rendering and stays capped as a long message streams")
-    func proseMeasurementIsBoundedPerRendering() {
+    @Test("Prose height is the full text height, measured once per rendering")
+    func proseMeasurementIsFullHeightPerRendering() {
         let width: CGFloat = 600
         let long = String(repeating: "A long line of streamed text that wraps across the row.\n", count: 400)
         let first = AgentChatItem(id: "measure-\(UUID())", content: .assistant(long), revision: 1)
-        let capped = ProseCellView.height(item: first, width: width)
-        #expect(capped == ProseCellView.maximumTextHeight + ProseCellView.verticalInset * 2)
+        let height = ProseCellView.height(item: first, width: width)
+        #expect(height > 4_000, "A long reply is not capped")
         let before = ProseMeasure.measureCount
-        _ = ProseCellView.height(item: first, width: width)
+        #expect(ProseCellView.height(item: first, width: width) == height)
+        #expect(ProseMeasure.measureCount == before, "The same rendering is not laid out again")
         var grown = first
-        grown.content = .assistant(long + "More streamed text.")
+        grown.content = .assistant(long + String(repeating: "More streamed text.\n", count: 20))
         grown.revision = 2
-        #expect(ProseCellView.height(item: grown, width: width) == capped)
-        #expect(ProseMeasure.measureCount == before, "Neither the same rendering nor a longer capped revision is laid out again")
+        #expect(ProseCellView.height(item: grown, width: width) > height, "A longer revision grows the row")
+        #expect(ProseMeasure.measureCount == before + 1)
         var cache = AgentRecencyCache<Int>(capacity: 8)
         for index in 0..<8 { cache.set(index, for: "k\(index)") }
         _ = cache["k0"]
@@ -300,28 +301,76 @@ struct AgentChatTimelineTableTests {
         #expect(kept == 0 && evicted == nil && cache.count == 7, "The least recently used quarter goes, not everything")
     }
 
-    @Test("Another pane's capped message under the same item key never caps a message that fits")
-    func cappedHeightIsNotSharedAcrossPanes() {
+    @Test("Another pane's message under the same item key never lends its height")
+    func proseHeightIsNotSharedAcrossPanes() {
         let width: CGFloat = 600, key = "pane-\(UUID())"
         let listing = "```swift\n" + (0..<120).map { "let v\($0) = \($0)" }.joined(separator: "\n") + "\n```"
         let paneA = AgentChatItem(id: key, content: .assistant(listing), revision: 2)
-        let capped = ProseCellView.height(item: paneA, width: width)
-        #expect(capped == ProseCellView.maximumTextHeight + ProseCellView.verticalInset * 2)
+        let tall = ProseCellView.height(item: paneA, width: width)
         let prose = String(repeating: "Paragraph prose that wraps across the row without any code at all. ", count: 30)
         let paneB = AgentChatItem(id: key, content: .assistant(prose), revision: 2)
         #expect(prose.utf16.count > listing.utf16.count)
-        #expect(ProseCellView.height(item: paneB, width: width) < capped - 200, "Pane B is measured, not given pane A's cap")
+        #expect(ProseCellView.height(item: paneB, width: width) < tall - 200, "Pane B is measured, not given pane A's height")
+    }
+
+    @Test("A long streamed reply grows its row; the transcript is the only scroller and follows only while the reader does")
+    func longStreamedReplyScrollsTheTranscript() throws {
+        let recorder = WheelRecordingScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 500))
+        let (timeline, scroll, window) = makeTimeline(scroll: recorder)
+        defer { window.close() }
+        var message = (0..<150).map { "Line \($0) of a long streamed answer." }.joined(separator: "\n")
+        var revision = 2_000
+        func rows() -> [AgentTimelineRow] {
+            [.user(user(0)), .prose(AgentChatItem(id: "long", content: .assistant(message), revision: revision))]
+        }
+        timeline.applyRows(rows(), now: Self.origin)
+        timeline.streamingKey = "long"
+        settle(scroll)
+        let cell = try #require(timeline.tableView.view(atColumn: 0, row: 1, makeIfNecessary: false) as? ProseCellView)
+        let rowHeight = timeline.tableView.rect(ofRow: 1).height
+        #expect(rowHeight > scroll.contentView.bounds.height * 2, "The row is as tall as the whole reply")
+        #expect(cell.textView.frame.maxY <= cell.bounds.maxY + 1, "No text is hidden below the row")
+        #expect(cell.textView.enclosingScrollView === scroll, "The message's text sits directly in the transcript scroll")
+        #expect(!descendants(of: cell).contains { $0 is NSScrollView })
+        #expect(scroll.contentView.bounds.maxY >= timeline.tableView.bounds.maxY - 1, "The transcript shows the newest text")
+
+        message += "\nNewest streamed line"
+        revision += 1
+        timeline.applyRows(rows(), now: Self.origin)
+        settle(scroll)
+        #expect(timeline.tableView.rect(ofRow: 1).height > rowHeight, "The row grows as the reply streams")
+        #expect(scroll.contentView.bounds.maxY >= timeline.tableView.bounds.maxY - 1, "The transcript follows streaming output")
+
+        // A scroll wheel over the message moves the conversation.
+        let wheel = try #require(CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 400, wheel2: 0, wheel3: 0))
+        let event = try #require(NSEvent(cgEvent: wheel))
+        cell.textView.scrollWheel(with: event)
+        #expect(recorder.wheelEvents == 1, "Wheel events over a message reach the transcript scroll view")
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, timeline.tableView.bounds.maxY - scroll.contentView.bounds.height)))
+
+        // Reading earlier text: streaming no longer moves the transcript.
+        scroll.contentView.scroll(to: .zero)
+        scroll.reflectScrolledClipView(scroll.contentView)
+        message += "\nBackground stream while reading earlier text"
+        revision += 1
+        timeline.applyRows(rows(), now: Self.origin)
+        settle(scroll)
+        #expect(scroll.contentView.bounds.origin.y == 0)
+    }
+
+    private func descendants(of view: NSView) -> [NSView] {
+        [view] + view.subviews.flatMap { descendants(of: $0) }
     }
 
     // MARK: - Fixtures
 
-    private func makeTimeline() -> (AgentChatTimelineTable, NSScrollView, NSWindow) {
+    private func makeTimeline(scroll: NSScrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 500)))
+        -> (AgentChatTimelineTable, NSScrollView, NSWindow) {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500), styleMask: [.titled],
                               backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let table = AgentChatTimelineTableView()
         let timeline = AgentChatTimelineTable(tableView: table)
-        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 500))
         scroll.hasVerticalScroller = true
         scroll.documentView = table
         scroll.autoresizingMask = [.width, .height]
@@ -354,5 +403,15 @@ struct AgentChatTimelineTableTests {
         call.endedAt = running ? nil : Self.origin.addingTimeInterval(1)
         call.outcome = running ? nil : .completed
         return AgentChatItem(id: "tool-t\(index)", content: .tool(call), revision: revision)
+    }
+}
+
+/// Counts scroll-wheel events that reach the transcript scroll view.
+private final class WheelRecordingScrollView: NSScrollView {
+    private(set) var wheelEvents = 0
+
+    override func scrollWheel(with event: NSEvent) {
+        wheelEvents += 1
+        super.scrollWheel(with: event)
     }
 }
