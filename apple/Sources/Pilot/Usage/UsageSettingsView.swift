@@ -56,7 +56,8 @@ final class UsageSettingsViewController: NSViewController {
             setup.isBordered = false
             setup.toolTip = "Install & sign in to \(account.displayName)"
             setup.setAccessibilityLabel(setup.toolTip)
-            providerRows.append(NativeSettingsUI.formRow(account.title, subtitle: status, accessories: [setup, toggle]))
+            providerRows.append(NativeSettingsUI.formRow(account.title, subtitle: status, icon: account.symbol, iconTint: account.tint,
+                                                         accessories: [setup, toggle]))
             toggles[account] = toggle
             statuses[account] = status
         }
@@ -72,9 +73,14 @@ final class UsageSettingsViewController: NSViewController {
         sharing.identifier = .init("usage.dashboard-sharing")
         sharingToggle = sharing
         stack.addArrangedSubview(NativeSettingsUI.group("Sharing", [
-            NativeSettingsUI.formRow("Lock Screen & Companions", accessories: [sharing]),
+            NativeSettingsUI.formRow("Lock Screen & Companions", icon: "lock.rectangle.stack", accessories: [sharing]),
         ]))
-        InspectorNativeUI.scrollDocument(stack, in: scroll, inset: 24)
+        if showsPageHeader {
+            InspectorNativeUI.scrollDocument(stack, in: scroll, inset: 24)
+        } else {
+            // Inside Settings the toolbar shows the title and pages use one centered column.
+            NativeSettingsUI.embedPage(stack, in: scroll)
+        }
         synchronizePreferences()
     }
 
