@@ -77,6 +77,7 @@ enum DroneSessionProof {
         try await closeDuringCreateProof()
         try await closeDuringAttachProof()
         try await resyncAndResizeProof()
+        try await resizeOrderingProof()
 
         factory.revokeFails = true
         await store.forget(id: id)
@@ -160,8 +161,8 @@ enum DroneSessionProof {
         let session = DroneTerminalSession(identity: identity, remoteSessionID: nil, client: client)
         let restoring = Task { try await session.restore(workingDirectory: nil) }
         await wait { client.createCount == 1 }
+        session.retire()
         let closing = Task { await session.close() }
-        await Task.yield()
         client.releaseCreate()
         do {
             _ = try await restoring.value
@@ -187,8 +188,8 @@ enum DroneSessionProof {
         let session = DroneTerminalSession(identity: identity, remoteSessionID: remoteID, client: client)
         let restoring = Task { try await session.restore(workingDirectory: nil) }
         await wait { client.attachCount == 1 }
+        session.retire()
         let closing = Task { await session.close() }
-        await Task.yield()
         client.releaseAttach()
         do {
             _ = try await restoring.value
@@ -226,6 +227,39 @@ enum DroneSessionProof {
         let resized = await session.resize(columns: 132, rows: 43)
         precondition(resized, "session resize failed")
         precondition(client.resizes == [DroneResizeBody(columns: 132, rows: 43)], "resize did not reach client")
+    }
+
+    @MainActor
+    private static func resizeOrderingProof() async throws {
+        let droneID = UUID()
+        let connection = ResizeOrderingConnection()
+        let client = DroneRemoteTerminalClient(droneID: droneID, controllerID: UUID(), connection: connection)
+        let reference = DroneTerminalSessionReference(droneID: droneID, sessionID: UUID(), generation: 1)
+        await client.setOutputHandler({ _ in true }, for: reference)
+        let handler = Task {
+            while !Task.isCancelled {
+                do {
+                    await client.handle(try await connection.receive())
+                } catch {
+                    break
+                }
+            }
+        }
+        defer { handler.cancel() }
+        let older = Task { try await client.resize(columns: 80, rows: 24, for: reference) }
+        await wait { connection.resizes.count == 1 }
+        let newer = Task { try await client.resize(columns: 132, rows: 43, for: reference) }
+        await Task.yield()
+        precondition(connection.resizes.count == 1, "newer resize overtook unacknowledged request")
+        connection.releaseResize(at: 0)
+        await wait { connection.resizes.count == 2 }
+        connection.releaseResize(at: 1)
+        try await older.value
+        try await newer.value
+        precondition(connection.resizes == [
+            DroneResizeBody(columns: 80, rows: 24),
+            DroneResizeBody(columns: 132, rows: 43),
+        ], "resize completion order changed the final dimensions")
     }
 
     @MainActor
@@ -343,6 +377,50 @@ private final class SessionConnection: DroneConnection, @unchecked Sendable {
 
     func close() {
         lock.withLock { closed = true }
+        continuation.finish()
+    }
+}
+
+private final class ResizeOrderingConnection: DroneConnection, @unchecked Sendable {
+    let peer = DroneAuthenticatedPeer(
+        identityFingerprint: "resize-fixture", hardware: .unknown, hello: DroneHello(selectedVersion: 1)
+    )
+    private let lock = NSLock()
+    private var pending: [DroneEnvelope] = []
+    private var storedResizes: [DroneResizeBody] = []
+    private let stream: AsyncThrowingStream<DroneEnvelope, any Error>
+    private let continuation: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation
+
+    var resizes: [DroneResizeBody] { lock.withLock { storedResizes } }
+
+    init() {
+        (stream, continuation) = AsyncThrowingStream.makeStream()
+    }
+
+    func send(_ envelope: DroneEnvelope) async throws {
+        guard envelope.kind == .resize, case .resize(let body) = envelope.body else { return }
+        lock.withLock {
+            storedResizes.append(body)
+            pending.append(envelope)
+        }
+    }
+
+    func releaseResize(at index: Int) {
+        let envelope = lock.withLock { pending[index] }
+        continuation.yield(DroneEnvelope(
+            kind: .ack,
+            requestID: envelope.requestID,
+            sessionID: envelope.sessionID
+        ))
+    }
+
+    func receive() async throws -> DroneEnvelope {
+        var iterator = stream.makeAsyncIterator()
+        guard let envelope = try await iterator.next() else { throw DroneTransportError.disconnected }
+        return envelope
+    }
+
+    func close() {
         continuation.finish()
     }
 }

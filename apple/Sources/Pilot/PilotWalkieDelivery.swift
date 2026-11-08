@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// Routes dictation through the captured terminal or VNC connection without
 /// relying on whichever AppKit view happens to have focus at delivery time.
@@ -52,23 +52,43 @@ struct PilotWalkieDelivery {
         return Target(workspaceID: workspaceID, paneID: paneID, terminalIdentity: session.identity)
     }
 
+    func startTarget(for command: VoiceRecordCommand) -> Target? {
+        capture(workspaceID: command.workspaceID ?? store.selectedSyncWorkspaceID)
+    }
+
     func start(_ command: VoiceRecordCommand, state: inout PilotWalkieInputState) {
+        start(command, state: &state, capturedTarget: startTarget(for: command))
+    }
+
+    func start(
+        _ command: VoiceRecordCommand,
+        state: inout PilotWalkieInputState,
+        capturedTarget: Target?
+    ) {
         let workspaceID = command.workspaceID ?? store.selectedSyncWorkspaceID
         if workspaceID == WorkspaceStore.remoteDesktopWorkspaceID {
             store.enterRemoteDesktopMode()
         } else if let workspaceID {
             store.selectWorkspace(workspaceID)
         }
-        state.begin(recordingID: command.recordingID, workspaceID: workspaceID,
-                    target: capture(workspaceID: workspaceID))
+        state.begin(recordingID: command.recordingID, workspaceID: workspaceID, target: capturedTarget)
     }
 
     @discardableResult
     func receive(_ speech: TranscribedSpeech, state: inout PilotWalkieInputState) async -> Bool {
         let fallback = speech.recordingID == nil
             ? capture(workspaceID: speech.workspaceID ?? store.selectedSyncWorkspaceID) : nil
+        return await receive(speech, state: &state, capturedFallback: fallback)
+    }
+
+    @discardableResult
+    func receive(
+        _ speech: TranscribedSpeech,
+        state: inout PilotWalkieInputState,
+        capturedFallback: Target?
+    ) async -> Bool {
         let target = state.receiveTranscript(recordingID: speech.recordingID,
-                                             workspaceID: speech.workspaceID, legacyFallback: fallback)
+                                             workspaceID: speech.workspaceID, legacyFallback: capturedFallback)
         let text = PilotWalkieInputState.textForTerminal(speech.text)
         guard !text.isEmpty, let target else { return false }
         let inserted = if let insertText {
@@ -91,7 +111,12 @@ struct PilotWalkieDelivery {
 
     @discardableResult
     func enterSelection() async -> Bool {
-        guard let target = capture(workspaceID: store.selectedSyncWorkspaceID) else { return false }
+        await enter(capture(workspaceID: store.selectedSyncWorkspaceID))
+    }
+
+    @discardableResult
+    func enter(_ target: Target?) async -> Bool {
+        guard let target else { return false }
         if let sendEnter { return await sendEnter(target) }
         return await sendLiveEnter(target: target)
     }
@@ -123,5 +148,83 @@ struct PilotWalkieDelivery {
               let session = terminalSession(paneID), session.identity == identity,
               session.destination.isValid else { return nil }
         return session
+    }
+}
+
+@MainActor
+final class PilotWalkieDeliveryQueue {
+    private let delivery: PilotWalkieDelivery
+    private var task: Task<Void, Never>?
+    private var generation: UInt64 = 0
+    private(set) var state = PilotWalkieInputState()
+
+    init(delivery: PilotWalkieDelivery) {
+        self.delivery = delivery
+    }
+
+    func start(_ command: VoiceRecordCommand) {
+        let target = delivery.startTarget(for: command)
+        let delivery = delivery
+        enqueue { state in
+            delivery.start(command, state: &state, capturedTarget: target)
+        }
+    }
+
+    func stop(_ command: VoiceRecordCommand) {
+        enqueue { state in
+            state.stop(recordingID: command.recordingID, workspaceID: command.workspaceID)
+        }
+    }
+
+    func receive(_ speech: TranscribedSpeech) {
+        let fallback = speech.recordingID == nil
+            ? delivery.capture(workspaceID: speech.workspaceID ?? delivery.store.selectedSyncWorkspaceID) : nil
+        let delivery = delivery
+        enqueue { state in
+            if await delivery.receive(speech, state: &state, capturedFallback: fallback) == false,
+               !speech.text.isEmpty {
+                NSSound.beep()
+            }
+        }
+    }
+
+    func execute(_ command: ExecuteTranscript) {
+        let delivery = delivery
+        enqueue { state in
+            _ = await delivery.execute(command, state: &state)
+        }
+    }
+
+    func enterSelection() {
+        let target = delivery.capture(workspaceID: delivery.store.selectedSyncWorkspaceID)
+        let delivery = delivery
+        enqueue { _ in
+            _ = await delivery.enter(target)
+        }
+    }
+
+    func reset() {
+        generation &+= 1
+        task?.cancel()
+        state.reset()
+    }
+
+    func waitForIdle() async {
+        await task?.value
+    }
+
+    private func enqueue(
+        _ operation: @escaping @MainActor (inout PilotWalkieInputState) async -> Void
+    ) {
+        let candidate = generation
+        let previous = task
+        task = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, !Task.isCancelled, self.generation == candidate else { return }
+            var state = self.state
+            await operation(&state)
+            guard !Task.isCancelled, self.generation == candidate else { return }
+            self.state = state
+        }
     }
 }

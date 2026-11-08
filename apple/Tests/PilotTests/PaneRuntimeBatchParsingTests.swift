@@ -27,6 +27,13 @@ struct PaneRuntimeBatchParsingTests {
     }
 
     @Test
+    func acceptsTmuxEscapedFieldSeparators() {
+        let runtimes = parse("pilot-abc\\t101\\t1\\t1\\t1")
+        #expect(runtimes["pilot-abc"]?.shellPID == 101)
+        #expect(runtimes["pilot-abc"]?.cursorVisible == true)
+    }
+
+    @Test
     func malformedLinesAreDropped() {
         let output = "pilot-abc\t101\t1\npilot-short\t7\n\ngarbage\npilot-extra\t9\t1\t1\t1\t1"
         #expect(parse(output).isEmpty)

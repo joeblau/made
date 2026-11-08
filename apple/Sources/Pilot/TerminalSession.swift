@@ -192,15 +192,23 @@ extension CockpitTerminalSession {
 }
 
 struct LocalTerminalSession: CockpitTerminalSession {
+    typealias CompanionInput = @MainActor (TerminalSessionInput) async -> Bool
+
     let identity: TerminalSessionIdentity
     let persistentSessionName: String
+    private let companionInput: CompanionInput?
 
     var destination: TerminalDestination { .local }
     var hasRuntimeSnapshot: Bool { PersistentTerminalSession.hasPaneRuntimeSnapshot() }
 
-    init(identity: TerminalSessionIdentity, persistentSessionName: String) {
+    init(
+        identity: TerminalSessionIdentity,
+        persistentSessionName: String,
+        companionInput: CompanionInput? = nil
+    ) {
         self.identity = identity
         self.persistentSessionName = persistentSessionName
+        self.companionInput = companionInput
     }
 
     func bootstrap(workingDirectory: String?) -> TerminalSessionBootstrap {
@@ -227,6 +235,7 @@ struct LocalTerminalSession: CockpitTerminalSession {
     }
 
     func sendCompanion(_ input: TerminalSessionInput) async -> Bool {
+        if let companionInput { return await companionInput(input) }
         if await sendGhosttyCompanion(input) { return true }
         return await send(input)
     }

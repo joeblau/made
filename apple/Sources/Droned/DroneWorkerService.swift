@@ -17,6 +17,11 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     private var pairings: [DroneConnectionID: UUID] = [:]
     private var approvals: [UUID: DronePairingRequest] = [:]
     private var outputPumps = DroneWorkerTerminalPumps()
+    private struct ResizeOperation {
+        let id: UUID
+        let task: Task<Void, any Error>
+    }
+    private var resizeOperations: [DroneWorkerTerminalPumps.Key: ResizeOperation] = [:]
     private var toolOperations: [UUID: DroneEnvelope] = [:]
     private var toolHistories: [UUID: [DroneEnvelope]] = [:]
     private var toolHistoryOrder: [UUID] = []
@@ -372,14 +377,13 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
                 guard let sessionID = envelope.sessionID, case .resize(let body) = envelope.body else {
                     throw DroneProtocolError.malformedMessage
                 }
-                try await terminals.resize(
-                    columns: body.columns,
-                    rows: body.rows,
+                try await resizeInOrder(
+                    body,
+                    requestID: envelope.requestID,
                     sessionID: sessionID,
-                    pairingID: pairingID,
-                    connectionID: connectionID.rawValue
+                    connectionID: connectionID,
+                    pairingID: pairingID
                 )
-                try await send(DroneEnvelope(kind: .ack, requestID: envelope.requestID, sessionID: sessionID), on: connectionID)
             case .resync:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
                 outputPumps.cancel(connectionID: connectionID, sessionID: sessionID)
@@ -709,6 +713,38 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
             // Keep draining the bounded observer to terminal state and retaining
             // owner cancellation authority, even when its subscriber goes away.
         }
+    }
+
+    private func resizeInOrder(
+        _ body: DroneResizeBody,
+        requestID: UUID?,
+        sessionID: DroneSessionID,
+        connectionID: DroneConnectionID,
+        pairingID: UUID
+    ) async throws {
+        let key = DroneWorkerTerminalPumps.Key(connectionID: connectionID, sessionID: sessionID)
+        let id = UUID()
+        let previous = resizeOperations[key]?.task
+        let task = Task { [self] in
+            try? await previous?.value
+            try Task.checkCancellation()
+            try await terminals.resize(
+                columns: body.columns,
+                rows: body.rows,
+                sessionID: sessionID,
+                pairingID: pairingID,
+                connectionID: connectionID.rawValue
+            )
+            try Task.checkCancellation()
+            try await send(DroneEnvelope(kind: .ack, requestID: requestID, sessionID: sessionID), on: connectionID)
+        }
+        resizeOperations[key] = ResizeOperation(id: id, task: task)
+        defer {
+            if resizeOperations[key]?.id == id {
+                resizeOperations.removeValue(forKey: key)
+            }
+        }
+        try await task.value
     }
 
     private func startOutputPump(

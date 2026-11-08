@@ -119,6 +119,59 @@ struct PilotWalkieDeliveryTests {
         try await verifySessionDelivery(destination: .drone(droneID: UUID()))
     }
 
+    @Test("Reset cancels queued Enter and prevents stale state from being resurrected")
+    func queueResetInvalidatesPendingWorkAndCommit() async throws {
+        try await withFixture { store, workspace, _ in
+            let fixture = QueueDeliveryFixture()
+            let queue = PilotWalkieDeliveryQueue(delivery: fixture.delivery(store: store))
+            let started = WalkieDeliveryGate()
+            let gate = WalkieDeliveryGate()
+            fixture.insertText = { _, _ in
+                started.open()
+                await gate.wait()
+                return true
+            }
+            let recordingID = UUID()
+            queue.start(.init(control: .start, workspaceID: workspace.id, recordingID: recordingID))
+            queue.receive(.init(workspaceID: workspace.id, text: "stale", recordingID: recordingID))
+            await started.wait()
+            queue.enterSelection()
+
+            queue.reset()
+            gate.open()
+            await queue.waitForIdle()
+
+            #expect(!queue.state.isRecording)
+            #expect(fixture.events.isEmpty)
+        }
+    }
+
+    @Test("Queued Enter keeps the pane captured at message receipt")
+    func queuedEnterUsesReceiptTarget() async throws {
+        try await withFixture { store, workspace, _ in
+            let fixture = QueueDeliveryFixture()
+            let queue = PilotWalkieDeliveryQueue(delivery: fixture.delivery(store: store))
+            let gate = WalkieDeliveryGate()
+            fixture.insertText = { _, _ in await gate.wait(); return true }
+            let recordingID = UUID()
+            queue.start(.init(control: .start, workspaceID: workspace.id, recordingID: recordingID))
+            queue.receive(.init(workspaceID: workspace.id, text: "hold queue", recordingID: recordingID))
+            queue.enterSelection()
+            fixture.selectSecond()
+
+            gate.open()
+            await queue.waitForIdle()
+
+            let entered = fixture.events.compactMap { event -> PilotWalkieInputState.Target? in
+                guard case .enter(let target) = event else { return nil }
+                return target
+            }
+            #expect(entered.count == 1)
+            #expect(entered.first?.paneID == fixture.first.identity.paneID)
+            #expect(entered.first?.terminalIdentity == fixture.first.identity)
+        }
+    }
+
     @Test("Terminal replacement rejects captured dictation without input or reconnect")
     func replacementSessionFailsClosed() async throws {
         try await withFixture { store, workspace, _ in
@@ -242,6 +295,61 @@ private final class DeliveryRecorder {
         case .terminal: return true
         case .remoteDesktop(let connectionID, let sessionID): return sessions[connectionID] == sessionID
         }
+    }
+}
+
+@MainActor
+private final class QueueDeliveryFixture {
+    let first = WalkieRecordingSession(destination: .local, paneID: UUID())
+    let second = WalkieRecordingSession(destination: .local, paneID: UUID())
+    var insertText: PilotWalkieDelivery.InsertText?
+    var events: [DeliveryRecorder.Event] = []
+    private var usesSecond = false
+
+    func selectSecond() {
+        usesSecond = true
+    }
+
+    func delivery(store: WorkspaceStore) -> PilotWalkieDelivery {
+        PilotWalkieDelivery(store: store, terminalPaneID: { [self] _ in
+            usesSecond ? second.identity.paneID : first.identity.paneID
+        }, terminalSession: { [self] paneID in
+            paneID == first.identity.paneID ? first : second
+        }, insertText: { [self] target, text in
+            if let insertText { return await insertText(target, text) }
+            events.append(.text(target, text))
+            return true
+        }, sendEnter: { [self] target in
+            events.append(.enter(target))
+            return true
+        })
+    }
+}
+
+private final class WalkieDeliveryGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    func wait() async {
+        _ = await withCheckedContinuation { continuation in
+            lock.withLock {
+                if opened {
+                    continuation.resume()
+                } else {
+                    self.continuation = continuation
+                }
+            }
+        }
+    }
+
+    func open() {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            opened = true
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume()
     }
 }
 

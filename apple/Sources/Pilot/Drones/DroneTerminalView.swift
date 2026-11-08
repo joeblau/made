@@ -18,6 +18,7 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     private var closed = false
     private var generation = 0
     private var lastDimensions: DroneResizeBody?
+    private let resizeCoordinator = DroneTerminalResizeCoordinator()
 
     init(pane: Pane, provider: TerminalSessionProvider = .shared) {
         self.pane = pane
@@ -112,6 +113,7 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
                 focusPaneInput()
             }
         } else {
+            resizeCoordinator.cancel()
             presentation.stop()
         }
     }
@@ -136,7 +138,10 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
         guard isViewLoaded, !closed else { return }
         statusLabel.stringValue = presentation.status
         retryButton.isHidden = presentation.status == "Connecting…" || presentation.status == "Connected"
-        if !presentation.isConnected { lastDimensions = nil }
+        if !presentation.isConnected {
+            resizeCoordinator.cancel()
+            lastDimensions = nil
+        }
         if active { renderOutput() }
         updateControls()
         resizeRemoteTerminal()
@@ -154,7 +159,7 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
         let dimensions = DroneResizeBody(columns: columns, rows: rows)
         guard dimensions != lastDimensions else { return }
         lastDimensions = dimensions
-        Task { [weak self, presentation] in
+        resizeCoordinator.resize { [weak self, presentation] in
             let resized = await presentation.resize(columns: columns, rows: rows)
             guard let self, lastDimensions == dimensions, !resized else { return }
             lastDimensions = nil
@@ -209,6 +214,7 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     func closePane() {
         closed = true
         generation += 1
+        resizeCoordinator.cancel()
         presentation.onUpdate = nil
         presentation.stop()
         if isViewLoaded { updateControls() }
@@ -216,4 +222,31 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     }
 
     isolated deinit { closePane() }
+}
+
+@MainActor
+final class DroneTerminalResizeCoordinator {
+    private var revision: UInt64 = 0
+    private var task: Task<Void, Never>?
+
+    func resize(_ operation: @escaping @MainActor () async -> Void) {
+        revision &+= 1
+        let candidate = revision
+        let previous = task
+        task = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled, candidate == revision else { return }
+            await operation()
+        }
+    }
+
+    func cancel() {
+        revision &+= 1
+        task?.cancel()
+        task = nil
+    }
+
+    func waitForIdle() async {
+        await task?.value
+    }
 }

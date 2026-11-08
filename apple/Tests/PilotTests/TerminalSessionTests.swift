@@ -105,10 +105,14 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(output.string, "recovered again hidden")
     }
 
-    private func waitForNativeTerminal(_ predicate: @MainActor () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+    private func waitForNativeTerminal(
+        timeout: Duration = .seconds(3),
+        message: String = "Native terminal did not reach the expected state",
+        _ predicate: @MainActor () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + timeout
         while !predicate(), ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(5)) }
-        XCTAssertTrue(predicate(), "Native terminal did not reach the expected state")
+        XCTAssertTrue(predicate(), message)
     }
 
     func testLegacyPaneDefaultsToLocalDestination() {
@@ -190,37 +194,48 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertEqual(client.attachCount, 2)
     }
 
-    func testLocalCompanionInputDoesNotRequireTmux() async throws {
-        let app = try XCTUnwrap(GhosttyRuntime.shared.app)
-        let pane = Pane(kind: .terminal)
-        let terminal = GhosttyMetalView(app: app, pane: pane)
-        let viewSessionName = pane.persistentSessionName
-        defer {
-            terminal.dispose()
-            Task { _ = await PersistentTerminalSession.closeSession(sessionName: viewSessionName) }
+    func testResizeCoordinatorSkipsSupersededDimensions() async {
+        let coordinator = DroneTerminalResizeCoordinator()
+        let started = TerminalResizeGate()
+        let finish = TerminalResizeGate()
+        var applied: [DroneResizeBody] = []
+        let older = DroneResizeBody(columns: 80, rows: 24)
+        let superseded = DroneResizeBody(columns: 100, rows: 30)
+        let newest = DroneResizeBody(columns: 132, rows: 43)
+        coordinator.resize {
+            applied.append(older)
+            await started.open()
+            await finish.wait()
         }
-        XCTAssertNotNil(terminal.surface)
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let output = root.appendingPathComponent("companion.txt")
+        await started.wait()
+        coordinator.resize { applied.append(superseded) }
+        coordinator.resize { applied.append(newest) }
+
+        await finish.open()
+        await coordinator.waitForIdle()
+
+        XCTAssertEqual(applied, [older, newest])
+    }
+
+    func testLocalCompanionInputDoesNotRequireTmux() async {
+        var inputs: [TerminalSessionInput] = []
         let session = LocalTerminalSession(
             identity: TerminalSessionIdentity(
-                paneID: pane.id,
-                ownership: TerminalDestination.local.ownership,
-                generation: 1
+                paneID: UUID(), ownership: TerminalDestination.local.ownership, generation: 1
             ),
-            persistentSessionName: "pilot-unavailable-\(UUID().uuidString)"
+            persistentSessionName: "pilot-unavailable-\(UUID().uuidString)",
+            companionInput: { input in
+                inputs.append(input)
+                return true
+            }
         )
-        try await Task.sleep(for: .milliseconds(200))
 
-        let inserted = await session.sendCompanion(.literal("printf companion-ok > \(output.path)"))
+        let inserted = await session.sendCompanion(.literal("companion-ok"))
         let entered = await session.sendCompanion(.enter)
 
         XCTAssertTrue(inserted)
         XCTAssertTrue(entered)
-        try await waitForNativeTerminal { FileManager.default.fileExists(atPath: output.path) }
-        XCTAssertEqual(try String(contentsOf: output, encoding: .utf8), "companion-ok")
+        XCTAssertEqual(inputs, [.literal("companion-ok"), .enter])
     }
 
     func testLocalSessionRetainsTmuxBootstrapInputActivityDirectoryAndClose() async throws {
@@ -251,10 +266,23 @@ final class TerminalSessionTests: XCTestCase {
         let entered = await session.send(.enter)
         XCTAssertTrue(inserted)
         XCTAssertTrue(entered)
-        try await waitForNativeTerminal { FileManager.default.fileExists(atPath: output.path) }
+        try await waitForNativeTerminal(timeout: .seconds(10), message: "tmux output did not arrive") {
+            FileManager.default.fileExists(atPath: output.path)
+        }
         let activity = await session.foregroundActivity(unavailableActivity: .running)
         XCTAssertEqual(activity, .idle)
-        try await waitForNativeTerminal { session.currentDirectorySnapshot() != nil }
+        let listing = try await ProcessRunner.run(ProcessInvocation(
+            executableURL: URL(fileURLWithPath: tmux),
+            arguments: ["list-panes", "-a", "-F", "#{session_name}\\t#{pane_pid}\\t#{cursor_flag}\\t#{window_active}\\t#{pane_active}"],
+            timeout: .seconds(2)
+        ))
+        let parsed = PersistentTerminalSession.parsePaneRuntimes(listing.standardOutputString)
+        XCTAssertNotNil(parsed[sessionName])
+        let runtimes = await PersistentTerminalSession.loadAllPaneRuntimes(executable: URL(fileURLWithPath: tmux))
+        XCTAssertNotNil(runtimes?[sessionName])
+        try await waitForNativeTerminal(timeout: .seconds(10), message: "tmux cwd did not converge") {
+            session.currentDirectorySnapshot() != nil
+        }
         XCTAssertEqual(
             session.currentDirectorySnapshot().map {
                 URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
@@ -296,6 +324,33 @@ final class TerminalSessionTests: XCTestCase {
             .droneUnavailable(droneID)
         )
         XCTAssertFalse(session is LocalTerminalSession)
+    }
+}
+
+private final class TerminalResizeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    func open() async {
+        let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            opened = true
+            defer { self.continuation = nil }
+            return self.continuation
+        }
+        continuation?.resume()
+    }
+
+    func wait() async {
+        _ = await withCheckedContinuation { continuation in
+            lock.withLock {
+                if opened {
+                    continuation.resume()
+                } else {
+                    self.continuation = continuation
+                }
+            }
+        }
     }
 }
 

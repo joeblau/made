@@ -19,6 +19,11 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
         let handler: @Sendable (DroneOutputBody) -> Bool
     }
     private var subscriptions: [UUID: Subscription] = [:]
+    private struct ResizeOperation {
+        let id: UUID
+        let task: Task<Void, any Error>
+    }
+    private var resizeOperations: [UUID: ResizeOperation] = [:]
 
     init(droneID: UUID, controllerID: UUID, connection: any DroneConnection) {
         self.droneID = droneID
@@ -137,12 +142,25 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
 
     func resize(columns: UInt16, rows: UInt16, for reference: DroneTerminalSessionReference) async throws {
         try validate(reference)
-        let response = try await request(
-            kind: .resize,
-            sessionID: DroneSessionID(rawValue: reference.sessionID),
-            body: .resize(DroneResizeBody(columns: columns, rows: rows))
-        )
-        guard response.kind == .ack else { throw DroneTransportError.remoteRejected }
+        let id = UUID()
+        let previous = resizeOperations[reference.sessionID]?.task
+        let task = Task { [self] in
+            try? await previous?.value
+            try validate(reference)
+            let response = try await request(
+                kind: .resize,
+                sessionID: DroneSessionID(rawValue: reference.sessionID),
+                body: .resize(DroneResizeBody(columns: columns, rows: rows))
+            )
+            guard response.kind == .ack else { throw DroneTransportError.remoteRejected }
+        }
+        resizeOperations[reference.sessionID] = ResizeOperation(id: id, task: task)
+        defer {
+            if resizeOperations[reference.sessionID]?.id == id {
+                resizeOperations.removeValue(forKey: reference.sessionID)
+            }
+        }
+        try await task.value
     }
 
     func perform(

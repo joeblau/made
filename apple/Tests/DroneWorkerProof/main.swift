@@ -324,8 +324,16 @@ extension DroneWorkerProof {
             resumeState: resumeState
         )
         _ = try await terminalSession.restore(workingDirectory: nil)
-        let resized = await terminalSession.resize(columns: 132, rows: 43)
-        expect(resized, "encrypted client/session resize failed")
+        async let olderResize = terminalSession.resize(columns: 80, rows: 24)
+        for _ in 0..<200 {
+            if terminalConnection.resizeCount == 1 { break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        expect(terminalConnection.resizeCount == 1, "older resize was not sent")
+        async let newerResize = terminalSession.resize(columns: 132, rows: 43)
+        let olderResized = await olderResize
+        let newerResized = await newerResize
+        expect(olderResized && newerResized, "ordered client/session resize failed")
         let sizeRequested = await terminalSession.send(.literal("stty size\n"))
         expect(sizeRequested, "encrypted stty input failed")
         var reportedSize = ""
@@ -1350,6 +1358,9 @@ private final class ProofTerminalConnection: DroneConnection, @unchecked Sendabl
     private let connectionID: DroneConnectionID
     private let stream: AsyncThrowingStream<DroneEnvelope, any Error>
     private let continuation: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation
+    private let lock = NSLock()
+    private var storedResizeCount = 0
+    var resizeCount: Int { lock.withLock { storedResizeCount } }
 
     init(
         controller: DroneLANTransport,
@@ -1368,6 +1379,9 @@ private final class ProofTerminalConnection: DroneConnection, @unchecked Sendabl
     }
 
     func send(_ envelope: DroneEnvelope) async throws {
+        if envelope.kind == .resize {
+            lock.withLock { storedResizeCount += 1 }
+        }
         controller.send(envelope, on: connectionID)
     }
 

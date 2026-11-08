@@ -28,8 +28,8 @@ final class PilotApp {
     let secureIdentity: SecureIdentity
     let pairingPrompts = PairingPromptCoordinator()
     var peerDeviceStatus = DeviceStatus()
-    var walkieInput = PilotWalkieInputState()
-    var walkieDeliveryTask: Task<Void, Never>?
+    lazy var walkieDeliveryQueue = PilotWalkieDeliveryQueue(delivery: walkieDelivery)
+    var walkieInput: PilotWalkieInputState { walkieDeliveryQueue.state }
     var plotterClientCount = 0
     var plotterPairingRequest: FrameLinkPairingRequest?
     var mainWindowID: CGWindowID?
@@ -187,6 +187,7 @@ final class PilotApp {
                 extensionWindowID = windowID
                 if windowID == nil, lastRemoteInputSurface == .extension { lastRemoteInputSurface = .main }
             }
+            if windowID == nil { walkieDeliveryQueue.reset() }
         }
         controller.inspectorFactory = { [weak self] workspace in
             guard let self else { return nil }
@@ -474,12 +475,16 @@ final class PilotApp {
             lastCompanionsEnabled = companionsEnabled
             if companionsEnabled { setupSync(); frameSender.start(); buildPush.restore() } else {
                 buildPush.stop(); syncService.stop(); frameSender.stop(); screenMirror.stop()
-                plotterClientCount = 0; walkieInput.reset(); pairingPrompts.cancelAll()
+                plotterClientCount = 0; walkieDeliveryQueue.reset(); pairingPrompts.cancelAll()
             }
         }
         if syncService.isConnected != lastPeerConnected {
             lastPeerConnected = syncService.isConnected
-            if lastPeerConnected { sendLocalDeviceStatus(); secureIdentity.refreshPeer(); secureIdentity.announce() } else { walkieInput.reset() }
+            if lastPeerConnected {
+                sendLocalDeviceStatus(); secureIdentity.refreshPeer(); secureIdentity.announce()
+            } else {
+                walkieDeliveryQueue.reset()
+            }
         }
         let audioDescription = String(describing: headphoneDetector.audioOutput)
         if audioDescription != lastAudioDescription {
@@ -553,6 +558,7 @@ final class PilotApp {
     }
 
     func stop() {
+        walkieDeliveryQueue.reset()
         observation?.stop()
         notificationTokens.forEach(NotificationCenter.default.removeObserver)
         notificationTokens.removeAll()
