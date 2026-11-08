@@ -160,7 +160,6 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     private var heights: [String: (key: HeightKey, height: CGFloat)] = [:]
     private var verbCache: [String: (revision: Int, verb: AgentToolVerb)] = [:]
     private var timer: Timer?
-    private var applyingFollow: Bool?
     private var lastWidthChange: ContinuousClock.Instant?
     private var fullHeightPass: Task<Void, Never>?
 
@@ -201,9 +200,7 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         guard let key = notification.object as? String, let index = rows.firstIndex(where: { $0.id == key }) else { return }
         let follow = followsOutput
         heights[key] = nil
-        applyingFollow = follow
         refresh(rows: [index], animated: false)
-        applyingFollow = nil
         if follow { scrollToEnd() }
     }
 
@@ -362,8 +359,6 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     func applyRows(_ next: [AgentTimelineRow], now: Date) {
         guard rows != next else { return }
         let follow = followsOutput
-        applyingFollow = follow
-        defer { applyingFollow = nil }
         let old = rows
         let oldIDs = old.map(\.id)
         let newIDs = next.map(\.id)
@@ -454,12 +449,11 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
     private func scrollToEnd() {
         if !rows.isEmpty, let scroll = tableView.enclosingScrollView {
             tableView.layoutSubtreeIfNeeded()
-            // A capped message row can still be taller than the viewport;
+            // A long message row is often taller than the viewport;
             // scrollRowToVisible may align its top instead of the newest text.
             let clip = scroll.contentView
             clip.scroll(to: NSPoint(x: 0, y: max(0, tableView.bounds.maxY - clip.bounds.height)))
             scroll.reflectScrolledClipView(clip)
-            // Visible cells already received the follow flag in configure.
             tableView.view(atColumn: 0, row: rows.count - 1, makeIfNecessary: false)?.layoutSubtreeIfNeeded()
         }
     }
@@ -601,12 +595,9 @@ final class AgentChatTimelineTable: NSObject, NSTableViewDataSource, NSTableView
         case .user(let item):
             (view as? UserBubbleCellView)?.configure(item: item, actions: actions, caption: userCaptions[item.key])
         case .prose(let item):
-            let follows = applyingFollow ?? followsOutput
-            // The streaming message follows even while a pending steer
-            // bubble sits below it.
-            (view as? ProseCellView)?.configure(item: item, isStreaming: item.key == streamingKey,
-                                                followStreamingOutput: follows && (row == rows.count - 1 || item.key == streamingKey),
-                                                actions: actions)
+            // The row grows with the message; `finishApply` keeps the
+            // transcript itself pinned to the end while the reader follows.
+            (view as? ProseCellView)?.configure(item: item, isStreaming: item.key == streamingKey, actions: actions)
         case .activity(let group):
             (view as? ActivityCardView)?.configure(
                 group: group, expandedOverride: expandedOverrides[group.id], showAll: showAllGroups.contains(group.id),

@@ -13,7 +13,7 @@ struct NativeAgentChatPresentationTests {
         func stream(_ message: String) {
             revision += 1
             cell.configure(item: AgentChatItem(id: "stream", content: .assistant(message), revision: revision),
-                           isStreaming: true, followStreamingOutput: false, actions: AgentChatRowActions())
+                           isStreaming: true, actions: AgentChatRowActions())
             cell.layoutSubtreeIfNeeded()
         }
         stream("A **bold")
@@ -208,50 +208,6 @@ struct NativeAgentChatPresentationTests {
         #expect(cancellations == 1)
     }
 
-    @Test("Long streamed messages follow the end only while both scroll areas follow")
-    func longStreamedMessageScrolling() throws {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        defer { window.close() }
-        let cell = ProseCellView()
-        cell.frame = NSRect(x: 0, y: 0, width: 752, height: 1_208)
-        window.contentView?.addSubview(cell)
-        var message = (0..<150).map { "Line \($0)" }.joined(separator: "\n")
-        var revision = 0
-        func stream(follow: Bool) {
-            revision += 1
-            cell.configure(item: AgentChatItem(id: "stream", content: .assistant(message), revision: revision),
-                           isStreaming: true, followStreamingOutput: follow, actions: AgentChatRowActions())
-            cell.layoutSubtreeIfNeeded()
-        }
-        stream(follow: true)
-        let text = try #require(descendants(of: cell).compactMap { $0 as? NSTextView }.first)
-        let scroll = try #require(text.enclosingScrollView)
-        #expect(text.bounds.height > 1_200)
-        try expectMessageEndVisible(text)
-
-        message += "\nNewest streamed line"
-        stream(follow: true)
-        try expectMessageEndVisible(text)
-
-        scroll.contentView.scroll(to: .zero)
-        scroll.reflectScrolledClipView(scroll.contentView)
-        let selection = NSRange(location: 2, length: 5)
-        text.setSelectedRange(selection)
-        message += "\nBackground stream while reading earlier text"
-        stream(follow: true)
-        #expect(scroll.contentView.bounds.origin.y == 0)
-        #expect(text.selectedRange() == selection)
-
-        text.scrollToEndOfDocument(nil)
-        let originalOrigin = scroll.contentView.bounds.origin
-        message += "\nOuter transcript is now scrolled up"
-        stream(follow: false)
-        #expect(scroll.contentView.bounds.origin == originalOrigin)
-        #expect(text.selectedRange() == selection)
-    }
-
     @Test("Agent readiness honors requested input focus without stealing another field", arguments: [false, true])
     func readinessFocus(preserveOtherField: Bool) async throws {
         let defaults = try #require(UserDefaults(suiteName: "NativeAgentChatPresentationTests.\(UUID().uuidString)"))
@@ -316,25 +272,6 @@ struct NativeAgentChatPresentationTests {
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.effectiveAppearance.performAsCurrentDrawingAppearance { view.cacheDisplay(in: view.bounds, to: bitmap) }
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: output.appendingPathComponent(name + ".png"))
-    }
-
-    private func expectMessageEndVisible(_ text: NSTextView) throws {
-        let scroll = try #require(text.enclosingScrollView)
-        let layout = try #require(text.layoutManager)
-        let container = try #require(text.textContainer)
-        let length = text.string.utf16.count
-        try #require(length > 0)
-        let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: length - 1, length: 1), actualCharacterRange: nil)
-        let lastGlyph = layout.boundingRect(forGlyphRange: glyphs, in: container)
-            .offsetBy(dx: text.textContainerOrigin.x, dy: text.textContainerOrigin.y)
-        let visible = text.convert(scroll.contentView.bounds, from: scroll.contentView)
-        let pixel = 1 / (text.window?.backingScaleFactor ?? 1)
-        // NSTextView scrolls the final glyph into view; its trailing container
-        // padding need not align exactly with the clip edge on every display.
-        #expect(lastGlyph.height > 0)
-        #expect(lastGlyph.minY >= visible.minY - pixel)
-        #expect(lastGlyph.maxY <= visible.maxY + pixel)
-        #expect(abs(visible.maxY - text.bounds.maxY) <= text.textContainerInset.height + pixel)
     }
 
     private func key(code: UInt16, characters: String, flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
