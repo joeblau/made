@@ -259,6 +259,41 @@ struct AgentChatPaneTests {
         #expect(!(trigger.toolTip ?? "").contains("Context"))
     }
 
+    @Test("Transcript rows line up with the composer card's leading and trailing edges")
+    func transcriptEdgesMatchComposer() async throws {
+        let tools = (1...5).map { index in
+            #"update '{"sessionUpdate":"tool_call","toolCallId":"e\#(index)","title":"Read file\#(index).swift","kind":"read","status":"completed","rawInput":{"file_path":"/repo/file\#(index).swift"}}'"#
+        }.joined(separator: "\n")
+        let harness = try Harness(steering: false, "read -r _\n" + tools + "\n" + #"""
+        update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"All five files read."}}'
+        printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
+        read -r _
+        """#)
+        defer { harness.close() }
+        try await harness.sendPrompt(String(repeating: "Read every file and report back. ", count: 6))
+        try await harness.waitUntil {
+            harness.session.phase == .ready && harness.controller.timeline.rows.contains { row in
+                if case .activity(let group) = row { group.state == .settled } else { false }
+            }
+        }
+        harness.layout()
+        let controller = harness.controller
+        let root = controller.view
+        let composer = try #require(harness.identified("agent-chat.composer-card"))
+        let composerFrame = root.convert(composer.bounds, from: composer)
+        #expect(controller.transcriptScroll.scrollerStyle == .overlay, "The scroller never narrows the rows")
+        let rows = controller.timeline.rows
+        let cardRow = try #require(rows.firstIndex { if case .activity = $0 { true } else { false } })
+        let card = try #require(controller.table.view(atColumn: 0, row: cardRow, makeIfNecessary: true) as? ActivityCardView)
+        let chrome = root.convert(card.chrome.bounds, from: card.chrome)
+        #expect(abs(chrome.minX - composerFrame.minX) < 0.5, "Card leading \(chrome.minX) vs composer \(composerFrame.minX)")
+        #expect(abs(chrome.maxX - composerFrame.maxX) < 0.5, "Card trailing \(chrome.maxX) vs composer \(composerFrame.maxX)")
+        let userRow = try #require(rows.firstIndex { if case .user = $0 { true } else { false } })
+        let bubble = try #require(controller.table.view(atColumn: 0, row: userRow, makeIfNecessary: true) as? UserBubbleCellView)
+        let bubbleFrame = root.convert(bubble.bubble.bounds, from: bubble.bubble)
+        #expect(abs(bubbleFrame.maxX - composerFrame.maxX) < 0.5, "Bubble trailing \(bubbleFrame.maxX) vs composer \(composerFrame.maxX)")
+    }
+
     @Test("j/k move a visible step cursor, Enter opens the Inspector overlay, / and Shift-Tab move focus")
     func keyboardCursorAndInspector() async throws {
         let tools = (1...5).map { index in

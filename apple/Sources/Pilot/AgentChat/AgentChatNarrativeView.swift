@@ -381,7 +381,7 @@ final class ProseTextView: NSTextView {
 /// ```diff fences, and only http/https/mailto links.
 final class ProseCellView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.prose")
-    static let leadingInset: CGFloat = 8
+    static let leadingInset = AgentChatTimelineLayout.rowInset
     /// Right gutter holding the hover "Copy" button.
     static let copyGutter: CGFloat = 34
     static let verticalInset: CGFloat = 4
@@ -578,7 +578,7 @@ final class ProseCellView: NSTableCellView {
 final class UserBubbleCellView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.user")
     static let maximumWidthFraction: CGFloat = 0.75
-    static let sideInset: CGFloat = 8
+    static let sideInset = AgentChatTimelineLayout.rowInset
     static let verticalInset: CGFloat = 4
     static let horizontalPadding: CGFloat = 12
     static let verticalPadding: CGFloat = 8
@@ -730,7 +730,7 @@ final class UserBubbleCellView: NSTableCellView {
 /// Notices such as stop reasons. No copy; a failed-turn notice offers "Send again".
 final class NoticeCellView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.notice")
-    static let sideInset: CGFloat = 8
+    static let sideInset = AgentChatTimelineLayout.rowInset
     static let verticalInset: CGFloat = 4
     static let maximumLines = 6
 

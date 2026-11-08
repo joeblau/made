@@ -39,7 +39,7 @@ struct ActivityHeaderParts: Equatable {
 /// with no failures or agents render inline without card chrome.
 final class ActivityCardView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.activity")
-    static let outerInset = NSSize(width: 8, height: 2)
+    static let outerInset = NSSize(width: AgentChatTimelineLayout.rowInset, height: 2)
     static let padding = NSSize(width: 6, height: 6)
     static let rowSpacing: CGFloat = 2
 
