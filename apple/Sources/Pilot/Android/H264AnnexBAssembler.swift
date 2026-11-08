@@ -3,10 +3,11 @@ import Foundation
 /// Incremental H.264 Annex-B → AVCC access-unit assembler for the raw
 /// `screenrecord --output-format=h264` byte stream. Pure and allocation-bounded
 /// — the unit-testable core of the untrusted-input story: the device (and
-/// anything impersonating it through adb) controls every byte, so every bound
-/// here is enforced BEFORE buffering. Any violation throws; the caller treats
-/// that as a poisoned stream, kills the child, and restarts — bounded memory,
-/// bounded blast radius.
+/// anything impersonating it through adb) controls every byte. Only the buffer
+/// cap is enforced before appending; leading-garbage and NAL/parameter-set
+/// checks run after the bounded append or when a NALU completes. Any violation
+/// throws; the caller treats that as a poisoned stream, kills the child, and
+/// restarts — bounded memory, bounded blast radius.
 struct H264AnnexBAssembler {
     enum Event: Equatable {
         /// A new SPS/PPS pair, byte-different from the pair previously in
@@ -26,7 +27,8 @@ struct H264AnnexBAssembler {
         case bufferOverflow
     }
 
-    /// Hard caps, enforced before allocation grows past them.
+    /// Hard input caps. Only `maxBufferSize` is checked before appending; the
+    /// others are checked after the bounded append or when a NALU completes.
     static let maxLeadingGarbage = 64 * 1_024
     static let maxNALUSize = 2 * 1_024 * 1_024
     static let maxParameterSetSize = 1_024
