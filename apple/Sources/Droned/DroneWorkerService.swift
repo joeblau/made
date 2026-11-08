@@ -11,7 +11,8 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     private var storageHealthy = true
     private var stopping = false
     private var revokedControllers = Set<UUID>()
-    private let permissions: DroneControllerPermissions
+    private let permissionCeiling: DroneControllerPermissions
+    private var controllerGrants: [UUID: DroneControllerPermissions] = [:]
     private var toolLeases: DroneToolLeaseRegistry
     private var pairings: [DroneConnectionID: UUID] = [:]
     private var approvals: [UUID: DronePairingRequest] = [:]
@@ -34,7 +35,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         self.transport = transport ?? DroneLANTransport(role: .worker)
         self.pairingStore = pairingStore ?? DronePairingStore(role: .worker)
         healthProbeDirectory = stateDirectory
-        self.permissions = permissions
+        permissionCeiling = permissions
         toolLeases = DroneToolLeaseRegistry(
             droneID: try workerID ?? DroneIdentityStore(role: .worker).loadOrCreatePeerID().rawValue
         )
@@ -51,6 +52,39 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         tools = DroneJobToolEngine(jobs: jobs)
     }
 
+    func grantController(
+        _ controllerID: UUID,
+        permissions requested: DroneControllerPermissions
+    ) async throws {
+        guard !stopping, !revokedControllers.contains(controllerID),
+              pairings.values.contains(controllerID), !requested.isEmpty,
+              requested.isSubset(of: permissionCeiling)
+        else { throw DroneProtocolError.unauthorized }
+        if let removed = controllerGrants[controllerID]?.subtracting(requested), !removed.isEmpty {
+            await revokeControllerGrants(controllerID, permissions: removed)
+        }
+        controllerGrants[controllerID] = requested
+        onAudit?("controller.granted")
+    }
+
+    func revokeControllerGrants(
+        _ controllerID: UUID,
+        permissions revoked: DroneControllerPermissions = .all
+    ) async {
+        guard !revoked.isEmpty else { return }
+        controllerGrants[controllerID]?.subtract(revoked)
+        if controllerGrants[controllerID]?.isEmpty == true {
+            controllerGrants.removeValue(forKey: controllerID)
+        }
+        onAudit?("controller.grants.revoked")
+        guard revoked.contains(.terminal) else { return }
+        let connections = pairings.filter { $0.value == controllerID }.map(\.key)
+        for connection in connections {
+            outputPumps.cancel(connectionID: connection)
+            await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
+        }
+    }
+
     /// Trusted local control API, never invoked by a remote tool request.
     func issueToolLease(
         controllerID: UUID,
@@ -60,7 +94,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     ) throws -> DroneToolLease {
         guard !stopping, !revokedControllers.contains(controllerID),
               pairings.values.contains(controllerID), workspaceID == DroneWorkspaceIDs.default,
-              requested.isSubset(of: permissions)
+              requested.isSubset(of: permissionCeiling)
         else { throw DroneProtocolError.unauthorized }
         let lease = try toolLeases.issue(
             controllerID: controllerID, workspaceID: workspaceID,
@@ -73,6 +107,21 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     func ownerControl(_ request: DroneControlRequest) async throws -> DroneControlToolLease? {
         try request.validate()
         switch request.command {
+        case "grant", "revoke-grants":
+            guard let controller = request.controllerID, let names = request.permissions else {
+                throw DroneWorkerError.invalidArguments
+            }
+            var requested: DroneControllerPermissions = []
+            if names.contains("terminal") { requested.insert(.terminal) }
+            if names.contains("files") { requested.insert(.files) }
+            if names.contains("jobs") { requested.insert(.jobs) }
+            if names.contains("git") { requested.insert(.git) }
+            if request.command == "grant" {
+                try await grantController(controller, permissions: requested)
+            } else {
+                await revokeControllerGrants(controller, permissions: requested)
+            }
+            return nil
         case "grant-tools":
             guard let controller = request.controllerID, let workspace = request.workspaceID,
                   let names = request.permissions, let lifetime = request.lifetimeSeconds else {
@@ -122,6 +171,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     /// Running tool processes are cancelled; detached user terminals are not terminated.
     func revokeController(_ controllerID: UUID) async throws {
         revokedControllers.insert(controllerID)
+        controllerGrants.removeValue(forKey: controllerID)
         toolLeases.revoke(controllerID: controllerID)
         let connections = pairings.filter { $0.value == controllerID }.map(\.key)
         for connection in connections {
@@ -182,6 +232,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         stopping = true
         listenerReady = false
         for controller in Set(pairings.values) { toolLeases.revoke(controllerID: controller) }
+        controllerGrants.removeAll()
         pairings.removeAll()
         if !(await jobs.shutdown()) {
             storageHealthy = false
@@ -267,7 +318,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
                 try await handleTool(envelope, connectionID: connectionID, pairingID: pairingID)
                 return
             }
-            try require(.terminal)
+            try require(.terminal, controllerID: pairingID)
             switch envelope.kind {
             case .create:
                 guard case .create(let body) = envelope.body, let key = envelope.idempotencyKey else {
@@ -684,8 +735,11 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         outputPumps.insert(task, key: key, generation: generation)
     }
 
-    private func require(_ permission: DroneControllerPermissions) throws {
-        guard permissions.contains(permission) else {
+    private func require(
+        _ permission: DroneControllerPermissions,
+        controllerID: UUID
+    ) throws {
+        guard controllerGrants[controllerID]?.contains(permission) == true else {
             onAudit?("authorization.failed")
             throw DroneProtocolError.unauthorized
         }
@@ -709,6 +763,11 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     private func send(_ envelope: DroneEnvelope, on connectionID: DroneConnectionID) async throws {
         guard !stopping, let controller = pairings[connectionID],
               !revokedControllers.contains(controller) else { throw DroneProtocolError.disconnected }
+        if !envelope.kind.isTool && envelope.kind != .error {
+            guard controllerGrants[controller]?.contains(.terminal) == true else {
+                throw DroneProtocolError.disconnected
+            }
+        }
         try envelope.validate()
         transport.send(envelope, on: connectionID)
     }

@@ -124,6 +124,8 @@ enum DroneWorkerProof {
             return
         }
         if replayOnly {
+            try await verifyControllerGrants(controller: controller, connectionID: connectionID, controllerID: controllerID,
+                                             service: service, observed: observed, port: port, workspace: workspace, root: root)
             try await verifyIssuedLeases(
                 controller: controller, connectionID: connectionID, controllerID: controllerID,
                 service: service, observed: observed
@@ -169,6 +171,7 @@ enum DroneWorkerProof {
         observed: ProofObserved,
         workspace: URL
     ) async throws {
+        try await service.grantController(controllerID, permissions: .terminal)
         let createRequest = UUID()
         controller.send(DroneEnvelope(
             kind: .create,
@@ -187,6 +190,7 @@ enum DroneWorkerProof {
             try await Task.sleep(for: .milliseconds(25))
         }
         guard let sessionID else { throw ProofError.failed("terminal was not created") }
+        try await verifyUngrantedInput(service: service, port: port, sessionID: sessionID, workspace: workspace)
         controller.send(DroneEnvelope(
             kind: .attach,
             requestID: UUID(),
@@ -245,6 +249,29 @@ enum DroneWorkerProof {
 
         controller.send(DroneEnvelope(kind: .close, requestID: UUID(), sessionID: sessionID), on: connectionID)
         try await Task.sleep(for: .milliseconds(100))
+    }
+
+    private static func verifyUngrantedInput(
+        service: DroneWorkerService,
+        port: UInt16,
+        sessionID: DroneSessionID,
+        workspace: URL
+    ) async throws {
+        let ungranted = try await connectController(service: service, port: port)
+        defer { ungranted.transport.stop() }
+        let deniedInput = UUID()
+        ungranted.transport.send(DroneEnvelope(
+            kind: .input,
+            requestID: deniedInput,
+            sessionID: sessionID,
+            body: .input(DroneInputBody(data: Data("printf denied > denied-input.txt\n".utf8)))
+        ), on: ungranted.connectionID)
+        try await expectUnauthorized(deniedInput, observed: ungranted.observed)
+        try await Task.sleep(for: .milliseconds(100))
+        expect(
+            !FileManager.default.fileExists(atPath: workspace.appendingPathComponent("denied-input.txt").path),
+            "unauthorized controller released terminal input"
+        )
     }
 
     private static func prepareWorkspace(_ workspace: URL, includeGit: Bool) throws {
@@ -514,6 +541,214 @@ enum DroneWorkerProof {
         guard staleWasRetired else { throw ProofError.failed("ended pairing remained in approval summaries") }
         let another = try await connectController(service: service, port: port)
         another.transport.stop()
+    }
+
+    private static func verifyControllerGrants(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        controllerID: UUID,
+        service: DroneWorkerService,
+        observed: ProofObserved,
+        port: UInt16,
+        workspace: URL,
+        root: URL
+    ) async throws {
+        guard let index = CommandLine.arguments.firstIndex(of: "--proof-cli"),
+              CommandLine.arguments.indices.contains(index + 1) else {
+            throw ProofError.failed("CLI fixture executable missing")
+        }
+        let cli = CommandLine.arguments[index + 1]
+        let controlRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("grants-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: controlRoot) }
+        let paths = DronePaths(environment: [
+            "BLAU_DRONE_ROOT": controlRoot.path,
+            "BLAU_DRONE_WORKSPACE": workspace.path,
+        ])
+        let daemon = try DroneDaemon(paths: paths, workerService: service)
+        try daemon.startControlListener()
+        defer { daemon.stopControlListener() }
+        let other = try await connectController(service: service, port: port)
+        defer { other.transport.stop() }
+        var deniedCreateKeys: [String] = []
+        var deniedCreateRequests: [UUID] = []
+
+        for probe in [
+            (transport: controller, connectionID: connectionID, observed: observed),
+            (transport: other.transport, connectionID: other.connectionID, observed: other.observed),
+        ] {
+            let requestID = UUID()
+            let key = "denied-before-grant-\(UUID().uuidString)"
+            deniedCreateKeys.append(key)
+            deniedCreateRequests.append(requestID)
+            probe.transport.send(DroneEnvelope(
+                kind: .create,
+                requestID: requestID,
+                idempotencyKey: key,
+                body: .create(DroneCreateBody(
+                    workspaceID: DroneWorkspaceIDs.default,
+                    environment: [:],
+                    columns: 80,
+                    rows: 24
+                ))
+            ), on: probe.connectionID)
+            try await expectUnauthorized(requestID, observed: probe.observed)
+        }
+
+        let unknownGrant = try await runCLI(
+            cli,
+            arguments: ["grant", UUID().uuidString, "terminal"],
+            root: controlRoot
+        )
+        expect(unknownGrant.status != 0, "owner granted an unauthenticated controller")
+        let granted = try await runCLI(
+            cli,
+            arguments: ["grant", controllerID.uuidString, "terminal"],
+            root: controlRoot
+        )
+        expect(
+            granted.status == 0 && String(decoding: granted.output, as: UTF8.self) == "granted\n",
+            "owner terminal grant failed"
+        )
+        let otherGranted = try await runCLI(
+            cli,
+            arguments: ["grant", other.controllerID.uuidString, "jobs"],
+            root: controlRoot
+        )
+        expect(otherGranted.status == 0, "independent controller grant failed")
+        try await expectTerminalGrant(controller: controller, observed: observed)
+
+        let terminalKinds: [DroneMessageKind] = [
+            .create, .attach, .reconnect, .input, .resize, .detach, .close, .cancel,
+            .resync, .fastCommand, .activity, .workingDirectory, .acknowledge,
+        ]
+        for kind in terminalKinds {
+            let requestID = UUID()
+            let sessionID = DroneSessionID()
+            let key = kind == .create ? "denied-other-\(UUID().uuidString)" : nil
+            if let key {
+                deniedCreateKeys.append(key)
+                deniedCreateRequests.append(requestID)
+            }
+            let body: DroneEnvelope.Body
+            switch kind {
+            case .create:
+                body = .create(DroneCreateBody(
+                    workspaceID: DroneWorkspaceIDs.default,
+                    environment: [:],
+                    columns: 80,
+                    rows: 24
+                ))
+            case .attach, .reconnect, .acknowledge:
+                body = .attach(DroneAttachBody(afterSequence: 0, afterOffset: 0))
+            case .input:
+                body = .input(DroneInputBody(data: Data("printf denied > denied-replay.txt\n".utf8)))
+            case .resize:
+                body = .resize(DroneResizeBody(columns: 80, rows: 24))
+            case .fastCommand:
+                body = .fastCommand(DroneFastCommandBody(command: "printf denied > denied-replay.txt"))
+            default:
+                body = .empty
+            }
+            other.transport.send(DroneEnvelope(
+                kind: kind,
+                requestID: requestID,
+                sessionID: kind == .create ? nil : sessionID,
+                idempotencyKey: key,
+                body: body
+            ), on: other.connectionID)
+            try await expectUnauthorized(requestID, observed: other.observed)
+        }
+        expect(
+            !FileManager.default.fileExists(atPath: workspace.appendingPathComponent("denied-replay.txt").path),
+            "unauthorized non-tool operation released command work"
+        )
+
+        other.transport.disconnect(other.connectionID)
+        for _ in 0..<100 {
+            if !(await service.connectedControllerIDs()).contains(other.controllerID) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let connectedAfterDisconnect = await service.connectedControllerIDs()
+        expect(
+            !connectedAfterDisconnect.contains(other.controllerID),
+            "disconnected grant fixture remained authenticated"
+        )
+        let otherRevoked = try await runCLI(
+            cli,
+            arguments: ["revoke-grants", other.controllerID.uuidString, "jobs"],
+            root: controlRoot
+        )
+        expect(otherRevoked.status == 0, "independent grant revocation failed")
+        try await expectTerminalGrant(controller: controller, observed: observed)
+
+        let firstRevoked = try await runCLI(
+            cli,
+            arguments: ["revoke-grants", controllerID.uuidString, "terminal"],
+            root: controlRoot
+        )
+        expect(
+            firstRevoked.status == 0 && String(decoding: firstRevoked.output, as: UTF8.self) == "grants revoked\n",
+            "terminal grant revocation failed"
+        )
+        let revokedCreate = UUID()
+        let revokedKey = "denied-after-revoke-\(UUID().uuidString)"
+        deniedCreateKeys.append(revokedKey)
+        deniedCreateRequests.append(revokedCreate)
+        controller.send(DroneEnvelope(
+            kind: .create,
+            requestID: revokedCreate,
+            idempotencyKey: revokedKey,
+            body: .create(DroneCreateBody(
+                workspaceID: DroneWorkspaceIDs.default,
+                environment: [:],
+                columns: 80,
+                rows: 24
+            ))
+        ), on: connectionID)
+        try await expectUnauthorized(revokedCreate, observed: observed)
+
+        let regranted = try await runCLI(
+            cli,
+            arguments: ["grant", controllerID.uuidString, "terminal"],
+            root: controlRoot
+        )
+        expect(regranted.status == 0, "controller could not be regranted after permission revocation")
+        let replaced = try await runCLI(
+            cli,
+            arguments: ["grant", controllerID.uuidString, "jobs"],
+            root: controlRoot
+        )
+        expect(replaced.status == 0, "controller grant replacement failed")
+        let replacedProbe = UUID()
+        controller.send(DroneEnvelope(
+            kind: .activity,
+            requestID: replacedProbe,
+            sessionID: DroneSessionID()
+        ), on: connectionID)
+        try await expectUnauthorized(replacedProbe, observed: observed)
+        let restored = try await runCLI(
+            cli,
+            arguments: ["grant", controllerID.uuidString, "terminal"],
+            root: controlRoot
+        )
+        expect(restored.status == 0, "controller terminal grant was not restored")
+        try await service.revokeController(other.controllerID)
+        try await expectTerminalGrant(controller: controller, observed: observed)
+        await service.revokeControllerGrants(controllerID, permissions: .terminal)
+
+        let catalogURL = root.appendingPathComponent("state/terminals/terminals.json")
+        let catalog = (try? Data(contentsOf: catalogURL)) ?? Data()
+        for key in deniedCreateKeys {
+            expect(!catalog.contains(Data(key.utf8)), "denied create reached terminal idempotency state")
+        }
+        for requestID in deniedCreateRequests {
+            expect(
+                observed.createdSession(requestID: requestID) == nil
+                    && other.observed.createdSession(requestID: requestID) == nil,
+                "denied create released a session"
+            )
+        }
     }
 
     private static func verifyOwnerControl(service: DroneWorkerService, port: UInt16, workspace: URL) async throws {
@@ -790,10 +1025,34 @@ enum DroneWorkerProof {
         } catch DroneProtocolError.unauthorized {}
     }
 
+    private static func expectTerminalGrant(
+        controller: DroneLANTransport,
+        observed: ProofObserved
+    ) async throws {
+        guard let connectionID = observed.connectionID else {
+            throw ProofError.failed("grant probe lost authenticated connection")
+        }
+        let requestID = UUID()
+        controller.send(DroneEnvelope(
+            kind: .activity,
+            requestID: requestID,
+            sessionID: DroneSessionID()
+        ), on: connectionID)
+        try await expectError(requestID, code: "remoteRejected", observed: observed)
+    }
+
     private static func expectUnauthorized(_ requestID: UUID, observed: ProofObserved) async throws {
+        try await expectError(requestID, code: "unauthorized", observed: observed)
+    }
+
+    private static func expectError(
+        _ requestID: UUID,
+        code: String,
+        observed: ProofObserved
+    ) async throws {
         let response = try await waitForResponse(requestID, kind: .error, observed: observed)
-        guard case .error(let error) = response.body, error.code == "unauthorized" else {
-            throw ProofError.failed("expected authorization denial")
+        guard case .error(let error) = response.body, error.code == code else {
+            throw ProofError.failed("expected \(code) error")
         }
     }
 

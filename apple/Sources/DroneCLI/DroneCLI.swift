@@ -31,6 +31,8 @@ enum DroneCLIUsageError: String, Error {
 struct DroneCLI {
     static let usage = """
     usage: drone <install|uninstall|start|stop|restart|status|doctor|pairings|approve|reject|controllers|version>
+           drone grant <controller-uuid> <terminal,files,jobs,git>
+           drone revoke-grants <controller-uuid> <terminal,files,jobs,git>
            drone grant-tools <controller-uuid> <workspace-uuid> <files,jobs,git> <seconds:1-900>
            drone revoke <controller-uuid>
     """
@@ -46,7 +48,7 @@ struct DroneCLI {
             print(Self.usage)
             return
         }
-        if ["controllers", "grant-tools", "revoke"].contains(command) {
+        if ["controllers", "grant", "revoke-grants", "grant-tools", "revoke"].contains(command) {
             try runOwnerCommand(arguments)
             return
         }
@@ -117,6 +119,8 @@ struct DroneCLI {
             print(String(decoding: try DroneControlCodec.encode(lease), as: UTF8.self))
         case "controllers":
             for controller in response.controllers ?? [] { print(controller.uuidString) }
+        case "grant": print("granted")
+        case "revoke-grants": print("grants revoked")
         case "revoke": print("revoked")
         default: throw DroneCLIUsageError.unknownCommand
         }

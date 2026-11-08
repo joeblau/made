@@ -158,6 +158,35 @@ final class DroneLifecycleTests: XCTestCase {
         XCTAssertTrue(DroneVersion.report.contains("execution opt-in"))
     }
 
+    func testControllerGrantOwnerCommandsValidateExactPermissionSets() throws {
+        let controller = UUID()
+        for command in ["grant", "revoke-grants"] {
+            let request = try DroneOwnerCommand.parse([command, controller.uuidString, "terminal,jobs"])
+            XCTAssertEqual(request.command, command)
+            XCTAssertEqual(request.controllerID, controller)
+            XCTAssertEqual(request.permissions, ["terminal", "jobs"])
+            XCTAssertNil(request.workspaceID)
+            XCTAssertNil(request.lifetimeSeconds)
+            try request.validate()
+        }
+        let toolLease = try DroneOwnerCommand.parse([
+            "grant-tools", controller.uuidString, "00000000-0000-0000-0000-000000000001", "files,git", "60",
+        ])
+        XCTAssertEqual(toolLease.permissions, ["files", "git"])
+        XCTAssertEqual(toolLease.lifetimeSeconds, 60)
+
+        for arguments in [
+            ["grant", controller.uuidString, ""],
+            ["grant", controller.uuidString, "terminal,terminal"],
+            ["grant", controller.uuidString, "terminal,unknown"],
+            ["grant", controller.uuidString, "terminal", "extra"],
+            ["revoke-grants", "not-a-uuid", "terminal"],
+            ["revoke-grants", controller.uuidString, "jobs", "60"],
+        ] {
+            XCTAssertThrowsError(try DroneOwnerCommand.parse(arguments))
+        }
+    }
+
     func testUnixSocketPathsAreBoundedBeforeAllocation() {
         let longRoot = temporaryRoot.appendingPathComponent(String(repeating: "x", count: 120))
         let paths = DronePaths(environment: [
