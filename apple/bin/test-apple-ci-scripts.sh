@@ -8,19 +8,23 @@ APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/apple-ci-scripts-test.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/apple/bin/lib" "$work/tools"
-cp "$APPLE_ROOT/bin/build-ci.sh" "$APPLE_ROOT/bin/test.sh" "$work/apple/bin/"
-cp "$APPLE_ROOT/bin/lib/xcodebuild-ci.sh" "$work/apple/bin/lib/"
+cp "$APPLE_ROOT/bin/build-ci.sh" "$APPLE_ROOT/bin/test.sh" "$APPLE_ROOT/bin/benchmark-ci.sh" "$work/apple/bin/"
+cp "$APPLE_ROOT/bin/lib/xcodebuild-ci.sh" "$APPLE_ROOT/bin/lib/xcodebuild-benchmark.sh" "$work/apple/bin/lib/"
 export CI_TEST_LOG="$work/calls"
 export CI_TEST_ACTIONS="$work/actions"
 export PATH="$work/tools:$PATH"
 export TMPDIR="$work/tmp"
 mkdir -p "$TMPDIR"
-unset BLAU_DERIVED_DATA BLAU_SOURCE_PACKAGES
+unset BLAU_DERIVED_DATA BLAU_SOURCE_PACKAGES BLAU_CI_BENCHMARK_DIR BLAU_CI_BENCHMARK_XCODEBUILD
 export IOS_SIMULATOR_UDID=00000000-0000-0000-0000-000000000000
 export IPAD_SIMULATOR_UDID=11111111-1111-1111-1111-111111111111
 
 cat > "$work/tools/xcodebuild" <<'TOOL'
 #!/bin/bash
+if [[ "${1:-}" == -version ]]; then
+  printf 'Xcode 27.1\nBuild version 17B100\n'
+  exit 0
+fi
 printf 'xcodebuild DISABLE_SWIFTLINT=%s %s\n' "${DISABLE_SWIFTLINT:-}" "$*" >> "$CI_TEST_LOG"
 action="$1"
 derived=""
@@ -39,6 +43,17 @@ if [[ "$action" == build-for-testing ]]; then
   mkdir -p "$derived/Build/Products"
   touch "$derived/Build/Products/${scheme}_iphonesimulator27.0-arm64-x86_64.xctestrun"
 fi
+if [[ "$action" != test-without-building ]]; then
+  case "$scheme" in
+    Pilot|PilotTests|Copilot|SharedTests|DroneTests) printf 'SwiftCompile normal arm64 %s.swift\n' "$scheme" ;;
+  esac
+  case "$scheme" in
+    Pilot|DroneTools|Copilot|SharedTests|PlotterTests|DroneTests) printf 'CompileC %s.c\n' "$scheme" ;;
+  esac
+  [[ "$scheme" == Plotter ]] && printf 'SwiftCompile normal arm64 Plotter.swift\n'
+fi
+[[ "$scheme" == "${CI_TEST_SLEEP_SCHEME:-}" ]] && sleep 1
+exit 0
 TOOL
 cat > "$work/tools/xcrun" <<'TOOL'
 #!/bin/bash
@@ -211,5 +226,72 @@ reset_log
 BLAU_DERIVED_DATA="$work/custom" "$work/apple/bin/build-ci.sh"
 BLAU_DERIVED_DATA="$work/custom" "$work/apple/bin/test.sh" pilot
 expect_calls 3 "-derivedDataPath $work/custom/macos-debug "
+
+# The opt-in benchmark strips quiet logging, counts every platform's compile
+# tasks, and retains the same build-for-testing/test-without-building order.
+reset_log
+evidence="$work/benchmark evidence"
+(
+  cd "$work"
+  CI_TEST_SLEEP_SCHEME=PilotTests "$work/apple/bin/benchmark-ci.sh" "$evidence"
+)
+expect_calls 10 '^xcodebuild '
+expect_calls 0 ' -quiet '
+canonical_evidence="$(cd "$evidence" && pwd)"
+[[ "$(grep -cF -- "-derivedDataPath $canonical_evidence/derived-data/" "$CI_TEST_LOG" || true)" == 10 ]] ||
+  fail "benchmark did not isolate DerivedData: $(cat "$CI_TEST_LOG")"
+expect_actions 'build Pilot
+build DroneTools
+build Copilot
+build Plotter
+test PilotTests
+build-for-testing SharedTests
+test-without-building SharedTests
+build-for-testing PlotterTests
+test-without-building PlotterTests
+test DroneTests'
+awk -F '\t' '
+  $1 == "build" {
+    build = ($2 == 6 && $3 == 4 && $4 == 5 && $5 == 9 && $7 == 0)
+  }
+  $1 == "test" {
+    test = ($2 == 4 && $3 == 2 && $4 == 1 && $5 == 3 && $6 >= 1 && $7 == 0)
+  }
+  END { exit !(build && test) }
+' "$evidence/totals.tsv" || fail "incorrect benchmark phase totals: $(cat "$evidence/totals.tsv")"
+awk -F '\t' '
+  $1 == "build" { build = ($3 == 0) }
+  $1 == "test" { test = ($2 >= 1 && $3 == 0) }
+  END { exit !(build && test) }
+' "$evidence/steps.tsv" || fail "incorrect complete-step wall times: $(cat "$evidence/steps.tsv")"
+awk -F '\t' '
+  NR > 1 && $8 != 0 { exit 1 }
+  $2 == "test-without-building" && ($3 == "SharedTests" || $3 == "PlotterTests") && $6 == 0 { mobile += 1 }
+  END { exit mobile != 2 }
+' "$evidence/commands.tsv" || fail "mobile test-without-building benchmark records are incorrect"
+while IFS=$'\t' read -r phase _ _ _ _ _ _ status log; do
+  [[ "$phase" == phase ]] && continue
+  [[ -f "$evidence/$log" ]] || fail "missing non-quiet benchmark log: $log"
+done < "$evidence/commands.tsv"
+[[ "$(wc -l < "$evidence/commands.tsv" | tr -d ' ')" == 11 ]] || fail "expected ten benchmark command records"
+status=0
+(cd "$work" && "$work/apple/bin/benchmark-ci.sh" "$evidence") 2>/dev/null || status=$?
+[[ "$status" == 2 ]] || fail "an existing evidence directory must reject a non-clean run"
+expect_calls 10 '^xcodebuild '
+
+# Benchmark logging preserves xcodebuild's failure status, so a failed mobile
+# build cannot fall through to execution of test-without-building.
+reset_log
+failed_evidence="$work/failed-benchmark"
+status=0
+(cd "$work" && CI_TEST_FAIL_ACTION=build-for-testing "$work/apple/bin/benchmark-ci.sh" "$failed_evidence") >/dev/null 2>&1 || status=$?
+[[ "$status" == 65 ]] || fail "benchmark hid a build-for-testing failure: $status"
+expect_calls 0 ' test-without-building '
+awk -F '\t' '
+  $2 == "build-for-testing" && $3 == "SharedTests" && $8 == 65 { failed = 1 }
+  END { exit !failed }
+' "$failed_evidence/commands.tsv" || fail "failed benchmark command was not recorded"
+awk -F '\t' '$1 == "build" { exit $7 == 1 ? 0 : 1 }' "$failed_evidence/totals.tsv" ||
+  fail "failed benchmark phase total was not recorded"
 
 printf 'Apple CI script orchestration checks passed.\n'
