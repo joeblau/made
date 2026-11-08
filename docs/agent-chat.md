@@ -535,9 +535,12 @@ Picking a model on another provider switches the pane to that agent (as a
 provider switch always did) and selects the model once the new session is
 ready, if it still advertises it; otherwise the composer says it is no longer
 offered. Picking another model on the agent that is still starting replaces
-the pending choice, so the latest pick is the one applied. A provider that has
-never run shows one row, "Start <Provider> to see its models", which switches
-to it.
+the pending choice, so the latest pick is the one applied. Opening the picker
+automatically discovers missing provider catalogs through the installed ACP
+agents. A loading row is replaced with selectable models as soon as discovery
+finishes, without switching the active provider or modifying the draft or
+conversation. Failed discovery offers a retry row with the setup/error detail
+in its tooltip. Closing the picker cancels outstanding discovery.
 
 A row for the running agent, on its own tab or under Favorites, is enabled only
 while the session can change models (ready, not mid-turn or mid-change) and
@@ -560,7 +563,13 @@ included, require an idle session.
 reasoning levels are cached in `UserDefaults` under
 `agentChat.modelCatalog.<agent>` (at most 200 models and 64 KiB, descriptions
 dropped first; corrupt or oversized data is ignored) so other providers' tabs
-can list models without launching them. The cache stores only what the agent
+can list models immediately on subsequent opens. Missing catalogs are loaded
+using a separate short-lived connection (`initialize`, then `session/new`),
+without a prompt, configuration change, history replay, or saved pane session
+ID. Discovery uses the chat launcher and existing authentication, supports
+advertised silent authentication, bounds requests to 45 seconds each, and
+closes its process on success, failure, timeout, or cancellation. Interactive
+sign-in remains in the terminal. The cache stores only what the agent
 advertised; Cockpit does not maintain a hard-coded catalog or modify
 authentication to select a model, and the agent may still refuse a cached
 model. Favorites live under `agentChat.favoriteModels` as an ordered list of

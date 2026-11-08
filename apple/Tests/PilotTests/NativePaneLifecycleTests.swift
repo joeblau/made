@@ -43,6 +43,77 @@ final class NativePaneLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testHiddenTerminalStripListsFastCommandControlsVertically() throws {
+        let terminal = Pane(kind: .terminal, sortOrder: 0)
+        let editor = Pane(kind: .editor, sortOrder: 1)
+        let workspace = Workspace(name: "Strip")
+        workspace.panes = [terminal, editor]
+        terminal.workspace = workspace
+        editor.workspace = workspace
+        workspace.selectedPaneID = editor.id
+        let cache = CockpitPaneControllerCache()
+        defer { cache.closeAll() }
+        let presentation = CockpitWorkspaceViewController(
+            workspace: workspace, projectID: workspace.id, surface: .main, cache: cache,
+            factory: { _, _ in LifecyclePaneController() }, onDrop: { _, _ in false })
+        workspace.collapsePane(terminal)
+        presentation.view.frame = NSRect(x: 0, y: 0, width: 1200, height: 700)
+        presentation.refresh(isActive: true)
+        presentation.view.layoutSubtreeIfNeeded()
+
+        func control(_ id: String) throws -> NSView {
+            var stack: [NSView] = [presentation.view]
+            while let view = stack.popLast() {
+                if view.accessibilityIdentifier() == id, !view.isHiddenOrHasHiddenAncestor { return view }
+                stack.append(contentsOf: view.subviews)
+            }
+            return try XCTUnwrap(NSView?.none, "\(id) not found in the hidden strip")
+        }
+        let play = try control("terminal.fast-command.play")
+        let stop = try control("terminal.fast-command.stop")
+        let playFrame = play.convert(play.bounds, to: presentation.view)
+        let stopFrame = stop.convert(stop.bounds, to: presentation.view)
+        XCTAssertEqual(playFrame.midX, stopFrame.midX, accuracy: 1, "Controls share one column")
+        XCTAssertGreaterThan(abs(playFrame.midY - stopFrame.midY), 20, "Play and Stop are stacked vertically")
+        XCTAssertLessThan(playFrame.maxX, 80, "Controls live in the hidden pane's narrow strip")
+    }
+
+    @MainActor
+    func testClosingTheLastPaneLeavesTheNewTabPage() async throws {
+        let (container, workspace, pane) = try singlePaneFixture()
+        defer { withExtendedLifetime(container) {} }
+        XCTAssertTrue(workspace.canClosePane(pane))
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            workspace.requestClosePane(pane) {
+                defer { continuation.resume() }
+                return true
+            }
+        }
+        // The removal runs right after the readiness check on the main actor.
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while workspace.panes.contains(where: { $0 === pane }), ContinuousClock.now < deadline { await Task.yield() }
+        let opening = try XCTUnwrap(workspace.panes.first)
+        defer { opening.isChoosingMode = false }
+        XCTAssertEqual(workspace.panes.count, 1)
+        XCTAssertNotEqual(opening.id, pane.id)
+        XCTAssertTrue(opening.isChoosingMode)
+        XCTAssertEqual(workspace.selectedPaneID, opening.id)
+        XCTAssertFalse(workspace.canClosePane(opening), "Closing the last New Tab would only bring it back")
+    }
+
+    @MainActor
+    func testEmptyWorkspaceShowsNewTab() throws {
+        let (container, workspace, pane) = try singlePaneFixture()
+        defer { withExtendedLifetime(container) {} }
+        XCTAssertNil(workspace.ensureNewTabWhenEmpty(), "A workspace with panes is left alone")
+        XCTAssertTrue(workspace.removePane(pane, allowEmpty: true))
+        let opening = try XCTUnwrap(workspace.ensureNewTabWhenEmpty())
+        defer { opening.isChoosingMode = false }
+        XCTAssertTrue(opening.isChoosingMode)
+        XCTAssertEqual(workspace.panes.map(\.id), [opening.id])
+    }
+
+    @MainActor
     func testFailedFinalPaneRemovalRestoresMembershipAndSelection() throws {
         let (container, workspace, pane) = try singlePaneFixture()
         XCTAssertFalse(workspace.removePane(pane, allowEmpty: true, performSave: { _ in

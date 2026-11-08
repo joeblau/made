@@ -53,6 +53,7 @@ final class SimulatorSession {
     @ObservationIgnored private let logger = Logger(subsystem: "app.blau.pilot.simulator", category: "session")
 
     init() {
+        devices = MobileDeviceCache.shared.simulators ?? []
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.clear.cgColor
     }
@@ -74,6 +75,7 @@ final class SimulatorSession {
             switch result {
             case .success(let groups):
                 self.devices = groups
+                MobileDeviceCache.shared.record(simulators: groups)
                 self.lastError = nil
                 if self.status == .toolingMissing { self.status = .picking }
             case .toolingMissing:

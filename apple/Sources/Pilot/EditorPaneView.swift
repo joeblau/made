@@ -83,10 +83,13 @@ final class EditorPaneViewController: NSViewController, CockpitPanePresenting, C
     private let errorLabel = CockpitUI.label("")
     private let palette = NSVisualEffectView()
     private let searchField = NSSearchField()
+    /// Back to New Tab, offered until the first file opens.
+    private let backButton = NSButton()
     private let results = NSTableView()
     private let resultsScroll = NSScrollView()
     private let finderStatus = CockpitUI.label("", color: .secondaryLabelColor)
     private var paletteHeight: NSLayoutConstraint!
+    private var searchLeading: NSLayoutConstraint!
 
     convenience init(pane: Pane, rootPath: String?) {
         let state = pane.editorState ?? EditorState()
@@ -499,6 +502,19 @@ final class EditorPaneViewController: NSViewController, CockpitPanePresenting, C
         searchField.delegate = self
         searchField.translatesAutoresizingMaskIntoConstraints = false
         palette.addSubview(searchField)
+        backButton.bezelStyle = .accessoryBarAction
+        backButton.isBordered = false
+        backButton.image = NSImage(systemSymbolName: "chevron.left", accessibilityDescription: "Back")
+        backButton.imagePosition = .imageOnly
+        backButton.contentTintColor = .secondaryLabelColor
+        backButton.target = self
+        backButton.action = #selector(returnToNewTab)
+        backButton.toolTip = "Back to New Tab (Esc)"
+        backButton.setAccessibilityLabel("Back to New Tab")
+        backButton.setAccessibilityIdentifier("editor.quick-open.back")
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        palette.addSubview(backButton)
+        searchLeading = searchField.leadingAnchor.constraint(equalTo: palette.leadingAnchor, constant: 10)
         results.addTableColumn(NSTableColumn(identifier: NSUserInterfaceItemIdentifier("file")))
         results.headerView = nil
         results.rowHeight = 42
@@ -527,7 +543,10 @@ final class EditorPaneViewController: NSViewController, CockpitPanePresenting, C
             palette.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             palette.topAnchor.constraint(equalTo: view.topAnchor, constant: 48),
             searchField.topAnchor.constraint(equalTo: palette.topAnchor, constant: 10),
-            searchField.leadingAnchor.constraint(equalTo: palette.leadingAnchor, constant: 10),
+            searchLeading,
+            backButton.leadingAnchor.constraint(equalTo: palette.leadingAnchor, constant: 8),
+            backButton.centerYAnchor.constraint(equalTo: searchField.centerYAnchor),
+            backButton.widthAnchor.constraint(equalToConstant: 24),
             searchField.trailingAnchor.constraint(equalTo: palette.trailingAnchor, constant: -10),
             resultsScroll.topAnchor.constraint(equalTo: searchField.bottomAnchor, constant: 8),
             resultsScroll.leadingAnchor.constraint(equalTo: palette.leadingAnchor, constant: 6),
@@ -539,9 +558,24 @@ final class EditorPaneViewController: NSViewController, CockpitPanePresenting, C
         ])
     }
 
+    /// True until this pane opens its first file: backing out then undoes
+    /// the Editor choice instead of leaving an empty editor behind.
+    private var canReturnToNewTab: Bool {
+        pane != nil && session.document == nil && state.filePath.isEmpty
+    }
+
+    @objc private func returnToNewTab() {
+        guard canReturnToNewTab, let pane else { return }
+        finding = false
+        palette.isHidden = true
+        pane.returnToNewTab()
+    }
+
     private func presentFinder(resetQuery: Bool) {
         finding = true
         palette.isHidden = false
+        backButton.isHidden = !canReturnToNewTab
+        searchLeading.constant = canReturnToNewTab ? 36 : 10
         emptyView.isHidden = true
         if resetQuery {
             searchField.stringValue = ""
@@ -554,6 +588,7 @@ final class EditorPaneViewController: NSViewController, CockpitPanePresenting, C
     }
 
     private func dismissFinder() {
+        if canReturnToNewTab { returnToNewTab(); return }
         guard session.document != nil else { return }
         finding = false
         palette.isHidden = true

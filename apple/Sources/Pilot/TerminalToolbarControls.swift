@@ -65,6 +65,7 @@ final class TerminalFastCommandToolbarActions: NSView {
     private let play = NSButton(image: NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Run Fast Command")!, target: nil, action: nil)
     private let stopButton = NSButton(image: NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Stop Terminal Process")!, target: nil, action: nil)
     private let spinner = NSProgressIndicator()
+    private let stack = NSStackView()
     private var activity: TerminalProcessActivity = .idle
     private var pollingTask: Task<Void, Never>?
     private var actionTask: Task<Void, Never>?
@@ -95,26 +96,37 @@ final class TerminalFastCommandToolbarActions: NSView {
         spinner.style = .spinning
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
-        let stack = NSStackView(views: [play, stopButton, spinner])
+        for view in [play, stopButton, spinner] { stack.addArrangedSubview(view) }
         // The spinner only takes space while an action runs.
         stack.detachesHiddenViews = true
         stack.spacing = 2
         stack.orientation = .horizontal
-        stack.translatesAutoresizingMaskIntoConstraints = false
+        stack.frame = bounds
+        stack.autoresizingMask = [.width, .height]
         addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-            heightAnchor.constraint(greaterThanOrEqualTo: stack.heightAnchor),
-        ])
         NotificationCenter.default.addObserver(self, selector: #selector(refreshControls), name: UserDefaults.didChangeNotification, object: nil)
         refreshControls()
     }
 
     required init?(coder: NSCoder) { nil }
 
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 28) }
+    /// Horizontal in the terminal toolbar; vertical in a hidden pane's strip.
+    var orientation: NSUserInterfaceLayoutOrientation {
+        get { stack.orientation }
+        set {
+            guard stack.orientation != newValue else { return }
+            stack.orientation = newValue
+            invalidateIntrinsicContentSize()
+        }
+    }
+
+    /// Length along `orientation` for the visible buttons (plus the spinner
+    /// while an action runs).
+    var preferredLength: CGFloat { isRunningAction ? 28 * 3 + 4 : 28 * 2 + 2 }
+
+    override var intrinsicContentSize: NSSize {
+        orientation == .horizontal ? NSSize(width: preferredLength, height: 28) : NSSize(width: 28, height: preferredLength)
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -136,10 +148,16 @@ final class TerminalFastCommandToolbarActions: NSView {
     }
 
     @objc private func refreshControls() {
-        play.isEnabled = !isRunningAction && TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: pane.id)) != nil
+        let command = TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: pane.id))
+        play.isEnabled = !isRunningAction && command != nil
+        play.toolTip = command.map { "Stop the active process and run \($0)" } ?? "Set a Fast Command in the terminal toolbar"
         stopButton.isEnabled = !isRunningAction && activity == .running
         if isRunningAction { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-        spinner.isHidden = !isRunningAction
+        if spinner.isHidden == isRunningAction {
+            spinner.isHidden = !isRunningAction
+            invalidateIntrinsicContentSize()
+            superview?.needsLayout = true
+        }
     }
 
     @objc private func run() {
@@ -242,6 +260,52 @@ enum TerminalCloseConfirmation {
 }
 
 extension Workspace {
+    /// Whether the user can close this pane: any pane while others remain,
+    /// and the last one only when it isn't already the New Tab page (closing
+    /// it would just bring the same page back).
+    func canClosePane(_ pane: Pane) -> Bool {
+        panes.contains(where: { $0 === pane }) && (panes.count > 1 || !pane.isChoosingMode)
+    }
+
+    /// Opens on the New Tab page instead of an automatic terminal. For a
+    /// freshly created workspace, whose only pane is the initial terminal.
+    func startOnNewTab() {
+        guard panes.count == 1, let pane = panes.first else { return }
+        pane.isChoosingMode = true
+        if frontmostTerminalPaneID == pane.id { frontmostTerminalPaneID = nil }
+    }
+
+    /// A workspace with no panes shows the New Tab page.
+    @discardableResult
+    func ensureNewTabWhenEmpty() -> Pane? {
+        guard panes.isEmpty else { return nil }
+        return addPane(kind: .terminal, side: .right, chooseModeOnOpen: true)
+    }
+
+    /// User-initiated close. Closing the last pane leaves the New Tab page in
+    /// its place, so a workspace is never blank.
+    @MainActor
+    func requestClosePane(_ pane: Pane, canRemove: @escaping @MainActor () -> Bool = { true }) {
+        guard canClosePane(pane) else { return }
+        Task {
+            await TerminalCloseConfirmation.perform(panes: [pane]) {
+                // The user can change workspaces or move panes while the
+                // activity check or confirmation sheet is pending.
+                guard self.canClosePane(pane), canRemove() else { return }
+                guard self.panes.count == 1 else {
+                    self.removePane(pane)
+                    return
+                }
+                let placeholder = self.addPane(kind: .terminal, side: .right, chooseModeOnOpen: true)
+                if !self.removePane(pane) {
+                    // Keep the original pane; drop the unused placeholder.
+                    self.removePane(placeholder)
+                    placeholder.isChoosingMode = false
+                }
+            }
+        }
+    }
+
     @MainActor
     func requestRemovePane(_ pane: Pane, allowEmpty: Bool = false,
                            canRemove: @escaping @MainActor () -> Bool = { true }) {

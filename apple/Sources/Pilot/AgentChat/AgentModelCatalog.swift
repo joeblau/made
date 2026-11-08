@@ -3,7 +3,8 @@ import Foundation
 /// The models each agent last advertised, and the user's favorite models
 /// across agents, in `UserDefaults`.
 ///
-/// A snapshot is written whenever a session's configuration arrives, so the
+/// A snapshot is written when a session or background discovery advertises
+/// its configuration, so the
 /// model picker can list another provider's models without launching it. It
 /// is a cache of what the agent itself advertised, never a hard-coded list:
 /// selecting a cached model still goes through the agent, which may refuse.

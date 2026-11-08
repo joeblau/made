@@ -106,6 +106,9 @@ final class AndroidDeviceSession {
 
     init(target: AndroidPaneTarget? = nil) {
         self.target = target
+        if let cached = MobileDeviceCache.shared.androidDevices {
+            devices = target.map { t in cached.filter(t.includes) } ?? cached
+        }
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = NSColor.clear.cgColor
         recorder.onSegmentFinished = { [weak self] url, errorMessage in
@@ -172,6 +175,7 @@ final class AndroidDeviceSession {
             self.bootableAVDs = scan.bootableAVDs
             switch scan.devices {
             case .success(let devices):
+                MobileDeviceCache.shared.record(androidDevices: devices)
                 self.devices = target.map { t in devices.filter(t.includes) } ?? devices
                 self.lastError = nil
                 if self.status == .adbMissing { self.status = .picking }

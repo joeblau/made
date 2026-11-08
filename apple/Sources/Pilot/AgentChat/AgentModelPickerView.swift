@@ -18,7 +18,7 @@ struct AgentModelPickerState: Equatable {
         var group: String?
         var isCurrent: Bool
         var isFavorite: Bool
-        /// "Start <Provider> to see its models": no keycap or favorite toggle.
+        /// Loading/retry status: no keycap or favorite toggle.
         var isPlaceholder: Bool
         /// false dims the row and ignores clicks and ⌘N even when the picker
         /// is editable (a running-agent model the session cannot select now).
@@ -258,10 +258,9 @@ final class AgentModelPickerViewController: NSViewController, NSSearchFieldDeleg
         searchField.placeholderAttributedString = NSAttributedString(string: "Search models…", attributes: [
             .font: font, .foregroundColor: AgentChatPalette.color(.textMuted),
         ])
-        if let cell = searchField.cell as? NSSearchFieldCell, let button = cell.searchButtonCell {
-            button.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 14 * metrics.scale, weight: .regular))
-        }
+        // The borderless header uses text-only search. AppKit's search icon
+        // otherwise overlaps the placeholder at the composer's larger font.
+        (searchField.cell as? NSSearchFieldCell)?.searchButtonCell = nil
     }
 
     private func renderRail() {

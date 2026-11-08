@@ -393,7 +393,8 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     var canCloseSelectedPane: Bool {
         if surface == .main, store.isNotesMode { return store.selectedNote != nil }
         if surface == .main, store.isRemoteDesktopMode { return store.selectedRemoteConnection != nil }
-        return selectedPane != nil && ((selectedWorkspace?.panes.count ?? 0) > 1 || surface == .extension)
+        guard let pane = selectedPane, let workspace = selectedWorkspace else { return false }
+        return workspace.canClosePane(pane)
     }
 
     func closeSelectedPane() {
@@ -413,11 +414,10 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 
     func closePane(_ pane: Pane) {
-        guard let workspace = pane.workspace,
-              workspace.panes.count > 1 || surface == .extension else { return }
+        guard let workspace = pane.workspace, workspace.canClosePane(pane) else { return }
         paneCache.prepareToClose(ids: [pane.id]) { [weak self, weak pane, weak workspace] allowed in
             guard allowed, let self, let pane, let workspace, workspace.panes.contains(where: { $0 === pane }) else { return }
-            workspace.requestRemovePane(pane, allowEmpty: self.surface == .extension) { [weak self] in
+            workspace.requestClosePane(pane) { [weak self] in
                 self?.paneCache.validateCloseReadiness(ids: [pane.id]) ?? false
             }
             self.scheduleRefresh()

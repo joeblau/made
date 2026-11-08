@@ -173,6 +173,13 @@ final class AgentChatSession {
 
     func startIfNeeded() { if phase == .idle { start() } }
 
+    /// Uses the same installed-agent environment as chat, without switching
+    /// this pane's provider or touching its conversation/configuration.
+    func discoverModels(for target: ChatAgent) async throws -> ACPSessionConfig {
+        guard let workingDirectory else { throw ChatAgentSetupIssue.noWorkingDirectory }
+        return try await AgentModelDiscovery.load(agent: target, workingDirectory: workingDirectory, resolveLaunch: resolveLaunch)
+    }
+
     func setWorkingDirectory(_ directory: String?) {
         guard directory != workingDirectory, !phase.isRunning else { return }
         workingDirectory = directory

@@ -13,63 +13,6 @@ enum DeviceConnectionStatus: Sendable, Equatable {
     case failed(String)
 }
 
-struct IOSCaptureDevice: Identifiable, Sendable, Equatable {
-    let id: String
-    let name: String
-    let modelID: String
-
-    var detail: String? {
-        let trimmedModel = modelID.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedModel.isEmpty,
-              trimmedModel.localizedCaseInsensitiveCompare(name) != .orderedSame else { return nil }
-        return trimmedModel
-    }
-}
-
-/// Conservative admission policy for the CMIO sources shown in the iOS
-/// picker. AVFoundation does not expose a public "this is an iOS screen"
-/// flag, so explicit iPhone/iPad identity metadata is the strongest signal.
-/// A generic muxed source is admitted only when AVFoundation identifies its
-/// manufacturer as Apple and its transport as USB; this keeps ordinary capture
-/// cards and webcams out without dropping a renamed tethered iPhone whose
-/// display/model name is generic.
-enum IOSCaptureDiscoveryPolicy {
-    /// `kIOAudioDeviceTransportTypeUSB` (`'usb '`). `AVCaptureDevice` exposes
-    /// the value but AVFoundation does not provide a Swift-native enum for it.
-    private static let usbTransportType = Int32(bitPattern: 0x7573_6220)
-
-    static func includes(
-        name: String,
-        modelID: String,
-        manufacturer: String,
-        isMuxed: Bool,
-        transportType: Int32
-    ) -> Bool {
-        let identity = "\(name) \(modelID)"
-        let identityWords = identity.components(separatedBy: CharacterSet.alphanumerics.inverted)
-        let hasIOSIdentity = identity.localizedCaseInsensitiveContains("iphone")
-            || identity.localizedCaseInsensitiveContains("ipad")
-            || identityWords.contains {
-                $0.localizedCaseInsensitiveCompare("ios") == .orderedSame
-            }
-        if hasIOSIdentity { return true }
-
-        let normalizedManufacturer = manufacturer.trimmingCharacters(in: .whitespacesAndNewlines)
-        return isMuxed
-            && normalizedManufacturer.localizedCaseInsensitiveCompare("Apple Inc.") == .orderedSame
-            && transportType == usbTransportType
-    }
-}
-
-enum IOSCaptureAudioPairingPolicy {
-    /// AVFoundation exposes no public relationship between separate video and
-    /// audio capture devices. Only identical unique IDs are authoritative;
-    /// names and model IDs are not unique when two phones are connected.
-    static func matches(videoUniqueID: String, audioUniqueID: String) -> Bool {
-        videoUniqueID == audioUniqueID
-    }
-}
-
 enum CaptureFrameError: LocalizedError, Equatable {
     case timedOut
     case cancelled
@@ -139,6 +82,8 @@ final class DeviceCaptureSession: NSObject {
     @ObservationIgnored private let selectionDefaults: UserDefaults
     @ObservationIgnored private let selectionPreferenceKey: String
     @ObservationIgnored private let selectionPreferenceNameKey: String
+    @ObservationIgnored private let deviceDiscovery: @Sendable () async -> DiscoveryResult
+    @ObservationIgnored private var discoveryGeneration = 0
     /// Drives the bounded rescan that catches an already-connected iPhone the
     /// one-shot discovery races against (see `scheduleRescan`).
     @ObservationIgnored private var rescanAttemptsRemaining = 0
@@ -225,13 +170,34 @@ final class DeviceCaptureSession: NSObject {
     /// device's real aspect ratio (issue #56).
     @ObservationIgnored private let coordinator = CaptureCoordinator()
 
-    init(paneID: UUID, defaults: UserDefaults = .standard) {
+    struct DiscoveryResult: @unchecked Sendable {
+        let attached: [AVCaptureDevice]
+        let options: [IOSCaptureDevice]
+    }
+
+    init(
+        paneID: UUID,
+        defaults: UserDefaults = .standard,
+        deviceDiscovery: (@Sendable () async -> DiscoveryResult)? = nil
+    ) {
+        // The system discovery seeds from, and writes back to, the app-wide
+        // cache so an already-connected iPhone lists the moment a picker opens.
+        if let deviceDiscovery {
+            self.deviceDiscovery = deviceDiscovery
+        } else {
+            self.deviceDiscovery = {
+                let result = await DeviceCaptureSession.loadDevices()
+                await MainActor.run { MobileDeviceCache.shared.record(appleDevices: result.options) }
+                return result
+            }
+        }
         selectionDefaults = defaults
         selectionPreferenceKey = Self.preferenceKey(for: paneID)
         selectionPreferenceNameKey = Self.preferenceNameKey(for: paneID)
         preferredDeviceUniqueID = defaults.string(forKey: selectionPreferenceKey)
         preferredDeviceName = defaults.string(forKey: selectionPreferenceNameKey)
         super.init()
+        if deviceDiscovery == nil, let cached = MobileDeviceCache.shared.appleDevices { devices = cached }
         Self.enableScreenCaptureDevices()
         audioPreview.volume = 1.0
         videoDataOutput.alwaysDiscardsLateVideoFrames = true
@@ -318,25 +284,32 @@ final class DeviceCaptureSession: NSObject {
     func refreshDevices() {
         guard !isRefreshing else { return }
         isRefreshing = true
-        let attached = Self.attachedScreenCaptureDevices()
-        devices = Self.sortedOptions(from: attached)
-        isRefreshing = false
-        lastError = nil
+        discoveryGeneration &+= 1
+        let generation = discoveryGeneration
+        Task {
+            let result = await deviceDiscovery()
+            guard generation == discoveryGeneration else { return }
+            devices = result.options
+            isRefreshing = false
+            lastError = nil
 
-        guard deviceUniqueID == nil, isStarted else { return }
-        guard let preferredDeviceUniqueID else {
-            status = .picking
-            return
-        }
-        if let preferred = attached.first(where: { $0.uniqueID == preferredDeviceUniqueID }) {
-            attach(preferred)
-        } else {
-            status = .picking
-            scheduleRescan()
+            guard deviceUniqueID == nil, isStarted else { return }
+            guard let preferredDeviceUniqueID else {
+                status = .picking
+                return
+            }
+            if let preferred = result.attached.first(where: { $0.uniqueID == preferredDeviceUniqueID }) {
+                attach(preferred)
+            } else {
+                status = .picking
+                scheduleRescan()
+            }
         }
     }
 
     func connect(_ option: IOSCaptureDevice) {
+        discoveryGeneration &+= 1
+        isRefreshing = false
         guard let device = Self.attachedScreenCaptureDevices().first(where: { $0.uniqueID == option.id }) else {
             status = .picking
             refreshDevices()
@@ -516,7 +489,7 @@ final class DeviceCaptureSession: NSObject {
     /// publishes USB-tethered iPhones as `AVCaptureDevice`s. This is the
     /// same flag QuickTime sets when it offers "iPhone" as a recording
     /// source. Idempotent — safe to call on every launch.
-    private static func enableScreenCaptureDevices() {
+    static func enableScreenCaptureDevices() {
         var address = CMIOObjectPropertyAddress(
             mSelector: CMIOObjectPropertySelector(kCMIOHardwarePropertyAllowScreenCaptureDevices),
             mScope: CMIOObjectPropertyScope(kCMIOObjectPropertyScopeGlobal),
@@ -613,7 +586,14 @@ final class DeviceCaptureSession: NSObject {
         }
     }
 
-    private static func attachedScreenCaptureDevices() -> [AVCaptureDevice] {
+    static func loadDevices() async -> DiscoveryResult {
+        await Task.detached(priority: .userInitiated) {
+            let attached = attachedScreenCaptureDevices()
+            return DiscoveryResult(attached: attached, options: sortedOptions(from: attached))
+        }.value
+    }
+
+    nonisolated private static func attachedScreenCaptureDevices() -> [AVCaptureDevice] {
         // The CMIO screen-capture pathway publishes the iPhone as an
         // `.external` device that normally delivers `.muxed` video+audio.
         // Continuity Camera (which streams the phone's camera, not its screen)
@@ -649,11 +629,11 @@ final class DeviceCaptureSession: NSObject {
         return Array(byUniqueID.values)
     }
 
-    private static func captureDeviceOption(_ device: AVCaptureDevice) -> IOSCaptureDevice {
+    nonisolated private static func captureDeviceOption(_ device: AVCaptureDevice) -> IOSCaptureDevice {
         IOSCaptureDevice(id: device.uniqueID, name: device.localizedName, modelID: device.modelID)
     }
 
-    private static func sortedOptions(from devices: [AVCaptureDevice]) -> [IOSCaptureDevice] {
+    nonisolated private static func sortedOptions(from devices: [AVCaptureDevice]) -> [IOSCaptureDevice] {
         devices.map(Self.captureDeviceOption).sorted {
             let nameOrder = $0.name.localizedCaseInsensitiveCompare($1.name)
             return nameOrder == .orderedSame ? $0.id < $1.id : nameOrder == .orderedAscending
@@ -665,7 +645,7 @@ final class DeviceCaptureSession: NSObject {
         return Self.attachedScreenCaptureDevices().first { $0.uniqueID == preferredDeviceUniqueID }
     }
 
-    private static func isEligibleIOSScreenCaptureDevice(_ device: AVCaptureDevice) -> Bool {
+    nonisolated private static func isEligibleIOSScreenCaptureDevice(_ device: AVCaptureDevice) -> Bool {
         guard device.deviceType != .continuityCamera else { return false }
         return IOSCaptureDiscoveryPolicy.includes(
             name: device.localizedName,
@@ -699,13 +679,6 @@ final class DeviceCaptureSession: NSObject {
             MainActor.assumeIsolated {
                 guard let self, self.isStarted, self.deviceUniqueID == nil,
                       !self.isCameraPermissionDenied else { return }
-                let attached = Self.attachedScreenCaptureDevices()
-                self.devices = Self.sortedOptions(from: attached)
-                guard let preferredDeviceUniqueID = self.preferredDeviceUniqueID,
-                      let device = attached.first(where: { $0.uniqueID == preferredDeviceUniqueID }) else {
-                    self.status = .picking
-                    return
-                }
                 // Only a genuine physical replug (not a re-enumeration mid-recovery)
                 // is a clean slate — clearing strikes while recovering would let a
                 // device that dies-and-re-enumerates every cycle dodge the thrash cap
@@ -716,7 +689,8 @@ final class DeviceCaptureSession: NSObject {
                 // Supersede any in-flight recovery re-attach so it can't fire a
                 // second, redundant attach() on the stream we're about to build.
                 self.cancelRecovery()
-                self.attach(device)
+                self.status = .picking
+                self.refreshDevices()
             }
         }
     }
@@ -956,6 +930,8 @@ final class DeviceCaptureSession: NSObject {
     }
 
     private func detach() {
+        discoveryGeneration &+= 1
+        isRefreshing = false
         cancelRescan()
         stopFailedRescan()
         // The watchdog only makes sense while attached; stopping it here covers

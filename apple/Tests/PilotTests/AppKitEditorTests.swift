@@ -102,6 +102,29 @@ struct AppKitEditorTests {
             == root.appendingPathComponent("Config.txt").resolvingSymlinksInPath())
     }
 
+    @Test("Esc or Back in an Editor with no file yet returns the pane to New Tab")
+    func editorBacksOutToNewTab() throws {
+        let pane = Pane(kind: .terminal)
+        pane.isChoosingMode = true
+        defer { pane.isChoosingMode = false }
+        let workspace = Workspace(name: "Back")
+        workspace.rootPath = FileManager.default.temporaryDirectory.path
+        pane.workspace = workspace
+        pane.openingPath = [.root]
+        #expect(pane.applyOpeningChoice(.editor))
+        #expect(pane.kind == .editor && !pane.isChoosingMode)
+
+        let editor = EditorPaneViewController(pane: pane, rootPath: workspace.rootPath)
+        defer { editor.closePane() }
+        editor.updatePresentation(isActive: true, isSelected: true)
+        let back = try #require(descendants(editor.view).first { $0.accessibilityIdentifier() == "editor.quick-open.back" })
+        #expect(!back.isHidden, "Back is offered before any file opens")
+        let search = try #require(descendants(editor.view).compactMap { $0 as? NSSearchField }.first)
+        #expect(editor.control(search, textView: NSTextView(), doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        #expect(pane.isChoosingMode, "Esc undoes the Editor choice")
+        #expect(pane.openingPath == [.root])
+    }
+
     @Test("Native find and replacement controls edit the real document with undo")
     func nativeFindAndReplace() async throws {
         let pane = await makePane(io: NativeEditorTestIO())

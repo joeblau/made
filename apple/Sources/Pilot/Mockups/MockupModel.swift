@@ -1,8 +1,7 @@
 import AppKit
 import Observation
 
-/// The two studios under Mock-ups: flat device frames for stills, and a 3D
-/// stage that animates a device for video.
+/// Photo and Video share the same device composition and 3D stage.
 enum MockupKind: String, CaseIterable, Identifiable {
     case photo
     case video
@@ -163,6 +162,9 @@ struct MockupFinish: Hashable {
     let resource: String
     /// USD variantSet selections, applied through a generated wrapper layer.
     var variants: [String: String] = [:]
+    /// For a model Apple publishes in one color only: retints its flat-colored
+    /// shell materials from the authored body tone to this finish's.
+    var recolor: MockupRecolor?
 }
 
 /// Devices the studios can frame (Apple's lineup as of 2026-11), each backed
@@ -262,6 +264,9 @@ enum MockupDevice: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The Sky Blue model's authored frame tone, rgb(0.68, 0.76, 0.81).
+    static let iPhoneAirBodyTone: UInt32 = 0xADC2CF
+
     var finishes: [MockupFinish] {
         switch self {
         case .iPhone18Pro, .iPhone18ProMax:
@@ -272,7 +277,14 @@ enum MockupDevice: String, CaseIterable, Identifiable {
             [("Star White", "Star_White", 0xEDEAE3), ("Night Sky", "Night_Sky", 0x1F2633)].map {
                 MockupFinish(name: $0.0, swatch: .init(hex: $0.2), resource: "iphone-duo", variants: ["Color": $0.1, "Pose": "Landscape"])
             }
-        case .iPhoneAir: [MockupFinish(name: "Sky Blue", swatch: .init(hex: 0xC9D9E6), resource: "iphone-air")]
+        case .iPhoneAir:
+            // Apple publishes the Air's AR model in Sky Blue only; the other
+            // finishes retint its flat shell materials.
+            [("Sky Blue", 0xC9D9E6, nil), ("Light Gold", 0xE6D9C1, 0xD9CCB4),
+             ("Cloud White", 0xF0EFEB, 0xE0DFDA), ("Space Black", 0x2F2F31, 0x2C2C2E)].map { (name: String, swatch: UInt32, body: UInt32?) in
+                MockupFinish(name: name, swatch: .init(hex: swatch), resource: "iphone-air",
+                             recolor: body.map { MockupRecolor(source: Self.iPhoneAirBodyTone, target: $0) })
+            }
         case .iPhone17: [MockupFinish(name: "Lavender", swatch: .init(hex: 0xC9BCE0), resource: "iphone-17")]
         case .iPhone17e:
             [MockupFinish(name: "Soft Pink", swatch: .init(hex: 0xEBCFCF), resource: "iphone-17e-soft-pink"),
@@ -296,19 +308,41 @@ final class MockupDocument {
     var kind: MockupKind = .photo
     var aspect: MockupAspectRatio = .default
     var background: MockupBackground = .solid(MockupColor(hex: 0x7CF866, space: .displayP3))
-    var device: MockupDevice = .iPhone18Pro { didSet { if oldValue != device { finishIndex = 0 } } }
-    /// Static framing the motion presets play around (radians).
+    var device: MockupDevice = .iPhone18Pro {
+        didSet {
+            if oldValue != device { finishIndex = 0 }
+            if !availableLayouts.contains(layout) { selectLayout(.centered) }
+        }
+    }
+    var layout: MockupLayout = .centered {
+        didSet {
+            if !availableLayouts.contains(layout) { layout = .centered }
+            selectedScreen = min(selectedScreen, layout.screenCount - 1)
+        }
+    }
+    var selectedScreen = 0
+    /// Stable slots retain their content when a smaller layout hides them.
+    private var screenshots: [NSImage?] = [nil, nil, nil]
+    /// Static framing and the values captured by a keyframe (angles in radians).
     var tiltX: CGFloat = 0
     var tiltY: CGFloat = 0
+    var positionX: CGFloat = 0
+    var positionY: CGFloat = 0
     /// 0 closed … 1 open, for the Duo and MacBook.
     var openAmount: CGFloat = 1
     var finishIndex = 0
-    var screenshot: NSImage?
+    var screenshot: NSImage? {
+        get { screenshot(at: selectedScreen) }
+        set { setScreenshot(newValue, at: selectedScreen) }
+    }
     /// Degrees of in-plane rotation for photo mode.
     var rotation: CGFloat = 0
     /// Device height as a fraction of the canvas height.
     var scale: CGFloat = 0.82
     var motion: MockupMotion = .turntable
+    var timeline = MockupTimeline.preset(.turntable, base: MockupPose())
+    var playhead: Double = 0
+    var selectedKeyframeID: MockupKeyframe.ID?
     var isPlaying = true
 
     var finish: MockupFinish {
@@ -316,10 +350,143 @@ final class MockupDocument {
         return finishes[min(max(finishIndex, 0), finishes.count - 1)]
     }
 
-    /// The user's static pose; presets add their motion on top.
+    var devices: [MockupDevice] { layout.devices(for: device) }
+    var availableLayouts: [MockupLayout] { MockupLayout.available(for: device) }
+    var selectedKeyframe: MockupKeyframe? { timeline.keyframes.first { $0.id == selectedKeyframeID } }
+    var selectedKeyframeStart: Double? {
+        selectedKeyframeID.flatMap { timeline.startTime(for: $0) }
+    }
+    var canEditSelectedKeyframe: Bool {
+        kind == .video && selectedKeyframeStart.map { abs($0 - playhead) < 0.001 } == true
+    }
+
+    func finish(for device: MockupDevice) -> MockupFinish {
+        device == self.device ? finish : device.finishes[0]
+    }
+
+    func screenshot(at index: Int) -> NSImage? {
+        screenshots.indices.contains(index) ? screenshots[index] : nil
+    }
+
+    func setScreenshot(_ image: NSImage?, at index: Int) {
+        guard screenshots.indices.contains(index) else { return }
+        screenshots[index] = image
+    }
+
+    func selectLayout(_ layout: MockupLayout) {
+        self.layout = layout
+        tiltX = 0; tiltY = 0; rotation = 0; scale = 0.82
+        positionX = 0; positionY = 0
+    }
+
+    /// The inspector's current pose, or the pose being written into a keyframe.
     var basePose: MockupPose {
         MockupPose(yaw: Double(tiltY), pitch: Double(tiltX), roll: Double(rotation * .pi / 180),
+                   pan: Double(positionX), lift: Double(positionY),
                    scale: Double(scale / 0.82), open: Double(openAmount))
+    }
+
+    func applyMotion(_ motion: MockupMotion) {
+        guard motion != .custom else { return }
+        self.motion = motion
+        timeline = MockupTimeline.preset(motion, base: basePose)
+        playhead = 0
+        selectedKeyframeID = timeline.keyframes.first?.id
+        if let pose = timeline.keyframes.first?.pose { setStaticPose(pose) }
+        isPlaying = true
+    }
+
+    func togglePlayback() {
+        if isPlaying {
+            isPlaying = false
+            setStaticPose(timeline.pose(at: playhead))
+        } else {
+            if playhead >= timeline.duration { playhead = 0 }
+            selectedKeyframeID = nil
+            isPlaying = true
+        }
+    }
+
+    func seek(to time: Double) {
+        isPlaying = false
+        selectedKeyframeID = nil
+        playhead = min(max(time, 0), timeline.duration)
+        setStaticPose(timeline.pose(at: playhead))
+    }
+
+    func selectKeyframe(_ id: MockupKeyframe.ID) {
+        guard let keyframe = timeline.keyframes.first(where: { $0.id == id }), let start = timeline.startTime(for: id) else { return }
+        isPlaying = false
+        selectedKeyframeID = id
+        playhead = start
+        setStaticPose(keyframe.pose)
+    }
+
+    func stepKeyframe(_ direction: Int) {
+        let times = timeline.keyframes.indices.map { timeline.startTime(at: $0) }
+        let index: Int?
+        if direction < 0 {
+            index = times.indices.last(where: { times[$0] < playhead - 0.001 })
+        } else {
+            index = times.indices.first(where: { times[$0] > playhead + 0.001 })
+        }
+        if let index { selectKeyframe(timeline.keyframes[index].id) }
+    }
+
+    func addKeyframe() {
+        let pose = isPlaying ? timeline.pose(at: playhead) : basePose
+        guard let id = timeline.addKeyframe(at: playhead, pose: pose) else { return }
+        motion = .custom
+        selectKeyframe(id)
+    }
+
+    func deleteSelectedKeyframe() {
+        guard let id = selectedKeyframeID,
+              let index = timeline.keyframes.firstIndex(where: { $0.id == id }) else { return }
+        timeline.removeKeyframe(id)
+        motion = .custom
+        let next = min(index, timeline.keyframes.count - 1)
+        if timeline.keyframes.indices.contains(next) { selectKeyframe(timeline.keyframes[next].id) }
+    }
+
+    func moveSelectedKeyframe(to time: Double) {
+        guard let id = selectedKeyframeID else { return }
+        let previous = timeline
+        timeline.moveKeyframe(id, to: time)
+        guard timeline != previous else { return }
+        motion = .custom
+        playhead = timeline.startTime(for: id) ?? playhead
+        isPlaying = false
+    }
+
+    func setSelectedDuration(_ duration: Double) {
+        guard let id = selectedKeyframeID else { return }
+        timeline.setDuration(duration, for: id)
+        motion = .custom
+        isPlaying = false
+    }
+
+    func setSelectedEasing(_ easing: MockupEasing) {
+        guard let id = selectedKeyframeID else { return }
+        timeline.setEasing(easing, for: id)
+        motion = .custom
+        isPlaying = false
+    }
+
+    func updateSelectedPose() {
+        guard canEditSelectedKeyframe, let id = selectedKeyframeID else { return }
+        timeline.updatePose(basePose, for: id)
+        motion = .custom
+    }
+
+    private func setStaticPose(_ pose: MockupPose) {
+        tiltX = CGFloat(pose.pitch)
+        tiltY = CGFloat(pose.yaw)
+        rotation = CGFloat(pose.roll * 180 / .pi)
+        positionX = CGFloat(pose.pan)
+        positionY = CGFloat(pose.lift)
+        scale = CGFloat(pose.scale * 0.82)
+        openAmount = CGFloat(pose.open)
     }
 }
 

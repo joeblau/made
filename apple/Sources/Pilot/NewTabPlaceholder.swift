@@ -62,6 +62,8 @@ extension Notification.Name {
     /// Posted with the pane's ID (a `UUID`) as `object` when its new-tab path
     /// changes. Observers compare IDs; `object:` filtering would not match.
     static let paneOpeningPathDidChange = Notification.Name("PaneOpeningPathDidChange")
+    /// Posted with the pane's id when a working pane goes back to New Tab.
+    static let paneDidReturnToNewTab = Notification.Name("PaneDidReturnToNewTab")
 }
 
 /// The working mode a placeholder becomes. Applying one is the only way a
@@ -224,6 +226,19 @@ extension Pane {
         return displayTitle
     }
 
+    /// Undoes a choice that never got past its own setup (an Editor with no
+    /// file opened yet): the pane shows New Tab again at its root page.
+    @MainActor
+    func returnToNewTab() {
+        guard !isChoosingMode else { return }
+        isChoosingMode = true
+        openingPath = [.root]
+        if workspace?.frontmostTerminalPaneID == id {
+            workspace?.setFrontmostTerminalPaneID(nil)
+        }
+        NotificationCenter.default.post(name: .paneDidReturnToNewTab, object: id)
+    }
+
     /// Converts the placeholder into its working mode. Returns false without
     /// mutating the pane when the choice is unavailable or already applied.
     @MainActor @discardableResult
@@ -352,6 +367,10 @@ final class NewTabLiveSource: NewTabContentSource {
         polling = nil
         if case .browserServers = page {} else { stopServerScan() }
         switch page {
+        case .root, .simulator, .device:
+            // Prefetch every mobile list while the user is still choosing, so
+            // the next page opens already populated.
+            MobileDeviceCache.shared.warmUp()
         case .browserServers:
             scanServers(rootPath: rootPath)
         case .simulators(.apple):
@@ -371,7 +390,7 @@ final class NewTabLiveSource: NewTabContentSource {
             session.invalidateAVDSerialCache()
             if session.status == .picking { session.refreshDevices() }
             poll { if session.status == .picking, !session.isRefreshing { session.refreshDevices() } }
-        case .root, .terminal, .browser, .simulator, .device:
+        case .terminal, .browser:
             break
         }
     }
@@ -734,6 +753,11 @@ final class CockpitNewTabView: NSView {
         pageView = next
         pageHost.addSubview(next)
         renderContent(force: true)
+        // `openingPath` isn't observable, so tracking must be re-armed for the
+        // new page's live source (device sessions, server scans); otherwise a
+        // device list keeps showing its first render until unrelated state
+        // happens to change.
+        observation.refresh()
         needsLayout = true
         layoutSubtreeIfNeeded()
         if let transition, window?.isVisible == true, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
@@ -921,7 +945,7 @@ private final class NewTabPageView: NSScrollView {
             tile()
         }
         // A scrolling list reserves the scroller's width as an equal gutter on
-        // both sides, so cards stay centered and never sit under the scroller
+        // both sides, so rows stay centered and never sit under the scroller
         // (legacy or overlay).
         let gutter = overflows ? NSScroller.scrollerWidth(for: .regular, scrollerStyle: scrollerStyle) + 4 : 0
         let width = max(0, bounds.width - 2 * gutter)

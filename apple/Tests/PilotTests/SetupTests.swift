@@ -109,5 +109,10 @@ struct SetupTests {
         #expect(selected.name == "My Project")
         #expect(selected.panes.first?.currentDirectory == directory.path)
         #expect(original.panes.first?.currentDirectory.isEmpty == true)
+        // New workspaces open on the New Tab page, not an automatic terminal.
+        let opening = try #require(selected.panes.first)
+        defer { store.workspaces.flatMap(\.panes).forEach { $0.isChoosingMode = false } }
+        #expect(opening.isChoosingMode)
+        #expect(selected.frontmostTerminalPaneID == nil)
     }
 }

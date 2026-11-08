@@ -687,6 +687,7 @@ final class WorkspaceStore {
             workspace.panes.first?.currentDirectory = directory.path
         }
         workspace.workspaceSortOrder = workspaces.count
+        workspace.startOnNewTab()
         modelContext.insert(workspace)
         _ = modelContext.saveReporting()
         changeCount += 1

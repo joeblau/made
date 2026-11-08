@@ -50,7 +50,7 @@ enum MockupRenderer {
     }
 }
 
-/// The studio stage: one of Apple's device models under a soft studio rig.
+/// The studio stage: a composition of Apple's models under a soft studio rig.
 /// Photo mode holds the user's pose; Video mode plays a motion preset. Both
 /// render through the same scene so the preview is the export.
 @MainActor
@@ -59,14 +59,23 @@ final class MockupStageView: NSView {
     private let scnView = SCNView(frame: .zero, options: [SCNView.Option.preferredRenderingAPI.rawValue: SCNRenderingAPI.metal.rawValue])
     private let scene = SCNScene()
     private let cameraNode = SCNNode()
-    private let pivot = SCNNode()
-    private(set) var model: MockupDeviceModel?
-    private var loaded: (MockupDevice, MockupFinish)?
-    private var shownScreenshot: NSImage?
+    private struct DeviceEntry {
+        let key: MockupDeviceLibrary.MockupFinishKey
+        let model: MockupDeviceModel
+        let pivot: SCNNode
+        let size: CGSize
+        var screenshot: NSImage?
+    }
+    private var entries: [DeviceEntry] = []
+    var models: [MockupDeviceModel] { entries.map(\.model) }
+    var model: MockupDeviceModel? { entries.indices.contains(document.selectedScreen) ? entries[document.selectedScreen].model : nil }
+    private var canvasSize = CGSize(width: 20, height: 20)
+    private var currentPose = MockupPose()
     private var displayLink: CADisplayLink?
     private var playStart: CFTimeInterval = 0
     var onImportFailure: ((MockupImageLoader.Failure) -> Void)?
     var onLoadFailure: ((String) -> Void)?
+    var onTimeUpdate: ((Double) -> Void)?
 
     init(document: MockupDocument) {
         self.document = document
@@ -78,6 +87,7 @@ final class MockupStageView: NSView {
         scnView.antialiasingMode = .multisampling4X
         scnView.backgroundColor = .clear
         scnView.setAccessibilityIdentifier("mockups.stage")
+        scnView.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(selectScreen(_:))))
         addSubview(scnView)
         registerForDraggedTypes(MockupImageLoader.pasteboardTypes)
         setAccessibilityIdentifier("mockups.canvas")
@@ -91,22 +101,42 @@ final class MockupStageView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self) }
 
+    @objc private func selectScreen(_ gesture: NSClickGestureRecognizer) {
+        window?.makeFirstResponder(self)
+        for hit in scnView.hitTest(gesture.location(in: scnView)) {
+            var node: SCNNode? = hit.node
+            while let ancestor = node {
+                if let index = entries.firstIndex(where: { ancestor === $0.pivot }) {
+                    document.selectedScreen = index
+                    return
+                }
+                node = ancestor.parent
+            }
+        }
+    }
+
     override func layout() {
         super.layout()
         scnView.frame = bounds
         frameCamera(aspect: bounds.height > 0 ? bounds.width / bounds.height : 1)
+        apply(currentPose)
         updateBackdrop()
     }
 
     private func buildRig() {
         let camera = SCNCamera()
         camera.fieldOfView = 24
+        // Parallel projection keeps layout positions and deliberate crops
+        // stable as depth ordering changes between overlapping devices.
+        camera.usesOrthographicProjection = true
         camera.zNear = 1
         camera.zFar = 400
         camera.wantsHDR = true
         camera.bloomIntensity = 0.08
         camera.wantsExposureAdaptation = false
         cameraNode.camera = camera
+        cameraNode.position = SCNVector3(0, 0, 100)
+        scnView.pointOfView = cameraNode
         scene.rootNode.addChildNode(cameraNode)
 
         func light(_ type: SCNLight.LightType, intensity: CGFloat, euler: SCNVector3 = SCNVector3Zero, position: SCNVector3 = SCNVector3Zero) {
@@ -125,44 +155,56 @@ final class MockupStageView: NSView {
         light(.omni, intensity: 500, position: SCNVector3(-30, 25, -30))
         scene.lightingEnvironment.contents = Self.studioEnvironment
         scene.lightingEnvironment.intensity = 1.2
-        scene.rootNode.addChildNode(pivot)
     }
 
-    /// Fits the device's span into the frame with a margin, whatever the aspect.
+    /// One scene unit system for thumbnails, preview, and every export aspect.
     private func frameCamera(aspect: CGFloat) {
-        let vertical = Double(cameraNode.camera?.fieldOfView ?? 24) * .pi / 180
-        let half = Double(MockupDeviceModel.span) / 2 * 1.18
-        let byHeight = half / tan(vertical / 2)
-        let byWidth = half / (tan(vertical / 2) * Double(max(aspect, 0.01)))
-        cameraNode.position = SCNVector3(0, 0, max(byHeight, byWidth) + Double(MockupDeviceModel.span) / 2)
+        let ratio = max(aspect, 0.01)
+        let span = CGFloat(MockupDeviceModel.span)
+        canvasSize = CGSize(width: span * max(1, ratio), height: span * max(1, 1 / ratio))
+        cameraNode.camera?.orthographicScale = Double(canvasSize.height / 2)
     }
 
     // MARK: - Document → scene
 
     /// Re-applies document state; cheap when nothing structural changed.
     func update() {
-        if loaded.map({ $0.0 != document.device || $0.1 != document.finish }) ?? true { loadModel() }
-        if shownScreenshot !== document.screenshot {
-            model?.setScreen(document.screenshot)
-            shownScreenshot = document.screenshot
+        let keys = document.devices.map { MockupDeviceLibrary.MockupFinishKey(device: $0, finish: document.finish(for: $0)) }
+        if entries.map(\.key) != keys { loadModels(keys) }
+        for index in entries.indices {
+            let screenshot = document.screenshot(at: index)
+            if entries[index].screenshot !== screenshot {
+                entries[index].model.setScreen(screenshot)
+                entries[index].screenshot = screenshot
+            }
         }
         updateBackdrop()
         updatePlayback()
         if displayLink == nil { apply(document.basePose) }
     }
 
-    private func loadModel() {
-        model?.node.removeFromParentNode()
-        model = nil
-        loaded = (document.device, document.finish)
+    private func loadModels(_ keys: [MockupDeviceLibrary.MockupFinishKey]) {
+        for entry in entries { entry.pivot.removeFromParentNode() }
+        entries = []
         do {
-            let model = try MockupDeviceLibrary.model(for: document.device, finish: document.finish)
-            model.setScreen(document.screenshot)
-            pivot.addChildNode(model.node)
-            self.model = model
-            shownScreenshot = document.screenshot
+            for (index, key) in keys.enumerated() {
+                let model = try MockupDeviceLibrary.model(for: key.device, finish: key.finish)
+                let screenshot = document.screenshot(at: index)
+                model.setScreen(screenshot)
+                let bounds = MockupDeviceLibrary.visibleBounds(model.node)
+                let size = bounds.max - bounds.min
+                let pivot = SCNNode()
+                pivot.addChildNode(model.node)
+                scene.rootNode.addChildNode(pivot)
+                entries.append(DeviceEntry(key: key, model: model, pivot: pivot,
+                                           size: CGSize(width: CGFloat(size.x / MockupDeviceModel.span),
+                                                        height: CGFloat(size.y / MockupDeviceModel.span)),
+                                           screenshot: screenshot))
+            }
         } catch {
-            onLoadFailure?("\(document.device.name) could not be loaded (\(error)).")
+            for entry in entries { entry.pivot.removeFromParentNode() }
+            entries = []
+            onLoadFailure?("The device layout could not be loaded (\(error)).")
         }
     }
 
@@ -175,7 +217,7 @@ final class MockupStageView: NSView {
     private func updatePlayback() {
         let wantsLink = document.kind == .video && document.isPlaying
         if wantsLink, displayLink == nil {
-            playStart = CACurrentMediaTime()
+            playStart = CACurrentMediaTime() - document.playhead
             let link = displayLink(target: self, selector: #selector(tick))
             link.add(to: .main, forMode: .common)
             displayLink = link
@@ -186,14 +228,27 @@ final class MockupStageView: NSView {
     }
 
     @objc private func tick(_ link: CADisplayLink) {
-        apply(document.motion.pose(at: link.timestamp - playStart, base: document.basePose))
+        let duration = document.timeline.duration
+        guard duration > 0 else { return }
+        let elapsed = link.timestamp - playStart
+        document.playhead = elapsed.truncatingRemainder(dividingBy: duration)
+        apply(document.timeline.pose(at: document.playhead))
+        onTimeUpdate?(document.playhead)
     }
 
     func apply(_ pose: MockupPose) {
-        pivot.eulerAngles = SCNVector3(pose.pitch, pose.yaw, pose.roll)
-        pivot.position = SCNVector3(0, pose.lift * Double(MockupDeviceModel.span), 0)
-        pivot.scale = SCNVector3(pose.scale, pose.scale, pose.scale)
-        model?.setOpen(pose.open)
+        currentPose = pose
+        let placements = document.layout.placements(for: document.device, in: canvasSize, sizes: entries.map(\.size))
+        for (entry, placement) in zip(entries, placements) {
+            let scale = Double(placement.scale) / Double(MockupDeviceModel.span) * pose.scale
+            entry.pivot.eulerAngles = SCNVector3(pose.pitch, pose.yaw, pose.roll + Double(placement.rotation) * .pi / 180)
+            entry.pivot.position = SCNVector3(
+                Double(placement.center.x - canvasSize.width / 2) * pose.scale + pose.pan * Double(canvasSize.width),
+                Double(placement.center.y - canvasSize.height / 2) * pose.scale + pose.lift * Double(canvasSize.height),
+                Double(placement.layer) * 5)
+            entry.pivot.scale = SCNVector3(scale, scale, scale)
+            entry.model.setOpen(pose.open)
+        }
     }
 
     // MARK: - Offscreen rendering (export)
@@ -201,18 +256,21 @@ final class MockupStageView: NSView {
     /// Renders one frame at `size`. Video passes a time; photo passes nil and
     /// gets the static pose. A `.none` background renders transparent.
     func render(size: CGSize, time: Double?) -> NSImage? {
-        guard let device = MTLCreateSystemDefaultDevice() else { return nil }
+        guard entries.count == document.devices.count, size.width > 0, size.height > 0,
+              let device = MTLCreateSystemDefaultDevice() else { return nil }
         let renderer = SCNRenderer(device: device, options: nil)
         let previous = scene.background.contents
+        let previousPose = currentPose
+        let previousCanvas = canvasSize
         defer {
             scene.background.contents = previous
-            if displayLink == nil { apply(document.basePose) }
+            frameCamera(aspect: previousCanvas.width / previousCanvas.height)
+            apply(previousPose)
         }
         scene.background.contents = MockupRenderer.backgroundImage(document.background, size: size, transparentWhenNone: true)
             ?? NSColor.clear
         frameCamera(aspect: size.width / max(size.height, 1))
-        defer { frameCamera(aspect: bounds.height > 0 ? bounds.width / bounds.height : 1) }
-        apply(time.map { document.motion.pose(at: $0, base: document.basePose) } ?? document.basePose)
+        apply(time.map { document.timeline.pose(at: $0) } ?? document.basePose)
         renderer.scene = scene
         renderer.pointOfView = cameraNode
         return renderer.snapshot(atTime: time ?? 0, with: size, antialiasingMode: .multisampling4X)
