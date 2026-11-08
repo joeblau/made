@@ -116,6 +116,7 @@
 		244B35BA80A80ED7A87AE125 /* DroneRegistryPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8374E4371A25C059C91CC94A /* DroneRegistryPersistence.swift */; };
 		24629E03835FE283F6058FB5 /* RemoteDesktopConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E409FEF0C1085401347F420 /* RemoteDesktopConnection.swift */; };
 		251F06D64D36DABEB92B4018 /* SignalingClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4F1B539CB5FFBDE29FBA5DC /* SignalingClient.swift */; };
+		254399DCAB1463859C2BC101 /* DroneSettingsIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D3CFD30F7FF46B907B30F6B /* DroneSettingsIntegrationTests.swift */; };
 		256050E22C440BA07F5889A9 /* AndroidDeviceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FD8F6A2DF17BA6E97F4D980 /* AndroidDeviceRegistry.swift */; };
 		25A699E8CD5105660A979C7D /* LegibleAccent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D571608047B5720EA5320F9D /* LegibleAccent.swift */; };
 		25DB1C813527BADD1A77A5DB /* AgenticUseDashboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C31F6B28F8E695EF20655394 /* AgenticUseDashboardTests.swift */; };
@@ -1004,6 +1005,7 @@
 		3B7EB9EECE8109721851CDCC /* MacMini.usdz */ = {isa = PBXFileReference; lastKnownFileType = file.usdz; path = MacMini.usdz; sourceTree = "<group>"; };
 		3C037C473FD5915EE5F5B3E9 /* AgentStepDetail.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentStepDetail.swift; sourceTree = "<group>"; };
 		3D07BB3C282DA6EA064BE3DD /* PaneDeviceTitleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneDeviceTitleTests.swift; sourceTree = "<group>"; };
+		3D3CFD30F7FF46B907B30F6B /* DroneSettingsIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneSettingsIntegrationTests.swift; sourceTree = "<group>"; };
 		3D5870DE7B53D77258F4400D /* WorkspaceStore+Walkie.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "WorkspaceStore+Walkie.swift"; sourceTree = "<group>"; };
 		3D84F3E5C1D0ECFF89593BF3 /* ChromiumSecurityPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumSecurityPolicyTests.swift; sourceTree = "<group>"; };
 		3E409FEF0C1085401347F420 /* RemoteDesktopConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopConnection.swift; sourceTree = "<group>"; };
@@ -1567,6 +1569,7 @@
 				AF473328FC403D95F77EB28D /* DockerNativePresentationTests.swift */,
 				95C1CA5AF0F78C873A2C334B /* DockerStoreRefreshTests.swift */,
 				5D9F2CCBA1890E01988BAD33 /* DroneRegistryTests.swift */,
+				3D3CFD30F7FF46B907B30F6B /* DroneSettingsIntegrationTests.swift */,
 				891501BF1C5DFC63468EF179 /* EditorDocumentSessionTests.swift */,
 				6732BE81058BC78D5A8C6D43 /* EmulatorBridgeTests.swift */,
 				85B225D4E2F6A862436589E5 /* EncodedVideoSampleTests.swift */,
@@ -3676,6 +3679,7 @@
 				9F776E09C5BE9C8A31F6B808 /* DockerNativePresentationTests.swift in Sources */,
 				487E41C66441FF84A4E15B90 /* DockerStoreRefreshTests.swift in Sources */,
 				6526D8D5DEE0251E2245BF94 /* DroneRegistryTests.swift in Sources */,
+				254399DCAB1463859C2BC101 /* DroneSettingsIntegrationTests.swift in Sources */,
 				9BEDF32A9EA4BE218F5F5067 /* EditorDocumentSessionTests.swift in Sources */,
 				302A7AAFF1DFBF76EC4AE3FD /* EmulatorBridgeTests.swift in Sources */,
 				5299BE4F7A17E90C77A65C3C /* EncodedVideoSampleTests.swift in Sources */,
