@@ -46,21 +46,31 @@ struct DockerStoreRefreshTests {
 
     @Test("A poll tick during a list request is satisfied by that request")
     func pollTickDoesNotQueueTrailingRefresh() async throws {
-        let harness = try Harness(pollInterval: .milliseconds(40))
+        // Poll ticks fire only when the test says so; with a real timer the
+        // next tick could land between the release and the check below and
+        // start a fresh (held) request, which made this test flaky under load.
+        let clock = ManualPollClock()
+        let harness = try Harness(pollWait: { _ in await clock.wait() })
         let engine = harness.nextEngine(name: "engine", holdsLists: true)
         let store = harness.store
         store.start()
         #expect(await eventually { engine.listCalls == 1 })
-        // Several poll intervals pass while the first reply is held.
-        try await Task.sleep(for: .milliseconds(250))
+        // Several poll ticks arrive while the first reply is held. A tick is
+        // handled once the loop is waiting again.
+        for _ in 0..<3 {
+            #expect(await eventually { clock.waiting == 1 })
+            clock.tick()
+        }
+        #expect(await eventually { clock.waiting == 1 })
         #expect(engine.listCalls == 1)
 
         engine.releaseLists(with: [])
-        // `isRefreshing` is set synchronously with each request, so the moment
-        // it reads false nothing was queued behind the released reply.
-        #expect(await eventually(pollEvery: .milliseconds(1)) { !store.isRefreshing })
+        // No tick can fire now, so the first time `isRefreshing` reads false
+        // is the answer: nothing was queued behind the released reply.
+        #expect(await eventually { !store.isRefreshing })
         #expect(engine.listCalls == 1)
         store.stop()
+        clock.tick()
         engine.releaseLists(with: [])
     }
 
@@ -387,7 +397,8 @@ private final class Harness {
 
     var engineCount: Int { engines.handedOut }
 
-    init(pollInterval: Duration = .seconds(3600)) throws {
+    init(pollInterval: Duration = .seconds(3600),
+         pollWait: (@Sendable (Duration) async -> Void)? = nil) throws {
         let suiteName = "DockerStoreRefreshTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         let engines = EngineQueue()
@@ -397,7 +408,8 @@ private final class Harness {
             defaults: defaults,
             resolveSocketPath: { Harness.socketPath },
             makeClient: { _ in engines.next() },
-            pollInterval: pollInterval
+            pollInterval: pollInterval,
+            pollWait: pollWait ?? { try? await Task.sleep(for: $0) }
         )
     }
 
@@ -596,4 +608,27 @@ private func eventually(
         try? await Task.sleep(for: interval)
     }
     return true
+}
+
+/// A poll clock the test advances by hand: each `tick()` releases every loop
+/// currently waiting out its interval.
+private final class ManualPollClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var waiting: Int { lock.withLock { waiters.count } }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            lock.withLock { waiters.append(continuation) }
+        }
+    }
+
+    func tick() {
+        let released = lock.withLock { () -> [CheckedContinuation<Void, Never>] in
+            defer { waiters.removeAll() }
+            return waiters
+        }
+        released.forEach { $0.resume() }
+    }
 }
