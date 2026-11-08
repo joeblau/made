@@ -272,14 +272,15 @@ final class ChromiumDiagnosticsViewController: NSViewController {
         let runtimeDetail = NativeSettingsUI.column([initialization, termination], spacing: 2)
         let clearDetail = NativeSettingsUI.column([reason, result], spacing: 2)
         let group = NativeSettingsUI.group("Chromium", [
-            NativeSettingsUI.formRow(runtimeTitle, subtitle: runtimeDetail, accessories: [runtime]),
-            NativeSettingsUI.valueRow("Release", value: ChromiumArtifactRevision.releaseID, monospaced: true),
-            NativeSettingsUI.valueRow("CEF", value: ChromiumArtifactRevision.cefVersion, monospaced: true,
+            NativeSettingsUI.formRow(runtimeTitle, subtitle: runtimeDetail, icon: "bolt.horizontal.circle", status: runtime),
+            NativeSettingsUI.valueRow("Release", value: ChromiumArtifactRevision.releaseID, icon: "shippingbox", monospaced: true),
+            NativeSettingsUI.valueRow("CEF", value: ChromiumArtifactRevision.cefVersion, icon: "cube", monospaced: true,
                                       help: ChromiumArtifactRevision.cefCommit),
-            NativeSettingsUI.valueRow("Chromium", value: ChromiumArtifactRevision.chromiumVersion, monospaced: true,
+            NativeSettingsUI.valueRow("Chromium", value: ChromiumArtifactRevision.chromiumVersion, icon: "globe", monospaced: true,
                                       help: ChromiumArtifactRevision.chromiumCommit),
-            NativeSettingsUI.valueRow("Profile", value: ChromiumBrowsingDataController.profileLocationCategory),
-            NativeSettingsUI.formRow("Browsing Data", subtitle: clearDetail, accessories: [clearButton]),
+            NativeSettingsUI.valueRow("Profile", value: ChromiumBrowsingDataController.profileLocationCategory,
+                                      icon: "person.crop.circle"),
+            NativeSettingsUI.formRow("Browsing Data", subtitle: clearDetail, icon: "trash", accessories: [clearButton]),
         ])
         group.toolTip = "Chromium profiles are isolated from WebKit, workspaces, and system Chrome. Diagnostics omit credentials, URL details, headers, local paths, and page content."
         // Failure and clear results appear only when there is something to report.

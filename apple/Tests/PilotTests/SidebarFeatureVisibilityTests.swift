@@ -206,8 +206,9 @@ struct SidebarFeatureVisibilityTests {
         let controller = SidebarSettingsViewController(visibility: visibility)
         let root = controller.view
         let labels = descendants(root).compactMap { ($0 as? NSTextField)?.stringValue }
-        #expect(labels.prefix(2) == ["Sidebar", "Show in Sidebar"])
-        #expect(Array(labels.dropFirst(2)) == SidebarFeature.allCases.map(\.title), "No explanatory text beyond the rows")
+        // The page title lives in the Settings toolbar, not in the page.
+        #expect(labels.first == "Show in Sidebar")
+        #expect(Array(labels.dropFirst()) == SidebarFeature.allCases.map(\.title), "No explanatory text beyond the rows")
         let switches = descendants(root).compactMap { $0 as? NSSwitch }
         #expect(switches.map { $0.identifier?.rawValue } == SidebarFeature.allCases.map { "sidebar.visibility.\($0.rawValue)" })
         #expect(switches.map { $0.accessibilityLabel() } == SidebarFeature.allCases.map { "Show \($0.title) in Sidebar" })
@@ -258,16 +259,16 @@ struct SidebarFeatureVisibilityTests {
             search.stringValue = ""
             controller.controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: search))
             #expect(sections.numberOfRows == 4)
-            // The search field shares the sidebar surface, lines up with the
-            // row selections' edges, and centers on the page title's line.
+            // The search field sits in the toolbar row, to the right of the
+            // sidebar, and centers on the page title's line.
             controller.view.layoutSubtreeIfNeeded()
             let searchFrame = search.convert(search.bounds, to: nil)
-            let sidebarFrame = try #require(search.superview).convert(try #require(search.superview).bounds, to: nil)
-            #expect(search.superview is NSVisualEffectView, "One sidebar surface behind search and list")
-            #expect(abs(searchFrame.minX - sidebarFrame.minX - PilotSettingsViewController.sidebarInset) < 0.5)
-            #expect(abs(sidebarFrame.maxX - searchFrame.maxX - PilotSettingsViewController.sidebarInset) < 0.5)
+            let sidebar = try #require(sections.enclosingScrollView?.superview)
+            #expect(sidebar is NSVisualEffectView)
+            #expect(searchFrame.minX >= sidebar.convert(sidebar.bounds, to: nil).maxX)
             let title = try #require(descendants(controller.view).compactMap { $0 as? NSTextField }
-                .first { $0.stringValue == "Sidebar" && $0.font?.pointSize ?? 0 > 18 })
+                .first { $0.identifier?.rawValue == "settings.pageTitle" })
+            #expect(title.stringValue == "Sidebar")
             let titleFrame = title.convert(title.bounds, to: nil)
             #expect(abs(searchFrame.midY - titleFrame.midY) < 2, "Search \(searchFrame.midY) vs title \(titleFrame.midY)")
             #expect(sections.enclosingScrollView?.autohidesScrollers == true)

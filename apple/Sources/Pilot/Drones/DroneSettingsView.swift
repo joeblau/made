@@ -5,12 +5,12 @@ final class DroneSettingsViewController: NSViewController {
     private let store: DroneStore
     private let runsDiscovery: Bool
     private let observation = NativeSettingsObservation()
-    private let body = NativeSettingsUI.column(spacing: 20)
+    private let body = NativeSettingsUI.column()
     private let saved = NativeSettingsGroupView()
     private let discovered = NativeSettingsGroupView()
-    private let approvals = NativeSettingsUI.column(spacing: 20)
+    private let approvals = NativeSettingsUI.column(spacing: NativeSettingsUI.pageGroupSpacing)
     private let errors = NativeSettingsUI.label("", color: .systemOrange)
-    private let savedHeading = NativeSettingsUI.label("", weight: .semibold)
+    private let savedHeading = NativeSettingsUI.label("", weight: .bold)
     private let discoveryStatus = NativeSettingsUI.label("", size: 11, color: .secondaryLabelColor)
     private var discoveryRow: NSView?
     private var savedRowsInstalled = false
@@ -29,22 +29,19 @@ final class DroneSettingsViewController: NSViewController {
     required init?(coder: NSCoder) { nil }
 
     override func loadView() {
-        body.addArrangedSubview(NativeSettingsUI.pageTitle("Drones"))
         NativeSettingsUI.fillWidth(errors, in: body)
         NativeSettingsUI.fillWidth(approvals, in: body)
-        let savedSection = NativeSettingsUI.column(spacing: 6)
-        NativeSettingsUI.fillWidth(savedHeading, in: savedSection)
-        NativeSettingsUI.fillWidth(saved, in: savedSection)
+        let savedSection = NativeSettingsUI.group(savedHeading, box: saved)
         savedSection.toolTip = "Offline and unauthorized Drones stay listed. Cockpit never substitutes Local when a Drone is unavailable."
         NativeSettingsUI.fillWidth(savedSection, in: body)
         let retry = NativeSettingsButton("Retry") { [weak self] in self?.store.discovery.retry() }
         retry.toolTip = "Retry Discovery"
         let add = NativeSettingsButton("Add by Address…") { [weak self] in self?.addManual() }
-        discoveryRow = NativeSettingsUI.formRow("Local Network", subtitle: discoveryStatus, accessories: [retry, add])
+        discoveryRow = NativeSettingsUI.formRow("Local Network", subtitle: discoveryStatus, icon: "network", accessories: [retry, add])
         let discover = NativeSettingsUI.group("Discover", box: discovered)
         discover.toolTip = "Bonjour names, addresses, and protocol advertisements are hints only. A Drone becomes connected only after authenticated identity and capability negotiation."
         NativeSettingsUI.fillWidth(discover, in: body)
-        view = NativeSettingsUI.scrolling(body)
+        view = NativeSettingsUI.page(body)
         refresh()
     }
 
@@ -110,8 +107,8 @@ final class DroneSettingsViewController: NSViewController {
                     self?.store.resolvePairing(requestID: request.id, approved: false)
                 }
                 NativeSettingsUI.fillWidth(NativeSettingsUI.group("Pairing Approval", [
-                    NativeSettingsUI.formRow(message),
-                    NativeSettingsUI.formRow(code, accessories: [reject, approve]),
+                    NativeSettingsUI.formRow(message, icon: request.isKeyChange ? "exclamationmark.shield" : "checkmark.shield"),
+                    NativeSettingsUI.formRow(code, icon: "number", accessories: [reject, approve]),
                 ]), in: approvals)
             }
         }
@@ -132,6 +129,7 @@ final class DroneSettingsViewController: NSViewController {
                 discoveredRows.append(NativeSettingsUI.formRow(
                     candidate.displayName,
                     subtitle: NativeSettingsUI.label(version, size: 11, color: .secondaryLabelColor),
+                    icon: "desktopcomputer",
                     accessories: [NativeSettingsButton("Pair") { [weak self] in self?.pair(candidate) }]
                 ))
             }
@@ -204,7 +202,7 @@ final class DroneSettingsViewController: NSViewController {
 
 @MainActor
 private final class NativeDroneRow: NSView {
-    private let name = NativeSettingsUI.label("", weight: .semibold)
+    private let name = NativeSettingsUI.label("")
     private let summary = NativeSettingsUI.label("", size: 11, color: .secondaryLabelColor, selectable: true)
     private let status = NativeSettingsUI.label("", weight: .medium)
     private let detail = NativeSettingsUI.label("", size: 11, color: .secondaryLabelColor)
@@ -237,7 +235,8 @@ private final class NativeDroneRow: NSView {
         summary.lineBreakMode = .byTruncatingMiddle
         let subtitle = NativeSettingsUI.column([summary, detail], spacing: 2)
         for label in [summary, detail] { label.widthAnchor.constraint(equalTo: subtitle.widthAnchor).isActive = true }
-        NativeSettingsUI.pin(NativeSettingsUI.formRow(name, subtitle: subtitle, accessories: [status, actionsButton]), to: self)
+        NativeSettingsUI.pin(NativeSettingsUI.formRow(name, subtitle: subtitle, icon: "desktopcomputer", status: status,
+                                                      accessories: [actionsButton]), to: self)
     }
     required init?(coder: NSCoder) { nil }
 

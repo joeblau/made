@@ -51,6 +51,28 @@ enum NativeSettingsUI {
 
     static func scrolling(_ stack: NSStackView, inset: CGFloat = 24) -> NSScrollView {
         let scroll = NSScrollView()
+        configure(scroll, stack: stack, insets: NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset), maxWidth: nil)
+        return scroll
+    }
+
+    /// Settings pages: a centered column no wider than `pageMaxWidth`, with
+    /// the page title living in the window's toolbar instead of the content.
+    static func page(_ stack: NSStackView) -> NSScrollView {
+        let scroll = NSScrollView()
+        embedPage(stack, in: scroll)
+        return scroll
+    }
+
+    /// `page(_:)` for a controller that already owns its scroll view.
+    static func embedPage(_ stack: NSStackView, in scroll: NSScrollView) {
+        stack.spacing = pageGroupSpacing
+        configure(scroll, stack: stack, insets: NSEdgeInsets(top: 12, left: 32, bottom: 32, right: 32), maxWidth: pageMaxWidth)
+    }
+
+    static let pageMaxWidth: CGFloat = 640
+    static let pageGroupSpacing: CGFloat = 26
+
+    private static func configure(_ scroll: NSScrollView, stack: NSStackView, insets: NSEdgeInsets, maxWidth: CGFloat?) {
         scroll.hasVerticalScroller = true
         // No empty track or gutter on pages that fit, even with "Always" scroll bars.
         scroll.autohidesScrollers = true
@@ -63,12 +85,25 @@ enum NativeSettingsUI {
         NSLayoutConstraint.activate([
             document.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
             document.heightAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.heightAnchor),
-            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: inset),
-            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -inset),
-            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: inset),
-            document.bottomAnchor.constraint(greaterThanOrEqualTo: stack.bottomAnchor, constant: inset)
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: insets.top),
+            document.bottomAnchor.constraint(greaterThanOrEqualTo: stack.bottomAnchor, constant: insets.bottom)
         ])
-        return scroll
+        if let maxWidth {
+            // Fill the pane up to `maxWidth`, then stay centered with wider margins.
+            let fill = stack.widthAnchor.constraint(equalTo: document.widthAnchor, constant: -(insets.left + insets.right))
+            fill.priority = .defaultHigh
+            NSLayoutConstraint.activate([
+                fill,
+                stack.widthAnchor.constraint(lessThanOrEqualToConstant: maxWidth),
+                stack.centerXAnchor.constraint(equalTo: document.centerXAnchor),
+                stack.leadingAnchor.constraint(greaterThanOrEqualTo: document.leadingAnchor, constant: insets.left)
+            ])
+        } else {
+            NSLayoutConstraint.activate([
+                stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: insets.left),
+                stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -insets.right)
+            ])
+        }
     }
 
     static func section(_ title: String, _ views: [NSView]) -> NSView {
@@ -109,16 +144,18 @@ enum NativeSettingsUI {
     }
 }
 
-/// System Settings–style grouped form building blocks: a page title, a caption
-/// above each rounded group, and rows with the label leading and controls
-/// trailing. Explanations belong in tooltips, not in paragraphs on the page.
+/// Xcode Settings–style grouped form building blocks: a bold header above
+/// each borderless rounded card, and rows with an optional accent icon, a
+/// title with optional secondary line, and trailing status, actions or value.
+/// The page title lives in the Settings toolbar. Explanations belong in
+/// tooltips, not in paragraphs on the page.
 @MainActor
 extension NativeSettingsUI {
     static func pageTitle(_ text: String) -> CockpitLabel {
         label(text, size: 22, weight: .bold)
     }
 
-    /// A captioned group. Pass `rows` built with `formRow`/`valueRow`, or any view.
+    /// A headed group. Pass `rows` built with `formRow`/`valueRow`, or any view.
     static func group(_ title: String? = nil, _ rows: [NSView]) -> NSStackView {
         let box = NativeSettingsGroupView()
         box.setRows(rows)
@@ -126,18 +163,41 @@ extension NativeSettingsUI {
     }
 
     static func group(_ title: String?, box: NativeSettingsGroupView) -> NSStackView {
-        let stack = column(spacing: 6)
-        if let title { fillWidth(label(title, weight: .semibold), in: stack) }
+        group(title.map { label($0, weight: .bold) }, box: box)
+    }
+
+    /// A group whose header text changes after creation (for example a count).
+    static func group(_ header: NSTextField?, box: NativeSettingsGroupView) -> NSStackView {
+        let stack = column(spacing: 8)
+        if let header { fillWidth(groupHeader(header), in: stack) }
         fillWidth(box, in: stack)
         return stack
     }
 
-    /// Label (and optional secondary line) on the leading edge, controls trailing.
-    static func formRow(_ title: String, subtitle: NSView? = nil, accessories: [NSView] = []) -> NSStackView {
-        formRow(label(title), subtitle: subtitle, accessories: accessories)
+    /// Section headers sit slightly inside the card's leading edge.
+    static func groupHeader(_ header: NSTextField) -> NSView {
+        let container = NSView()
+        header.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(header)
+        NSLayoutConstraint.activate([
+            header.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: NativeSettingsGroupView.rowInsets.left - 4),
+            header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            header.topAnchor.constraint(equalTo: container.topAnchor),
+            header.bottomAnchor.constraint(equalTo: container.bottomAnchor)
+        ])
+        return container
     }
 
-    static func formRow(_ title: NSTextField, subtitle: NSView? = nil, accessories: [NSView] = []) -> NSStackView {
+    /// Optional accent `icon` (an SF Symbol or asset name) in a fixed column,
+    /// the title (and optional secondary line) leading, then trailing
+    /// `status` text and `accessories` (buttons, switches, values).
+    static func formRow(_ title: String, subtitle: NSView? = nil, icon: String? = nil, iconTint: NSColor = .controlAccentColor,
+                        status: NSTextField? = nil, accessories: [NSView] = []) -> NSStackView {
+        formRow(label(title), subtitle: subtitle, icon: icon, iconTint: iconTint, status: status, accessories: accessories)
+    }
+
+    static func formRow(_ title: NSTextField, subtitle: NSView? = nil, icon: String? = nil, iconTint: NSColor = .controlAccentColor,
+                        status: NSTextField? = nil, accessories: [NSView] = []) -> NSStackView {
         title.maximumNumberOfLines = 2
         let text = column([title] + (subtitle.map { [$0] } ?? []), spacing: 2)
         for field in [title, subtitle].compactMap({ $0 }) as [NSView] {
@@ -145,24 +205,31 @@ extension NativeSettingsUI {
         }
         text.setContentHuggingPriority(.init(1), for: .horizontal)
         text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        for accessory in accessories {
+        if let status {
+            status.alignment = .right
+            status.maximumNumberOfLines = 1
+            if status.textColor == .labelColor { status.textColor = .secondaryLabelColor }
+        }
+        let trailing = (status.map { [$0] } ?? []) + accessories
+        for accessory in trailing {
             accessory.setContentHuggingPriority(.required, for: .horizontal)
             accessory.setContentCompressionResistancePriority(.defaultHigh, for: .horizontal)
         }
-        let stack = row([text] + accessories, spacing: 10)
+        let leading: [NSView] = icon.map { [NativeSettingsIconView(icon: $0, tint: iconTint)] } ?? []
+        let stack = row(leading + [text] + trailing, spacing: 10)
         stack.distribution = .fill
         return stack
     }
 
     /// A read-only setting: title leading, value trailing.
-    static func valueRow(_ title: String, value: String, monospaced: Bool = false, help: String? = nil) -> NSStackView {
+    static func valueRow(_ title: String, value: String, icon: String? = nil, monospaced: Bool = false, help: String? = nil) -> NSStackView {
         let field = label(value, color: .secondaryLabelColor, selectable: true)
         field.usesMonospacedFont = monospaced
         field.alignment = .right
         field.maximumNumberOfLines = 1
         field.lineBreakMode = .byTruncatingMiddle
         field.toolTip = help ?? value
-        let stack = formRow(title, accessories: [field])
+        let stack = formRow(title, icon: icon, accessories: [field])
         // Long values truncate before the title does.
         field.setContentCompressionResistancePriority(.init(200), for: .horizontal)
         return stack
@@ -178,11 +245,53 @@ extension NativeSettingsUI {
     }
 }
 
-/// Rounded inset container that draws hairline dividers between its rows.
+/// A decorative row icon in a fixed-width column that follows Cockpit zoom.
+/// Accepts an SF Symbol name or an asset-catalog symbol name.
+@MainActor
+final class NativeSettingsIconView: NSImageView {
+    static let pointSize: CGFloat = 19
+    static let columnWidth: CGFloat = 28
+    private var widthConstraint: NSLayoutConstraint?
+    private var zoomObserver: NSObjectProtocol?
+
+    init(icon: String, tint: NSColor = .controlAccentColor) {
+        super.init(frame: .zero)
+        image = NSImage(systemSymbolName: icon, accessibilityDescription: nil) ?? NSImage(named: icon)
+        contentTintColor = tint
+        imageScaling = .scaleProportionallyDown
+        setAccessibilityElement(false)
+        translatesAutoresizingMaskIntoConstraints = false
+        widthConstraint = widthAnchor.constraint(equalToConstant: Self.columnWidth)
+        widthConstraint?.isActive = true
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+        refreshScale()
+        zoomObserver = NotificationCenter.default.addObserver(
+            forName: .cockpitUIZoomDidChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshScale() }
+        }
+    }
+    required init?(coder: NSCoder) { nil }
+
+    private func refreshScale() {
+        let zoom = CGFloat(CockpitUIZoomController.shared.factor)
+        symbolConfiguration = .init(pointSize: Self.pointSize * zoom, weight: .regular)
+        widthConstraint?.constant = Self.columnWidth * zoom
+    }
+
+    isolated deinit {
+        if let zoomObserver { NotificationCenter.default.removeObserver(zoomObserver) }
+    }
+}
+
+/// Borderless rounded card that draws inset hairline dividers between rows.
 @MainActor
 final class NativeSettingsGroupView: NSView {
-    private static let rowInsets = NSEdgeInsets(top: 9, left: 12, bottom: 9, right: 12)
+    static let rowInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 14)
+    static let minimumRowHeight: CGFloat = 48
     private let stack = NSStackView()
+    private var contrastObserver: NSObjectProtocol?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -190,11 +299,17 @@ final class NativeSettingsGroupView: NSView {
         stack.alignment = .leading
         stack.spacing = 0
         NativeSettingsUI.pin(stack, to: self)
+        contrastObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.needsDisplay = true }
+        }
     }
     required init?(coder: NSCoder) { nil }
 
     func setRows(_ rows: [NSView]) {
         NativeSettingsUI.clear(stack)
+        let insets = Self.rowInsets
         for (index, row) in rows.enumerated() {
             if index > 0 {
                 let divider = NSBox()
@@ -204,8 +319,8 @@ final class NativeSettingsGroupView: NSView {
                 divider.translatesAutoresizingMaskIntoConstraints = false
                 inset.addSubview(divider)
                 NSLayoutConstraint.activate([
-                    divider.leadingAnchor.constraint(equalTo: inset.leadingAnchor, constant: Self.rowInsets.left),
-                    divider.trailingAnchor.constraint(equalTo: inset.trailingAnchor),
+                    divider.leadingAnchor.constraint(equalTo: inset.leadingAnchor, constant: insets.left),
+                    divider.trailingAnchor.constraint(equalTo: inset.trailingAnchor, constant: -insets.right),
                     divider.centerYAnchor.constraint(equalTo: inset.centerYAnchor),
                     inset.heightAnchor.constraint(equalToConstant: 1),
                 ])
@@ -216,26 +331,43 @@ final class NativeSettingsGroupView: NSView {
             cell.translatesAutoresizingMaskIntoConstraints = false
             row.translatesAutoresizingMaskIntoConstraints = false
             cell.addSubview(row)
-            let insets = Self.rowInsets
+            // Rows center vertically in at least the minimum height.
+            let top = row.topAnchor.constraint(equalTo: cell.topAnchor, constant: insets.top)
+            top.priority = .defaultHigh
             NSLayoutConstraint.activate([
                 row.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: insets.left),
                 row.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -insets.right),
-                row.topAnchor.constraint(equalTo: cell.topAnchor, constant: insets.top),
-                row.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -insets.bottom),
-                cell.heightAnchor.constraint(greaterThanOrEqualToConstant: 40),
+                row.topAnchor.constraint(greaterThanOrEqualTo: cell.topAnchor, constant: insets.top),
+                row.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                top,
+                cell.heightAnchor.constraint(greaterThanOrEqualToConstant: Self.minimumRowHeight),
             ])
             stack.addArrangedSubview(cell)
             cell.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
+
     override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
-        NSColor.labelColor.withAlphaComponent(0.04).setFill()
+        let radius = CockpitCardStyle.cornerRadius
+        let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+        CockpitCardStyle.fillColor.setFill()
         path.fill()
-        NSColor.separatorColor.setStroke()
-        path.lineWidth = 1
-        path.stroke()
+        // Increase Contrast restores an edge the quiet fill alone cannot give.
+        if NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast {
+            let edge = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+            NSColor.separatorColor.setStroke()
+            edge.lineWidth = 1
+            edge.stroke()
+        }
+    }
+
+    isolated deinit {
+        if let contrastObserver { NSWorkspace.shared.notificationCenter.removeObserver(contrastObserver) }
     }
 }
 
