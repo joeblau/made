@@ -275,3 +275,75 @@ final class AgentChatComposerChip: NSView {
 
     @objc private func remove() { onRemove() }
 }
+
+/// "Auto-approve" (label and small switch) at the top right of the composer,
+/// opposite the Steer / Queue chip. Shown only while a session is up; the
+/// session owns the state and asks before it turns on.
+@MainActor
+final class AgentChatAutoApproveControl: NSView {
+    static let title = "Auto-approve"
+    static let tip = "Approve the agent's requests automatically for this session"
+    let label = NSTextField(labelWithString: title)
+    let toggle = NSSwitch()
+    var onToggle: (Bool) -> Void = { _ in }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        toolTip = Self.tip
+        label.toolTip = Self.tip
+        label.textColor = .secondaryLabelColor
+        label.setAccessibilityElement(false)
+        toggle.controlSize = .mini
+        toggle.target = self
+        toggle.action = #selector(toggled)
+        toggle.toolTip = Self.tip
+        toggle.setAccessibilityLabel("Auto-approve requests")
+        toggle.setAccessibilityIdentifier("agent-chat.auto-approve")
+        toggle.setAccessibilityHelp(Self.tip)
+        let click = NSClickGestureRecognizer(target: self, action: #selector(labelClicked))
+        label.addGestureRecognizer(click)
+        let stack = NSStackView(views: [label, toggle])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 6
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        setContentHuggingPriority(.required, for: .horizontal)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.lineBreakMode = .byTruncatingTail
+        updateFont()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    var isOn: Bool { toggle.state == .on }
+
+    /// Shows `on` (also while the confirmation sheet is up).
+    func update(on: Bool) {
+        let state: NSControl.StateValue = on ? .on : .off
+        if toggle.state != state { toggle.state = state }
+    }
+
+    /// Narrow split panes keep only the switch (its tooltip and accessibility
+    /// label still name it).
+    func update(compact: Bool) {
+        if label.isHidden != compact { label.isHidden = compact }
+    }
+
+    func updateFont() {
+        label.font = CockpitTypography.font(size: 11, weight: .medium)
+    }
+
+    @objc private func toggled() { onToggle(toggle.state == .on) }
+
+    @objc private func labelClicked() {
+        toggle.state = toggle.state == .on ? .off : .on
+        toggled()
+    }
+}

@@ -437,6 +437,139 @@ struct AgentChatSessionTests {
         #expect(ACPRemoteError(["code": 1, "message": "short"]).message == "short")
     }
 
+    // MARK: Auto-approve
+
+    @Test
+    func autoApproveIsSessionScopedAndAnswersOnlyAllowOnceRequests() async throws {
+        let session = makeSession(script(#"""
+        ONCE='{"optionId":"yes","name":"Allow","kind":"allow_once"},{"optionId":"no","name":"Reject","kind":"reject_once"}'
+        ALWAYS='{"optionId":"always","name":"Always","kind":"allow_always"},{"optionId":"once","name":"Once","kind":"allow_once"},{"optionId":"no","name":"Reject","kind":"reject_once"}'
+        NOALLOW='{"optionId":"always","name":"Always","kind":"allow_always"},{"optionId":"no","name":"Reject","kind":"reject_once"}'
+        askopts() { printf '{"jsonrpc":"2.0","id":%s,"method":"session/request_permission","params":{"sessionId":"s1","toolCall":{"toolCallId":"t","title":"Run it"%s},"options":[%s]}}\n' "$1" "$3" "$2"; }
+        read -r _
+        ask '"m1"' s1
+        read -r r; has "$r" '"id":"m1"' && has "$r" '"optionId":"yes"' && say ok1
+        askopts '"a1"' "$ALWAYS"
+        read -r r; has "$r" '"id":"a1"' && has "$r" '"optionId":"once"' && say ok2
+        askopts '"n1"' "$NOALLOW"; askopts '"x1"' "$ONCE" ',"kind":"switch_mode"'
+        read -r r; has "$r" '"id":"n1"' && has "$r" '"optionId":"no"' && say ok3
+        ask '"m2"' s1
+        read -r r; has "$r" '"id":"m2"' && has "$r" '"optionId":"yes"' && say ok4
+        read -r _
+        """#))
+        defer { session.shutDown() }
+        final class Sheet { var asked = 0; var answer = false }
+        let sheet = Sheet()
+        session.confirmAutoApprove = { agent in
+            #expect(agent == .claude)
+            sheet.asked += 1
+            return sheet.answer
+        }
+        func replies() -> String {
+            session.transcript.items.compactMap { item -> String? in
+                if case .assistant(let text) = item.content { text } else { nil }
+            }.joined()
+        }
+
+        // Off and unavailable before the session starts; enabling then is refused unasked.
+        #expect(!session.canAutoApprove && !session.isAutoApproveEnabled)
+        await session.enableAutoApprove()
+        #expect(!session.isAutoApproveEnabled && sheet.asked == 0)
+        session.start()
+        #expect(!session.canAutoApprove, "Not while starting")
+        try await waitUntil { session.phase == .ready }
+        #expect(session.canAutoApprove && !session.isAutoApproveEnabled, "Available once ready, still off by default")
+
+        session.draft = "go"
+        session.send()
+        try await waitUntil { session.pendingPermission?.requestID == "m1" }
+        // Cancel on the confirmation keeps it off and leaves the request pending.
+        await session.enableAutoApprove()
+        #expect(sheet.asked == 1 && !session.isAutoApproveEnabled && !session.isConfirmingAutoApprove)
+        #expect(record("m1", in: session)?.decision == .pending)
+
+        // Confirming approves the request already waiting, once, as allow_once.
+        sheet.answer = true
+        await session.enableAutoApprove()
+        #expect(sheet.asked == 2 && session.isAutoApproveEnabled)
+        try await waitUntil { replies().contains("ok1") }
+        try await waitUntil { record("m1", in: session)?.decision != .pending }
+        #expect(record("m1", in: session)?.decision == .chose(optionID: "yes", name: "Allow", allows: true))
+        #expect(record("m1", in: session)?.autoApproved == true)
+        #expect(session.diagnostics.contains(.approvalAutoApproved(requestID: "m1")))
+
+        // allow_once is chosen even when allow_always comes first.
+        try await waitUntil { replies().contains("ok1ok2") }
+        try await waitUntil { record("a1", in: session)?.autoApproved == true }
+        #expect(record("a1", in: session)?.decision == .chose(optionID: "once", name: "Once", allows: true))
+
+        // No allow-once option, or a mode change: the user decides.
+        try await waitUntil { session.permissionQueue.map(\.requestID) == ["n1", "x1"] }
+        #expect(record("n1", in: session)?.decision == .pending && record("n1", in: session)?.autoApproved == false)
+        #expect(record("x1", in: session)?.decision == .pending)
+
+        // Off: later requests wait for the user again.
+        session.disableAutoApprove()
+        #expect(!session.isAutoApproveEnabled)
+        session.answerPermission(session.permissionQueue[0], optionID: "no")
+        try await waitUntil { replies().contains("ok3") }
+        try await waitUntil { session.permissionQueue.map(\.requestID) == ["x1", "m2"] }
+        #expect(record("n1", in: session)?.decision == .chose(optionID: "no", name: "Reject", allows: false))
+        #expect(record("n1", in: session)?.autoApproved == false)
+        #expect(record("m2", in: session)?.decision == .pending)
+
+        // Back on: m2 is approved, x1 (switch_mode) still waits.
+        await session.enableAutoApprove()
+        try await waitUntil { replies().contains("ok4") }
+        try await waitUntil { record("m2", in: session)?.autoApproved == true }
+        #expect(session.permissionQueue.map(\.requestID) == ["x1"])
+
+        // A new conversation starts with it off again.
+        session.startNewConversation()
+        #expect(!session.isAutoApproveEnabled && !session.canAutoApprove)
+        try await waitUntil { session.phase == .ready }
+        #expect(!session.isAutoApproveEnabled)
+        #expect(sheet.asked == 3, "Every enable asks")
+    }
+
+    @Test
+    func autoApproveResetsOnRestartAndAgentSwitch() async throws {
+        let session = makeSession(script("read -r _"))
+        defer { session.shutDown() }
+        session.confirmAutoApprove = { _ in true }
+        session.start()
+        try await waitUntil { session.phase == .ready }
+        await session.enableAutoApprove()
+        #expect(session.isAutoApproveEnabled)
+        session.restart()
+        #expect(!session.isAutoApproveEnabled)
+        try await waitUntil { session.phase == .ready }
+        await session.enableAutoApprove()
+        #expect(session.isAutoApproveEnabled)
+        session.switchAgent(to: .codex)
+        #expect(!session.isAutoApproveEnabled)
+    }
+
+    @Test
+    func autoApproveOptionIsOnlyAnAllowOnceThatChangesNoMode() throws {
+        func request(_ options: [(String, String)], kind: String? = nil) throws -> ACPPermissionRequest {
+            var toolCall: [String: JSONValue] = ["toolCallId": "t", "title": "Run it"]
+            if let kind { toolCall["kind"] = .string(kind) }
+            let list = options.map { id, kind -> JSONValue in ["optionId": .string(id), "name": .string(id), "kind": .string(kind)] }
+            return try #require(ACPPermissionRequest(requestID: 1, params: [
+                "sessionId": "s1", "toolCall": .object(toolCall), "options": .array(list),
+            ]))
+        }
+        let pick = AgentChatSession.autoApproveOption(for:)
+        #expect(pick(try request([("always", "allow_always"), ("once", "allow_once")]))?.id == "once")
+        #expect(pick(try request([("always", "allow_always"), ("no", "reject_once")])) == nil)
+        #expect(pick(try request([("no", "reject_once"), ("never", "reject_always")])) == nil)
+        #expect(pick(try request([("once", "allow_once")], kind: "switch_mode")) == nil)
+        #expect(pick(try request([("exit-plan-default", "allow_once")])) == nil)
+        #expect(pick(try request([("custom", "allow_sometimes"), ("once", "allow_once")]))?.id == "once")
+        #expect(pick(try request([("once", "allow_once")], kind: "execute"))?.id == "once")
+    }
+
     // MARK: Helpers
 
     private func makeSession(
