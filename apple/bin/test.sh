@@ -99,6 +99,7 @@ drone_execution() {
   "$APPLE_ROOT/bin/test-drone-terminal.sh"
   "$APPLE_ROOT/bin/test-drone-tools.sh"
   "$APPLE_ROOT/bin/test-drone-worker.sh"
+  "$APPLE_ROOT/bin/test-drone-worker.sh" --tool-replay-authorization
 }
 
 case "$SUITE" in

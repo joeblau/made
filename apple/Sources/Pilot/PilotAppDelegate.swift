@@ -189,6 +189,7 @@ final class PilotAppDelegate: NSObject, NSApplicationDelegate {
             || UserDefaults.standard.bool(forKey: "demoMode")
         application = PilotApp(isolated: isolated)
         application?.start()
+        if !isolated { MobileDeviceCache.shared.warmUp() }
         let urls = pendingURLs
         pendingURLs.removeAll()
         urls.forEach { application?.openDashboard($0) }

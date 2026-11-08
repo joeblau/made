@@ -24,20 +24,23 @@ final class TerminalPaneViewController: NSViewController, CockpitPanePresenting,
         container.wantsLayer = true
         container.layer?.backgroundColor = GhosttyRuntime.terminalBackgroundColor.cgColor
         view = container
-        if pane.terminalDestination.kind == .drone {
+        let destination = pane.terminalDestination
+        if destination.kind == .drone, destination.isValid {
             let controller = DroneTerminalViewController(pane: pane)
             controller.onSelect = { [weak self] in self?.onSelect?() }
             droneController = controller
             addChild(controller)
             install(controller.view)
-        } else if let app = GhosttyRuntime.shared.app {
-            let terminal = GhosttyMetalView(app: app, pane: pane)
-            terminalView = terminal
-            install(terminal)
+        } else if case .local = pane.terminalSession.bootstrap(workingDirectory: pane.currentDirectory) {
+            if let app = GhosttyRuntime.shared.app {
+                let terminal = GhosttyMetalView(app: app, pane: pane)
+                terminalView = terminal
+                install(terminal)
+            } else {
+                installError("The terminal renderer could not start. Close this pane and try again.")
+            }
         } else {
-            let error = NSTextField(wrappingLabelWithString: "The terminal renderer could not start. Close this pane and try again.")
-            error.textColor = .white
-            install(error)
+            installError("The terminal destination is invalid. Close this pane and try again.")
         }
         applyPresentation()
     }
@@ -51,6 +54,12 @@ final class TerminalPaneViewController: NSViewController, CockpitPanePresenting,
             content.topAnchor.constraint(equalTo: view.topAnchor),
             content.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
+    }
+
+    private func installError(_ message: String) {
+        let error = NSTextField(wrappingLabelWithString: message)
+        error.textColor = .white
+        install(error)
     }
 
     override func viewDidAppear() {

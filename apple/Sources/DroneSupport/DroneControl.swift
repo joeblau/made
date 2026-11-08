@@ -22,6 +22,13 @@ struct DroneControlRequest: Codable, Equatable, Sendable {
         case "revoke":
             guard controllerID != nil, requestID == nil, workspaceID == nil,
                   permissions == nil, lifetimeSeconds == nil else { throw DroneWorkerError.invalidArguments }
+        case "grant", "revoke-grants":
+            guard requestID == nil, controllerID != nil, workspaceID == nil,
+                  let permissions, !permissions.isEmpty, permissions.count <= 4,
+                  Set(permissions).count == permissions.count,
+                  permissions.allSatisfy({ ["terminal", "files", "jobs", "git"].contains($0) }),
+                  lifetimeSeconds == nil
+            else { throw DroneWorkerError.invalidArguments }
         case "grant-tools":
             guard requestID == nil, controllerID != nil, workspaceID != nil,
                   let permissions, !permissions.isEmpty, permissions.count <= 3,
@@ -59,6 +66,14 @@ enum DroneOwnerCommand {
                 throw DroneWorkerError.invalidArguments
             }
             request = DroneControlRequest(command: command, controllerID: controller)
+        case "grant", "revoke-grants":
+            guard arguments.count == 3, let controller = UUID(uuidString: arguments[1]) else {
+                throw DroneWorkerError.invalidArguments
+            }
+            request = DroneControlRequest(
+                command: command, controllerID: controller,
+                permissions: arguments[2].split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+            )
         case "grant-tools":
             guard arguments.count == 5, let controller = UUID(uuidString: arguments[1]),
                   let workspace = UUID(uuidString: arguments[2]), let lifetime = Int(arguments[4]) else {

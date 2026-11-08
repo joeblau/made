@@ -69,6 +69,15 @@ extension PilotApp {
     var walkieDelivery: PilotWalkieDelivery {
         PilotWalkieDelivery(store: store, terminalPaneID: { [self] workspaceID in
             activeTerminalPane(in: workspaceID, on: remoteInputSurface())?.id
+        }, terminalSession: { [self] paneID in
+            for workspace in store.workspaces {
+                let companion = extensionWorkspaceController.workspace(forSourceID: workspace.id)
+                if let pane = workspace.panes.first(where: { $0.id == paneID })
+                    ?? companion?.panes.first(where: { $0.id == paneID }) {
+                    return TerminalSessionProvider.shared.existingSession(for: pane)
+                }
+            }
+            return nil
         })
     }
 
@@ -204,16 +213,14 @@ extension PilotApp {
             case .voiceRecord(let command):
                 switch command.control {
                 case .start:
-                    walkieDelivery.start(command, state: &walkieInput)
+                    walkieDeliveryQueue.start(command)
                 case .stop:
-                    walkieInput.stop(recordingID: command.recordingID, workspaceID: command.workspaceID)
+                    walkieDeliveryQueue.stop(command)
                 }
             case .transcribedSpeech(let speech):
-                if !walkieDelivery.receive(speech, state: &walkieInput), !speech.text.isEmpty {
-                    NSSound.beep()
-                }
+                walkieDeliveryQueue.receive(speech)
             case .executeTranscript(let command):
-                walkieDelivery.execute(command, state: &walkieInput)
+                walkieDeliveryQueue.execute(command)
             case .followBuild(let request):
                 buildPush.follow(request, available: actionWatcher.recentRuns)
             case .unfollowBuild(let request):
@@ -221,7 +228,7 @@ extension PilotApp {
             case .buildRunUpdate:
                 break
             case .terminalInput(.enter):
-                walkieDelivery.enterSelection()
+                walkieDeliveryQueue.enterSelection()
             case .deviceKey(let announce):
                 // Auto-exchange device keys with Copilot (issue #51).
                 secureIdentity.receive(announce)

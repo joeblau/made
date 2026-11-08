@@ -159,7 +159,8 @@ Swift schema is `DroneEnvelope`; the required shape is:
 | `close` / `closed` | empty | request + session; explicitly destructive |
 | `cancel` / `cancelled` | empty | request + session; process-group cancellation, session retained |
 | `reconnect` / `reconnected` | resume sequence/offset | request + detached session |
-| `ack` | empty | accepted input/resize request + session |
+| `resync` / `ack` | empty | request + session; reset replay to a fresh visible snapshot |
+| `ack` | empty | accepted input/resize/resync request + session |
 | `heartbeat` | empty | authenticated connection liveness only |
 | `error` | stable error code and retryable flag | related request/session when available |
 
@@ -317,13 +318,29 @@ and statuses only. Provider authentication remains with the agent's host;
 remote terminal agents use credentials already on their Drone. This interface
 does not authorize copying credentials to Cockpit or another worker.
 
-Worker-local approval issues bounded leases tied to the worker identity,
-configured workspace and authenticated controller. Grants are held in memory
-and expire on worker restart. Older clients that construct their own leases
-are rejected; `drone grant-tools` on the worker must issue an approved lease before
-using the unchanged typed calls. There is no remote first-use registration.
-The lease job ID identifies the approved orchestration session; individual
-operations retain their own durable job records.
+Worker-local approval issues non-tool permission grants and bounded tool leases
+to an authenticated controller. `BLAU_DRONE_PERMISSIONS` limits what the owner
+may grant; it does not implicitly authorize paired controllers. `drone grant`
+sets a controller's non-tool permissions, while `drone grant-tools` issues an
+independent lease tied to the worker identity and configured workspace. Both
+kinds of grant are held in memory and expire on worker restart. Older clients
+that construct their own leases are rejected, and there is no remote first-use
+registration. The lease job ID identifies the approved orchestration session;
+individual operations retain their own durable job records. A conditional edit
+is one durable typed job: its SHA/precondition check, unique-byte replacement,
+and atomic file replacement run under the same per-workspace typed-mutation
+lock. It is not a read job followed by an independently racing write job.
+
+Tool correlation is persisted with the job before execution and keyed by the
+authenticated controller and original request ID, not by lease ID, lease job ID,
+or expiry. After a restart, the owner must issue a fresh grant for the same
+controller, Drone, and workspace; the operation's original files/jobs/Git
+permission is checked again before retry, cancellation, or replay. Retained
+terminal results and output/cursors replay from the durable job record, and
+same-key retries return that record without executing again. Jobs interrupted
+before a terminal record fail explicitly as `workerRestarted`; retained-history
+gaps remain `outputGap` rather than silently dropping output. In-memory output
+history is only a replay fast path, not the durable authority.
 
 Authorization, resource-governance and recovery acceptance remains tracked in
 #326/#327. Keep detailed security findings and remediation evidence in private
@@ -332,6 +349,7 @@ not replace production integration or physical rollout checks.
 
 Run `apple/bin/test-drone-tools.sh` for the typed client/fake-engine proof and
 `apple/bin/test-drone-worker.sh --tool-replay-authorization` for the encrypted
-production attach-route ownership proof without creating a terminal. The full
-worker proof exercises a real terminal and agent cycle. None substitutes for
-the physical matrix or adverse recovery checks in the rollout guide.
+production controller-grant and attach-route ownership proofs without creating
+a terminal. The full worker proof exercises a real terminal and agent cycle.
+None substitutes for the physical matrix or adverse recovery checks in the
+rollout guide.

@@ -33,11 +33,14 @@ drone doctor
 ```
 
 `BLAU_DRONE_WORKSPACE` registers the root used by typed workspace operations.
-Terminals and process jobs intentionally run with the worker user's authority;
-they are not an OS sandbox. Use trusted controllers and grant only the
-capabilities required for the controlled rollout. Tool calls additionally need
-a worker-issued lease from the local approval/control path. The hardening and
-recovery checklist remains a prerequisite for broader rollout. Installation creates a per-user `app.blau.drone` LaunchAgent with
+`BLAU_DRONE_PERMISSIONS` is the owner-configured ceiling for local grants; it
+does not authorize every paired controller. Terminals and process jobs
+intentionally run with the worker user's authority; they are not an OS sandbox.
+Use trusted controllers and grant only the capabilities required for the
+controlled rollout. Non-tool operations need an explicit per-controller grant,
+and typed tool calls additionally need a worker-issued lease from the local
+approval/control path. The hardening and recovery checklist remains a
+prerequisite for broader rollout. Installation creates a per-user `app.blau.drone` LaunchAgent with
 `RunAtLoad`, crash supervision, restart throttling, private state directories,
 and two bounded log generations. It does not install a root daemon, cron job,
 or unmanaged shell loop.
@@ -63,36 +66,48 @@ Cockpit. Registry and Bonjour metadata are separate from command output. Treat
 job output and file/diff results as sensitive: arbitrary executed programs can
 print secrets, and bounded output is not automatic redaction.
 
-## Owner-approved central tools
+## Owner-approved controller permissions and central tools
 
 On the worker, use the private local control socket through the CLI:
 
 ```bash
 drone controllers
+drone grant <controller-uuid> terminal
+drone revoke-grants <controller-uuid> terminal
 drone grant-tools <controller-uuid> 00000000-0000-0000-0000-000000000001 files,jobs,git 300
 drone revoke <controller-uuid>
 ```
 
-`controllers` lists authenticated connected controllers. `grant-tools` requires
-one of those controllers, the configured workspace ID, a nonempty subset of
-`files,jobs,git`, and a lifetime of 1–900 seconds. The requested permissions must
-also be enabled by the daemon owner. The JSON result decodes directly as
-`DroneToolLease`; supply it to `DroneToolClient` on the approved controller.
-The lease records worker identity, controller, workspace, a worker-assigned
-orchestration job ID and Unix-epoch expiry. The worker caps outstanding grants
-at 16 per controller and 128 total.
+`controllers` lists authenticated connected controllers. `grant` requires one
+of those controllers and a nonempty subset of `terminal,files,jobs,git`; it
+replaces that controller's non-tool grant set. The requested permissions must
+also be enabled by `BLAU_DRONE_PERMISSIONS`. Pairing, connection, and UI
+visibility do not create a grant. `revoke-grants` removes only the named
+permissions from that controller and works while it is disconnected. Removing
+`terminal` denies new terminal requests, detaches its attachments, and stops
+output delivery without terminating detached shells.
+
+`grant-tools` requires a connected controller, the configured workspace ID, a
+nonempty subset of `files,jobs,git`, and a lifetime of 1–900 seconds. It issues
+an independent typed-tool lease and does not grant terminal access. The JSON
+result decodes directly as `DroneToolLease`; supply it to `DroneToolClient` on
+the approved controller. The lease records worker identity, controller,
+workspace, a worker-assigned orchestration job ID and Unix-epoch expiry. The
+worker caps outstanding tool leases at 16 per controller and 128 total.
 
 Only the worker owner can issue or revoke grants through the mode-0600 Unix
-socket; the daemon also checks the connecting UID. The LAN tool protocol cannot
+socket; the daemon also checks the connecting UID. The LAN protocol cannot
 issue grants. Clients that previously invented their own leases fail closed and
-must obtain an owner-issued lease. Grants expire on worker restart and must be
-approved again. Provider credentials are not part of a grant.
+must obtain an owner-issued lease. Controller grants and tool leases expire on
+worker restart and must be approved again. Provider credentials are not part of
+a grant.
 
-`revoke` invalidates grants and channels immediately, requests cancellation of
-running tool processes, and reports success only after pin removal succeeds.
-Already accepted edits retain their recorded outcome. Detached user terminals
-are not terminated by revocation. A persistence failure returns failure while
-local denial remains active; repair storage and retry revocation before restart.
+`revoke` invalidates controller grants, tool leases, and channels immediately,
+requests cancellation of running tool processes, and reports success only after
+pin removal succeeds. Already accepted edits retain their recorded outcome.
+Detached user terminals are not terminated by revocation. A persistence failure
+returns failure while local denial remains active; repair storage and retry
+revocation before restart.
 
 Storage health is deliberately latched unhealthy after an observed storage
 failure or incomplete shutdown. A later successful probe does not erase that
@@ -108,6 +123,11 @@ restart and confirm `drone doctor` succeeds before enabling further rollout.
   before execution. Retry returns the original job instead of duplicating side
   effects. Interrupted nonterminal jobs fail explicitly as `workerRestarted`;
   they are not rerun automatically.
+- Tool jobs use durable controller/request-ID correlation independent of lease
+  ID, orchestration job, and expiry. A fresh owner grant in the same
+  controller/Drone/workspace scope must pass the original operation permission
+  check before retry, cancellation, or bounded output/cursor replay.
+  Conditional edits compare and replace in one serialized workspace mutation.
 - Cancellation signals the owned process group, not unrelated user processes.
   Output, history, frame size, connection queues, sessions, jobs, path lengths,
   environments, and retained replay histories are bounded.

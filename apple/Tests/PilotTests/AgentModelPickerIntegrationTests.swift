@@ -4,7 +4,8 @@ import Testing
 
 /// The model picker inside a live pane, against shell agents that answer
 /// `session/new` with the probe fixtures and log every later request.
-@Suite("Agent model picker integration")
+// These tests open transient popovers and share AppKit's key-window state.
+@Suite("Agent model picker integration", .serialized)
 @MainActor
 struct AgentModelPickerIntegrationTests {
     struct Label: Sendable, CustomTestStringConvertible {
@@ -21,6 +22,125 @@ struct AgentModelPickerIntegrationTests {
         Label(agent: .grok, model: "Grok 4.7 Fast", reasoning: "Medium"),
         Label(agent: .cursor, model: "grok-4.7", reasoning: nil),
     ]
+
+    @Test("Opening the picker automatically loads unused providers without changing the conversation")
+    func automaticallyDiscoversProviderModels() async throws {
+        let harness = try Harness(.cursor)
+        defer { harness.close() }
+        try await harness.waitUntil { harness.session.phase == .ready }
+        let sessionID = harness.session.rootSessionID
+        harness.session.draft = "Keep my draft"
+        let catalog = AgentModelCatalog(defaults: harness.defaults)
+        #expect(catalog.snapshot(for: .claude) == nil && catalog.snapshot(for: .codex) == nil)
+        harness.layout()
+        let picker = harness.controller.modelPicker
+        picker.show()
+        picker.handle(.selectTab(.agent(.claude)))
+        let view = try #require(picker.picker)
+        #expect(view.state.rows.first?.name == "Loading Claude models…")
+        #expect(view.state.rows.first?.isEnabled == false)
+        try await harness.waitUntil { ChatAgent.allCases.allSatisfy { catalog.snapshot(for: $0) != nil } }
+        try await harness.waitUntil { view.state.rows.first?.isPlaceholder == false }
+        for agent in [ChatAgent.claude, .codex] {
+            picker.handle(.selectTab(.agent(agent)))
+            let expected = try #require(ACPSessionConfig(ACPProbeFixtures.result(agent))?.model)
+            #expect(view.state.rows.map(\.modelID) == expected.choices.map(\.id))
+            #expect(view.state.rows.allSatisfy { $0.isEnabled && !$0.isCurrent })
+            #expect(try harness.files.methods(agent).isEmpty, "Discovery sends no prompt or configuration changes")
+            #expect(try harness.files.launchCount(agent) == 1)
+        }
+        #expect(harness.session.agent == .cursor && harness.session.rootSessionID == sessionID)
+        #expect(harness.session.draft == "Keep my draft" && harness.session.phase == .ready)
+        picker.close()
+        picker.show()
+        picker.handle(.selectTab(.agent(.codex)))
+        #expect(picker.picker?.state.rows.first?.isPlaceholder == false)
+        #expect(try harness.files.launchCount(.codex) == 1, "Reopening uses the cached catalog")
+    }
+
+    @Test("Failed discovery offers an inline retry without switching providers")
+    func discoveryCanRetry() async throws {
+        let harness = try Harness(.cursor)
+        defer { harness.close() }
+        try await harness.waitUntil { harness.session.phase == .ready }
+        try harness.files.replyNew(.claude, [:])
+        harness.layout()
+        let picker = harness.controller.modelPicker
+        picker.show()
+        picker.handle(.selectTab(.agent(.claude)))
+        let view = try #require(picker.picker)
+        try await harness.waitUntil { view.state.rows.first?.name == "Retry loading Claude models" }
+        #expect(view.state.rows.first?.detail == "Claude did not return any models.")
+        #expect(view.state.rows.first?.isEnabled == true)
+        #expect(harness.session.agent == .cursor)
+        try harness.files.replyNew(.claude, ACPProbeFixtures.result(.claude))
+        view.select(rowAt: 0)
+        try await harness.waitUntil { view.state.rows.first?.isPlaceholder == false }
+        #expect(view.state.rows.contains { $0.modelID == "opus" })
+        #expect(harness.session.agent == .cursor && picker.isShown)
+        #expect(try harness.files.launchCount(.claude) == 2)
+    }
+
+    @Test("Discovery stops an unresponsive agent on timeout or cancellation", arguments: [false, true])
+    func discoveryStopsWaiting(cancel: Bool) async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ModelDiscovery-\(UUID())")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let script = #"""
+        read -r _
+        printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+        read -r _
+        printf 'waiting' > "$DIR/waiting"
+        while read -r _; do :; done
+        printf 'stopped' > "$DIR/stopped"
+        """#
+        let config = ACPConnection.LaunchConfiguration(executable: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", script], environment: ["DIR": directory.path], currentDirectory: directory)
+        let task = Task {
+            try await AgentModelDiscovery.load(agent: .claude, workingDirectory: directory.path,
+                resolveLaunch: { _, _ in .success(config) }, timeout: cancel ? .seconds(30) : .milliseconds(200))
+        }
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !FileManager.default.fileExists(atPath: directory.appendingPathComponent("waiting").path), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("waiting").path))
+        if cancel { task.cancel() }
+        do {
+            _ = try await task.value
+            Issue.record("An unresponsive agent must not succeed")
+        } catch {
+            if cancel { #expect(error is CancellationError) } else {
+                #expect(error as? ACPConnectionError == .timedOut(method: ACP.Method.newSession))
+            }
+        }
+        #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("stopped").path))
+    }
+
+    @Test("Installed Anthropic and OpenAI agents populate the picker", arguments: [ChatAgent.claude, .codex])
+    func installedAgentReview(agent: ChatAgent) async throws {
+        guard let path = ProcessInfo.processInfo.environment["MADE_MODEL_DISCOVERY_REVIEW"] else { return }
+        let harness = try Harness(.cursor)
+        defer { harness.close() }
+        try await harness.waitUntil { harness.session.phase == .ready }
+        let config = try await AgentModelDiscovery.load(agent: agent, workingDirectory: NSTemporaryDirectory(),
+                                                       resolveLaunch: AgentChatSession.loginShellLaunchResolver)
+        let catalog = AgentModelCatalog(defaults: harness.defaults)
+        #expect(catalog.record(config, for: agent))
+        harness.layout()
+        let picker = harness.controller.modelPicker
+        picker.show()
+        picker.handle(.selectTab(.agent(agent)))
+        let controller = try #require(picker.picker)
+        #expect(!controller.state.rows.isEmpty && controller.state.rows.allSatisfy { !$0.isPlaceholder && $0.isEnabled })
+        controller.view.layoutSubtreeIfNeeded()
+        let view = controller.view
+        let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        let directory = URL(fileURLWithPath: path)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: directory.appendingPathComponent(agent.rawValue + ".png"))
+    }
 
     @Test("The trigger reads `{model} {reasoning}` for each agent, and session/new fills the catalog", arguments: labels)
     func triggerLabelAndCatalog(_ expected: Label) async throws {
@@ -330,9 +450,28 @@ private struct PickerAgentFiles {
         try value.serialized().write(to: directory.appendingPathComponent("\(agent.rawValue)-\(number).json"))
     }
 
+    func replyNew(_ agent: ChatAgent, _ value: JSONValue) throws {
+        try value.serialized().write(to: directory.appendingPathComponent("\(agent.rawValue)-new.json"))
+    }
+
+    func launchCount(_ agent: ChatAgent) throws -> Int {
+        let url = directory.appendingPathComponent("\(agent.rawValue)-launches.log")
+        guard FileManager.default.fileExists(atPath: url.path) else { return 0 }
+        return try String(contentsOf: url, encoding: .utf8).split(separator: "\n").count
+    }
+
+    func methods(_ agent: ChatAgent) throws -> [String] {
+        let url = directory.appendingPathComponent("\(agent.rawValue).log")
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        return try String(contentsOf: url, encoding: .utf8).split(separator: "\n").compactMap {
+            try JSONValue.parse(Data($0.utf8))["method"]?.stringValue
+        }
+    }
+
     func launch(_ agent: ChatAgent) throws -> ACPConnection.LaunchConfiguration {
         try ACPProbeFixtures.result(agent).serialized().write(to: directory.appendingPathComponent("\(agent.rawValue)-new.json"))
         let script = #"""
+        printf 'started\n' >> "$DIR/AGENT-launches.log"
         reply() { printf '{"jsonrpc":"2.0","id":%s,"result":' "$1"; cat "$DIR/$2.json"; printf '}\n'; }
         read -r _
         printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":false}}}'

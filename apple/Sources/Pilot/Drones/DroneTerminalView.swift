@@ -17,6 +17,8 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     private var active = false
     private var closed = false
     private var generation = 0
+    private var lastDimensions: DroneResizeBody?
+    private let resizeCoordinator = DroneTerminalResizeCoordinator()
 
     init(pane: Pane, provider: TerminalSessionProvider = .shared) {
         self.pane = pane
@@ -111,6 +113,7 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
                 focusPaneInput()
             }
         } else {
+            resizeCoordinator.cancel()
             presentation.stop()
         }
     }
@@ -126,12 +129,41 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
         presentation.retry()
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        resizeRemoteTerminal()
+    }
+
     private func refreshPresentation() {
         guard isViewLoaded, !closed else { return }
         statusLabel.stringValue = presentation.status
         retryButton.isHidden = presentation.status == "Connecting…" || presentation.status == "Connected"
+        if !presentation.isConnected {
+            resizeCoordinator.cancel()
+            lastDimensions = nil
+        }
         if active { renderOutput() }
         updateControls()
+        resizeRemoteTerminal()
+    }
+
+    private func resizeRemoteTerminal() {
+        guard active, presentation.isConnected, !closed, let font = output.font else { return }
+        let characterWidth = font.maximumAdvancement.width
+        let lineHeight = font.ascender - font.descender + font.leading
+        let width = scroll.contentView.bounds.width - output.textContainerInset.width * 2
+        let height = scroll.contentView.bounds.height - output.textContainerInset.height * 2
+        guard characterWidth > 0, lineHeight > 0, width >= characterWidth, height >= lineHeight else { return }
+        let columns = UInt16(min(Int(DroneLimits.maxTerminalColumns), Int(width / characterWidth)))
+        let rows = UInt16(min(Int(DroneLimits.maxTerminalRows), Int(height / lineHeight)))
+        let dimensions = DroneResizeBody(columns: columns, rows: rows)
+        guard dimensions != lastDimensions else { return }
+        lastDimensions = dimensions
+        resizeCoordinator.resize { [weak self, presentation] in
+            let resized = await presentation.resize(columns: columns, rows: rows)
+            guard let self, lastDimensions == dimensions, !resized else { return }
+            lastDimensions = nil
+        }
     }
 
     private func renderOutput() {
@@ -182,6 +214,7 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     func closePane() {
         closed = true
         generation += 1
+        resizeCoordinator.cancel()
         presentation.onUpdate = nil
         presentation.stop()
         if isViewLoaded { updateControls() }
@@ -189,4 +222,31 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     }
 
     isolated deinit { closePane() }
+}
+
+@MainActor
+final class DroneTerminalResizeCoordinator {
+    private var revision: UInt64 = 0
+    private var task: Task<Void, Never>?
+
+    func resize(_ operation: @escaping @MainActor () async -> Void) {
+        revision &+= 1
+        let candidate = revision
+        let previous = task
+        task = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled, candidate == revision else { return }
+            await operation()
+        }
+    }
+
+    func cancel() {
+        revision &+= 1
+        task?.cancel()
+        task = nil
+    }
+
+    func waitForIdle() async {
+        await task?.value
+    }
 }

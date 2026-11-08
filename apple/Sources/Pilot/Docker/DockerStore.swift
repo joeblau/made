@@ -98,6 +98,9 @@ final class DockerStore {
     @ObservationIgnored private let makeClient: @MainActor (String) -> any DockerEngineAPI
     @ObservationIgnored private let resolveSocketPath: @MainActor () -> String?
     @ObservationIgnored private let pollInterval: Duration
+    /// Waits out one poll interval. Tests substitute a manual clock so a poll
+    /// tick lands exactly when they choose instead of at a random phase.
+    @ObservationIgnored private let pollWait: @Sendable (Duration) async -> Void
     @ObservationIgnored private var client: (any DockerEngineAPI)?
     @ObservationIgnored private var isRunning = false
 
@@ -128,12 +131,14 @@ final class DockerStore {
         defaults: UserDefaults = .standard,
         resolveSocketPath: @escaping @MainActor () -> String? = { DockerSocketLocator.resolve() },
         makeClient: @escaping @MainActor (String) -> any DockerEngineAPI = { DockerEngineClient(socketPath: $0) },
-        pollInterval: Duration = .seconds(15)
+        pollInterval: Duration = .seconds(15),
+        pollWait: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) {
         self.defaults = defaults
         self.resolveSocketPath = resolveSocketPath
         self.makeClient = makeClient
         self.pollInterval = pollInterval
+        self.pollWait = pollWait
         // Default to showing stopped containers: the list is as much "what can I
         // bring up" as "what is up".
         self.showsStopped = defaults.object(forKey: Self.showsStoppedKey) as? Bool ?? true
@@ -308,9 +313,10 @@ final class DockerStore {
     private func startPoll() {
         guard pollTask == nil else { return }
         let interval = pollInterval
+        let wait = pollWait
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: interval)
+                await wait(interval)
                 guard let self, !Task.isCancelled, isRunning else { return }
                 if engine.isConnected {
                     requestRefresh(.poll)

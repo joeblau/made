@@ -21,7 +21,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
     let autoApproveControl = AgentChatAutoApproveControl()
     /// Steer / Queue chip at the left, Auto-approve at the right, above the input.
     let composerTopRow = NSStackView()
-    private let transcriptScroll = NSScrollView()
+    let transcriptScroll = NSScrollView()
     private let transcriptArea = NSView()
     private(set) lazy var modelPicker = AgentModelPickerController(session: session)
     let conversationMenuButton = AgentChatConversationMenuButton()
@@ -146,8 +146,11 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         let cardHeight = approvalCard.heightAnchor.constraint(equalToConstant: 0)
         approvalHeight = cardHeight
         NSLayoutConstraint.activate([
-            transcriptArea.leadingAnchor.constraint(equalTo: lower.leadingAnchor, constant: -4),
-            transcriptArea.trailingAnchor.constraint(equalTo: lower.trailingAnchor, constant: 4),
+            // Rows draw their content `AgentChatTimelineLayout.rowInset` in
+            // from the table's edges, so the transcript overhangs the composer
+            // by that much and row content lines up with the composer card.
+            transcriptArea.leadingAnchor.constraint(equalTo: lower.leadingAnchor, constant: -AgentChatTimelineLayout.rowInset),
+            transcriptArea.trailingAnchor.constraint(equalTo: lower.trailingAnchor, constant: AgentChatTimelineLayout.rowInset),
             transcriptArea.topAnchor.constraint(equalTo: root.topAnchor, constant: 8),
             transcriptArea.bottomAnchor.constraint(equalTo: lower.topAnchor, constant: -8),
             lower.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 12),
@@ -236,14 +239,25 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
         transcriptScroll.hasVerticalScroller = true
         transcriptScroll.autohidesScrollers = true
         transcriptScroll.drawsBackground = false
+        // An overlay scroller floats in the rows' trailing inset instead of
+        // narrowing the table, so the trailing edge matches the composer even
+        // with "Show scroll bars: Always". AppKit resets the style when that
+        // preference changes, so reapply it.
+        transcriptScroll.scrollerStyle = .overlay
+        NotificationCenter.default.addObserver(self, selector: #selector(preferredScrollerStyleChanged),
+                                               name: NSScroller.preferredScrollerStyleDidChangeNotification, object: nil)
         transcriptScroll.translatesAutoresizingMaskIntoConstraints = false
         transcriptArea.addSubview(transcriptScroll)
         NSLayoutConstraint.activate([
-            transcriptScroll.leadingAnchor.constraint(equalTo: transcriptArea.leadingAnchor, constant: 8),
-            transcriptScroll.trailingAnchor.constraint(equalTo: transcriptArea.trailingAnchor, constant: -8),
+            transcriptScroll.leadingAnchor.constraint(equalTo: transcriptArea.leadingAnchor),
+            transcriptScroll.trailingAnchor.constraint(equalTo: transcriptArea.trailingAnchor),
             transcriptScroll.topAnchor.constraint(equalTo: transcriptArea.topAnchor),
             transcriptScroll.bottomAnchor.constraint(equalTo: transcriptArea.bottomAnchor),
         ])
+    }
+
+    @objc private func preferredScrollerStyleChanged() {
+        DispatchQueue.main.async { [weak self] in self?.transcriptScroll.scrollerStyle = .overlay }
     }
 
     /// Row callbacks shared by the timeline and the Inspector's nested card.

@@ -15,6 +15,16 @@ private final class FakeNewTabSource: NewTabContentSource {
     func content(for page: NewTabPage) -> NewTabContent { contents[page] ?? NewTabContent(rows: []) }
 }
 
+/// Observable like the live device sessions, so the view must track it.
+@MainActor
+@Observable
+private final class ObservableNewTabSource: NewTabContentSource {
+    var contents: [NewTabPage: NewTabContent] = [:]
+    func activate(_ page: NewTabPage, rootPath: String?) {}
+    func deactivate() {}
+    func content(for page: NewTabPage) -> NewTabContent { contents[page] ?? NewTabContent(rows: []) }
+}
+
 @MainActor
 @Suite("New-tab placeholder")
 struct NewTabPlaceholderTests {
@@ -94,6 +104,56 @@ struct NewTabPlaceholderTests {
         #expect(changes == 1)
         #expect(pane.kind == .simulator && !pane.isChoosingMode)
         #expect(!view.press("t"))
+    }
+
+    @Test("A pushed live page redraws when its source finds a device")
+    func pushedPageObservesLiveSource() async throws {
+        let pane = Pane(kind: .terminal)
+        pane.isChoosingMode = true
+        defer { pane.isChoosingMode = false; NewTabProbes.release(paneID: pane.id, keeping: nil) }
+        let source = ObservableNewTabSource()
+        let view = CockpitNewTabView(pane: pane, source: source)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        window.contentView = view
+
+        #expect(view.press("d") && view.press("g"))
+        #expect(view.currentPage == .devices(.google))
+        #expect(view.rows.isEmpty)
+
+        source.contents[.devices(.google)] = NewTabContent(rows: NewTabMenu.numbered([
+            NewTabRow(id: "SM02", title: "Seeker", action: .open(.pane(.android, .device))),
+        ]))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while view.rows.isEmpty, ContinuousClock.now < deadline { await Task.yield() }
+        #expect(view.rows.map(\.title) == ["Seeker"], "The device list must not wait for unrelated state to change")
+    }
+
+    @Test("A running dev server turns its dot green on the Safari page")
+    func liveServerDotInWindow() async throws {
+        let workspace = Workspace(name: "Next")
+        workspace.rootPath = "/projects/my-next-app"
+        let pane = Pane(kind: .terminal)
+        pane.workspace = workspace
+        pane.isChoosingMode = true
+        defer { pane.isChoosingMode = false }
+        let catalog = LocalServerCatalog(scanner: { _ in [LocalServer(port: 3000, name: "my-next-app")] })
+        // Known workspace: the list is cached, so only liveness arrives after the page renders.
+        _ = await catalog.refresh(rootPath: try #require(workspace.effectiveRootPath))
+        let source = NewTabLiveSource(paneID: pane.id, serverCatalog: catalog, serverProbe: { $0 == 3000 })
+        let view = CockpitNewTabView(pane: pane, source: source)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { window.contentView = nil }
+        window.contentView = view
+
+        #expect(view.press("b") && view.press("s"))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while view.rows.first?.serverIsLive != true, ContinuousClock.now < deadline { await Task.yield() }
+        #expect(view.rows.first?.serverIsLive == true, "The listening server must show as live without other UI changes")
     }
 
     @Test("The tab title follows the chosen rows: New Tab, Terminal, Terminal / Agent")

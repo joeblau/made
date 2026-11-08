@@ -65,6 +65,49 @@ final class DeviceCaptureLifecycleTests: XCTestCase {
         ))
     }
 
+    @MainActor
+    func testRefreshPublishesDevicesWithoutBlockingMainActor() async throws {
+        let (stream, continuation) = AsyncStream<Void>.makeStream()
+        let session = DeviceCaptureSession(paneID: UUID(), deviceDiscovery: {
+            var iterator = stream.makeAsyncIterator()
+            _ = await iterator.next()
+            return DeviceCaptureSession.DiscoveryResult(
+                attached: [],
+                options: [IOSCaptureDevice(id: "phone-a", name: "Test iPhone", modelID: "iPhone18,1")]
+            )
+        })
+        var observedIDs: [String] = []
+        var observedRefreshing = false
+        let observation = CockpitObservation {
+            observedIDs = session.devices.map(\.id)
+            observedRefreshing = session.isRefreshing
+        }
+        observation.start()
+        defer {
+            observation.stop()
+            session.stop()
+        }
+
+        session.refreshDevices()
+        XCTAssertTrue(session.isRefreshing)
+        for _ in 0..<10 { await Task.yield() }
+        XCTAssertTrue(session.isRefreshing, "The main actor remains responsive while discovery is pending")
+        XCTAssertTrue(observedRefreshing)
+
+        continuation.yield()
+        continuation.finish()
+        for _ in 0..<100 where session.isRefreshing {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        for _ in 0..<10 { await Task.yield() }
+
+        XCTAssertFalse(session.isRefreshing)
+        XCTAssertEqual(session.devices.map(\.id), ["phone-a"])
+        XCTAssertEqual(session.devices.map(\.name), ["Test iPhone"])
+        XCTAssertEqual(observedIDs, ["phone-a"])
+        XCTAssertFalse(observedRefreshing)
+    }
+
     func testScreenshotTimesOutWithRecoverableError() async {
         let coordinator = CaptureCoordinator()
         do {

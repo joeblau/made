@@ -20,6 +20,10 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
     private weak var responderAtOpen: NSResponder?
     private var compact = false
     private var triggerSignature: [String]?
+    enum DiscoveryStatus { case loading, failed(String) }
+    private var discoveryStatus: [ChatAgent: DiscoveryStatus] = [:]
+    private var discoveryTasks: [ChatAgent: Task<Void, Never>] = [:]
+    private var discoveryGeneration = 0
 
     var catalog: AgentModelCatalog { AgentModelCatalog(defaults: session.defaults) }
     var isShown: Bool { popover?.isShown == true }
@@ -45,7 +49,7 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
             trigger.configure(agent: session.agent, modelName: label.model, reasoning: label.reasoning, compact: self.compact)
         }
         guard let picker, isShown else { return }
-        picker.update(Self.state(session: session, catalog: catalog, selectedTab: selectedTab))
+        picker.update(Self.state(session: session, catalog: catalog, selectedTab: selectedTab, discovery: discoveryStatus))
     }
 
     /// Re-measures the trigger for a new UI zoom.
@@ -88,17 +92,56 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
         responderAtOpen = trigger.window?.firstResponder
         // Above the trigger: `maxY` is the top edge only in unflipped coordinates.
         popover.show(relativeTo: trigger.bounds, of: trigger, preferredEdge: trigger.isFlipped ? .minY : .maxY)
+        for agent in ChatAgent.allCases { discoverModels(for: agent) }
     }
 
     func close() {
+        cancelDiscovery()
         popover?.close()
     }
 
     func popoverDidClose(_ notification: Notification) {
         guard let closed = notification.object as? NSPopover, closed === popover else { return }
+        cancelDiscovery()
         popover = nil
         picker = nil
         onClose(responderAtOpen)
+    }
+
+    isolated deinit { for task in discoveryTasks.values { task.cancel() } }
+
+    private func cancelDiscovery() {
+        discoveryGeneration += 1
+        for task in discoveryTasks.values { task.cancel() }
+        discoveryTasks.removeAll()
+        discoveryStatus.removeAll()
+    }
+
+    private func discoverModels(for agent: ChatAgent) {
+        guard agent != session.agent, catalog.snapshot(for: agent) == nil, discoveryTasks[agent] == nil else { return }
+        let generation = discoveryGeneration
+        discoveryStatus[agent] = .loading
+        discoveryTasks[agent] = Task { [weak self, session] in
+            do {
+                let config = try await session.discoverModels(for: agent)
+                try Task.checkCancellation()
+                guard let self, generation == discoveryGeneration else { return }
+                // A live session may have supplied a newer list while loading.
+                if catalog.snapshot(for: agent) == nil { catalog.record(config, for: agent) }
+                discoveryStatus[agent] = nil
+            } catch {
+                guard !Task.isCancelled, let self, generation == discoveryGeneration else { return }
+                if let issue = error as? ChatAgentSetupIssue {
+                    discoveryStatus[agent] = .failed([issue.message, issue.command].compactMap { $0 }.joined(separator: " "))
+                } else {
+                    discoveryStatus[agent] = .failed(redactInline(error.localizedDescription))
+                }
+            }
+            guard let self, generation == discoveryGeneration else { return }
+            discoveryTasks[agent] = nil
+            refresh()
+        }
+        refresh()
     }
 
     // MARK: - Actions
@@ -114,11 +157,19 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
             refresh()
             return
         case .selectModel(let agent, let modelID):
-            // A running-agent placeholder ("Loading…") carries no model to select.
-            if agent == session.agent, modelID.isEmpty { return }
+            if modelID.isEmpty {
+                // A failed discovery's row retries it without switching providers.
+                if case .failed = discoveryStatus[agent] {
+                    discoveryStatus[agent] = nil
+                    discoverModels(for: agent)
+                    return
+                }
+                // A running-agent placeholder ("Loading…") carries no model to
+                // select; another provider's placeholder starts that provider.
+                if agent == session.agent { return }
+            }
             if agent != session.agent {
-                // Another provider restarts the pane on it; a placeholder row carries no model.
-                if modelID.isEmpty { session.switchAgent(to: agent) } else { session.selectModel(modelID, on: agent) }
+                session.selectModel(modelID, on: agent)
                 close()
             } else {
                 // Before the session is ready this replaces the pending model;
@@ -156,12 +207,13 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
 
     /// The picker's values for `selectedTab`. The running agent's tab lists
     /// the models its session advertises; other providers list their cached
-    /// catalog, or one row that starts them. Reasoning and the footer belong
+    /// catalog, loading status, or a retry row. Reasoning and the footer belong
     /// to the running session and show only on its tab. A row of the running
     /// agent is enabled only while the session can change models and
     /// advertises that model, on every tab, so no click is silently dropped.
     static func state(session: AgentChatSession, catalog: AgentModelCatalog,
-                      selectedTab: AgentModelPickerState.Tab.Kind) -> AgentModelPickerState {
+                      selectedTab: AgentModelPickerState.Tab.Kind,
+                      discovery: [ChatAgent: DiscoveryStatus] = [:]) -> AgentModelPickerState {
         let running = session.agent
         let config = session.config
         let favorites = Set(catalog.favorites())
@@ -222,9 +274,15 @@ final class AgentModelPickerController: NSObject, NSPopoverDelegate {
             if let snapshot = catalog.snapshot(for: agent) {
                 state.rows = snapshot.models.map { row(agent, $0.id, $0.name, $0.detail, $0.group) }
             } else {
-                state.rows = [AgentModelPickerState.Row(agent: agent, modelID: "", name: "Start \(agent.displayName) to see its models",
-                                                        detail: nil, group: nil, isCurrent: false, isFavorite: false,
-                                                        isPlaceholder: true)]
+                var placeholder = AgentModelPickerState.Row(agent: agent, modelID: "", name: "Loading \(agent.displayName) models…",
+                                                            detail: nil, group: nil, isCurrent: false, isFavorite: false,
+                                                            isPlaceholder: true, isEnabled: false)
+                if case .failed(let message) = discovery[agent] {
+                    placeholder.name = "Retry loading \(agent.displayName) models"
+                    placeholder.detail = message
+                    placeholder.isEnabled = true
+                }
+                state.rows = [placeholder]
             }
         }
         return state

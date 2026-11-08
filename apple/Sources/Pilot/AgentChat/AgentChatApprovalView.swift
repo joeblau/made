@@ -483,7 +483,7 @@ final class ApprovalCardView: NSView {
 /// "Rejected · <name>", "Cancelled", "Withdrawn by agent", or "Stopped".
 final class ApprovalRecordView: NSTableCellView {
     static let reuseIdentifier = NSUserInterfaceItemIdentifier("agent-chat.approval-record")
-    static let sideInset: CGFloat = 8
+    static let sideInset = AgentChatTimelineLayout.rowInset
 
     let dot = AgentStatusDotView()
     let statusLabel = AgentChatText.makeLabel()

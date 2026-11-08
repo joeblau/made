@@ -137,7 +137,7 @@ final class DroneDaemon {
                         throw DroneWorkerError.invalidResponse
                     }
                     await workerService.resolvePairing(requestID: requestID, approved: request.command == "approve")
-                case "grant-tools", "revoke":
+                case "grant", "revoke-grants", "grant-tools", "revoke":
                     guard let workerService else { throw DroneWorkerError.invalidResponse }
                     lease = try await workerService.ownerControl(request)
                 default: throw DroneWorkerError.invalidResponse

@@ -2,9 +2,7 @@ import AppKit
 import Observation
 import UniformTypeIdentifiers
 
-/// Mock-ups studio: device rail on the left, artboard in the center, backdrop
-/// and device inspector on the right. Photo mode draws flat frames; Video mode
-/// stages the same document in 3D.
+/// Mock-ups studio: layout rail, shared 3D artboard, and backdrop inspector.
 @MainActor
 final class MockupsViewController: NSViewController, CockpitPanePresenting, CockpitPageToolbarProviding {
     let document = MockupDocument()
@@ -21,7 +19,10 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     private let exporter = MockupVideoExporter()
     private var exportTask: Task<Void, Never>?
     private let center = MockupCenterView()
-    private let deviceRail = NSStackView()
+    private let devicePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let gallery = NSStackView()
+    private var layoutButtons: [MockupLayoutButton] = []
+    private let screenPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let finishRow = NSStackView()
     private let styleControl = NSSegmentedControl(labels: MockupBackground.Style.allCases.map(\.rawValue), trackingMode: .selectOne, target: nil, action: nil)
     private let swatches = MockupSwatchGrid()
@@ -30,20 +31,21 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     private let scale = NSSlider(value: 0.82, minValue: 0.3, maxValue: 1.1, target: nil, action: nil)
     private let tiltX = NSSlider(value: 0, minValue: -60, maxValue: 60, target: nil, action: nil)
     private let tiltY = NSSlider(value: 0, minValue: -90, maxValue: 90, target: nil, action: nil)
+    private let positionX = NSSlider(value: 0, minValue: -0.5, maxValue: 0.5, target: nil, action: nil)
+    private let positionY = NSSlider(value: 0, minValue: -0.5, maxValue: 0.5, target: nil, action: nil)
     private let openSlider = NSSlider(value: 1, minValue: 0, maxValue: 1, target: nil, action: nil)
     private lazy var openRow = Self.labeled("Open", openSlider)
     private lazy var chooseScreenshot = RRButton("Choose Screenshot…", symbol: "iphone") { [weak self] in self?.chooseScreenshotImage() }
-    private let transport = NSStackView()
-    private lazy var playButton = RRButton("", symbol: "pause.fill") { [weak self] in self?.document.isPlaying.toggle() }
-    private let motionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private lazy var timeline = MockupTimelineView(document: document)
     private let status = RRUI.label("", size: 11, color: .secondaryLabelColor)
     private var lastSolid = MockupColor(hex: 0x7CF866, space: .displayP3)
     private let colorFormatPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let colorField = NSTextField()
-    private lazy var displayP3Toggle = NSButton(checkboxWithTitle: "Display P3", target: self, action: #selector(toggleDisplayP3))
+    private let displayP3Toggle = NSSwitch()
     private lazy var colorRow = RRUI.stack([
         RRUI.stack([colorFormatPopup, colorField], axis: .horizontal),
-        displayP3Toggle,
+        RRUI.stack([RRUI.label("Display P3", size: 12, color: .secondaryLabelColor), RRUI.spacer(), displayP3Toggle],
+                   axis: .horizontal),
     ], spacing: 8)
     private var colorFormat: MockupColorFormat = .hex
     private var backdropSpace: MockupColor.Space = .displayP3
@@ -55,6 +57,14 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         if let kind = defaults.string(forKey: "mockups.kind").flatMap(MockupKind.init(rawValue:)) { document.kind = kind }
         if let aspect = defaults.string(forKey: "mockups.aspect").flatMap(MockupAspectRatio.preset(id:)) { document.aspect = aspect }
         if let device = defaults.string(forKey: "mockups.device").flatMap(MockupDevice.init(rawValue:)) { document.device = device }
+        if let layout = defaults.string(forKey: "mockups.layout").flatMap(MockupLayout.init(rawValue:)) { document.layout = layout }
+        if let motion = defaults.string(forKey: "mockups.motion").flatMap(MockupMotion.init(rawValue:)) { document.motion = motion }
+        if let data = defaults.data(forKey: "mockups.timeline"),
+           let saved = try? JSONDecoder().decode(MockupTimeline.self, from: data), saved.isValid {
+            document.timeline = saved
+        } else {
+            document.timeline = MockupTimeline.preset(document.motion, base: document.basePose)
+        }
         if let format = defaults.string(forKey: MockupColorFormat.defaultsKey).flatMap(MockupColorFormat.init(rawValue:)) {
             colorFormat = format
         }
@@ -97,12 +107,13 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         center.document = document
         stage.onImportFailure = { [weak self] in self?.report($0) }
         stage.onLoadFailure = { [weak self] in self?.status.stringValue = $0 }
+        stage.onTimeUpdate = { [weak self] _ in self?.timeline.updatePlayhead() }
 
         let rail = buildRail()
         let inspector = buildInspector()
-        let centerColumn = RRUI.stack([center, buildTransport()], spacing: 8)
+        let centerColumn = RRUI.stack([center, timeline], spacing: 8)
         centerColumn.alignment = .centerX
-        center.widthAnchor.constraint(equalTo: centerColumn.widthAnchor).isActive = true
+        for item in [center, timeline] { item.widthAnchor.constraint(equalTo: centerColumn.widthAnchor).isActive = true }
         center.setContentHuggingPriority(.defaultLow, for: .vertical)
 
         let columns = RRUI.stack([rail, centerColumn, inspector], axis: .horizontal, spacing: 0)
@@ -111,7 +122,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         for column in [rail, centerColumn, inspector] {
             column.heightAnchor.constraint(equalTo: columns.heightAnchor).isActive = true
         }
-        rail.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        rail.widthAnchor.constraint(equalToConstant: 220).isActive = true
         inspector.widthAnchor.constraint(equalToConstant: 280).isActive = true
         RRUI.pin(columns, to: view)
         refreshControls()
@@ -126,11 +137,14 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
                 _ = document.kind; _ = document.aspect; _ = document.background; _ = document.device
                 _ = document.finishIndex; _ = document.screenshot; _ = document.rotation; _ = document.scale
                 _ = document.tiltX; _ = document.tiltY; _ = document.openAmount; _ = document.motion; _ = document.isPlaying
+                _ = document.positionX; _ = document.positionY; _ = document.timeline; _ = document.selectedKeyframeID
+                _ = document.layout; _ = document.selectedScreen
+                for index in 0..<3 { _ = document.screenshot(at: index) }
             }, changed: { [weak self] in self?.documentChanged() })
             documentChanged()
         } else {
             observation.stop()
-            document.isPlaying = false
+            if document.isPlaying { document.togglePlayback() }
             stage.update()
         }
     }
@@ -139,6 +153,9 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         defaults.set(document.kind.rawValue, forKey: "mockups.kind")
         defaults.set(document.aspect.id, forKey: "mockups.aspect")
         defaults.set(document.device.rawValue, forKey: "mockups.device")
+        defaults.set(document.layout.rawValue, forKey: "mockups.layout")
+        defaults.set(document.motion.rawValue, forKey: "mockups.motion")
+        defaults.set(try? JSONEncoder().encode(document.timeline), forKey: "mockups.timeline")
         center.needsLayout = true
         stage.update()
         refreshControls()
@@ -147,29 +164,48 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     // MARK: - Columns
 
     private func buildRail() -> NSView {
-        deviceRail.orientation = .vertical
-        deviceRail.alignment = .leading
-        deviceRail.spacing = 4
-        var group = ""
         for device in MockupDevice.allCases {
-            if device.group != group {
-                group = device.group
-                let heading = RRUI.label(group.uppercased(), size: 10, weight: .semibold, color: .tertiaryLabelColor)
-                deviceRail.addArrangedSubview(heading)
-                deviceRail.setCustomSpacing(6, after: heading)
-            }
-            let button = RRButton(device.name, symbol: device.symbol) { [weak self] in self?.document.device = device }
-            button.identifier = NSUserInterfaceItemIdentifier(device.rawValue)
-            button.setAccessibilityIdentifier("mockups.device." + device.rawValue)
-            deviceRail.addArrangedSubview(button)
+            devicePopup.addItem(withTitle: device.name)
+            devicePopup.lastItem?.representedObject = device.rawValue
         }
+        devicePopup.controlSize = .small
+        devicePopup.target = self
+        devicePopup.action = #selector(changeDevice)
+        devicePopup.setAccessibilityLabel("Device model")
+        devicePopup.setAccessibilityIdentifier("mockups.device-picker")
         finishRow.orientation = .horizontal
         finishRow.spacing = 6
-        let finishHeading = RRUI.label("FINISH", size: 10, weight: .semibold, color: .tertiaryLabelColor)
-        let stack = RRUI.stack([deviceRail, finishHeading, finishRow, RRUI.spacer()], spacing: 10)
-        stack.setCustomSpacing(18, after: deviceRail)
-        stack.edgeInsets = NSEdgeInsets(top: 16, left: 14, bottom: 16, right: 10)
+        gallery.orientation = .vertical
+        gallery.alignment = .centerX
+        gallery.spacing = 6
+        let scroll = Self.scrolling(gallery)
+        scroll.setAccessibilityIdentifier("mockups.layouts")
+        let stack = RRUI.stack([
+            RRUI.label("Device", size: 15, weight: .semibold), devicePopup, finishRow,
+            RRUI.label("Layouts", size: 15, weight: .semibold), scroll,
+        ], spacing: 10)
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 12, bottom: 12, right: 12)
+        for child in [devicePopup, scroll] { child.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true }
         return stack
+    }
+
+    private static func scrolling(_ content: NSView) -> NSScrollView {
+        let scroll = CockpitUI.scrollView(documentView: content)
+        // A flipped clip view anchors short and tall columns at the top;
+        // AppKit's default clip view starts a scroll view at the bottom.
+        let clip = MockupFlippedClipView()
+        clip.drawsBackground = false
+        scroll.contentView = clip
+        scroll.documentView = content
+        scroll.automaticallyAdjustsContentInsets = false
+        content.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            content.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            content.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor),
+        ])
+        return scroll
     }
 
     private func buildInspector() -> NSView {
@@ -190,9 +226,14 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         colorField.target = self
         colorField.action = #selector(colorFieldCommitted)
         colorField.setAccessibilityLabel("Backdrop color value")
+        colorField.widthAnchor.constraint(greaterThanOrEqualToConstant: 96).isActive = true
+        for row in colorRow.arrangedSubviews { row.widthAnchor.constraint(equalTo: colorRow.widthAnchor).isActive = true }
         displayP3Toggle.controlSize = .small
+        displayP3Toggle.target = self
+        displayP3Toggle.action = #selector(toggleDisplayP3)
+        displayP3Toggle.setAccessibilityLabel("Display P3")
         displayP3Toggle.toolTip = "Pick backdrop colors in the wide Display P3 gamut instead of sRGB"
-        for slider in [rotation, scale, tiltX, tiltY, openSlider] {
+        for slider in [rotation, scale, tiltX, tiltY, positionX, positionY, openSlider] {
             slider.target = self
             slider.action = #selector(slidersChanged)
             slider.controlSize = .small
@@ -201,7 +242,14 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         scale.setAccessibilityLabel("Device size")
         tiltX.setAccessibilityLabel("Tilt")
         tiltY.setAccessibilityLabel("Turn")
+        positionX.setAccessibilityLabel("Horizontal position")
+        positionY.setAccessibilityLabel("Vertical position")
         openSlider.setAccessibilityLabel("Open amount")
+        screenPopup.controlSize = .small
+        screenPopup.target = self
+        screenPopup.action = #selector(changeScreen)
+        screenPopup.setAccessibilityLabel("Screen to edit")
+        screenPopup.setAccessibilityIdentifier("mockups.screen-picker")
         let clear = RRButton("Clear", symbol: "xmark") { [weak self] in self?.document.screenshot = nil }
         let stack = RRUI.stack([
             RRUI.label("Backdrop", size: 15, weight: .semibold),
@@ -213,30 +261,20 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             Self.labeled("Turn", tiltY),
             Self.labeled("Tilt", tiltX),
             Self.labeled("Rotation", rotation),
+            Self.labeled("Move X", positionX),
+            Self.labeled("Move Y", positionY),
             Self.labeled("Size", scale),
             openRow,
             RRUI.label("Screen", size: 15, weight: .semibold),
+            screenPopup,
             RRUI.stack([chooseScreenshot, clear], axis: .horizontal),
+            RRUI.label("Choose a screen, then drop or paste its image onto the canvas.", size: 11, color: .secondaryLabelColor),
             status,
             RRUI.spacer(),
         ], spacing: 12)
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 14, bottom: 16, right: 14)
-        swatches.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -28).isActive = true
-        return stack
-    }
-
-    private func buildTransport() -> NSView {
-        for motion in MockupMotion.allCases { motionPopup.addItem(withTitle: motion.rawValue) }
-        motionPopup.controlSize = .small
-        motionPopup.target = self
-        motionPopup.action = #selector(changeMotion)
-        motionPopup.setAccessibilityLabel("Motion preset")
-        playButton.setAccessibilityLabel("Play or pause")
-        transport.orientation = .horizontal
-        transport.spacing = 10
-        transport.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 12, right: 0)
-        for view in [playButton, motionPopup] { transport.addArrangedSubview(view) }
-        return transport
+        RRUI.fillWidth(stack)
+        return Self.scrolling(stack)
     }
 
     private static func labeled(_ title: String, _ control: NSView) -> NSView {
@@ -247,12 +285,41 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
 
     // MARK: - State → controls
 
+    private func refreshLayouts() {
+        guard layoutButtons.map(\.layout) != document.availableLayouts else { return }
+        RRUI.clear(gallery)
+        layoutButtons.removeAll()
+        for layout in document.availableLayouts {
+            if layout == .responsive {
+                gallery.addArrangedSubview(RRUI.label("More layouts", size: 11, color: .secondaryLabelColor))
+            }
+            let button = MockupLayoutButton(layout: layout, document: document) { [weak self] in
+                self?.document.selectLayout(layout)
+            }
+            gallery.addArrangedSubview(button)
+            button.widthAnchor.constraint(equalTo: gallery.widthAnchor).isActive = true
+            layoutButtons.append(button)
+        }
+        gallery.layoutSubtreeIfNeeded()
+        gallery.enclosingScrollView?.contentView.scroll(to: .zero)
+    }
+
     private func refreshControls() {
         kindPicker.selectedSegment = MockupKind.allCases.firstIndex(of: document.kind) ?? 0
         if let index = MockupAspectRatio.presets.firstIndex(of: document.aspect) { aspectPopup.selectItem(at: index) }
-        for case let button as RRButton in deviceRail.arrangedSubviews {
-            button.state = button.identifier?.rawValue == document.device.rawValue ? .on : .off
+        devicePopup.selectItem(withTitle: document.device.name)
+        refreshLayouts()
+        for button in layoutButtons {
+            button.state = button.layout == document.layout ? .on : .off
+            button.needsDisplay = true
         }
+        let screenTitles = document.devices.enumerated().map { "\($0.offset + 1) · \($0.element.name)" }
+        if screenPopup.itemTitles != screenTitles {
+            screenPopup.removeAllItems()
+            screenPopup.addItems(withTitles: screenTitles)
+        }
+        screenPopup.selectItem(at: document.selectedScreen)
+        screenPopup.isHidden = document.devices.count == 1
         RRUI.clear(finishRow)
         for (index, finish) in document.device.finishes.enumerated() {
             let dot = MockupSwatchGrid.Dot(color: finish.swatch.nsColor, selected: index == document.finishIndex) { [weak self] in
@@ -288,19 +355,35 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         scale.doubleValue = document.scale
         tiltX.doubleValue = document.tiltX * 180 / .pi
         tiltY.doubleValue = document.tiltY * 180 / .pi
+        positionX.doubleValue = document.positionX
+        positionY.doubleValue = document.positionY
         openSlider.doubleValue = document.openAmount
-        openRow.isHidden = document.device.hinge == .none
-        transport.isHidden = document.kind != .video
-        motionPopup.selectItem(withTitle: document.motion.rawValue)
-        playButton.image = NSImage(systemSymbolName: document.isPlaying ? "pause.fill" : "play.fill", accessibilityDescription: nil)
+        openRow.isHidden = !stage.models.contains(where: \.hasHinge)
+        timeline.isHidden = document.kind != .video
+        timeline.refresh()
         if exportTask == nil { exportButton.title = document.kind == .photo ? "Export PNG" : "Export MP4" }
     }
 
     // MARK: - Actions
 
+    @objc private func changeDevice() {
+        guard let id = devicePopup.selectedItem?.representedObject as? String, let device = MockupDevice(rawValue: id) else { return }
+        document.device = device
+    }
+
+    @objc private func changeScreen() {
+        document.selectedScreen = max(screenPopup.indexOfSelectedItem, 0)
+    }
+
     @objc private func changeKind() {
+        if document.isPlaying { document.togglePlayback() }
         document.kind = MockupKind.allCases[max(kindPicker.selectedSegment, 0)]
-        document.isPlaying = document.kind == .video
+        if document.kind == .video {
+            document.seek(to: 0)
+            document.isPlaying = true
+        } else {
+            document.selectedKeyframeID = nil
+        }
     }
 
     @objc private func changeAspect() {
@@ -363,17 +446,15 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         document.scale = scale.doubleValue
         document.tiltX = tiltX.doubleValue * .pi / 180
         document.tiltY = tiltY.doubleValue * .pi / 180
+        document.positionX = positionX.doubleValue
+        document.positionY = positionY.doubleValue
         document.openAmount = openSlider.doubleValue
-    }
-
-    @objc private func changeMotion() {
-        guard let title = motionPopup.titleOfSelectedItem, let motion = MockupMotion(rawValue: title) else { return }
-        document.motion = motion
-        document.isPlaying = true
+        document.updateSelectedPose()
     }
 
     private func chooseScreenshotImage() {
-        pickImage { [weak self] image in self?.document.screenshot = image }
+        let index = document.selectedScreen
+        pickImage { [weak self] image in self?.document.setScreenshot(image, at: index) }
     }
 
     private func chooseBackgroundImage() {
@@ -439,13 +520,11 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         }
     }
 
-    /// Whole loops of the preset, at least five seconds.
+    /// Exports the exact keyframe timeline, including its final hold.
     private func exportVideo(to url: URL) {
-        let loop = document.motion.duration
-        let duration = loop * max(1, (5 / loop).rounded(.up))
-        let settings = MockupVideoExporter.Settings.social(ratio: document.aspect.ratio, duration: duration)
+        let settings = MockupVideoExporter.Settings.social(ratio: document.aspect.ratio, duration: document.timeline.duration)
         let wasPlaying = document.isPlaying
-        document.isPlaying = false
+        if wasPlaying { document.togglePlayback() }
         exportButton.title = "Cancel"
         exportTask = Task { [weak self] in
             guard let self else { return }
@@ -462,7 +541,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
                 self.status.stringValue = "Export failed: \(error)"
             }
             self.exportTask = nil
-            self.document.isPlaying = wasPlaying
+            if wasPlaying { self.document.togglePlayback() }
             self.refreshControls()
         }
     }
@@ -563,4 +642,8 @@ final class MockupSwatchGrid: NSView {
         override func mouseDown(with event: NSEvent) { perform() }
         override func accessibilityPerformPress() -> Bool { perform(); return true }
     }
+}
+
+private final class MockupFlippedClipView: NSClipView {
+    override var isFlipped: Bool { true }
 }

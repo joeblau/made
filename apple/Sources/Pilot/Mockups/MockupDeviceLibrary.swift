@@ -119,11 +119,15 @@ enum MockupDeviceLibrary {
             throw Failure.missingResource(finish.resource)
         }
         let source = finish.variants.isEmpty ? url : try variantWrapper(for: url, variants: finish.variants)
+        let scene: SCNScene
         do {
-            return try SCNScene(url: source, options: [.checkConsistency: false])
+            scene = try SCNScene(url: source, options: [.checkConsistency: false])
         } catch {
             throw Failure.unreadable(finish.resource)
         }
+        // Each finish loads its own scene, so retinting the template is safe.
+        if let recolor = finish.recolor { recolor.apply(to: scene.rootNode) }
+        return scene
     }
 
     /// SceneKit has no variant API, but it honours selections authored in a

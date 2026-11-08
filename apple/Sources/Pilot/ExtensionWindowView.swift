@@ -141,7 +141,7 @@ final class ExtensionWorkspaceController {
     func closeSelectedPane() {
         guard let workspace = selectedWorkspace,
               let pane = workspace.selectedPane else { return }
-        workspace.requestRemovePane(pane, allowEmpty: true)
+        workspace.requestClosePane(pane)
     }
 
     func synchronize(with source: Workspace?) {
@@ -162,6 +162,8 @@ final class ExtensionWorkspaceController {
         }
 
         synchronizeMetadata(from: source, to: workspace)
+        // An Extendo workspace whose panes were all closed earlier shows New Tab.
+        workspace.ensureNewTabWhenEmpty()
         selectedSourceID = source.id
         guard modelContext.saveReporting(
             operation: "Saving Extendo workspace",
@@ -216,6 +218,7 @@ final class ExtensionWorkspaceController {
         // must not silently detach browser/editor panes from that source.
         workspace.rootPathSource = .manual
         workspace.sortedPanes.first?.currentDirectory = rootPath
+        workspace.startOnNewTab()
         let link = ExtensionWorkspaceLink(sourceWorkspaceID: source.id, workspace: workspace)
         modelContext.insert(workspace)
         modelContext.insert(link)

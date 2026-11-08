@@ -509,11 +509,44 @@ struct AgenticUsageProviderTests {
 }
 
 final class AgenticUsagePerformanceTests: XCTestCase {
+    private static let recordsPerProvider = 16_384
+
     private struct Corpus: Sendable {
         let root: URL
         let sources: [AgenticUsageLoader.Source]
         let kimiFile: URL
         let recordCount: Int
+        let byteCount: Int
+        let bytesPerProvider: [String: Int]
+    }
+
+    private struct Observation {
+        let parsedByteCount: Int?
+        let recordCount: Int?
+        let didCancel: Bool?
+    }
+
+    private struct Sample: Codable {
+        let iteration: Int
+        let elapsedMilliseconds: Double
+        let parsedByteCount: Int?
+        let recordCount: Int?
+        let didCancel: Bool?
+    }
+
+    private struct Report: Codable {
+        let version: Int
+        let workload: String
+        let sourceRevision: String
+        let recordsPerProvider: Int
+        let recordCount: Int
+        let corpusByteCount: Int
+        let bytesPerProvider: [String: Int]
+        let samples: [Sample]
+    }
+
+    private enum ConfigurationError: Error {
+        case invalidIterationCount
     }
 
     private static func claude(_ serial: Int) -> String {
@@ -540,140 +573,183 @@ final class AgenticUsagePerformanceTests: XCTestCase {
         """
     }
 
-    private func makeCorpus(recordsPerProvider: Int) throws -> Corpus {
+    private func configuration() throws -> (output: URL, iterations: Int) {
+        let environment = ProcessInfo.processInfo.environment
+        guard let path = environment["MADE_USAGE_BENCHMARK_OUTPUT"] else {
+            throw XCTSkip("Run apple/bin/benchmark-agentic-usage.sh to collect usage benchmarks")
+        }
+        let iterations = Int(environment["MADE_USAGE_BENCHMARK_ITERATIONS"] ?? "5")
+        guard let iterations, iterations > 0 else { throw ConfigurationError.invalidIterationCount }
+        return (URL(fileURLWithPath: path, isDirectory: true), iterations)
+    }
+
+    private func makeCorpus() throws -> Corpus {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("agentic-benchmark-\(UUID().uuidString)", isDirectory: true)
         let files: [(AgenticProvider, String, [String])] = [
-            (.claude, "history.jsonl", (0..<recordsPerProvider).map(Self.claude)),
-            (.codex, "rollout.jsonl", (0..<recordsPerProvider).map(Self.codex)),
-            (.grok, "updates.jsonl", (0..<recordsPerProvider).map(Self.grok)),
-            (.kimi, "wire.jsonl", (0..<recordsPerProvider).map(Self.kimi)),
+            (.claude, "history.jsonl", (0..<Self.recordsPerProvider).map(Self.claude)),
+            (.codex, "rollout.jsonl", (0..<Self.recordsPerProvider).map(Self.codex)),
+            (.grok, "updates.jsonl", (0..<Self.recordsPerProvider).map(Self.grok)),
+            (.kimi, "wire.jsonl", (0..<Self.recordsPerProvider).map(Self.kimi)),
         ]
         var sources: [AgenticUsageLoader.Source] = []
+        var bytesPerProvider: [String: Int] = [:]
         var kimiFile = root
         for (provider, name, lines) in files {
             let directoryURL = root.appendingPathComponent(provider.rawValue, isDirectory: true)
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             let url = directoryURL.appendingPathComponent(name)
-            try Data((lines.joined(separator: "\n") + "\n").utf8).write(to: url)
+            let data = Data((lines.joined(separator: "\n") + "\n").utf8)
+            try data.write(to: url)
             sources.append(.init(provider: provider, rootDirectory: directoryURL))
+            bytesPerProvider[provider.rawValue] = data.count
             if provider == .kimi { kimiFile = url }
         }
         return Corpus(
-            root: root, sources: sources, kimiFile: kimiFile, recordCount: recordsPerProvider * files.count
+            root: root,
+            sources: sources,
+            kimiFile: kimiFile,
+            recordCount: Self.recordsPerProvider * files.count,
+            byteCount: bytesPerProvider.values.reduce(0, +),
+            bytesPerProvider: bytesPerProvider
         )
     }
 
-    private func withCorpus(
-        recordsPerProvider: Int = 256,
-        _ body: (Corpus) -> Void
-    ) {
-        do {
-            let corpus = try makeCorpus(recordsPerProvider: recordsPerProvider)
-            defer { try? FileManager.default.removeItem(at: corpus.root) }
-            body(corpus)
-        } catch {
-            XCTFail("Could not create benchmark corpus: \(error)")
-        }
+    private func measure(
+        iteration: Int,
+        operation: () async throws -> Observation
+    ) async rethrows -> Sample {
+        let start = ProcessInfo.processInfo.systemUptime
+        let observation = try await operation()
+        return Sample(
+            iteration: iteration,
+            elapsedMilliseconds: (ProcessInfo.processInfo.systemUptime - start) * 1_000,
+            parsedByteCount: observation.parsedByteCount,
+            recordCount: observation.recordCount,
+            didCancel: observation.didCancel
+        )
     }
 
-    private func run(_ operation: @Sendable @escaping () async throws -> Void) {
-        let completed = expectation(description: "Async workload")
-        Task {
-            do { try await operation() } catch { XCTFail("Workload failed: \(error)") }
-            completed.fulfill()
-        }
-        wait(for: [completed], timeout: 120)
+    private func writeReport(workload: String, corpus: Corpus, samples: [Sample], to output: URL) throws {
+        let report = Report(
+            version: 1,
+            workload: workload,
+            sourceRevision: ProcessInfo.processInfo.environment["MADE_USAGE_BENCHMARK_REVISION"] ?? "unknown",
+            recordsPerProvider: Self.recordsPerProvider,
+            recordCount: corpus.recordCount,
+            corpusByteCount: corpus.byteCount,
+            bytesPerProvider: corpus.bytesPerProvider,
+            samples: samples
+        )
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try encoder.encode(report).write(to: output.appendingPathComponent("\(workload).json"), options: .atomic)
     }
 
-    private func measureWorkload(_ body: () -> Void) {
-        let options = XCTMeasureOptions()
-        options.invocationOptions = [.manuallyStart, .manuallyStop]
-        measure(metrics: [XCTClockMetric()], options: options, block: body)
-    }
-
-    func testColdLoadMultiProviderCorpus() {
-        measureWorkload {
-            withCorpus { corpus in
-                startMeasuring()
-                run {
-                    let result = try await AgenticUsageLoader(sources: corpus.sources).load()
-                    XCTAssertEqual(result.records.count, corpus.recordCount)
-                }
-                stopMeasuring()
+    func testColdLoadMultiProviderCorpus() async throws {
+        let configuration = try configuration()
+        let corpus = try makeCorpus()
+        defer { try? FileManager.default.removeItem(at: corpus.root) }
+        var samples: [Sample] = []
+        for iteration in 1...configuration.iterations {
+            let sample = try await measure(iteration: iteration) {
+                let result = try await AgenticUsageLoader(sources: corpus.sources).load()
+                XCTAssertEqual(result.records.count, corpus.recordCount)
+                XCTAssertEqual(result.parsedByteCount, corpus.byteCount)
+                return Observation(
+                    parsedByteCount: result.parsedByteCount,
+                    recordCount: result.records.count,
+                    didCancel: nil
+                )
             }
+            samples.append(sample)
         }
+        try writeReport(workload: "cold-load", corpus: corpus, samples: samples, to: configuration.output)
     }
 
-    func testUnchangedRefreshMultiProviderCorpus() {
-        measureWorkload {
-            withCorpus { corpus in
-                let loader = AgenticUsageLoader(sources: corpus.sources)
-                run { _ = try await loader.load() }
-                startMeasuring()
-                run {
-                    let result = try await loader.load()
-                    XCTAssertFalse(result.changed)
-                    XCTAssertEqual(result.parsedByteCount, 0)
-                    XCTAssertEqual(result.records.count, corpus.recordCount)
-                }
-                stopMeasuring()
+    func testUnchangedRefreshMultiProviderCorpus() async throws {
+        let configuration = try configuration()
+        let corpus = try makeCorpus()
+        defer { try? FileManager.default.removeItem(at: corpus.root) }
+        let loader = AgenticUsageLoader(sources: corpus.sources)
+        _ = try await loader.load()
+        var samples: [Sample] = []
+        for iteration in 1...configuration.iterations {
+            let sample = try await measure(iteration: iteration) {
+                let result = try await loader.load()
+                XCTAssertFalse(result.changed)
+                XCTAssertEqual(result.parsedByteCount, 0)
+                XCTAssertEqual(result.records.count, corpus.recordCount)
+                return Observation(
+                    parsedByteCount: result.parsedByteCount,
+                    recordCount: result.records.count,
+                    didCancel: nil
+                )
             }
+            samples.append(sample)
         }
+        try writeReport(workload: "unchanged-refresh", corpus: corpus, samples: samples, to: configuration.output)
     }
 
-    func testSmallAppendMultiProviderCorpus() {
-        measureWorkload {
-            withCorpus { corpus in
-                let loader = AgenticUsageLoader(sources: corpus.sources)
-                run { _ = try await loader.load() }
-                do {
-                    let appended = Data((Self.kimi(256) + "\n").utf8)
-                    let handle = try FileHandle(forWritingTo: corpus.kimiFile)
-                    try handle.seekToEnd()
-                    try handle.write(contentsOf: appended)
-                    try handle.close()
-                    startMeasuring()
-                    run {
-                        let result = try await loader.load()
-                        XCTAssertEqual(result.parsedByteCount, appended.count)
-                        XCTAssertEqual(result.records.count, corpus.recordCount + 1)
-                    }
-                    stopMeasuring()
-                } catch {
-                    XCTFail("Could not append benchmark record: \(error)")
+    func testSmallAppendMultiProviderCorpus() async throws {
+        let configuration = try configuration()
+        let corpus = try makeCorpus()
+        defer { try? FileManager.default.removeItem(at: corpus.root) }
+        let loader = AgenticUsageLoader(sources: corpus.sources)
+        _ = try await loader.load()
+        var samples: [Sample] = []
+        for iteration in 1...configuration.iterations {
+            let appended = Data((Self.kimi(Self.recordsPerProvider + iteration - 1) + "\n").utf8)
+            let handle = try FileHandle(forWritingTo: corpus.kimiFile)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: appended)
+            try handle.close()
+            let sample = try await measure(iteration: iteration) {
+                let result = try await loader.load()
+                XCTAssertEqual(result.parsedByteCount, appended.count)
+                XCTAssertEqual(result.records.count, corpus.recordCount + iteration)
+                return Observation(
+                    parsedByteCount: result.parsedByteCount,
+                    recordCount: result.records.count,
+                    didCancel: nil
+                )
+            }
+            samples.append(sample)
+        }
+        try writeReport(workload: "small-append", corpus: corpus, samples: samples, to: configuration.output)
+    }
+
+    func testCancellationMultiProviderCorpus() async throws {
+        let configuration = try configuration()
+        let corpus = try makeCorpus()
+        defer { try? FileManager.default.removeItem(at: corpus.root) }
+        var samples: [Sample] = []
+        for iteration in 1...configuration.iterations {
+            let loader = AgenticUsageLoader(sources: corpus.sources)
+            let started = expectation(description: "Scan started")
+            started.assertForOverFulfill = false
+            let task = Task {
+                try await loader.load { scanned, _ in
+                    if scanned == 0 { started.fulfill() }
                 }
             }
-        }
-    }
-
-    func testCancellationMultiProviderCorpus() {
-        measureWorkload {
-            withCorpus(recordsPerProvider: 16_384) { corpus in
-                let loader = AgenticUsageLoader(sources: corpus.sources)
-                let started = expectation(description: "Scan started")
-                let task = Task {
-                    try await loader.load { scanned, _ in
-                        if scanned == 0 { started.fulfill() }
-                    }
-                }
-                wait(for: [started], timeout: 30)
-                startMeasuring()
+            await fulfillment(of: [started], timeout: 30)
+            let sample = try await measure(iteration: iteration) {
                 task.cancel()
-                let completed = expectation(description: "Scan cancelled")
-                Task {
-                    do {
-                        _ = try await task.value
-                        XCTFail("Cancelled workload completed")
-                    } catch is CancellationError {
-                    } catch {
-                        XCTFail("Unexpected cancellation error: \(error)")
-                    }
-                    completed.fulfill()
+                do {
+                    _ = try await task.value
+                    XCTFail("Cancelled workload completed")
+                    return Observation(parsedByteCount: nil, recordCount: nil, didCancel: false)
+                } catch is CancellationError {
+                    return Observation(parsedByteCount: nil, recordCount: nil, didCancel: true)
                 }
-                wait(for: [completed], timeout: 30)
-                stopMeasuring()
             }
+            XCTAssertEqual(sample.didCancel, true)
+            samples.append(sample)
+            let recovered = try await loader.load()
+            XCTAssertEqual(recovered.records.count, corpus.recordCount)
         }
+        try writeReport(workload: "cancellation", corpus: corpus, samples: samples, to: configuration.output)
     }
 }

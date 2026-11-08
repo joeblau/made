@@ -224,8 +224,21 @@ final class CockpitWorkspaceViewController: NSViewController {
         self.factory = factory
         self.onDrop = onDrop
         super.init(nibName: nil, bundle: nil)
+        returnObserver = NotificationCenter.default.addObserver(
+            forName: .paneDidReturnToNewTab, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let id = note.object as? UUID else { return }
+            MainActor.assumeIsolated {
+                guard let self, self.workspace.panes.contains(where: { $0.id == id }) else { return }
+                self.refresh(isActive: self.active)
+                self.onSelectionChange?()
+                self.focusSelectedPane()
+            }
+        }
     }
     required init?(coder: NSCoder) { nil }
+    isolated deinit { returnObserver.map(NotificationCenter.default.removeObserver) }
+    private var returnObserver: NSObjectProtocol?
     override func loadView() { view = layoutView; layoutView.workspace = workspace }
 
     func refresh(isActive: Bool) {
@@ -278,7 +291,7 @@ final class CockpitWorkspaceViewController: NSViewController {
                 }
                 panes[pane.id] = slot
             }
-            slot.tab.canClose = sorted.count > 1 || surface == .extension
+            slot.tab.canClose = workspace.canClosePane(pane)
             slot.tab.isSelected = workspace.selectedPaneID == pane.id && !pane.isCollapsed
             slot.tab.refresh()
             slot.refreshOpeningChoice()
@@ -371,6 +384,9 @@ private final class CockpitPaneSlot: NSView {
     private var modePicker: CockpitNewTabView?
     private weak var controller: NSViewController?
     private let reveal = ShellActionButton("Show Pane", symbol: "eye", perform: {})
+    /// A hidden terminal keeps its Fast Command controls in the strip, so a
+    /// dev server can be restarted or stopped without revealing the pane.
+    private var collapsedActions: TerminalFastCommandToolbarActions?
     override var isFlipped: Bool { true }
 
     init(pane: Pane, payload: WorkspacePaneDragPayload) {
@@ -406,6 +422,7 @@ private final class CockpitPaneSlot: NSView {
     func showOpeningChoice() {
         detach()
         reveal.removeFromSuperview()
+        collapsedActions?.removeFromSuperview()
         if modePicker == nil {
             let picker = CockpitNewTabView(pane: pane)
             picker.onChange = { [weak self] in
@@ -431,6 +448,7 @@ private final class CockpitPaneSlot: NSView {
         let switchingMode = self.controller != nil && self.controller !== controller
         self.controller = controller
         reveal.removeFromSuperview()
+        collapsedActions?.removeFromSuperview()
         if controller.view.superview !== content {
             controller.view.removeFromSuperview()
             controller.view.frame = content.bounds
@@ -456,6 +474,13 @@ private final class CockpitPaneSlot: NSView {
     func showCollapsed() {
         modePicker?.isHidden = true
         if reveal.superview !== self { addSubview(reveal) }
+        if pane.kind == .terminal, !pane.isChoosingMode {
+            let actions = collapsedActions ?? TerminalFastCommandToolbarActions(pane: pane)
+            collapsedActions = actions
+            if actions.superview !== self { addSubview(actions) }
+        } else {
+            collapsedActions?.removeFromSuperview()
+        }
         needsLayout = true
     }
     override func layout() {
@@ -468,6 +493,20 @@ private final class CockpitPaneSlot: NSView {
             reveal.frame = NSRect(x: padding, y: padding,
                                   width: min(CockpitPaneTab.preferredHeight, max(0, bounds.width - 2 * padding)),
                                   height: min(CockpitPaneTab.preferredHeight, max(0, bounds.height - 2 * padding)))
+            if let actions = collapsedActions, actions.superview === self {
+                // A tall strip (side-by-side panes) lists the controls down
+                // its length; a wide one (stacked panes) lists them across.
+                let vertical = bounds.height >= bounds.width
+                actions.orientation = vertical ? .vertical : .horizontal
+                let gap = LiquidGlassMetrics.Spacing.xSmall
+                let length = actions.preferredLength
+                actions.frame = vertical
+                    ? NSRect(x: reveal.frame.midX - 14, y: reveal.frame.maxY + gap, width: 28,
+                             height: min(length, max(0, bounds.height - reveal.frame.maxY - gap - padding)))
+                    : NSRect(x: reveal.frame.maxX + gap, y: reveal.frame.midY - 14,
+                             width: min(length, max(0, bounds.width - reveal.frame.maxX - gap - padding)), height: 28)
+                actions.isHidden = actions.frame.width < 28 || actions.frame.height < 28
+            }
             return
         }
         let top = min(inset, bounds.height)

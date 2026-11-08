@@ -281,7 +281,7 @@ final class NativeCockpitWindowTests: XCTestCase {
     func testGlassColumnsKeepContentClearOfToolbarAndInspector() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanUp() }
-        fixture.store.addWorkspace()
+        fixture.store.addWorkingWorkspace()
         let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
         let paneController = FixturePaneController()
         let controller = fixture.window(paneFactory: { _, _ in paneController })
@@ -518,7 +518,7 @@ final class NativeCockpitWindowTests: XCTestCase {
         for letter in letters {
             let fixture = try Fixture()
             defer { fixture.cleanUp() }
-            fixture.store.addWorkspace()
+            fixture.store.addWorkingWorkspace()
             var created: [UUID: NSTextView] = [:]
             let controller = fixture.window(paneFactory: { pane, _ in
                 let child = NSViewController()
@@ -684,7 +684,7 @@ final class NativeCockpitWindowTests: XCTestCase {
             let data = try JSONSerialization.data(withJSONObject: ["name": name, "scripts": ["dev": "vite --port \(55_000 + index)"]])
             try data.write(to: folder.appendingPathComponent("package.json"))
         }
-        fixture.store.addWorkspace(directory: directory)
+        fixture.store.addWorkingWorkspace(directory: directory)
         let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
         workspace.name = "Design Preview"
         workspace.setRootPath(directory.path)
@@ -1119,4 +1119,17 @@ private final class FocusFixturePaneController: NSViewController, CockpitPaneInp
         view.addSubview(hiddenField)
     }
     func focusPaneInput() { focusRequests += 1 }
+}
+
+extension WorkspaceStore {
+    /// New workspaces open on the New Tab page; fixtures that exercise an
+    /// existing working pane dismiss it so the initial terminal is live.
+    @MainActor
+    func addWorkingWorkspace(directory: URL? = nil) {
+        addWorkspace(directory: directory)
+        selectedWorkspace?.panes.forEach { $0.isChoosingMode = false }
+        if let workspace = selectedWorkspace, workspace.frontmostTerminalPaneID == nil {
+            workspace.frontmostTerminalPaneID = workspace.panes.first(where: { $0.kind == .terminal })?.id
+        }
+    }
 }

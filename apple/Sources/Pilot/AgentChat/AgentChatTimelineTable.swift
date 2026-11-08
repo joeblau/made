@@ -1,5 +1,13 @@
 import AppKit
 
+/// Geometry every timeline row shares.
+enum AgentChatTimelineLayout {
+    /// How far row content (prose, cards, bubbles) sits in from the table's
+    /// edges. The pane overhangs the composer by this much so row content
+    /// lines up with the composer card.
+    static let rowInset: CGFloat = 8
+}
+
 /// Keys the transcript table handles while it is first responder.
 enum AgentChatTimelineKey: Equatable {
     case next, previous, open, focusComposer, escape, stop
