@@ -213,12 +213,7 @@ struct PilotSchemaMigrationTests {
         }
 
         try autoreleasepool {
-            let schema = Schema(versionedSchema: PilotSchemaV4.self)
-            let container = try ModelContainer(
-                for: schema,
-                migrationPlan: PilotMigrationPlan.self,
-                configurations: ModelConfiguration(schema: schema, url: storeURL)
-            )
+            let container = try makeCurrentContainer(at: storeURL)
             let panes = try container.mainContext.fetch(FetchDescriptor<Pane>())
             let browser = try #require(panes.first { $0.id == browserPaneID })
             let state = try #require(browser.browserState)
@@ -230,12 +225,7 @@ struct PilotSchemaMigrationTests {
         }
 
         try autoreleasepool {
-            let schema = Schema(versionedSchema: PilotSchemaV4.self)
-            let container = try ModelContainer(
-                for: schema,
-                migrationPlan: PilotMigrationPlan.self,
-                configurations: ModelConfiguration(schema: schema, url: storeURL)
-            )
+            let container = try makeCurrentContainer(at: storeURL)
             let panes = try container.mainContext.fetch(FetchDescriptor<Pane>())
             let browser = try #require(panes.first { $0.id == browserPaneID })
             #expect(browser.browserState?.engine == .chromium)
@@ -264,6 +254,29 @@ struct PilotSchemaMigrationTests {
             fixture: fixture,
             extensionWorkspaceID: extensionWorkspaceID
         )
+        try verifyPreMigrationBackup(in: directory, fixture: fixture)
+    }
+
+    /// Launch backs the store up before migrating. The oldest backup must be
+    /// the untouched V1 store, still readable by a V1 build, so a migration
+    /// that goes wrong can always be rolled back.
+    private func verifyPreMigrationBackup(in directory: URL, fixture: FixtureIDs) throws {
+        let backups = try FileManager.default.contentsOfDirectory(
+            at: directory.appendingPathComponent("Backups", isDirectory: true), includingPropertiesForKeys: nil
+        ).filter { !$0.lastPathComponent.hasPrefix(".") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let oldest = try #require(backups.first).appendingPathComponent("Pilot.store")
+        try autoreleasepool {
+            let schema = Schema(versionedSchema: PilotSchemaV1.self)
+            let container = try ModelContainer(
+                for: schema, migrationPlan: V1OnlyPlan.self,
+                configurations: ModelConfiguration(schema: schema, url: oldest))
+            let workspaces = try container.mainContext.fetch(FetchDescriptor<PilotSchemaV1.Workspace>())
+            let workspace = try #require(workspaces.first { $0.id == fixture.workspaceID })
+            #expect(workspace.name == "Canonical Workspace")
+            #expect(workspace.panes.count == 2)
+            #expect(try container.mainContext.fetchCount(FetchDescriptor<PilotSchemaV1.BrowserState>()) == 1)
+        }
     }
 
     /// Writes the store exactly as a shipped V1 build would have: through the
@@ -387,14 +400,9 @@ struct PilotSchemaMigrationTests {
         }
     }
 
+    /// The launch path: backup, then the current schema with the full migration plan.
     private func makeCurrentContainer(at storeURL: URL) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: PilotSchemaV4.self)
-        let configuration = ModelConfiguration(schema: schema, url: storeURL)
-        return try ModelContainer(
-            for: schema,
-            migrationPlan: PilotMigrationPlan.self,
-            configurations: configuration
-        )
+        try CockpitPersistence.openStore(at: storeURL)
     }
 
     private func canonicalWorkspace(in context: ModelContext, id: UUID) throws -> Workspace {
