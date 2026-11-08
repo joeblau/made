@@ -69,7 +69,29 @@ extension PilotApp {
     var walkieDelivery: PilotWalkieDelivery {
         PilotWalkieDelivery(store: store, terminalPaneID: { [self] workspaceID in
             activeTerminalPane(in: workspaceID, on: remoteInputSurface())?.id
+        }, terminalSession: { [self] paneID in
+            for workspace in store.workspaces {
+                let companion = extensionWorkspaceController.workspace(forSourceID: workspace.id)
+                if let pane = workspace.panes.first(where: { $0.id == paneID })
+                    ?? companion?.panes.first(where: { $0.id == paneID }) {
+                    return TerminalSessionProvider.shared.existingSession(for: pane)
+                }
+            }
+            return nil
         })
+    }
+
+    func enqueueWalkieDelivery(
+        _ operation: @escaping @MainActor (PilotWalkieDelivery, inout PilotWalkieInputState) async -> Void
+    ) {
+        let previous = walkieDeliveryTask
+        walkieDeliveryTask = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self else { return }
+            var state = walkieInput
+            await operation(walkieDelivery, &state)
+            walkieInput = state
+        }
     }
 
     func selectRemoteWorkspace(_ workspaceID: UUID, on surface: WorkspacePaneSurface) {
@@ -202,18 +224,24 @@ extension PilotApp {
             case .mouseClick:
                 MouseBridge.shared.click()
             case .voiceRecord(let command):
-                switch command.control {
-                case .start:
-                    walkieDelivery.start(command, state: &walkieInput)
-                case .stop:
-                    walkieInput.stop(recordingID: command.recordingID, workspaceID: command.workspaceID)
+                enqueueWalkieDelivery { delivery, state in
+                    switch command.control {
+                    case .start:
+                        delivery.start(command, state: &state)
+                    case .stop:
+                        state.stop(recordingID: command.recordingID, workspaceID: command.workspaceID)
+                    }
                 }
             case .transcribedSpeech(let speech):
-                if !walkieDelivery.receive(speech, state: &walkieInput), !speech.text.isEmpty {
-                    NSSound.beep()
+                enqueueWalkieDelivery { delivery, state in
+                    if await delivery.receive(speech, state: &state) == false, !speech.text.isEmpty {
+                        NSSound.beep()
+                    }
                 }
             case .executeTranscript(let command):
-                walkieDelivery.execute(command, state: &walkieInput)
+                enqueueWalkieDelivery { delivery, state in
+                    _ = await delivery.execute(command, state: &state)
+                }
             case .followBuild(let request):
                 buildPush.follow(request, available: actionWatcher.recentRuns)
             case .unfollowBuild(let request):
@@ -221,7 +249,9 @@ extension PilotApp {
             case .buildRunUpdate:
                 break
             case .terminalInput(.enter):
-                walkieDelivery.enterSelection()
+                enqueueWalkieDelivery { delivery, _ in
+                    _ = await delivery.enterSelection()
+                }
             case .deviceKey(let announce):
                 // Auto-exchange device keys with Copilot (issue #51).
                 secureIdentity.receive(announce)

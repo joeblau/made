@@ -164,10 +164,12 @@ protocol CockpitTerminalSession: Sendable {
     func visibleContents() -> String?
     func close() async -> Bool
     func suspend() async
+    func resize(columns: UInt16, rows: UInt16) async -> Bool
     func setOutputHandler(_ handler: @escaping @Sendable (String) -> Void) async
 }
 
 extension CockpitTerminalSession {
+    func resize(columns: UInt16, rows: UInt16) async -> Bool { false }
     func setOutputHandler(_ handler: @escaping @Sendable (String) -> Void) async {}
 
     func runFastCommand(_ command: String) async -> Bool {
@@ -278,6 +280,8 @@ protocol DroneTerminalClient: AnyObject, Sendable {
     func interrupt(_ reference: DroneTerminalSessionReference) async throws
     func detach(_ reference: DroneTerminalSessionReference) async throws
     func close(_ reference: DroneTerminalSessionReference) async throws
+    func resynchronize(_ reference: DroneTerminalSessionReference) async throws
+    func resize(columns: UInt16, rows: UInt16, for reference: DroneTerminalSessionReference) async throws
     func setOutputHandler(
         _ handler: @escaping @Sendable (DroneOutputBody) -> Bool,
         for reference: DroneTerminalSessionReference
@@ -287,6 +291,14 @@ protocol DroneTerminalClient: AnyObject, Sendable {
 extension DroneTerminalClient {
     func attachTerminal(_ reference: DroneTerminalSessionReference, after cursor: DroneTerminalCursor) async throws {
         try await attachTerminal(reference)
+    }
+
+    func resynchronize(_ reference: DroneTerminalSessionReference) async throws {
+        throw DroneRemoteTerminalError.remote(code: "remoteRejected")
+    }
+
+    func resize(columns: UInt16, rows: UInt16, for reference: DroneTerminalSessionReference) async throws {
+        throw DroneRemoteTerminalError.remote(code: "remoteRejected")
     }
 
     func setOutputHandler(
@@ -302,6 +314,7 @@ final class DroneTerminalResumeState: @unchecked Sendable {
     private var storedSessionID: UUID?
     private var storedCursor = DroneTerminalCursor.zero
     private var bytes = Data()
+    private var awaitingSnapshot = false
     private var displayIdentity: TerminalSessionIdentity?
     private var outputHandler: (@Sendable (String) -> Void)?
 
@@ -350,10 +363,23 @@ final class DroneTerminalResumeState: @unchecked Sendable {
         }
     }
 
+    func resetForResynchronization() {
+        lock.withLock {
+            storedCursor = .zero
+            bytes.removeAll(keepingCapacity: false)
+            awaitingSnapshot = true
+        }
+    }
+
     func append(_ output: DroneOutputBody) -> String? {
         lock.withLock {
-            guard output.sequence == storedCursor.sequence, output.offset == storedCursor.offset else { return nil }
-            bytes.append(output.data)
+            if awaitingSnapshot {
+                bytes = output.data
+                awaitingSnapshot = false
+            } else {
+                guard output.sequence == storedCursor.sequence, output.offset == storedCursor.offset else { return nil }
+                bytes.append(output.data)
+            }
             storedCursor = DroneTerminalCursor(output: output)
             if bytes.count > 256 * 1_024 { bytes.removeFirst(bytes.count - 256 * 1_024) }
             // Avoid beginning the retained viewport in the middle of a UTF-8 scalar.
@@ -368,6 +394,7 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
     private let client: any DroneTerminalClient
     private let lock = NSLock()
     private var retired = false
+    private var closeTask: Task<Bool, Never>?
     let resumeState: DroneTerminalResumeState
     private var restoration: (id: UUID, task: Task<TerminalSessionRestoration, any Error>)?
     private let initialWorkingDirectory: String?
@@ -404,7 +431,6 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
         lock.withLock {
             retired = true
             restoration?.task.cancel()
-            restoration = nil
         }
         resumeState.deactivate(identity)
     }
@@ -469,8 +495,22 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
         }
         let reference = try reference()
         await subscribe(reference)
-        try await client.attachTerminal(reference, after: resumeState.cursor)
+        do {
+            try await client.attachTerminal(reference, after: resumeState.cursor)
+        } catch {
+            guard Self.isOutputGap(error) else { throw error }
+            _ = try self.reference()
+            resumeState.resetForResynchronization()
+            resumeState.publish(identity: identity)
+            try await client.resynchronize(reference)
+        }
+        _ = try self.reference()
         return TerminalSessionRestoration(identity: identity, remoteSessionID: sessionID)
+    }
+
+    private static func isOutputGap(_ error: any Error) -> Bool {
+        if case DroneRemoteTerminalError.remote(let code) = error { return code == "outputGap" }
+        return (error as? DroneTerminalError) == .outputGap
     }
 
     func send(_ input: TerminalSessionInput) async -> Bool {
@@ -548,14 +588,49 @@ final class DroneTerminalSession: CockpitTerminalSession, @unchecked Sendable {
         return accepted
     }
 
-    func close() async -> Bool {
+    func resize(columns: UInt16, rows: UInt16) async -> Bool {
         do {
-            try await client.close(reference())
-            directoryCache.invalidate(identity.runtimeCacheKey)
+            _ = try await restore(workingDirectory: nil)
+            try await client.resize(columns: columns, rows: rows, for: reference())
             return true
         } catch {
             return false
         }
+    }
+
+    func close() async -> Bool {
+        let task = lock.withLock { () -> Task<Bool, Never> in
+            if let closeTask { return closeTask }
+            retired = true
+            let pending = restoration?.task
+            pending?.cancel()
+            let client = client
+            let resumeState = resumeState
+            let identity = identity
+            let cache = directoryCache
+            let task = Task<Bool, Never> {
+                if let pending { _ = try? await pending.value }
+                cache.invalidate(identity.runtimeCacheKey)
+                guard let sessionID = resumeState.sessionID else { return true }
+                guard let droneID = identity.ownership.droneID, client.droneID == droneID else { return false }
+                let reference = DroneTerminalSessionReference(
+                    droneID: droneID,
+                    sessionID: sessionID,
+                    generation: identity.generation
+                )
+                await client.setOutputHandler({ _ in false }, for: reference)
+                do {
+                    try await client.close(reference)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            closeTask = task
+            return task
+        }
+        resumeState.deactivate(identity)
+        return await task.value
     }
 
     func suspend() async {
@@ -735,6 +810,17 @@ final class TerminalSessionProvider: @unchecked Sendable {
         return makeSession(for: pane, destination: destination, generation: generation(for: pane.id))
     }
 
+    func existingSession(for pane: Pane) -> (any CockpitTerminalSession)? {
+        let destination = pane.terminalDestination
+        return lock.withLock {
+            guard destination.isValid, let record = records[pane.id],
+                  record.destination.ownership == destination.ownership,
+                  record.destination.remoteSessionID == destination.remoteSessionID
+            else { return nil }
+            return record.session
+        }
+    }
+
     func reconnect(pane: Pane) -> any CockpitTerminalSession {
         let destination = pane.terminalDestination
         _ = lock.withLock {
@@ -763,8 +849,10 @@ final class TerminalSessionProvider: @unchecked Sendable {
     func invalidate(pane: Pane, session: any CockpitTerminalSession) {
         lock.withLock {
             guard records[pane.id]?.session.identity == session.identity else { return }
+            (session as? DroneTerminalSession)?.retire()
             resumeStates.removeValue(forKey: pane.id)
             records.removeValue(forKey: pane.id)
+            generations[pane.id] = session.identity.generation + 1
         }
     }
 
@@ -989,6 +1077,14 @@ final class DroneTerminalPresentation {
                 onUpdate?()
             }
         }
+    }
+
+    func resize(columns: UInt16, rows: UInt16) async -> Bool {
+        guard isActive, isConnected else { return false }
+        let candidate = generation
+        let session = provider.session(for: pane)
+        let resized = await session.resize(columns: columns, rows: rows)
+        return resized && isCurrent(candidate) && provider.isCurrent(session.identity, for: pane)
     }
 
     func send(_ command: String) async -> Bool {

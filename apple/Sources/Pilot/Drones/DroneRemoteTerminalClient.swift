@@ -126,6 +126,25 @@ actor DroneRemoteTerminalClient: DroneTerminalClient, @preconcurrency DroneToolT
         }
     }
 
+    func resynchronize(_ reference: DroneTerminalSessionReference) async throws {
+        try validate(reference)
+        let response = try await request(
+            kind: .resync,
+            sessionID: DroneSessionID(rawValue: reference.sessionID)
+        )
+        guard response.kind == .ack else { throw DroneTransportError.remoteRejected }
+    }
+
+    func resize(columns: UInt16, rows: UInt16, for reference: DroneTerminalSessionReference) async throws {
+        try validate(reference)
+        let response = try await request(
+            kind: .resize,
+            sessionID: DroneSessionID(rawValue: reference.sessionID),
+            body: .resize(DroneResizeBody(columns: columns, rows: rows))
+        )
+        guard response.kind == .ack else { throw DroneTransportError.remoteRejected }
+    }
+
     func perform(
         _ request: DroneEnvelope
     ) async throws -> AsyncThrowingStream<DroneEnvelope, any Error> {

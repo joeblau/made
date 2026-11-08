@@ -191,29 +191,13 @@ enum DroneWorkerProof {
         }
         guard let sessionID else { throw ProofError.failed("terminal was not created") }
         try await verifyUngrantedInput(service: service, port: port, sessionID: sessionID, workspace: workspace)
-        controller.send(DroneEnvelope(
-            kind: .attach,
-            requestID: UUID(),
-            sessionID: sessionID,
-            body: .attach(DroneAttachBody(afterSequence: 0, afterOffset: 0))
-        ), on: connectionID)
-        controller.send(DroneEnvelope(
-            kind: .input,
-            requestID: UUID(),
-            sessionID: sessionID,
-            body: .input(DroneInputBody(data: Data("printf 'drone-e2e-✓' > proof.txt\n".utf8)))
-        ), on: connectionID)
-
-        let proofFile = workspace.appendingPathComponent("proof.txt")
-        var contents = ""
-        for _ in 0..<400 {
-            if let data = try? Data(contentsOf: proofFile) {
-                contents = String(decoding: data, as: UTF8.self)
-                if contents.contains("drone-e2e-✓") { break }
-            }
-            try await Task.sleep(for: .milliseconds(25))
-        }
-        expect(contents.contains("drone-e2e-✓"), "remote command did not write expected file")
+        let terminal = try await verifyEncryptedTerminal(
+            controller: controller, connectionID: connectionID, controllerID: controllerID,
+            workerID: workerID, sessionID: sessionID, workspace: workspace, observed: observed
+        )
+        let terminalSession = terminal.session
+        let terminalConnection = terminal.connection
+        let terminalHandler = terminal.handler
 
         let toolTransport = ProofToolTransport(
             controller: controller,
@@ -221,7 +205,10 @@ enum DroneWorkerProof {
             controllerID: controllerID,
             droneID: workerID
         )
-        observed.onEnvelope = { envelope in toolTransport.handle(envelope) }
+        observed.onEnvelope = { envelope in
+            terminalConnection.yield(envelope)
+            toolTransport.handle(envelope)
+        }
         let lease = try await service.issueToolLease(
             controllerID: controllerID, permissions: [.files, .jobs, .git]
         )
@@ -245,10 +232,11 @@ enum DroneWorkerProof {
         expect(report.test.completion.status == .succeeded, "remote test failed")
         expect(report.test.standardOutput.range(of: Data("drone-tools-after".utf8)) != nil, "remote test output missing")
         expect(report.diff.range(of: Data("drone-tools-after".utf8)) != nil, "remote diff missing edit")
-        observed.onEnvelope = nil
 
-        controller.send(DroneEnvelope(kind: .close, requestID: UUID(), sessionID: sessionID), on: connectionID)
-        try await Task.sleep(for: .milliseconds(100))
+        let closed = await terminalSession.close()
+        expect(closed, "encrypted client/session close failed")
+        observed.onEnvelope = nil
+        terminalHandler.cancel()
     }
 
     private static func verifyUngrantedInput(
@@ -272,6 +260,91 @@ enum DroneWorkerProof {
             !FileManager.default.fileExists(atPath: workspace.appendingPathComponent("denied-input.txt").path),
             "unauthorized controller released terminal input"
         )
+    }
+
+    private static func verifyEncryptedTerminal(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        controllerID: UUID,
+        workerID: UUID,
+        sessionID: DroneSessionID,
+        workspace: URL,
+        observed: ProofObserved
+    ) async throws -> (
+        session: DroneTerminalSession,
+        connection: ProofTerminalConnection,
+        handler: Task<Void, Never>
+    ) {
+        let gapRequest = UUID()
+        controller.send(DroneEnvelope(
+            kind: .attach,
+            requestID: gapRequest,
+            sessionID: sessionID,
+            body: .attach(DroneAttachBody(afterSequence: 1, afterOffset: 5))
+        ), on: connectionID)
+        let gapResponse = try await waitForResponse(gapRequest, kind: .error, observed: observed)
+        guard case .error(let gapError) = gapResponse.body, gapError.code == "outputGap", !gapError.retryable else {
+            throw ProofError.failed("terminal output gap did not have a stable non-retryable error")
+        }
+
+        let terminalConnection = ProofTerminalConnection(
+            controller: controller, connectionID: connectionID, controllerID: controllerID, droneID: workerID
+        )
+        let terminalClient = DroneRemoteTerminalClient(
+            droneID: workerID, controllerID: controllerID, connection: terminalConnection
+        )
+        observed.onEnvelope = { envelope in terminalConnection.yield(envelope) }
+        let terminalHandler = Task {
+            while !Task.isCancelled {
+                do {
+                    let envelope = try await terminalConnection.receive()
+                    await terminalClient.handle(envelope)
+                } catch {
+                    break
+                }
+            }
+        }
+        let resumeState = DroneTerminalResumeState(sessionID: sessionID.rawValue)
+        _ = resumeState.append(DroneOutputBody(
+            sequence: 0, offset: 0, data: Data("stale".utf8), isFinal: false
+        ))
+        let terminalSession = DroneTerminalSession(
+            identity: TerminalSessionIdentity(
+                paneID: UUID(),
+                ownership: TerminalDestination.drone(droneID: workerID).ownership,
+                generation: 1
+            ),
+            remoteSessionID: sessionID.rawValue,
+            client: terminalClient,
+            resumeState: resumeState
+        )
+        _ = try await terminalSession.restore(workingDirectory: nil)
+        let resized = await terminalSession.resize(columns: 132, rows: 43)
+        expect(resized, "encrypted client/session resize failed")
+        let sizeRequested = await terminalSession.send(.literal("stty size\n"))
+        expect(sizeRequested, "encrypted stty input failed")
+        var reportedSize = ""
+        for _ in 0..<400 {
+            reportedSize = terminalSession.visibleContents() ?? ""
+            if reportedSize.contains("43 132") { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        expect(reportedSize.contains("43 132"), "remote PTY did not use resized dimensions: \(reportedSize)")
+        expect(!reportedSize.contains("stale"), "resync retained stale controller output")
+        let commandSent = await terminalSession.send(.literal("printf 'drone-e2e-✓' > proof.txt\n"))
+        expect(commandSent, "encrypted terminal command failed")
+
+        let proofFile = workspace.appendingPathComponent("proof.txt")
+        var contents = ""
+        for _ in 0..<400 {
+            if let data = try? Data(contentsOf: proofFile) {
+                contents = String(decoding: data, as: UTF8.self)
+                if contents.contains("drone-e2e-✓") { break }
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        expect(contents.contains("drone-e2e-✓"), "remote command did not write expected file")
+        return (terminalSession, terminalConnection, terminalHandler)
     }
 
     private static func prepareWorkspace(_ workspace: URL, includeGit: Bool) throws {
@@ -1243,6 +1316,48 @@ private final class ProofPairingStorage: PairingSecretStoring, @unchecked Sendab
 
 private enum ProofError: Error {
     case failed(String)
+}
+
+private final class ProofTerminalConnection: DroneConnection, @unchecked Sendable {
+    let peer: DroneAuthenticatedPeer
+    private let controller: DroneLANTransport
+    private let connectionID: DroneConnectionID
+    private let stream: AsyncThrowingStream<DroneEnvelope, any Error>
+    private let continuation: AsyncThrowingStream<DroneEnvelope, any Error>.Continuation
+
+    init(
+        controller: DroneLANTransport,
+        connectionID: DroneConnectionID,
+        controllerID: UUID,
+        droneID: UUID
+    ) {
+        self.controller = controller
+        self.connectionID = connectionID
+        peer = DroneAuthenticatedPeer(
+            identityFingerprint: droneID.uuidString,
+            hardware: .unknown,
+            hello: DroneHello(selectedVersion: DroneLimits.protocolVersion)
+        )
+        (stream, continuation) = AsyncThrowingStream.makeStream()
+    }
+
+    func send(_ envelope: DroneEnvelope) async throws {
+        controller.send(envelope, on: connectionID)
+    }
+
+    func receive() async throws -> DroneEnvelope {
+        var iterator = stream.makeAsyncIterator()
+        guard let envelope = try await iterator.next() else { throw DroneTransportError.disconnected }
+        return envelope
+    }
+
+    func yield(_ envelope: DroneEnvelope) {
+        continuation.yield(envelope)
+    }
+
+    func close() {
+        continuation.finish()
+    }
 }
 
 private final class ProofToolTransport: DroneToolTransport, @unchecked Sendable {

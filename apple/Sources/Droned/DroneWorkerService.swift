@@ -339,6 +339,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
                 guard let sessionID = envelope.sessionID, case .attach(let body) = envelope.body else {
                     throw DroneProtocolError.malformedMessage
                 }
+                outputPumps.cancel(connectionID: connectionID, sessionID: sessionID)
                 _ = try await terminals.attach(
                     sessionID,
                     pairingID: pairingID,
@@ -379,6 +380,16 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
                     connectionID: connectionID.rawValue
                 )
                 try await send(DroneEnvelope(kind: .ack, requestID: envelope.requestID, sessionID: sessionID), on: connectionID)
+            case .resync:
+                guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
+                outputPumps.cancel(connectionID: connectionID, sessionID: sessionID)
+                _ = try await terminals.resynchronize(
+                    sessionID,
+                    pairingID: pairingID,
+                    connectionID: connectionID.rawValue
+                )
+                try await send(DroneEnvelope(kind: .ack, requestID: envelope.requestID, sessionID: sessionID), on: connectionID)
+                startOutputPump(connectionID: connectionID, sessionID: sessionID, pairingID: pairingID)
             case .detach:
                 guard let sessionID = envelope.sessionID else { throw DroneProtocolError.malformedMessage }
                 try await terminals.detach(sessionID, pairingID: pairingID, connectionID: connectionID.rawValue)
@@ -720,6 +731,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
                     )
                     guard !Task.isCancelled else { return }
                     for output in page.chunks {
+                        guard !Task.isCancelled else { return }
                         try await send(
                             DroneEnvelope(kind: .output, sessionID: sessionID, body: .output(output)),
                             on: connectionID
@@ -754,8 +766,9 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     }
 
     private static func errorCode(_ error: any Error) -> String {
-        // Only payload-free protocol/job enums may be reflected onto the wire.
+        // Only payload-free protocol/terminal/job enums may be reflected onto the wire.
         if let code = error as? DroneProtocolError { return String(describing: code) }
+        if let code = error as? DroneTerminalError { return String(describing: code) }
         if let code = error as? DroneJobError { return String(describing: code) }
         return "remoteRejected"
     }

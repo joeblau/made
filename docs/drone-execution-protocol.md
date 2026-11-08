@@ -159,7 +159,8 @@ Swift schema is `DroneEnvelope`; the required shape is:
 | `close` / `closed` | empty | request + session; explicitly destructive |
 | `cancel` / `cancelled` | empty | request + session; process-group cancellation, session retained |
 | `reconnect` / `reconnected` | resume sequence/offset | request + detached session |
-| `ack` | empty | accepted input/resize request + session |
+| `resync` / `ack` | empty | request + session; reset replay to a fresh visible snapshot |
+| `ack` | empty | accepted input/resize/resync request + session |
 | `heartbeat` | empty | authenticated connection liveness only |
 | `error` | stable error code and retryable flag | related request/session when available |
 

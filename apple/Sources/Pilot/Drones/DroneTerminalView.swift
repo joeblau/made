@@ -17,6 +17,7 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
     private var active = false
     private var closed = false
     private var generation = 0
+    private var lastDimensions: DroneResizeBody?
 
     init(pane: Pane, provider: TerminalSessionProvider = .shared) {
         self.pane = pane
@@ -126,12 +127,38 @@ final class DroneTerminalViewController: NSViewController, CockpitPanePresenting
         presentation.retry()
     }
 
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        resizeRemoteTerminal()
+    }
+
     private func refreshPresentation() {
         guard isViewLoaded, !closed else { return }
         statusLabel.stringValue = presentation.status
         retryButton.isHidden = presentation.status == "Connecting…" || presentation.status == "Connected"
+        if !presentation.isConnected { lastDimensions = nil }
         if active { renderOutput() }
         updateControls()
+        resizeRemoteTerminal()
+    }
+
+    private func resizeRemoteTerminal() {
+        guard active, presentation.isConnected, !closed, let font = output.font else { return }
+        let characterWidth = font.maximumAdvancement.width
+        let lineHeight = font.ascender - font.descender + font.leading
+        let width = scroll.contentView.bounds.width - output.textContainerInset.width * 2
+        let height = scroll.contentView.bounds.height - output.textContainerInset.height * 2
+        guard characterWidth > 0, lineHeight > 0, width >= characterWidth, height >= lineHeight else { return }
+        let columns = UInt16(min(Int(DroneLimits.maxTerminalColumns), Int(width / characterWidth)))
+        let rows = UInt16(min(Int(DroneLimits.maxTerminalRows), Int(height / lineHeight)))
+        let dimensions = DroneResizeBody(columns: columns, rows: rows)
+        guard dimensions != lastDimensions else { return }
+        lastDimensions = dimensions
+        Task { [weak self, presentation] in
+            let resized = await presentation.resize(columns: columns, rows: rows)
+            guard let self, lastDimensions == dimensions, !resized else { return }
+            lastDimensions = nil
+        }
     }
 
     private func renderOutput() {

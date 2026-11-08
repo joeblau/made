@@ -121,8 +121,7 @@ class GhosttyMetalView: NSView, CALayerDelegate {
               ]
             : []
         let bootstrap = pane.terminalSession.bootstrap(workingDirectory: persistedDirectory)
-        let persistentSessionInput: String?
-        if case .local(let initialInput) = bootstrap { persistentSessionInput = initialInput } else { persistentSessionInput = nil }
+        guard case .local(let persistentSessionInput) = bootstrap else { return }
 
         let surface = Self.makeSurface(
             app: app,

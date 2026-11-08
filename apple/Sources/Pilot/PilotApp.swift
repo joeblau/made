@@ -29,6 +29,7 @@ final class PilotApp {
     let pairingPrompts = PairingPromptCoordinator()
     var peerDeviceStatus = DeviceStatus()
     var walkieInput = PilotWalkieInputState()
+    var walkieDeliveryTask: Task<Void, Never>?
     var plotterClientCount = 0
     var plotterPairingRequest: FrameLinkPairingRequest?
     var mainWindowID: CGWindowID?

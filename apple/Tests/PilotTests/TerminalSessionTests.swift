@@ -131,6 +131,21 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertFalse(destination.isValid)
     }
 
+    func testMalformedNonlocalDestinationNeverCreatesGhosttySurface() {
+        let pane = Pane(kind: .terminal)
+        pane.terminalDestinationRaw = TerminalDestinationKind.local.rawValue
+        pane.terminalDroneIDRaw = UUID().uuidString
+        let controller = TerminalPaneViewController(pane: pane)
+        defer { controller.closePane() }
+
+        _ = controller.view
+
+        XCTAssertFalse(pane.terminalDestination.isValid)
+        XCTAssertNil(GhosttyMetalView.view(for: pane.id))
+        let labels = controller.view.subviews.compactMap { $0 as? NSTextField }
+        XCTAssertTrue(labels.contains { $0.stringValue.contains("destination is invalid") })
+    }
+
     func testLiveSessionCannotMoveToAnotherDestination() {
         let provider = TerminalSessionProvider()
         let pane = Pane(kind: .terminal)

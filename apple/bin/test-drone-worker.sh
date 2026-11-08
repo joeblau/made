@@ -19,6 +19,12 @@ xcrun swiftc \
   "$APPLE_ROOT/Sources/Shared/DroneTmux.swift" \
   "$APPLE_ROOT/Sources/Shared/DronePTY.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneTerminalEngine.swift" \
+  "$APPLE_ROOT/Sources/Pilot/Drones/DroneModels.swift" \
+  "$APPLE_ROOT/Sources/Pilot/Drones/DroneTransport.swift" \
+  "$APPLE_ROOT/Sources/Pilot/Drones/DroneRemoteTerminalClient.swift" \
+  "$APPLE_ROOT/Sources/Pilot/TerminalSession.swift" \
+  "$APPLE_ROOT/Sources/Pilot/TerminalRuntimeCache.swift" \
+  "$APPLE_ROOT/Tests/DroneSessionProof/HostFixtures.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneToolProtocol.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneToolClient.swift" \
   "$APPLE_ROOT/Sources/Shared/DroneAgentDriver.swift" \
