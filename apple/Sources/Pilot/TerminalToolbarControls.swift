@@ -120,9 +120,32 @@ final class TerminalFastCommandToolbarActions: NSView {
         }
     }
 
+    /// Liquid Glass circles, used in a hidden pane's strip where the buttons
+    /// float over the strip instead of sitting in a toolbar.
+    var usesGlassCircles = false {
+        didSet {
+            guard oldValue != usesGlassCircles else { return }
+            for button in [play, stopButton] {
+                if usesGlassCircles {
+                    button.isBordered = true
+                    button.bezelStyle = .glass
+                    button.borderShape = .circle
+                } else {
+                    button.isBordered = false
+                }
+            }
+            stack.spacing = usesGlassCircles ? Self.glassSpacing : 2
+            invalidateIntrinsicContentSize()
+        }
+    }
+    static let glassSpacing: CGFloat = 6
+
     /// Length along `orientation` for the visible buttons (plus the spinner
     /// while an action runs).
-    var preferredLength: CGFloat { isRunningAction ? 28 * 3 + 4 : 28 * 2 + 2 }
+    var preferredLength: CGFloat {
+        let count: CGFloat = isRunningAction ? 3 : 2
+        return 28 * count + stack.spacing * (count - 1)
+    }
 
     override var intrinsicContentSize: NSSize {
         orientation == .horizontal ? NSSize(width: preferredLength, height: 28) : NSSize(width: 28, height: preferredLength)

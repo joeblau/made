@@ -404,7 +404,10 @@ private final class CockpitPaneSlot: NSView {
         addSubview(tab); addSubview(content)
         tab.onSelect = { [weak self] in self?.onSelect?(); self?.onFocus?() }
         reveal.perform = { [weak self] in self?.onSelect?(); self?.onFocus?() }
+        reveal.title = ""
         reveal.imagePosition = .imageOnly
+        reveal.bezelStyle = .glass
+        reveal.borderShape = .circle
         reveal.toolTip = "Show \(pane.displayTitle)"
         reveal.setAccessibilityLabel("Show \(pane.displayTitle)")
     }
@@ -476,6 +479,7 @@ private final class CockpitPaneSlot: NSView {
         if reveal.superview !== self { addSubview(reveal) }
         if pane.kind == .terminal, !pane.isChoosingMode {
             let actions = collapsedActions ?? TerminalFastCommandToolbarActions(pane: pane)
+            actions.usesGlassCircles = true
             collapsedActions = actions
             if actions.superview !== self { addSubview(actions) }
         } else {
@@ -498,7 +502,7 @@ private final class CockpitPaneSlot: NSView {
                 // its length; a wide one (stacked panes) lists them across.
                 let vertical = bounds.height >= bounds.width
                 actions.orientation = vertical ? .vertical : .horizontal
-                let gap = LiquidGlassMetrics.Spacing.xSmall
+                let gap = TerminalFastCommandToolbarActions.glassSpacing
                 let length = actions.preferredLength
                 actions.frame = vertical
                     ? NSRect(x: reveal.frame.midX - 14, y: reveal.frame.maxY + gap, width: 28,
