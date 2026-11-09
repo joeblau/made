@@ -55,10 +55,13 @@ final class DroneDaemon {
     }
 
     func run() throws {
+        // Handlers first: the control socket tells supervisors the daemon is
+        // up, so a SIGTERM sent right after it appears must reach shutDown()
+        // instead of the default action killing the process.
+        installSignalHandlers()
         try startControlListener()
         let bonjourID = try bonjourInstanceID()
         Task { [workerService] in await workerService?.start(bonjourInstanceID: bonjourID) }
-        installSignalHandlers()
         log.record("daemon.started")
         CFRunLoopRun()
     }
