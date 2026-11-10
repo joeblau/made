@@ -1014,7 +1014,7 @@ final class Workspace {
         side: Side,
         browserEngine: BrowserEngine = .webKit,
         terminalDestination: TerminalDestination = .local,
-        chooseModeOnOpen: Bool = false
+        chooseModeOnOpen: Bool = false, performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Pane {
         let maxOrder = panes.map(\.sortOrder).max() ?? -1
         let pane = Pane(
@@ -1054,7 +1054,7 @@ final class Workspace {
             frontmostTerminalPaneID = pane.id
         }
         syncDefaultRootPathIfNeeded()
-        _ = modelContext?.saveReporting(operation: "Adding pane")
+        _ = modelContext?.saveReporting(operation: "Adding pane", performSave: performSave)
         pane.isChoosingMode = chooseModeOnOpen
         return pane
     }
@@ -1065,9 +1065,9 @@ final class Workspace {
         allowEmpty: Bool = false,
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {
-        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }) else { return false }
+        let context = modelContext // #437: earlier unsaved work is saved first, or blocks the removal, so a rollback stays local.
+        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }), context?.saveEarlierChangesBeforeDestructiveChange(operation: "Removing pane", performSave: performSave) ?? true else { return false }
         if focusedPaneID == pane.id { restoreFocusedPane(save: false) } // rolled back with this removal
-        let context = modelContext
         let deletedDevicePaneID = pane.kind.isAppleTool ? pane.id : nil
         pane.tearDownRuntimeResources(preservingDevicePreference: true)
         panes.removeAll { $0.id == pane.id }
