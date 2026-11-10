@@ -382,6 +382,7 @@ final class PeerSyncAuthenticationTests: XCTestCase {
 
     /// Returns after everything already queued on the service's serial
     /// transport queue has run.
+    @MainActor
     private func transportBarrier(_ service: PeerSyncService) async {
         _ = await service.localIdentityPublicKeyBase64()
     }
