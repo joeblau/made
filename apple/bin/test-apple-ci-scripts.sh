@@ -310,4 +310,74 @@ awk -F '\t' '
 awk -F '\t' '$1 == "build" { exit $7 == 1 ? 0 : 1 }' "$failed_evidence/totals.tsv" ||
   fail "failed benchmark phase total was not recorded"
 
+# CI's tmux is the SHA-256 pinned build, never a runner-dependent bottle, and
+# the selected binary's version is asserted before the terminal tests run.
+ci_workflow="$APPLE_ROOT/../.github/workflows/ci.yml"
+! grep -Eq '^[^#]*brew install' "$ci_workflow" || fail "ci.yml installs an unpinned Homebrew tool"
+path_line="$(grep -n 'apple/bin/install-tmux.sh path' "$ci_workflow" | head -1 | cut -d: -f1)"
+verify_line="$(grep -n 'apple/bin/install-tmux.sh verify' "$ci_workflow" | head -1 | cut -d: -f1)"
+tests_line="$(grep -n 'apple/bin/test.sh all' "$ci_workflow" | head -1 | cut -d: -f1)"
+[[ -n "$path_line" && -n "$verify_line" && -n "$tests_line" ]] ||
+  fail "ci.yml must install and verify the pinned tmux before apple/bin/test.sh all"
+((path_line < verify_line && verify_line < tests_line)) ||
+  fail "ci.yml must install, then verify, the pinned tmux before apple/bin/test.sh all"
+
+# install-tmux.sh verify checks the same lookup order the apps and tests use.
+script_candidates="$(sed -n 's/^CANDIDATES=(\(.*\))$/\1/p' "$APPLE_ROOT/bin/install-tmux.sh")"
+[[ -n "$script_candidates" ]] || fail "install-tmux.sh candidate list not found"
+for source in Sources/Shared/DroneTmux.swift Sources/Pilot/Workspace.swift Tests/PilotTests/TerminalSessionTests.swift; do
+  swift_candidates="$(grep -o '"/[^"]*/tmux"' "$APPLE_ROOT/$source" | tr -d '"' | paste -sd ' ' -)"
+  [[ "$swift_candidates" == "$script_candidates" ]] ||
+    fail "$source tmux lookup ($swift_candidates) differs from install-tmux.sh ($script_candidates)"
+done
+
+cp "$APPLE_ROOT/bin/install-tmux.sh" "$work/apple/bin/"
+mkdir -p "$work/tmux-tools" "$work/tmux-bin"
+cat > "$work/tmux-tools/curl" <<'TOOL'
+#!/bin/bash
+while [[ $# -gt 0 ]]; do
+  [[ "$1" == -o ]] && printf 'tampered archive\n' > "$2"
+  shift
+done
+TOOL
+fake_tmux() {
+  # shellcheck disable=SC2016 # $1 belongs to the generated script.
+  printf '#!/bin/bash\n[[ "$1" == -V ]] && printf "%%s\\n" "%s"\n' "$2" > "$1"
+  chmod +x "$1"
+}
+pinned_version="$(sed -n 's/^TMUX_VERSION="\(.*\)"$/\1/p' "$APPLE_ROOT/bin/install-tmux.sh")"
+[[ -n "$pinned_version" ]] || fail "install-tmux.sh TMUX_VERSION not found"
+chmod +x "$work/tmux-tools/curl" "$work/apple/bin/install-tmux.sh"
+tmux_cache="$work/tmux-cache"
+cache_binary="$tmux_cache/blau/tmux/$pinned_version-libevent-$(sed -n 's/^LIBEVENT_VERSION="\(.*\)"$/\1/p' "$APPLE_ROOT/bin/install-tmux.sh")/bin/tmux"
+
+# A source archive whose digest differs from the pin is rejected before build.
+status=0
+output="$(PATH="$work/tmux-tools:$PATH" XDG_CACHE_HOME="$tmux_cache" \
+  "$work/apple/bin/install-tmux.sh" path 2>&1)" || status=$?
+[[ "$status" == 1 && "$output" == *"checksum mismatch"* ]] ||
+  fail "a tampered tmux source archive was not rejected: $status $output"
+[[ ! -e "$cache_binary" ]] || fail "a rejected tmux build left a cached binary"
+
+# A cached binary that is not the pinned version is never handed out.
+mkdir -p "${cache_binary%/*}"
+fake_tmux "$cache_binary" "tmux 3.0"
+status=0
+XDG_CACHE_HOME="$tmux_cache" "$work/apple/bin/install-tmux.sh" path >/dev/null 2>&1 || status=$?
+[[ "$status" == 1 ]] || fail "a cached tmux of the wrong version was accepted"
+fake_tmux "$cache_binary" "tmux $pinned_version"
+[[ "$(XDG_CACHE_HOME="$tmux_cache" "$work/apple/bin/install-tmux.sh" path)" == "$cache_binary" ]] ||
+  fail "the cached pinned tmux was not reused"
+
+# verify: the first tmux the apps would select must be the pinned version.
+fake_tmux "$work/tmux-bin/pinned" "tmux $pinned_version"
+fake_tmux "$work/tmux-bin/drifted" "tmux 9.9"
+BLAU_TMUX_CANDIDATES="$work/tmux-bin/missing:$work/tmux-bin/pinned" \
+  "$work/apple/bin/install-tmux.sh" verify >/dev/null || fail "the pinned tmux failed verification"
+for candidates in "$work/tmux-bin/drifted" "$work/tmux-bin/drifted:$work/tmux-bin/pinned" "$work/tmux-bin/missing"; do
+  status=0
+  BLAU_TMUX_CANDIDATES="$candidates" "$work/apple/bin/install-tmux.sh" verify >/dev/null 2>&1 || status=$?
+  [[ "$status" == 1 ]] || fail "tmux verification accepted candidates $candidates"
+done
+
 printf 'Apple CI script orchestration checks passed.\n'

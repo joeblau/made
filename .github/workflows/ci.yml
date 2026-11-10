@@ -136,14 +136,15 @@ jobs:
       - name: Compile every application
         run: apple/bin/build-ci.sh
       # The Drone terminal proof drives real tmux sessions; the runner image
-      # does not ship tmux.
-      - name: Install tmux
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      # does not ship tmux. Build it from SHA-256 pinned sources rather than a
+      # runner-dependent Homebrew bottle, and fail unless the tmux the apps
+      # select is exactly that pinned version.
+      - name: Install pinned tmux
         run: |
-          brew install tmux
-          tmux -V
+          tmux_binary="$(apple/bin/install-tmux.sh path)"
+          sudo install -d /usr/local/bin
+          sudo install -m 0755 "$tmux_binary" /usr/local/bin/tmux
+          apple/bin/install-tmux.sh verify
       - name: Run unit tests
         run: apple/bin/test.sh all
 
