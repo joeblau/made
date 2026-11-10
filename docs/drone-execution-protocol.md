@@ -212,6 +212,18 @@ pairing. An unexpired full table rejects new creates; it must not evict entries
 and risk duplicate execution. Later durable job storage (#322) must persist
 this decision atomically with job creation.
 
+Every other terminal-catalog limit is per pairing too, so one pairing can
+never make another pairing's create, close, or same-key retry fail. A
+pairing's terminal and create records may take at most 2 MiB of the persisted
+catalog, measured as an upper bound on their encoded size; the catalog holds
+32 pairings at that budget. The requested environment is stored once, on the
+terminal record, and a create that would pass the pairing's budget returns
+`resourceLimit` before tmux runs. Each pairing keeps up to 1,024 finished
+(closed or exited) terminals, and never drops one that an unexpired create
+record references. Only when more pairings hold state than the worker can pair
+at once (state left by revoked controllers) are the oldest unreferenced
+finished terminals of any pairing dropped to stay under the catalog cap.
+
 TCP retransmission and replay-window rejection are not execution idempotency:
 both layers are required. Requests other than create either are naturally
 idempotent state reads/transitions or carry request IDs so implementations can
@@ -238,7 +250,7 @@ These are worker/controller protocol requirements, not UI hints:
 | Detached reconnect queue | 1 MiB and 256 records per session; stop reads on overflow and emit `backpressure` |
 | Worker sessions / concurrent jobs | 64 live sessions and 32 running jobs; excess create returns `resourceLimit` |
 | Connections | 8 per worker and one active attachment per session; excess/surplus connections rejected |
-| Idempotency records | 1,024 per pairing, 24-hour TTL; fail new creates when full |
+| Idempotency records | 1,024 per pairing, 24-hour TTL; fail new creates when full; 2 MiB catalog budget per pairing |
 | Heartbeats | every 5 seconds; no valid record for 15 seconds closes transport only |
 | Handshake / request deadlines | 8 seconds / 30 seconds; deadlines never terminate detached execution |
 | Environment | at most 32 entries; 64-byte names and 4 KiB values |

@@ -93,7 +93,11 @@ actor DroneTerminalEngine: DroneTerminalServicing {
               configuration.maximumScrollbackRecords > 0,
               configuration.maximumReconnectQueueBytes > 0,
               configuration.maximumReconnectQueueRecords > 0,
-              configuration.maximumIdempotencyEntries > 0
+              configuration.maximumIdempotencyEntries > 0,
+              configuration.maximumRetainedSessionsPerPairing > 0,
+              configuration.maximumPairingCatalogBytes > 0,
+              configuration.maximumCatalogBytes
+                >= configuration.maximumPairingCatalogBytes + DroneTerminalEngine.catalogEnvelopeBytes
         else { throw DroneTerminalError.tmuxUnavailable }
         self.configuration = configuration
         self.workspaces = workspaces.mapValues { $0.standardizedFileURL.resolvingSymlinksInPath() }
@@ -105,7 +109,11 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         )
         catalogURL = stateDirectory.appendingPathComponent("terminals.json")
         let quarantineURL = stateDirectory.appendingPathComponent("quarantine", isDirectory: true)
-        let catalog = try DroneTerminalEngine.loadCatalog(from: catalogURL, quarantine: quarantineURL)
+        let catalog = try DroneTerminalEngine.loadCatalog(
+            from: catalogURL,
+            quarantine: quarantineURL,
+            maximumBytes: configuration.maximumCatalogBytes
+        )
         quarantinedCatalogCount = DroneTerminalEngine.entryCount(in: quarantineURL)
         for record in catalog.records {
             sessions[record.sessionID] = Session(
@@ -134,9 +142,14 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         if let existing = creates.first(where: {
             $0.key == idempotencyKey && $0.pairingID == pairingID
         }) {
-            guard existing.body == body, let session = sessions[existing.sessionID] else {
-                throw DroneProtocolError.idempotencyConflict
-            }
+            // The requested environment is stored once, on the terminal record,
+            // which retention keeps while this create record exists (#442).
+            guard let session = sessions[existing.sessionID],
+                  existing.body.workspaceID == body.workspaceID,
+                  existing.body.columns == body.columns,
+                  existing.body.rows == body.rows,
+                  session.record.environment == body.environment
+            else { throw DroneProtocolError.idempotencyConflict }
             return snapshot(session)
         }
         // Idempotency records are an allowance per pairing (#442): one
@@ -148,6 +161,20 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         guard let directory = workspaces[body.workspaceID],
               FileManager.default.fileExists(atPath: directory.path)
         else { throw DroneTerminalError.unauthorized }
+        // The catalog bytes a create adds are a per-pairing budget too, checked
+        // before tmux or the catalog is touched: a pairing that sends large
+        // environments or keeps many terminals exhausts only its own budget.
+        let storedBody = DroneCreateBody(
+            workspaceID: body.workspaceID,
+            environment: [:],
+            columns: body.columns,
+            rows: body.rows
+        )
+        guard reserveCatalogSpace(
+            Self.recordFootprintBytes + Self.environmentFootprint(body.environment)
+                + Self.createFootprintBytes,
+            for: pairingID
+        ) else { throw DroneTerminalError.resourceLimit }
 
         let sessionID = DroneSessionID()
         let environment = terminalEnvironment(requested: body.environment)
@@ -179,7 +206,7 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         creates.append(CreateRecord(
             key: idempotencyKey,
             pairingID: pairingID,
-            body: body,
+            body: storedBody,
             sessionID: sessionID,
             storedAt: now
         ))
@@ -635,12 +662,108 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         creates.removeAll {
             now.timeIntervalSince($0.storedAt) >= configuration.idempotencyLifetime
         }
-        let closed = sessions.values.filter { $0.record.closedAt != nil }.sorted(by: {
-            $0.record.createdAt > $1.record.createdAt
-        })
-        for session in closed.dropFirst(1_024) {
-            sessions.removeValue(forKey: session.record.sessionID)
+        // Finished terminals are retained per pairing (#442), so one pairing's
+        // activity never drops another's. A terminal an unexpired create
+        // record references is never dropped, so a same-key retry returns its
+        // original snapshot instead of `idempotencyConflict`.
+        var retained: [UUID: Int] = [:]
+        let referenced = Set(creates.map(\.sessionID))
+        for session in sessions.values
+        where Self.isFinished(session.record) && referenced.contains(session.record.sessionID) {
+            retained[session.record.pairingID, default: 0] += 1
         }
+        for session in evictableSessions().reversed() {
+            let pairingID = session.record.pairingID
+            if retained[pairingID, default: 0] < configuration.maximumRetainedSessionsPerPairing {
+                retained[pairingID, default: 0] += 1
+            } else {
+                evict(session)
+            }
+        }
+        // Per-pairing budgets keep the catalog under its cap while no more
+        // pairings hold state than the worker can pair at once. Past that
+        // (state left by revoked controllers), drop the oldest unreferenced
+        // finished terminals rather than fail every pairing's persist.
+        var total = catalogFootprint()
+        for session in evictableSessions() where total > catalogBudget {
+            total -= Self.footprint(of: session.record)
+            evict(session)
+        }
+    }
+
+    /// Makes room for `bytes` more of `pairingID`'s persisted state, under both
+    /// its own budget and the catalog's, by dropping only finished terminals no
+    /// create record references: first the pairing's own, then (only past the
+    /// pairing limit, see `pruneExpiredState`) the oldest of any pairing.
+    /// Returns false, dropping nothing, when that cannot make room.
+    private func reserveCatalogSpace(_ bytes: Int, for pairingID: UUID) -> Bool {
+        var owned = catalogFootprint(pairingID: pairingID) + bytes
+        var total = catalogFootprint() + bytes
+        var planned: [Session] = []
+        var plannedIDs = Set<DroneSessionID>()
+        for session in evictableSessions(pairingID: pairingID)
+        where owned > configuration.maximumPairingCatalogBytes || total > catalogBudget {
+            let footprint = Self.footprint(of: session.record)
+            owned -= footprint
+            total -= footprint
+            planned.append(session)
+            plannedIDs.insert(session.record.sessionID)
+        }
+        guard owned <= configuration.maximumPairingCatalogBytes else { return false }
+        for session in evictableSessions()
+        where total > catalogBudget && !plannedIDs.contains(session.record.sessionID) {
+            total -= Self.footprint(of: session.record)
+            planned.append(session)
+        }
+        guard total <= catalogBudget else { return false }
+        for session in planned {
+            evict(session)
+        }
+        return true
+    }
+
+    /// Finished terminals that no unexpired create record references, oldest
+    /// first: the only terminal state retention or a byte budget may drop.
+    private func evictableSessions(pairingID: UUID? = nil) -> [Session] {
+        let referenced = Set(creates.map(\.sessionID))
+        var evictable: [Session] = []
+        for session in sessions.values
+        where Self.isFinished(session.record) && !referenced.contains(session.record.sessionID) {
+            if let pairingID, session.record.pairingID != pairingID { continue }
+            evictable.append(session)
+        }
+        return evictable.sorted { $0.record.createdAt < $1.record.createdAt }
+    }
+
+    private func evict(_ session: Session) {
+        if session.record.closedAt == nil {
+            // An exited terminal's tmux session can outlive its client; close
+            // is the only other path that kills it, so do not orphan it here.
+            let environment = terminalEnvironment(requested: session.record.environment)
+            if tmux.hasSession(session.record.tmuxName, environment: environment) {
+                try? tmux.killSession(session.record.tmuxName, environment: environment)
+            }
+        }
+        session.pty?.close()
+        session.pty = nil
+        sessions.removeValue(forKey: session.record.sessionID)
+    }
+
+    /// Upper bound on the encoded bytes `pairingID`'s records (or, for nil, all
+    /// records) add to the catalog.
+    private func catalogFootprint(pairingID: UUID? = nil) -> Int {
+        var bytes = 0
+        for session in sessions.values where pairingID == nil || session.record.pairingID == pairingID {
+            bytes += Self.footprint(of: session.record)
+        }
+        for create in creates where pairingID == nil || create.pairingID == pairingID {
+            bytes += Self.footprint(of: create)
+        }
+        return bytes
+    }
+
+    private var catalogBudget: Int {
+        configuration.maximumCatalogBytes - Self.catalogEnvelopeBytes
     }
 
     private func persist() throws {
@@ -657,7 +780,9 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(catalog)
-        guard data.count <= 8 * 1_048_576 else { throw DroneTerminalError.persistenceFailed }
+        guard data.count <= configuration.maximumCatalogBytes else {
+            throw DroneTerminalError.persistenceFailed
+        }
         do {
             try data.write(to: catalogURL, options: .atomic)
             try FileManager.default.setAttributes(
@@ -688,10 +813,10 @@ actor DroneTerminalEngine: DroneTerminalServicing {
     /// all of it. Otherwise the file is moved into `quarantine/` and recovery
     /// starts empty, so a corrupt or newer-version catalog never stops the
     /// daemon. Size is checked before any read so the file is never over-allocated.
-    private static func loadCatalog(from url: URL, quarantine: URL) throws -> Catalog {
+    private static func loadCatalog(from url: URL, quarantine: URL, maximumBytes: Int) throws -> Catalog {
         guard FileManager.default.fileExists(atPath: url.path) else { return Catalog() }
         if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attributes[.size] as? Int, size <= maximumCatalogBytes,
+           let size = attributes[.size] as? Int, size <= maximumBytes,
            let data = try? Data(contentsOf: url),
            let catalog = try? JSONDecoder().decode(Catalog.self, from: data),
            isTrusted(catalog) {
@@ -734,7 +859,32 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         ))?.count ?? 0
     }
 
-    private static let maximumCatalogBytes = 8 * 1_048_576
+    /// Upper bounds on one entry's encoded size, excluding its environment,
+    /// including the array separator and room for every mutable field at its
+    /// widest (64-bit cursors, `closedAt`, timestamps): about 480 and 400 bytes
+    /// at most today. An admitted entry's footprint therefore never grows.
+    private static let recordFootprintBytes = 640
+    private static let createFootprintBytes = 512
+    private static let catalogEnvelopeBytes = 1_024
+
+    /// JSON escapes any byte to at most six (`\u0001`), plus quotes, colon
+    /// and separator per entry.
+    private static func environmentFootprint(_ environment: [String: String]) -> Int {
+        environment.reduce(0) { $0 + 6 * ($1.key.utf8.count + $1.value.utf8.count) + 6 }
+    }
+
+    private static func footprint(of record: Record) -> Int {
+        recordFootprintBytes + environmentFootprint(record.environment)
+    }
+
+    /// Records written before #442 also carry the environment in `body`.
+    private static func footprint(of create: CreateRecord) -> Int {
+        createFootprintBytes + environmentFootprint(create.body.environment)
+    }
+
+    private static func isFinished(_ record: Record) -> Bool {
+        record.closedAt != nil || record.exited
+    }
 
     private static func tmuxName(for sessionID: DroneSessionID) -> String {
         "drone-\(sessionID.rawValue.uuidString.lowercased())"

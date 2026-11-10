@@ -32,6 +32,18 @@ struct DroneTerminalConfiguration: Sendable {
     var maximumFastCommandBytes = 4 * 1_024
     var maximumIdempotencyEntries = DroneLimits.maxIdempotencyEntries
     var idempotencyLifetime = DroneLimits.idempotencyLifetime
+    /// Finished (closed or exited) terminals kept per pairing (#442). One that
+    /// an unexpired create record references is never dropped, so a pairing
+    /// keeps at most this many or its referenced ones, whichever is larger.
+    var maximumRetainedSessionsPerPairing = DroneLimits.maxIdempotencyEntries
+    /// Upper-bound encoded bytes of the terminal and create-idempotency records
+    /// one pairing may hold in `terminals.json` (#442). It fits a full create
+    /// allowance plus retained terminals with an empty environment; a create
+    /// that would pass it returns `resourceLimit` for that pairing only.
+    var maximumPairingCatalogBytes = 2 * 1_048_576
+    /// The whole catalog: every pairing the worker can hold at its full budget,
+    /// plus the envelope, so one pairing never fills the file for another.
+    var maximumCatalogBytes = DroneLimits.maxPairedWorkers * 2 * 1_048_576 + 65_536
 
     init() {}
 }
