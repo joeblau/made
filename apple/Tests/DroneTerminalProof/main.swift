@@ -3,6 +3,7 @@ import Foundation
 @main
 enum DroneTerminalProof {
     static func main() async throws {
+        try await provePTYDeliversOneChunkAtATime()
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("drone-terminal-proof-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -200,6 +201,51 @@ enum DroneTerminalProof {
         expect(preserved.count == 2, "quarantined catalogs were not preserved for the owner")
     }
 
+    /// #443: while a chunk is on its way to the receiver, `resumeReading()`
+    /// (acknowledge, attach, resynchronize) must not let a second chunk be
+    /// read, or independent delivery tasks could append them out of order.
+    private static func provePTYDeliversOneChunkAtATime() async throws {
+        let recorder = PTYChunkRecorder()
+        let pty = try DronePTY(
+            executable: "/usr/bin/yes",
+            arguments: ["drone-order"],
+            environment: ["PATH": "/usr/bin:/bin"],
+            columns: 80,
+            rows: 24,
+            onOutput: { _, data in recorder.record(data) },
+            onExit: {}
+        )
+        defer { pty.close() }
+        try await waitFor("first PTY chunk") { recorder.count >= 1 }
+        for _ in 0..<20 {
+            pty.resumeReading()
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        expect(recorder.count == 1, "resumeReading() read another chunk while one was still in flight")
+        pty.completeOutputDelivery(resumeReading: true)
+        try await waitFor("second PTY chunk") { recorder.count >= 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        expect(recorder.count == 2, "PTY read past an undelivered chunk after one completion")
+        pty.completeOutputDelivery(resumeReading: false)
+        try await Task.sleep(for: .milliseconds(100))
+        expect(recorder.count == 2, "completing delivery without resuming still read another chunk")
+        pty.resumeReading()
+        try await waitFor("PTY chunk after explicit resume") { recorder.count >= 3 }
+    }
+
+    private static func waitFor(
+        _ description: String,
+        _ condition: @Sendable () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                throw ProofError.failed("timed out waiting for \(description)")
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     private static func output(
         containing needle: String,
         socket: String,
@@ -261,4 +307,16 @@ enum DroneTerminalProof {
 
 private enum ProofError: Error {
     case failed(String)
+}
+
+private final class PTYChunkRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var chunks = 0
+
+    var count: Int { lock.withLock { chunks } }
+
+    func record(_ data: Data) {
+        guard !data.isEmpty else { return }
+        lock.withLock { chunks += 1 }
+    }
 }
