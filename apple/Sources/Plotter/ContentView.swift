@@ -440,7 +440,9 @@ private struct ZoomableMirrorView: UIViewRepresentable {
         } / CGFloat(max(1, stroke.path.count))
 
         return AnnotationStroke(
-            color: AnnotationColor(red: rgba.red, green: rgba.green, blue: rgba.blue, alpha: rgba.alpha),
+            // Wide-gamut ink reports extended-sRGB components outside 0...1,
+            // which the wire format refuses (issue #431).
+            color: AnnotationColor.normalized(red: rgba.red, green: rgba.green, blue: rgba.blue, alpha: rgba.alpha),
             width: AnnotationStroke.normalizedWidth(
                 penWidth: Double(averageWidth),
                 contentWidth: Double(drawRect.width),

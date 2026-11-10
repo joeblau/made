@@ -93,11 +93,14 @@ full rebuild otherwise and after every Pilot authentication, Pilot-originated
 undo or clear, and layout re-anchor. A rebuild is one `.replaceDrawing` when it
 fits in `maxAnnotationBytes`; a drawing within Pilot's ceilings that does not
 (about 23k full-precision points) is rebuilt as `.clear` followed by one
-`.addStroke` per stroke, and counts as delivered only if every message was. An
-annotation that cannot be encoded is refused, never queued. Plotter enforces
-Pilot's total stroke/point ceilings before sending; when a drawing is over
-them, or one of its strokes is too large to encode on its own, Plotter clears
-Pilot's ink, shows that the drawing is too large to mirror, and sends only full
+`.addStroke` per stroke, and counts as delivered only if every message was;
+that rebuild starts only after every stroke is checked to encode on its own. An
+annotation that cannot be encoded is refused, never queued. Plotter clamps ink
+colors into the wire's `0...1` range (wide-gamut ink reports extended-sRGB
+components outside it). Plotter enforces Pilot's total stroke/point ceilings
+before sending; when a drawing is over them, or one of its strokes is too large
+to encode on its own, Plotter sends Pilot a single `.clear` (never a partial
+rebuild), shows that the drawing is too large to mirror, and sends only full
 rebuilds until one succeeds. Pilot, after rejecting a message, refuses
 incremental messages until a replacement or clear arrives.
 

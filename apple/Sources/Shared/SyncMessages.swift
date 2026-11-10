@@ -116,6 +116,21 @@ public struct AnnotationStroke: Codable, Sendable, Hashable {
     }
 }
 
+extension AnnotationColor {
+    /// A wire color from platform color components, clamped into the `0...1`
+    /// range ``FrameProtocol`` accepts (a non-finite component becomes `0`).
+    /// `UIColor.getRed(_:green:blue:alpha:)` reports extended-sRGB components
+    /// outside `0...1` for the wide-gamut (Display P3) colors `PKToolPicker`
+    /// offers; unclamped, such a stroke could never be encoded and Pilot's
+    /// mirror would fail closed for an ordinary drawing (issue #431).
+    static func normalized(red: Double, green: Double, blue: Double, alpha: Double) -> AnnotationColor {
+        func unit(_ component: Double) -> Double {
+            component.isFinite ? min(1, max(0, component)) : 0
+        }
+        return AnnotationColor(red: unit(red), green: unit(green), blue: unit(blue), alpha: unit(alpha))
+    }
+}
+
 extension AnnotationStroke {
     /// The wire `width` for a pen `penWidth` points wide drawn over a video
     /// content rect `contentWidth` x `contentHeight` points: a fraction of the
@@ -173,7 +188,9 @@ public enum AnnotationMessage: Codable, Sendable, Hashable {
 /// fails closed: it sends a `.clear` so Pilot shows no ink rather than ink
 /// that no longer matches, marks itself out of sync, and sends nothing
 /// incremental until a full rebuild (a replacement, or a clear and every
-/// stroke) succeeds.
+/// stroke) succeeds. A stroke-by-stroke rebuild is preflighted, so a doomed
+/// one sends only that single fail-closed `.clear`, never a prefix of the
+/// drawing.
 struct AnnotationMirrorSync {
     /// The strokes Pilot holds after every message handed to the link so far.
     private(set) var mirrored: [AnnotationStroke] = []
@@ -247,11 +264,23 @@ struct AnnotationMirrorSync {
         return false
     }
 
+    /// Whether `message` passes ``FrameProtocol``'s per-message validation and
+    /// `maxAnnotationBytes`: exactly what `FrameReceiver.sendAnnotation` checks
+    /// before it hands a message to the link.
+    static func isEncodable(_ message: AnnotationMessage) -> Bool {
+        !FrameProtocol.encode(.annotation(seq: 0, message: message)).isEmpty
+    }
+
     /// Rebuilds Pilot's ink as `strokes` one message at a time, for a drawing
-    /// within Pilot's ceilings that is too large for a single replacement.
-    /// Returns `true` only if every message was handed to the link; on `false`
-    /// Pilot may hold a prefix of `strokes`, so the caller must fail closed.
+    /// within Pilot's ceilings (the caller checks them) that is too large for
+    /// a single replacement. Nothing is sent unless every stroke is
+    /// individually encodable, so a rebuild that cannot finish never clears
+    /// Pilot and replays a prefix of the drawing. Returns `true` only if every
+    /// message was handed to the link; on `false` Pilot may hold a prefix of
+    /// `strokes` (the link refused mid-rebuild), so the caller must fail
+    /// closed.
     private static func rebuild(_ strokes: [AnnotationStroke], send: (AnnotationMessage) -> Bool) -> Bool {
+        guard strokes.allSatisfy({ Self.isEncodable(.addStroke($0)) }) else { return false }
         guard send(.clear) else { return false }
         for stroke in strokes where !send(.addStroke(stroke)) {
             return false
