@@ -90,6 +90,14 @@ with Path(os.environ["CI_TEST_LOG"]).open("a") as log:
     log.write("cockpit-ui-boundary\n")
 raise SystemExit(int(os.environ.get("CI_TEST_BOUNDARY_FAILURE", "0")))
 TOOL
+cat > "$work/apple/bin/make-brand-symbols.py" <<'TOOL'
+import os
+import sys
+from pathlib import Path
+with Path(os.environ["CI_TEST_LOG"]).open("a") as log:
+    log.write("brand-symbols " + " ".join(sys.argv[1:]) + "\n")
+raise SystemExit(int(os.environ.get("CI_TEST_BRAND_SYMBOLS_FAILURE", "0")))
+TOOL
 cat > "$work/apple/bin/test-drone-protocol.sh" <<'TOOL'
 #!/bin/bash
 printf 'drone-protocol\n' >> "$CI_TEST_LOG"
@@ -130,6 +138,7 @@ reset_log
 "$work/apple/bin/build-ci.sh"
 "$work/apple/bin/test.sh" all
 expect_calls 1 '^icons validate$'
+expect_calls 1 '^brand-symbols --check$'
 expect_calls 1 '^benchmark-annexb --typecheck$'
 expect_calls 1 '^annexb-parity --typecheck$'
 expect_calls 1 '^android-stream-live --typecheck$'
@@ -236,6 +245,50 @@ if CI_TEST_BOUNDARY_FAILURE=1 "$work/apple/bin/test.sh" pilot; then
 fi
 expect_calls 1 '^cockpit-ui-boundary$'
 expect_calls 0 '^xcodebuild '
+
+# Generated brand SF Symbols that drift from their generator fail build-ci.sh
+# before any application build.
+reset_log
+if CI_TEST_BRAND_SYMBOLS_FAILURE=1 "$work/apple/bin/build-ci.sh"; then
+  fail "a brand SF Symbol drift must fail build-ci.sh"
+fi
+expect_calls 1 '^brand-symbols --check$'
+expect_calls 0 '^xcodebuild '
+
+# The real generator's --check mode: the committed symbolsets match, and a
+# hand edit, a leftover file, a missing file, or an unlisted Brand* symbolset
+# in a scratch copy is reported; regenerating that copy repairs it.
+brand_tool="$APPLE_ROOT/bin/make-brand-symbols.py"
+brand_assets="$work/brand-assets"
+mkdir -p "$brand_assets"
+python3 "$brand_tool" --check >/dev/null 2>&1 ||
+  fail "committed Brand*.symbolset assets differ from make-brand-symbols.py output"
+cp -R "$APPLE_ROOT/Sources/Pilot/Assets.xcassets/"Brand*.symbolset "$brand_assets/"
+expect_brand_drift() {
+  local output
+  if output="$(python3 "$brand_tool" --check --assets "$brand_assets" 2>&1)"; then
+    fail "brand symbol check accepted: $1"
+  fi
+  [[ "$output" == *"$2"* ]] || fail "brand symbol check did not report '$2': $output"
+  python3 "$brand_tool" --assets "$brand_assets" >/dev/null 2>&1
+  python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1 ||
+    fail "regenerating did not repair: $1"
+}
+python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1 ||
+  fail "a pristine copy of the brand symbols failed --check"
+printf ' ' >> "$brand_assets/BrandOpenAI.symbolset/openai.svg"
+expect_brand_drift "a hand-edited glyph" "BrandOpenAI.symbolset/openai.svg: differs"
+touch "$brand_assets/BrandGrok.symbolset/grok-old.svg"
+expect_brand_drift "a leftover file" "BrandGrok.symbolset/grok-old.svg: not produced"
+rm "$brand_assets/BrandCursor.symbolset/Contents.json"
+expect_brand_drift "a missing Contents.json" "BrandCursor.symbolset/Contents.json: missing"
+touch "$brand_assets/BrandAnthropic.symbolset/.DS_Store"
+python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1 ||
+  fail "Finder metadata in a symbolset must not count as drift"
+mkdir "$brand_assets/BrandStray.symbolset"
+if python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1; then
+  fail "brand symbol check accepted a Brand* symbolset with no generator entry"
+fi
 
 # An explicit root relocates both scripts together.
 reset_log
