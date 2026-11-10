@@ -56,6 +56,15 @@ final class DroneJobStore: @unchecked Sendable {
     private var jobs: [DroneJobID: DroneStoredJob] = [:]
     private var keys: [JobKey: DroneJobID] = [:]
     private var quarantinedEntries = 0
+    /// Records that existed when their controller was revoked and are not yet
+    /// deleted: jobs still running then, or finished ones whose removal failed.
+    /// Each is removed by the first purge after it finishes, and `remove(_:)`
+    /// drops its ID, so the set never outgrows the live records. Retiring
+    /// records rather than controllers lets a controller that re-pairs with the
+    /// same peer ID keep its new records for the full idempotency lifetime.
+    /// In memory only: after a restart, any record left behind still expires
+    /// through `purgeExpired()`.
+    private var retiredJobs: Set<DroneJobID> = []
 
     init(
         stateURL: URL,
@@ -295,6 +304,50 @@ final class DroneJobStore: @unchecked Sendable {
         return job
     }
 
+    /// Removes every finished record past the idempotency lifetime, for all
+    /// controllers, plus retired jobs that have since finished. Running jobs
+    /// are never removed; they become eligible once they reach a final state.
+    @discardableResult
+    func purgeExpired() throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let current = now()
+        let expired = jobs.values.filter {
+            $0.state.isTerminal
+                && (current - $0.createdAt >= limits.idempotencyLifetime
+                    || retiredJobs.contains($0.id))
+        }
+        try removeEach(expired)
+        return expired.count
+    }
+
+    /// Deletes a revoked controller's finished records now and retires its
+    /// in-flight records so the next purge after they finish deletes them.
+    /// Records created later (after re-pairing) are not affected.
+    @discardableResult
+    func removeFinishedJobs(controllerID: UUID) throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let owned = jobs.values.filter { $0.controllerID == controllerID }
+        retiredJobs.formUnion(owned.map(\.id))
+        let finished = owned.filter(\.state.isTerminal)
+        try removeEach(finished)
+        return finished.count
+    }
+
+    /// One unremovable record must not keep every other one alive.
+    private func removeEach(_ records: [DroneStoredJob]) throws {
+        var firstFailure: (any Error)?
+        for job in records {
+            do {
+                try remove(job)
+            } catch {
+                firstFailure = firstFailure ?? error
+            }
+        }
+        if let firstFailure { throw firstFailure }
+    }
+
     private func purgeExpired(controllerID: UUID) throws {
         let expired = jobs.values.filter {
             $0.controllerID == controllerID && $0.state.isTerminal
@@ -308,6 +361,7 @@ final class DroneJobStore: @unchecked Sendable {
         try FileManager.default.removeItem(at: fileURL(for: job))
         jobs.removeValue(forKey: job.id)
         keys.removeValue(forKey: key)
+        retiredJobs.remove(job.id)
     }
 
     /// Loads every record this build can decode and trust. A record that cannot
@@ -346,6 +400,17 @@ final class DroneJobStore: @unchecked Sendable {
                 let key = JobKey(controllerID: job.controllerID, idempotencyKey: job.idempotencyKey)
                 guard jobs[job.id] == nil, keys[key] == nil else {
                     try quarantine(recordURL)
+                    continue
+                }
+                // Never reload a record past the idempotency lifetime: every job is
+                // final after a restart, so it is purged here for every controller
+                // (#444). A record that was still running when the worker died is
+                // killed first so purging it never strands its process group (#441).
+                if now() - job.createdAt >= limits.idempotencyLifetime {
+                    if !job.state.isTerminal, let group = job.processGroup {
+                        DroneProcessTable.killOrphanedGroup(group)
+                    }
+                    try FileManager.default.removeItem(at: recordURL)
                     continue
                 }
                 controllerCount += 1

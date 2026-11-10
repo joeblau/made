@@ -15,12 +15,17 @@ final class DroneJobEngine: @unchecked Sendable {
     private var pendingAcceptances = 0
     private var stopping = false
     private var controls: [DroneJobID: DroneProcessGroupControl] = [:]
+    private let purgeTimer: any DispatchSourceTimer
 
+    /// `purgeInterval` bounds how long a finished record may outlive the
+    /// idempotency lifetime (or its controller's revocation) on disk and in
+    /// memory, independent of whether any controller creates new jobs.
     init(
         stateURL: URL,
         workspaces: DroneWorkspaceRegistry,
         limits: DroneJobEngineLimits = DroneJobEngineLimits(),
         gitExecutablePath: String = "/usr/bin/git",
+        purgeInterval: TimeInterval = 15 * 60,
         now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
     ) throws {
         guard limits.maximumJobsPerController > 0,
@@ -28,12 +33,38 @@ final class DroneJobEngine: @unchecked Sendable {
               limits.maximumHistoryEvents >= 3,
               limits.maximumHistoryOutputBytes > 0,
               limits.maximumStoredRecordBytes > 0,
-              limits.cancellationGracePeriod >= 0
+              limits.cancellationGracePeriod >= 0,
+              purgeInterval.isFinite, purgeInterval > 0
         else { throw DroneJobError.invalidRequest }
         self.limits = limits
         self.workspaces = workspaces
         self.gitExecutablePath = gitExecutablePath
-        store = try DroneJobStore(stateURL: stateURL, limits: limits, now: now)
+        let store = try DroneJobStore(stateURL: stateURL, limits: limits, now: now)
+        self.store = store
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + purgeInterval, repeating: purgeInterval)
+        // Capture only the store so the timer never extends the engine's lifetime.
+        timer.setEventHandler { _ = try? store.purgeExpired() }
+        purgeTimer = timer
+        timer.resume()
+    }
+
+    deinit {
+        purgeTimer.cancel()
+    }
+
+    /// Removes finished records past the idempotency lifetime for every
+    /// controller. Also runs on `purgeInterval` without any caller.
+    @discardableResult
+    func purgeExpiredJobs() throws -> Int {
+        try store.purgeExpired()
+    }
+
+    /// Deletes a revoked controller's finished records and ensures its
+    /// in-flight records are deleted by the next purge once they finish.
+    @discardableResult
+    func removeFinishedJobs(controllerID: UUID) throws -> Int {
+        try store.removeFinishedJobs(controllerID: controllerID)
     }
 
     /// Job records recovery moved aside instead of loading; nonzero is unhealthy storage.
