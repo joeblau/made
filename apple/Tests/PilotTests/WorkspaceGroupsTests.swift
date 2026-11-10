@@ -135,6 +135,39 @@ struct WorkspaceGroupsTests {
         }
     }
 
+    @Test("A stored layout with repeated group and member IDs loads with each workspace once")
+    func duplicateLayoutDecoding() throws {
+        let suite = "WorkspaceGroupsTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let ids = [UUID(), UUID(), UUID(), UUID()]
+        let first = WorkspaceGroup(name: "First", workspaceIDs: [ids[0], ids[1], ids[1]])
+        let second = WorkspaceGroup(name: "Second", workspaceIDs: [ids[0], ids[2]])
+        let repeated = WorkspaceGroup(id: first.id, name: "Repeated", workspaceIDs: [ids[2]])
+        let stored = StoredLayout(
+            groups: [first, second, repeated],
+            order: [.group(first.id), .group(first.id), .group(second.id)]
+        )
+        defaults.set(try JSONEncoder().encode(stored), forKey: "workspaceGroups.v1")
+
+        let groups = WorkspaceGroups(defaults: defaults)
+        #expect(groups.groups.map(\.id) == [first.id, second.id])
+        #expect(groups.group(first.id)?.workspaceIDs == [ids[0], ids[1]])
+        #expect(groups.group(second.id)?.workspaceIDs == [ids[2]])
+        let ordered = groups.orderedWorkspaceIDs(ids)
+        #expect(ordered == ids)
+        #expect(Set(ordered).count == ordered.count)
+        let rows = groups.visibleRows(workspaceIDs: ids)
+        #expect(Set(rows).count == rows.count)
+        #expect(groups.items(workspaceIDs: ids) == [.group(first.id), .group(second.id), .workspace(ids[3])])
+    }
+
+    /// Mirrors the private on-disk `WorkspaceGroups.Layout` shape.
+    private struct StoredLayout: Codable {
+        var groups: [WorkspaceGroup]
+        var order: [WorkspaceSidebarItem]
+    }
+
     private func withGroups(_ body: (WorkspaceGroups, UserDefaults) throws -> Void) throws {
         let suite = "WorkspaceGroupsTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
