@@ -633,6 +633,32 @@ struct MockupModelTests {
         #expect(split.addKeyframe(at: 0.002, pose: MockupPose(yaw: 0.5)) == nil)
         #expect(split.keyframes.map(\.duration) == [2, 2])
         #expect(split.isValid)
+
+        // Edits pinned to a bound can land one ulp past it with non-dyadic durations; they must still save.
+        func makeTimeline(_ durations: [Double]) -> MockupTimeline {
+            MockupTimeline(keyframes: durations.enumerated().map {
+                MockupKeyframe(pose: MockupPose(yaw: Double($0.offset)), duration: $0.element)
+            })
+        }
+        var pinnedDrag = makeTimeline([0.7, 0.1, 1.0])
+        pinnedDrag.moveKeyframe(pinnedDrag.keyframes[2].id, to: 0.75)
+        #expect(pinnedDrag.isValid)
+        var dragToEnd = makeTimeline([3, 2])
+        dragToEnd.moveKeyframe(dragToEnd.keyframes[1].id, to: 5)
+        #expect(dragToEnd.isValid)
+        var budgetFirst = makeTimeline([0.1, 7.7, 29.9, 29.9, 24.3])
+        budgetFirst.setDuration(30, for: budgetFirst.keyframes[0].id)
+        #expect(budgetFirst.duration > MockupTimeline.maximumTotalDuration - 0.001)
+        #expect(budgetFirst.isValid)
+        var budgetMiddle = makeTimeline([0.3, 29.9, 0.9, 30, 30])
+        budgetMiddle.setDuration(30, for: budgetMiddle.keyframes[2].id)
+        #expect(budgetMiddle.duration > MockupTimeline.maximumTotalDuration - 0.001)
+        #expect(budgetMiddle.isValid)
+        var fullMerge = makeTimeline([1.1, 29.3, 29.9, 0.1, 29.9, 29.7])
+        #expect(fullMerge.isValid)
+        fullMerge.removeKeyframe(fullMerge.keyframes[3].id)
+        #expect(abs(fullMerge.keyframes[2].duration - MockupTimeline.maximumKeyframeDuration) < 0.001)
+        #expect(fullMerge.isValid)
     }
 
     @Test("The document captures inspector poses into selected keyframes")

@@ -56,17 +56,21 @@ struct MockupTimeline: Codable, Equatable {
     /// Total-length cap enforced by every editing operation, so a saved timeline always reloads (#435).
     static let maximumTotalDuration = 120.0
     static let maximumKeyframes = 256
+    /// Edits derive durations by subtracting cumulative start times, so a value clamped onto a bound can
+    /// land one ulp past it; isValid accepts that rounding so a bound-pinned edit still saves (#435).
+    static let durationTolerance = 1e-9
 
     var keyframes: [MockupKeyframe]
 
     var duration: Double { keyframes.reduce(0) { $0 + $1.duration } }
 
     var isValid: Bool {
+        let tolerance = Self.durationTolerance
         guard !keyframes.isEmpty, keyframes.count <= Self.maximumKeyframes,
-              duration <= Self.maximumTotalDuration else { return false }
+              duration <= Self.maximumTotalDuration + tolerance else { return false }
         return keyframes.allSatisfy {
-            $0.duration.isFinite && $0.duration >= Self.minimumDuration
-                && $0.duration <= Self.maximumKeyframeDuration && $0.pose.isFinite
+            $0.duration.isFinite && $0.duration >= Self.minimumDuration - tolerance
+                && $0.duration <= Self.maximumKeyframeDuration + tolerance && $0.pose.isFinite
         }
     }
 
