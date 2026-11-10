@@ -41,10 +41,30 @@ final class WorkspaceGroups {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         if let data = defaults.data(forKey: Self.storageKey),
-           let layout = try? JSONDecoder().decode(Layout.self, from: data) {
+           let decoded = try? JSONDecoder().decode(Layout.self, from: data) {
+            let layout = Self.normalized(decoded)
             _groups = layout.groups
             _order = layout.order
         }
+    }
+
+    /// The stored layout is untrusted (hand-edited, corrupted, or written by
+    /// another build). Each group ID and each workspace ID may appear at most
+    /// once, so callers can key dictionaries by workspace ID. The first
+    /// occurrence wins; workspaces dropped from later groups fall back to the
+    /// top level.
+    private static func normalized(_ layout: Layout) -> Layout {
+        var seenGroups = Set<UUID>()
+        var seenMembers = Set<UUID>()
+        let groups = layout.groups.compactMap { group -> WorkspaceGroup? in
+            guard seenGroups.insert(group.id).inserted else { return nil }
+            var group = group
+            group.workspaceIDs = group.workspaceIDs.filter { seenMembers.insert($0).inserted }
+            return group
+        }
+        var seenItems = Set<WorkspaceSidebarItem>()
+        let order = layout.order.filter { seenItems.insert($0).inserted }
+        return Layout(groups: groups, order: order)
     }
 
     func items(workspaceIDs: [UUID]) -> [WorkspaceSidebarItem] {
