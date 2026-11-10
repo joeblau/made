@@ -321,7 +321,7 @@ def render():
     Pure: reads the robot scaffold and source SVGs, writes nothing, so write
     mode and --check share exactly one rendering path.
     """
-    with open(ROBOT) as f:
+    with open(ROBOT, encoding="utf-8") as f:
         robot = f.read()
     prefix = robot.split('  <g id="Symbols">')[0]
     # Drop the robot's provenance comment; each brand gets its own below.
@@ -341,7 +341,7 @@ def render():
             "  tints like a native SF Symbol.\n"
             "-->\n"
         )
-        with open(os.path.join(SOURCES, src)) as f:
+        with open(os.path.join(SOURCES, src), encoding="utf-8") as f:
             svg = f.read()
         ds = re.findall(r'd="([^"]+)"', svg)
         if len(ds) != 1:
@@ -392,8 +392,9 @@ def write(rendered, assets):
             if entry not in files and not entry.startswith(".") and os.path.isfile(path):
                 os.remove(path)
         for fname, contents in files.items():
-            with open(os.path.join(dest_dir, fname), "w") as f:
-                f.write(contents)
+            # Exact bytes: no platform newline translation on write.
+            with open(os.path.join(dest_dir, fname), "wb") as f:
+                f.write(contents.encode("utf-8"))
         print(f"{name} -> {dest_dir}")
 
 
@@ -408,12 +409,14 @@ def check(rendered, assets):
         for fname, expected in files.items():
             path = os.path.join(dest_dir, fname)
             try:
-                with open(path) as f:
+                # Binary read: text mode's universal newlines would map CRLF or a
+                # lone CR to LF and hide line-ending drift from the comparison.
+                with open(path, "rb") as f:
                     actual = f.read()
             except OSError:
                 problems.append(f"{name}.symbolset/{fname}: missing")
                 continue
-            if actual != expected:
+            if actual != expected.encode("utf-8"):
                 problems.append(f"{name}.symbolset/{fname}: differs from generator output")
         for entry in sorted(os.listdir(dest_dir)):
             if entry not in files and not entry.startswith("."):  # Finder metadata
