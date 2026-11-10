@@ -35,6 +35,8 @@ struct ContentView: View {
             // Frame-count / status reads live in their own view so the 60fps
             // diagnostic ticks don't re-render the canvas or video reps.
             SearchingOverlay(mirror: mirror)
+
+            AnnotationMirrorWarning(mirror: mirror)
         }
         // Settings + Dashboard + Pilot (Mac) connection status, top-left. Clears
         // the annotation toolbar (undo/clear/reset), which sits top-trailing.
@@ -260,6 +262,34 @@ private struct ConnectionStatusBadge: View {
     }
 }
 
+/// Shown while the drawing is too large for Cockpit to mirror (issue #431):
+/// Cockpit then shows no ink instead of ink that no longer matches, until an
+/// undo or erase brings the drawing back within the protocol limits.
+private struct AnnotationMirrorWarning: View {
+    var mirror: MirrorModel
+
+    var body: some View {
+        let isOutOfSync = mirror.isAnnotationMirrorOutOfSync
+        VStack {
+            if isOutOfSync {
+                Label("Drawing too large to show on Cockpit", systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .glassEffect(.regular, in: Capsule())
+                    .environment(\.colorScheme, .dark)
+                    .accessibilityHint("Undo or erase strokes to resume mirroring.")
+                    .transition(.opacity)
+            }
+            Spacer()
+        }
+        // Below the floating clusters (48pt circles, 12pt inset, 8pt gap).
+        .padding(.top, 72)
+        .allowsHitTesting(false)
+        .animation(LiquidGlassMetrics.stateChange, value: isOutOfSync)
+    }
+}
+
 /// The "searching for Cockpit" placeholder. Isolated into its own view so the
 /// per-frame `frameCount` updates only re-render this text — not the video or
 /// PencilKit canvas siblings.
@@ -336,6 +366,9 @@ private struct ZoomableMirrorView: UIViewRepresentable {
         mirror.attach(view.sampleBufferDisplayLayer)
         view.onAnnotation = { message in
             mirror.sendAnnotation(message)
+        }
+        view.onMirrorOutOfSyncChange = { outOfSync in
+            mirror.setAnnotationMirrorOutOfSync(outOfSync)
         }
         view.onCornerInsetsChange = onCornerInsetsChange
         // Apply undo/clear commands that originate on Pilot to this canvas (the
@@ -448,7 +481,11 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// to this canvas: `.addStroke` / `.undo` only for a provable append or
     /// last-stroke removal (so each line is a discrete entry on Pilot's undo
     /// stack), `.clear`, or a full `.replaceDrawing` for anything else.
-    var onAnnotation: ((AnnotationMessage) -> Void)?
+    /// Returns `false` when the message could not be handed to the link, so
+    /// Pilot is not assumed to hold it.
+    var onAnnotation: ((AnnotationMessage) -> Bool)?
+    /// Pilot's ink stopped (`true`) or resumed (`false`) mirroring this canvas.
+    var onMirrorOutOfSyncChange: ((Bool) -> Void)?
     /// The corner-adapted safe area changed; receives ``cornerInsets``.
     var onCornerInsetsChange: ((EdgeInsets) -> Void)?
 
@@ -459,11 +496,13 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// Last value delivered to `onCornerInsetsChange`, to report only changes.
     private var reportedCornerInsets: EdgeInsets?
 
-    /// The normalized strokes Pilot holds after every message sent so far. Each
-    /// change is diffed against this (not just the stroke count), so an eraser
-    /// removing a middle stroke or an undone erase restoring one resends the
-    /// whole drawing instead of being misreported as undo / add (issue #431).
-    private var mirroredStrokes: [AnnotationStroke] = []
+    /// The normalized strokes Pilot holds after every message delivered so
+    /// far. Each change is diffed against this (not just the stroke count), so
+    /// an eraser removing a middle stroke or an undone erase restoring one
+    /// resends the whole drawing instead of being misreported as undo / add,
+    /// and a message that cannot be delivered or would exceed Pilot's ink
+    /// ceilings marks the mirror out of sync instead (issue #431).
+    private var pilotMirror = AnnotationMirrorSync()
 
     /// Native size of the mirrored window; used to compute the aspect-fit
     /// content rect that annotations normalize against.
@@ -630,7 +669,7 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         ))
 
         canvasView.drawing = PKDrawing(strokes: strokes)
-        mirroredStrokes = normalizedStrokes()
+        pilotMirror.assumeMirrored(normalizedStrokes())
         updateCanvasAccessibilityValue()
     }
 
@@ -805,8 +844,7 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         canvasView.drawing = PKDrawing()
         updateCanvasAccessibilityValue()
         isApplyingProgrammaticChange = false
-        mirroredStrokes = []
-        onAnnotation?(.clear)
+        updatePilotMirror { mirror, send in mirror.clear(send: send) }
     }
 
     /// An icon button for the glass toolbar (44 x 48pt at the default size,
@@ -955,9 +993,7 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// Sends the one message that makes Pilot's ink match this canvas, if any.
     private func syncPilot() {
         let current = normalizedStrokes()
-        guard let message = AnnotationMirrorSync.message(from: mirroredStrokes, to: current) else { return }
-        mirroredStrokes = current
-        onAnnotation?(message)
+        updatePilotMirror { mirror, send in mirror.sync(to: current, send: send) }
     }
 
     /// Replaces Pilot's ink with this canvas's full drawing, unconditionally.
@@ -965,8 +1001,20 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// a layout re-anchor.
     func resyncPilot() {
         let current = normalizedStrokes()
-        mirroredStrokes = current
-        onAnnotation?(.replaceDrawing(AnnotationDrawing(strokes: current)))
+        updatePilotMirror { mirror, send in mirror.resync(to: current, send: send) }
+    }
+
+    /// Runs one ``AnnotationMirrorSync`` step against the link and reports a
+    /// change in whether Pilot still mirrors this canvas.
+    private func updatePilotMirror(
+        _ step: (inout AnnotationMirrorSync, (AnnotationMessage) -> Bool) -> Void
+    ) {
+        let wasOutOfSync = pilotMirror.isOutOfSync
+        let send = onAnnotation ?? { _ in false }
+        step(&pilotMirror, send)
+        if pilotMirror.isOutOfSync != wasOutOfSync {
+            onMirrorOutOfSyncChange?(pilotMirror.isOutOfSync)
+        }
     }
 
     /// Re-anchors existing strokes whenever the aspect-fit rect changes. This

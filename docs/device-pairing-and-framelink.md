@@ -87,6 +87,15 @@ immediately. Packet kinds also enforce video-dimension, parameter-set, sample,
 JPEG, and annotation ceilings. Diagnostics expose only aggregate invalid/drop
 counters, never payload contents.
 
+Kneeboard ink is mirrored stroke for stroke (issue #431). Plotter sends
+`.addStroke` / `.undo` only for a provable append or last-stroke removal, and a
+full `.replaceDrawing` otherwise and after every Pilot authentication. An
+annotation that cannot be encoded is refused, never queued. Plotter enforces
+Pilot's total stroke/point ceilings before sending; when a change cannot be
+delivered it clears Pilot's ink, shows that the drawing is too large to mirror,
+and sends only full replacements until one succeeds. Pilot, after rejecting a
+message, refuses incremental messages until a replacement or clear arrives.
+
 ## Revocation and key rotation
 
 - Plotter can revoke its Pilot pin by long-pressing the connection badge and

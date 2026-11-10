@@ -17,6 +17,9 @@ let plotterMirrorLog = Logger(subsystem: "app.blau.plotter", category: "Mirror")
 final class MirrorModel {
     private(set) var statusText = "Idle"
     private(set) var annotationStatusText = "Annotation idle"
+    /// True while the canvas drawing exceeds what Cockpit can mirror, so
+    /// Cockpit shows no ink until a full replacement fits again (issue #431).
+    private(set) var isAnnotationMirrorOutOfSync = false
     private(set) var frameCount = 0
     private(set) var isCockpitConnected = false
     private(set) var videoSize: CGSize = .zero
@@ -303,13 +306,28 @@ final class MirrorModel {
         }
     }
 
-    func sendAnnotation(_ message: AnnotationMessage) {
+    /// Hands `message` to the frame link. Returns `false` when it could not be
+    /// encoded (too large), so the canvas does not assume Pilot applied it.
+    func sendAnnotation(_ message: AnnotationMessage) -> Bool {
         lastSentAnnotationSeq &+= 1
+        guard receiver.sendAnnotation(message, seq: lastSentAnnotationSeq) else { return false }
         annotationStatusText = "Sending annotations over frame stream"
-        receiver.sendAnnotation(message, seq: lastSentAnnotationSeq)
+        return true
+    }
+
+    /// Records whether Cockpit's ink currently mirrors this canvas (issue
+    /// #431). While it does not, Cockpit shows no ink and the canvas keeps
+    /// trying a full replacement on every change.
+    func setAnnotationMirrorOutOfSync(_ outOfSync: Bool) {
+        guard isAnnotationMirrorOutOfSync != outOfSync else { return }
+        isAnnotationMirrorOutOfSync = outOfSync
+        annotationStatusText = outOfSync
+            ? "Drawing too large to mirror to Cockpit"
+            : "Sending annotations over frame stream"
     }
 
     private func acknowledgeAnnotation(_ seq: UInt32) {
+        guard !isAnnotationMirrorOutOfSync else { return }
         annotationStatusText = "Cockpit received your annotations"
     }
 

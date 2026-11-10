@@ -917,8 +917,19 @@ public final class FrameReceiver: @unchecked Sendable {
         if connection != nil { teardownConnection() }
     }
 
-    public func sendAnnotation(_ message: AnnotationMessage, seq: UInt32) {
-        enqueueOutbound(FrameLink.encode(.annotation(seq: seq, message: message)))
+    /// Queues an annotation update for Pilot. Returns `false`, queuing
+    /// nothing, when the message cannot be encoded (it is over the protocol's
+    /// per-message stroke/point or `maxAnnotationBytes` limits), so the caller
+    /// knows Pilot will never see it (issue #431).
+    @discardableResult
+    public func sendAnnotation(_ message: AnnotationMessage, seq: UInt32) -> Bool {
+        let packet = FrameLink.encode(.annotation(seq: seq, message: message))
+        guard !packet.isEmpty else {
+            frameLinkLog.error("FrameReceiver: annotation (seq \(seq, privacy: .public)) too large to encode; not sent")
+            return false
+        }
+        enqueueOutbound(packet)
+        return true
     }
 
     /// Reports current link quality back to the sender over TCP, driving the
@@ -964,8 +975,10 @@ public final class FrameReceiver: @unchecked Sendable {
     }
 
     private func enqueueOutboundLocked(_ packet: Data) {
-        guard !packet.isEmpty,
-              connection?.state == .ready,
+        // An empty packet is an encode failure; never queue it in place of a
+        // real one (it would also evict a queued packet).
+        guard !packet.isEmpty else { return }
+        guard connection?.state == .ready,
               let record = security.seal(packet) else {
             pendingOutbound.append(packet)
             if pendingOutbound.count > 16 {

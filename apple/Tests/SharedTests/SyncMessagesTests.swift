@@ -506,4 +506,145 @@ struct AnnotationMirrorSyncTests {
             #expect(pilot == canvas)
         }
     }
+
+    /// A stroke whose coordinates have full-precision decimals, so its JSON
+    /// encoding costs about 45 bytes per point (the realistic worst case).
+    private func denseStroke(_ id: Int, points: Int) -> AnnotationStroke {
+        AnnotationStroke(
+            color: AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1),
+            width: 0.01,
+            points: (0..<points).map { index in
+                AnnotationPoint(
+                    x: (Double(id * points + index) + 0.123456789) / 7_919.0,
+                    y: (Double(index) + 0.987654321) / 7_927.0
+                )
+            }
+        )
+    }
+
+    private func isIncremental(_ message: AnnotationMessage) -> Bool {
+        switch message {
+        case .addStroke, .undo: return true
+        case .replaceDrawing, .clear: return false
+        }
+    }
+
+    @Test("FrameReceiver refuses, rather than queues, an annotation too large to encode")
+    func receiverRefusesOversizedAnnotation() {
+        // Within the per-message stroke/point ceilings, but over 1 MiB of JSON.
+        let oversized = AnnotationMessage.replaceDrawing(AnnotationDrawing(
+            strokes: (0..<40).map { denseStroke($0, points: 1_000) }
+        ))
+        #expect(FrameProtocol.encode(.annotation(seq: 1, message: oversized)).isEmpty)
+
+        let receiver = FrameReceiver()
+        #expect(receiver.sendAnnotation(oversized, seq: 1) == false)
+        #expect(receiver.sendAnnotation(.addStroke(denseStroke(0, points: 1_000)), seq: 2))
+        #expect(receiver.sendAnnotation(.clear, seq: 3))
+    }
+
+    @Test("A replace too large to encode marks the mirror out of sync instead of advancing it")
+    func undeliverableReplaceFailsClosed() {
+        let receiver = FrameReceiver()
+        var attempted: [AnnotationMessage] = []
+        var delivered: [AnnotationMessage] = []
+        let send: (AnnotationMessage) -> Bool = { message in
+            attempted.append(message)
+            let sent = receiver.sendAnnotation(message, seq: 1)
+            if sent { delivered.append(message) }
+            return sent
+        }
+
+        var sync = AnnotationMirrorSync()
+        var canvas: [AnnotationStroke] = []
+        for id in 0..<40 {
+            canvas.append(denseStroke(id, points: 1_000))
+            sync.sync(to: canvas, send: send)
+        }
+        #expect(!sync.isOutOfSync)
+        #expect(sync.mirrored == canvas)
+        #expect(delivered.count == 40)
+
+        // The eraser removes a middle stroke: the needed replacement does not
+        // fit in one annotation, so Pilot is cleared and the mirror goes out
+        // of sync without recording the undelivered drawing.
+        canvas.remove(at: 3)
+        sync.sync(to: canvas, send: send)
+        #expect(sync.isOutOfSync)
+        #expect(sync.mirrored.isEmpty)
+        #expect(delivered.last == .clear)
+
+        // While out of sync nothing incremental is attempted, even for a
+        // provable append or for the resync after re-authentication.
+        attempted.removeAll()
+        canvas.append(denseStroke(99, points: 10))
+        sync.sync(to: canvas, send: send)
+        sync.resync(to: canvas, send: send)
+        #expect(sync.isOutOfSync)
+        #expect(!attempted.contains(where: isIncremental))
+        #expect(delivered.last == .clear)
+
+        // Once the drawing fits again, a full replacement restores sync.
+        canvas = Array(canvas.prefix(10))
+        sync.sync(to: canvas, send: send)
+        #expect(!sync.isOutOfSync)
+        #expect(sync.mirrored == canvas)
+        #expect(delivered.last == .replaceDrawing(AnnotationDrawing(strokes: canvas)))
+    }
+
+    @Test("A drawing over Pilot's ink ceilings is never sent incrementally")
+    func overPilotCeilingsFailsClosed() {
+        var sent: [AnnotationMessage] = []
+        let send: (AnnotationMessage) -> Bool = { sent.append($0); return true }
+        let tiny = AnnotationStroke(
+            color: AnnotationColor(red: 0, green: 0, blue: 1, alpha: 1),
+            width: 0.01,
+            points: [AnnotationPoint(x: 0.1, y: 0.1), AnnotationPoint(x: 0.2, y: 0.2)]
+        )
+
+        var sync = AnnotationMirrorSync()
+        let full = Array(repeating: tiny, count: FrameProtocol.maxAnnotationStrokes)
+        sync.resync(to: full, send: send)
+        #expect(!sync.isOutOfSync)
+
+        // Pilot's RemoteInkModel would reject a 4,097th stroke, so it is not
+        // sent; Pilot is cleared instead of being left one stroke behind.
+        sent.removeAll()
+        let over = full + [stroke(1)]
+        sync.sync(to: over, send: send)
+        #expect(sync.isOutOfSync)
+        #expect(sent == [.clear])
+
+        // Undoing that stroke must not send `.undo` (Pilot never had it).
+        sent.removeAll()
+        sync.sync(to: full, send: send)
+        #expect(!sync.isOutOfSync)
+        #expect(sent == [.replaceDrawing(AnnotationDrawing(strokes: full))])
+
+        // The point ceiling is enforced the same way.
+        #expect(AnnotationMirrorSync.fitsPilotLimits([denseStroke(0, points: FrameProtocol.maxAnnotationPoints)]))
+        #expect(!AnnotationMirrorSync.fitsPilotLimits([
+            denseStroke(0, points: FrameProtocol.maxAnnotationPoints),
+            tiny,
+        ]))
+    }
+
+    @Test("A message the link refuses never advances the mirror")
+    func refusedSendDoesNotAdvance() {
+        let a = stroke(1), b = stroke(2)
+        var sync = AnnotationMirrorSync()
+        sync.sync(to: [a], send: { _ in true })
+        #expect(sync.mirrored == [a])
+
+        // The link refuses everything: the append is not recorded.
+        sync.sync(to: [a, b], send: { _ in false })
+        #expect(sync.isOutOfSync)
+        #expect(sync.mirrored == [a])
+
+        // The next change is a full replacement, never `.undo` / `.addStroke`.
+        var sent: [AnnotationMessage] = []
+        sync.sync(to: [a], send: { sent.append($0); return true })
+        #expect(sent == [.replaceDrawing(AnnotationDrawing(strokes: [a]))])
+        #expect(!sync.isOutOfSync)
+    }
 }
