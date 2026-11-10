@@ -228,9 +228,15 @@ final class NativeCapturePresentationTests: XCTestCase {
         let window = annotationWindow(controller)
         defer { window.orderOut(nil); window.contentViewController = nil }
         controller.view.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(100))
+        try await waitUntil("the canvas to get its markup") {
+            controller.markupController.markup.map { !$0.bounds.isEmpty } ?? false
+        }
         controller.toolPicker.delegate?.markupToolbarViewController(controller.toolPicker, insertNewShape: .rectangle)
-        try await waitForAnnotation(in: controller)
+        // No failure on timeout here: an inactive host never gets the shape,
+        // and the check below skips in exactly that state.
+        try await poll(for: .seconds(15)) {
+            controller.markupController.markup.map { !$0.contentsRenderFrame.isEmpty } ?? false
+        }
         // PaperKit inserts shapes only into the key window of an active app. Some
         // CI runners start the test host inactive; skip only in that state.
         if controller.markupController.markup?.contentsRenderFrame.isEmpty != false, !NSApp.isActive, !window.isKeyWindow {
@@ -252,9 +258,22 @@ final class NativeCapturePresentationTests: XCTestCase {
         let window = annotationWindow(controller)
         defer { window.orderOut(nil); window.contentViewController = nil }
         controller.view.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(100))
-        controller.toolPicker.delegate?.markupToolbarViewController(controller.toolPicker, insertNewShape: .ellipse)
-        try await waitForAnnotation(in: controller)
+        // Insert only once the canvas has its markup and bounds, not after a
+        // guessed delay that a loaded CI runner can outlast.
+        try await waitUntil("the canvas to get its markup") {
+            controller.markupController.markup.map { !$0.bounds.isEmpty } ?? false
+        }
+        // Build the shape on the markup model. Toolbar insertion needs the key
+        // window of an active app, which CI test hosts don't reliably get
+        // (testNativeMarkupUndoStaysInsideTheAnnotationWindow covers it); this
+        // test is about resize and dismissal, so it must not depend on focus.
+        var markup = try XCTUnwrap(controller.markupController.markup)
+        markup.insertNewShape(
+            configuration: ShapeConfiguration(type: .ellipse, fillColor: nil,
+                                              strokeColor: NSColor.systemRed.cgColor, lineWidth: 3),
+            frame: CGRect(x: 120, y: 120, width: 240, height: 160)
+        )
+        controller.markupController.markup = markup
         let original = try XCTUnwrap(controller.markupController.markup).contentsRenderFrame
         XCTAssertFalse(original.isEmpty)
         window.setContentSize(NSSize(width: 720, height: 520))
@@ -286,10 +305,25 @@ final class NativeCapturePresentationTests: XCTestCase {
         return window
     }
 
-    private func waitForAnnotation(in controller: InkOverlayViewController) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
-        while controller.markupController.markup?.contentsRenderFrame.isEmpty != false,
-              ContinuousClock.now < deadline {
+    /// Polls `condition` until it holds or `timeout` passes, without failing.
+    private func poll(for timeout: Duration, _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+    }
+
+    /// Polls `condition` on the main actor. Returns as soon as it holds; the
+    /// generous deadline only matters on a loaded runner, and running out of
+    /// it fails with what was awaited rather than a bare assertion later.
+    private func waitUntil(_ what: String, timeout: Duration = .seconds(15),
+                           _ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while !condition() {
+            guard ContinuousClock.now < deadline else {
+                XCTFail("Timed out after \(timeout) waiting for \(what)")
+                throw CancellationError()
+            }
             try await Task.sleep(for: .milliseconds(20))
         }
     }

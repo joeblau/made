@@ -34,6 +34,18 @@ final class DronePTY: @unchecked Sendable {
         )
         let child = forkpty(&master, nil, nil, &window)
         if child == 0 {
+            // A forked child keeps the calling thread's signal mask and any
+            // ignored dispositions across execve. Swift concurrency threads
+            // block SIGWINCH, SIGHUP, SIGINT, SIGTERM, and more, and droned
+            // ignores SIGTERM/SIGINT, so without this reset the tmux client
+            // never sees a resize or hangup and terminal programs inherit
+            // ignored interrupts. Both calls are async-signal-safe.
+            var unblocked = sigset_t()
+            sigemptyset(&unblocked)
+            sigprocmask(SIG_SETMASK, &unblocked, nil)
+            for signalNumber in 1..<NSIG where signalNumber != SIGKILL && signalNumber != SIGSTOP {
+                signal(signalNumber, SIG_DFL)
+            }
             let executablePointer = strdup(executable)
             let argumentPointers = ([executable] + arguments).map { strdup($0) }
             var argv = argumentPointers + [nil]

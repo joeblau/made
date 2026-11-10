@@ -145,7 +145,9 @@ final class ProofSocket {
             while offset < count {
                 let received = Darwin.recv(descriptor, base + offset, count - offset, 0)
                 if received < 0, errno == EINTR { continue }
-                if received == 0 { throw ProofSocketError.disconnected }
+                // A peer that closes with unread bytes queued sends RST
+                // instead of FIN; either way it has gone away.
+                if received == 0 || (received < 0 && errno == ECONNRESET) { throw ProofSocketError.disconnected }
                 guard received > 0 else { throw Self.lastError() }
                 offset += received
             }
