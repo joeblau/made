@@ -231,6 +231,14 @@ final class ExtensionWorkspaceController {
     ) -> (workspace: Workspace?, deletedDevicePaneIDs: Set<UUID>) {
         let matchingLinks = links().filter { $0.sourceWorkspaceID == sourceWorkspaceID }
         let retainedLink = matchingLinks.first { $0.workspace != nil }
+        // #437: duplicate cleanup may be rolled back; it must not take earlier
+        // unsaved edits with it. Keep the duplicates until those edits save.
+        guard matchingLinks.count <= 1 || modelContext.saveEarlierChangesBeforeDestructiveChange(
+            operation: "Saving Extendo workspace",
+            performSave: performSave
+        ) else {
+            return (retainedLink?.workspace, [])
+        }
         var deletedDevicePaneIDs: Set<UUID> = []
         for duplicate in matchingLinks where duplicate !== retainedLink {
             if let workspace = duplicate.workspace {
@@ -249,9 +257,15 @@ final class ExtensionWorkspaceController {
     }
 
     private func deleteOrphanedLinks(excluding validSourceIDs: Set<UUID>) {
+        let orphanedLinks = links().filter { !validSourceIDs.contains($0.sourceWorkspaceID) }
+        // #437: a rollback below must discard only this cleanup.
+        guard !orphanedLinks.isEmpty, modelContext.saveEarlierChangesBeforeDestructiveChange(
+            operation: "Deleting orphaned Extendo workspaces",
+            performSave: performSave
+        ) else { return }
         var deletedLink = false
         var deletedDevicePaneIDs: Set<UUID> = []
-        for link in links() where !validSourceIDs.contains(link.sourceWorkspaceID) {
+        for link in orphanedLinks {
             if let workspace = link.workspace {
                 deletedDevicePaneIDs.formUnion(prepareForDeletion(workspace))
             }

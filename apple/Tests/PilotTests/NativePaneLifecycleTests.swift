@@ -127,6 +127,44 @@ final class NativePaneLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testFailedPaneRemovalKeepsEarlierUnsavedEdit() throws {
+        // #437: an edit whose save already failed stays pending for retry. A
+        // later failed removal must not roll it back along with itself.
+        let (container, workspace, pane) = try singlePaneFixture()
+        workspace.name = "Renamed while disk full"
+        XCTAssertTrue(container.mainContext.hasChanges)
+
+        XCTAssertFalse(workspace.removePane(pane, allowEmpty: true, performSave: { _ in
+            throw SaveFailure.rejected
+        }))
+        XCTAssertEqual(workspace.name, "Renamed while disk full")
+        XCTAssertTrue(container.mainContext.hasChanges, "The unsaved edit stays available for Retry")
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+    }
+
+    @MainActor
+    func testFailedPaneRemovalRollsBackOnlyItsOwnChanges() throws {
+        // #437: when earlier work can be saved first, the failing removal's
+        // rollback discards only the removal.
+        let (container, workspace, pane) = try singlePaneFixture()
+        workspace.name = "Renamed before close"
+        var saveAttempts = 0
+        XCTAssertFalse(workspace.removePane(pane, allowEmpty: true, performSave: { context in
+            saveAttempts += 1
+            guard saveAttempts == 1 else { throw SaveFailure.rejected }
+            try context.save()
+        }))
+        XCTAssertEqual(saveAttempts, 2)
+        XCTAssertEqual(workspace.name, "Renamed before close")
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertFalse(container.mainContext.hasChanges)
+        let persisted = try ModelContext(container).fetch(FetchDescriptor<Workspace>())
+        XCTAssertEqual(persisted.first { $0.id == workspace.id }?.name, "Renamed before close")
+    }
+
+    @MainActor
     func testCacheRetainsIdentityAndUpdatesContextWithoutRecreatingPane() {
         let cache = CockpitPaneControllerCache()
         let pane = Pane(kind: .editor, sortOrder: 0)

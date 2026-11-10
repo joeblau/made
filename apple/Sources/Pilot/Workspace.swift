@@ -1065,8 +1065,8 @@ final class Workspace {
         allowEmpty: Bool = false,
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {
-        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }) else { return false }
-        let context = modelContext
+        let context = modelContext // #437: earlier unsaved work is saved first, or blocks the removal, so a rollback stays local.
+        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }), context?.saveEarlierChangesBeforeDestructiveChange(operation: "Removing pane", performSave: performSave) ?? true else { return false }
         let deletedDevicePaneID = pane.kind.isAppleTool ? pane.id : nil
         pane.tearDownRuntimeResources(preservingDevicePreference: true)
         panes.removeAll { $0.id == pane.id }
