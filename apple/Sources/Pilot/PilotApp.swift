@@ -457,7 +457,9 @@ final class PilotApp {
         frameSender.onAnnotationMessage = { [weak self] sequence, message in
             Task { @MainActor in
                 guard let self else { return }
-                self.remoteInkModel.handle(message)
+                // Only acknowledge ink the model accepted within the
+                // protocol's total stroke/point ceilings.
+                guard self.remoteInkModel.handle(message) else { return }
                 self.frameSender.sendAnnotationAck(sequence)
             }
         }
