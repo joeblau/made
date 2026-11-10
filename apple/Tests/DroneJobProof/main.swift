@@ -627,7 +627,9 @@ enum DroneJobProof {
     /// #440: a record that decodes and passes the schema, owner and name checks
     /// but cannot be recovered (overflow-prone counters, out-of-order history,
     /// or a recovery persist that throws) is quarantined, and the rest of the
-    /// store still loads instead of trapping or failing startup.
+    /// store still loads instead of trapping or failing startup. #441: the
+    /// non-final `UInt64.max` record names a live process group, which must be
+    /// killed even though the record itself is rejected.
     private static func verifyUnrecoverableRecordQuarantine(in workspace: URL, root: URL) throws {
         let workspaceID = UUID()
         let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
@@ -661,6 +663,26 @@ enum DroneJobProof {
         try seeded.finish(id: dropped.id, state: .completed, result: nil, failure: nil)
         try replace(recordURL(counterState, "unrecoverable-maxseq-1"),
                     "\"latestSequence\":1,", "\"latestSequence\":\(UInt64.max),")
+        let leader = try spawnGroupLeader()
+        var reaped = false
+        defer {
+            if !reaped {
+                _ = Darwin.kill(-leader, SIGKILL)
+                var status: Int32 = 0
+                _ = waitpid(leader, &status, 0)
+            }
+        }
+        guard let group = DroneProcessGroupRecord.capture(leader: leader) else {
+            throw ProofError.failed("could not capture the fixture's process group")
+        }
+        let groupJSON = String(decoding: try JSONEncoder().encode(group), as: UTF8.self)
+        let maxSequenceURL = recordURL(counterState, "unrecoverable-maxseq-1")
+        var maxSequenceText = try String(contentsOf: maxSequenceURL, encoding: .utf8)
+        guard !maxSequenceText.contains("\"processGroup\""),
+              let brace = maxSequenceText.firstIndex(of: "{")
+        else { throw ProofError.failed("record fixture could not take a process group") }
+        maxSequenceText.replaceSubrange(brace...brace, with: "{\"processGroup\":\(groupJSON),")
+        try Data(maxSequenceText.utf8).write(to: maxSequenceURL)
         try replace(recordURL(counterState, "unrecoverable-ceiling1"),
                     "\"latestSequence\":1,", "\"latestSequence\":\(DroneStoredJob.maximumCounter),")
         try replace(recordURL(counterState, "unrecoverable-order-01"), "\"sequence\":1,", "\"sequence\":5,")
@@ -670,6 +692,16 @@ enum DroneJobProof {
         let engine = try DroneJobEngine(stateURL: counterState, workspaces: registry)
         expect(engine.quarantinedRecordCount == 4,
                "recovery quarantined \(engine.quarantinedRecordCount) unrecoverable records, expected 4")
+        var status: Int32 = 0
+        for _ in 0..<200 {
+            if waitpid(leader, &status, WNOHANG) == leader {
+                reaped = true
+                break
+            }
+            usleep(10_000)
+        }
+        expect(reaped && status & 0x7f == SIGKILL,
+               "an inconsistent non-final record was quarantined without killing its process group")
         let recovered = try engine.snapshot(id: kept.id, controllerID: controllerID)
         expect(recovered.state == .failed && recovered.failure?.code == .workerRestarted,
                "a valid record beside unrecoverable ones was not recovered")
@@ -706,6 +738,26 @@ enum DroneJobProof {
         expect(entries.count == 1 && entries.first.flatMap {
             try? Data(contentsOf: $0.appendingPathComponent("unpersistable-job-01.json"))
         } == pending, "the unpersistable record was not quarantined unchanged")
+    }
+
+    /// Starts `/bin/sleep` as the leader of its own process group, the shape
+    /// `DroneProcessRunner` records in `processGroup`. The caller reaps it.
+    private static func spawnGroupLeader() throws -> pid_t {
+        var attributes: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attributes) == 0 else {
+            throw ProofError.failed("posix_spawnattr_init failed")
+        }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawnattr_setpgroup(&attributes, 0) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP)) == 0
+        else { throw ProofError.failed("could not configure the fixture's process group") }
+        let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("30"), nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, "/bin/sleep", nil, &attributes, argv, nil) == 0 else {
+            throw ProofError.failed("could not start the fixture's process group")
+        }
+        return pid
     }
 
     /// #440: an expired record whose `jobs/` directory is read-only can be

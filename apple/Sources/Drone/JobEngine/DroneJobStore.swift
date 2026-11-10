@@ -395,7 +395,10 @@ final class DroneJobStore: @unchecked Sendable {
     /// failure (unreadable, unknown schema version, inconsistent counters,
     /// conflicting with another record, or a recovery append, persist or delete
     /// that fails) moves that record into `quarantine/` and recovery continues,
-    /// so one bad or newer-version record never keeps the daemon down. The
+    /// so one bad or newer-version record never keeps the daemon down. A
+    /// non-final record with a recorded process group has that group killed
+    /// before it is set aside, whether it is quarantined for inconsistent
+    /// counters or because recovery failed (#441). The
     /// quarantine entry reports storage as unhealthy. An expired record that
     /// can be neither deleted nor moved aside (for example, because its `jobs/`
     /// directory is read-only or immutable, which blocks unlink and rename
@@ -431,6 +434,19 @@ final class DroneJobStore: @unchecked Sendable {
                 guard controllerCount < limits.maximumJobsPerController,
                       let stored = loadRecord(at: recordURL, controllerID: controllerID)
                 else {
+                    try quarantine(recordURL)
+                    continue
+                }
+                // A record that decodes but whose counters or history cannot be
+                // trusted is never loaded. If it was still running, its process
+                // group is killed before it is set aside, so rejecting the record
+                // never strands the job's processes (#441). The recorded group is
+                // untrusted too; `killOrphanedGroup` refuses group IDs <= 1, this
+                // process's own pid and group, and any leader start-time mismatch.
+                guard stored.hasConsistentHistory else {
+                    if !stored.state.isTerminal, let group = stored.processGroup {
+                        DroneProcessTable.killOrphanedGroup(group)
+                    }
                     try quarantine(recordURL)
                     continue
                 }
@@ -500,6 +516,9 @@ final class DroneJobStore: @unchecked Sendable {
     }
 
     /// Size is checked before any read so an oversized record is never allocated.
+    /// Only decoding, schema, owner and name are checked here; `recover()`
+    /// checks `hasConsistentHistory` itself so it can stop a rejected record's
+    /// process group first.
     private func loadRecord(at recordURL: URL, controllerID: UUID) -> DroneStoredJob? {
         guard recordURL.pathExtension == "json",
               let values = try? recordURL.resourceValues(forKeys: [.fileSizeKey]),
@@ -508,7 +527,6 @@ final class DroneJobStore: @unchecked Sendable {
               let data = try? Data(contentsOf: recordURL, options: []),
               let job = try? decoder().decode(DroneStoredJob.self, from: data),
               (job.schemaVersion ?? 1) == DroneStoredJob.currentSchemaVersion,
-              job.hasConsistentHistory,
               job.controllerID == controllerID,
               recordURL.lastPathComponent == "\(job.idempotencyKey).json"
         else { return nil }
