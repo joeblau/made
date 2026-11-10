@@ -170,15 +170,35 @@ awk '
   END { exit !(recheck && publish && recheck < publish) }
 ' "$release_workflow" || fail "publish does not re-check the release tag before creating the release"
 
-# Execute the HEAD check exactly as the workflow embeds it.
+# Extract every run body of the step named $1 into $2.1, $2.2, ... and print
+# how many there were, so each embedded copy is executed exactly as written.
+extract_run_bodies() {
+  awk -v name="      - name: $1" -v prefix="$2" '
+    function finish() { if (out != "") close(out); body = 0; out = "" }
+    $0 == name { finish(); step = 1; next }
+    step && /^        run: \|$/ { step = 0; body = 1; out = prefix "." ++count; printf "" > out; next }
+    body && /^          / { sub(/^          /, ""); print > out; next }
+    body && /^$/ { print "" > out; next }
+    body { finish() }
+    /^      - / { step = 0 }
+    END { finish(); print count + 0 }
+  ' "$release_workflow"
+}
+
+# Execute every copy of the HEAD check exactly as the workflow embeds it: one
+# per checkout outside release-metadata, each rejecting anything but the
+# validated commit.
+checkouts="$(awk '
+  /^jobs:$/ { in_jobs = 1; next }
+  in_jobs && /^  [A-Za-z0-9_-]+:$/ { job = $1; sub(/:$/, "", job); next }
+  job != "release-metadata" && /^      - uses: actions\/checkout@/ { count++ }
+  END { print count + 0 }
+' "$release_workflow")"
 verify_script="$work/verify-release-commit.sh"
-awk -v name="      - name: $verify_step" '
-  $0 == name { step = 1; next }
-  step && /^        run: \|$/ { body = 1; next }
-  body && /^          / { sub(/^          /, ""); print; next }
-  body { exit }
-' "$release_workflow" > "$verify_script"
-[[ -s "$verify_script" ]] || fail "could not extract the release commit check"
+verify_copies="$(extract_run_bodies "$verify_step" "$verify_script")"
+[[ "$checkouts" -gt 0 ]] || fail "found no release checkouts to verify"
+[[ "$verify_copies" == "$checkouts" ]] ||
+  fail "found $verify_copies release commit check(s) for $checkouts release checkout(s)"
 release_repo="$work/release-repo"
 git init -q "$release_repo"
 git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
@@ -186,15 +206,66 @@ git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commi
 validated_commit="$(git -C "$release_repo" rev-parse HEAD)"
 git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
   commit -q --allow-empty -m moved
-(cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$verify_script") 2>/dev/null &&
-  fail "the release commit check accepted a checkout of a different commit"
-(cd "$release_repo" && RELEASE_COMMIT=v1.2.3 bash "$verify_script") 2>/dev/null &&
-  fail "the release commit check accepted a non-SHA release commit"
-(cd "$release_repo" && RELEASE_COMMIT='' bash "$verify_script") 2>/dev/null &&
-  fail "the release commit check accepted an empty release commit"
-git -C "$release_repo" checkout -q --detach "$validated_commit"
-(cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$verify_script") ||
-  fail "the release commit check rejected the validated commit"
+moved_commit="$(git -C "$release_repo" rev-parse HEAD)"
+for ((copy = 1; copy <= verify_copies; copy++)); do
+  script="$verify_script.$copy"
+  [[ -s "$script" ]] || fail "release commit check $copy is empty"
+  git -C "$release_repo" checkout -q --detach "$moved_commit"
+  (cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$script") 2>/dev/null &&
+    fail "release commit check $copy accepted a checkout of a different commit"
+  (cd "$release_repo" && RELEASE_COMMIT=v1.2.3 bash "$script") 2>/dev/null &&
+    fail "release commit check $copy accepted a non-SHA release commit"
+  (cd "$release_repo" && RELEASE_COMMIT='' bash "$script") 2>/dev/null &&
+    fail "release commit check $copy accepted an empty release commit"
+  git -C "$release_repo" checkout -q --detach "$validated_commit"
+  (cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$script") ||
+    fail "release commit check $copy rejected the validated commit"
+done
+
+# Execute publish's tag re-check exactly as embedded, against a stub gh whose
+# canned "type sha" answers model lightweight, annotated, and chained tags.
+recheck_script="$work/verify-release-tag.sh"
+recheck_copies="$(extract_run_bodies 'Verify the release tag still names the validated commit' "$recheck_script")"
+[[ "$recheck_copies" == 1 ]] || fail "expected one release tag re-check, found $recheck_copies"
+recheck_script="$recheck_script.1"
+mkdir -p "$work/gh-stub" "$work/gh-tags"
+cat > "$work/gh-stub/gh" <<'TOOL'
+#!/bin/bash
+[[ "$1" == api ]] || exit 2
+case "$2" in
+  "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG") printf '%s\n' "$GH_STUB_REF" ;;
+  "repos/$GITHUB_REPOSITORY/git/tags/"*) cat "$GH_STUB_TAGS/${2##*/}" ;;
+  *) exit 2 ;;
+esac
+TOOL
+chmod +x "$work/gh-stub/gh"
+tag_object() { printf '%040d' "$1"; }
+# Tag objects 1..5 form a chain ending at the validated commit; object 9
+# peels to the moved commit.
+for level in 1 2 3 4; do
+  printf 'tag %s\n' "$(tag_object $((level + 1)))" > "$work/gh-tags/$(tag_object "$level")"
+done
+printf 'commit %s\n' "$validated_commit" > "$work/gh-tags/$(tag_object 5)"
+printf 'commit %s\n' "$moved_commit" > "$work/gh-tags/$(tag_object 9)"
+run_recheck() {
+  PATH="$work/gh-stub:$PATH" GH_STUB_REF="$1" GH_STUB_TAGS="$work/gh-tags" \
+    GITHUB_REPOSITORY=example/release RELEASE_TAG=v1.2.3 \
+    RELEASE_COMMIT="${2:-$validated_commit}" bash "$recheck_script" 2>/dev/null
+}
+run_recheck "commit $validated_commit" ||
+  fail "the release tag re-check rejected a lightweight tag naming the validated commit"
+run_recheck "tag $(tag_object 5)" ||
+  fail "the release tag re-check rejected an annotated tag of the validated commit"
+run_recheck "tag $(tag_object 2)" ||
+  fail "the release tag re-check rejected a four-level tag chain to the validated commit"
+run_recheck "commit $moved_commit" &&
+  fail "the release tag re-check accepted a tag naming another commit"
+run_recheck "tag $(tag_object 9)" &&
+  fail "the release tag re-check accepted an annotated tag of another commit"
+run_recheck "tag $(tag_object 1)" &&
+  fail "the release tag re-check accepted a tag chain still unpeeled after four levels"
+run_recheck "commit $validated_commit" v1.2.3 &&
+  fail "the release tag re-check accepted a non-SHA release commit"
 
 root="$TMPDIR/blau-apple-ci"
 macos="-derivedDataPath $root/macos-debug "
