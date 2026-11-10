@@ -247,7 +247,11 @@ struct FrameLinkSecureSession {
         receiveKey = nil
         outboundSequence = 0
         replay = ReplayWindow(size: 4_096)
+        // A buffered proof is bound to this connection's transcript. Teardown
+        // (deadline, peer close, stop) dismisses the prompt without approve or
+        // reject, so drop it here or every reconnect's proof would be refused.
         pendingHello = nil
+        pendingProof = nil
         isAuthenticated = false
     }
 

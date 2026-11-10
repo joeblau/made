@@ -97,6 +97,40 @@ final class FrameLinkSecurityTests: XCTestCase {
         XCTAssertEqual(pilot.receive(plotterApproval.proof), .authenticated)
     }
 
+    func testBufferedProofDoesNotSurviveReconnect() throws {
+        let pilotKey = Curve25519.KeyAgreement.PrivateKey()
+        let plotterKey = Curve25519.KeyAgreement.PrivateKey()
+        var pilot = FrameLinkSecureSession(localKey: pilotKey)
+        var plotter = FrameLinkSecureSession(localKey: plotterKey)
+
+        // First connection: Pilot approves, Plotter buffers the proof and
+        // never answers before the connection is torn down.
+        let firstPilotHello = try XCTUnwrap(pilot.begin(random: { Data(repeating: 7, count: $0) }))
+        let firstPlotterHello = try XCTUnwrap(plotter.begin(random: { Data(repeating: 8, count: $0) }))
+        let plotterRequest = try pairingRequest(pilot.receive(firstPlotterHello))
+        _ = try pairingRequest(plotter.receive(firstPilotHello))
+        let firstApproval = try XCTUnwrap(pilot.approvePending(publicKey: plotterRequest.publicKey))
+        XCTAssertEqual(plotter.receive(firstApproval.proof), .waiting)
+        plotter.resetSession()
+
+        // Reconnect: Pilot already trusts Plotter and sends its proof at once.
+        let pilotHello = try XCTUnwrap(pilot.begin(random: { Data(repeating: 9, count: $0) }))
+        let plotterHello = try XCTUnwrap(plotter.begin(random: { Data(repeating: 10, count: $0) }))
+        guard case .send(let pilotProof)? = pilot.receive(plotterHello) else {
+            return XCTFail("trusted Pilot must answer the hello with its proof")
+        }
+        let pilotRequest = try pairingRequest(plotter.receive(pilotHello))
+        XCTAssertEqual(
+            plotter.receive(pilotProof),
+            .waiting,
+            "a proof from a torn-down connection must not block the new handshake"
+        )
+        XCTAssertNil(plotter.receive(firstApproval.proof), "only one proof is buffered per handshake")
+        let plotterApproval = try XCTUnwrap(plotter.approvePending(publicKey: pilotRequest.publicKey))
+        XCTAssertTrue(plotterApproval.authenticated)
+        XCTAssertEqual(pilot.receive(plotterApproval.proof), .authenticated)
+    }
+
     private func authenticateTrusted(
         _ pilot: inout FrameLinkSecureSession,
         _ plotter: inout FrameLinkSecureSession,
