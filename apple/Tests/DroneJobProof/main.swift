@@ -32,6 +32,8 @@ enum DroneJobProof {
         try verifyLaunchMarkerPrecedesSpawn(in: workspace)
         try await verifyFinishRecordsSurvivingGroup(in: workspace, root: root)
         try verifyUnverifiedGroupRecovery(in: workspace, root: root)
+        try await verifyOrphanedGroupWithZombieMember(in: workspace)
+        verifyGroupListingFailureIsNotEmpty()
 
         let source = Data("print(\"drone-build-ok\")\n".utf8)
         let write = try engine.createJob(DroneJobCreate(
@@ -177,6 +179,12 @@ enum DroneJobProof {
             )))
         ))
         _ = try await terminal(job.id, controllerID: controllerID, engine: engine, expected: .completed)
+        // The engine itself (not a hand-seeded store) wrote the launching
+        // marker and the leader's group before the job ran (#441).
+        let record = storedRecord(root.appendingPathComponent("background-child"), controllerID, "background-child-job-0001")
+        expect(record?["launching"] as? Bool == true, "an engine-run process job never persisted its launching marker")
+        expect((record?["processGroup"] as? [String: Any])?["groupID"] is Int,
+               "an engine-run process job never persisted its process group")
         let pidFile = workspace.appendingPathComponent("background.pid")
         guard let text = try? String(contentsOf: pidFile, encoding: .utf8),
               let child = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -226,6 +234,12 @@ enum DroneJobProof {
             _ = Darwin.kill(leader, SIGKILL)
         }
         expect(Darwin.kill(orphan, 0) == 0, "orphan did not outlive the crashed worker")
+        // What recovery relies on was on disk before the worker died: the
+        // engine marked the job launching and recorded the leader's group.
+        let crashed = storedRecord(state, controllerID, "crash-recovery-job-0001")
+        expect(crashed?["launching"] as? Bool == true, "the crashed engine never persisted its launching marker")
+        expect((crashed?["processGroup"] as? [String: Any])?["groupID"] as? Int == Int(leader),
+               "the crashed engine never persisted the leader's process group")
         if leaderExitsFirst {
             // The common crash shape: the leader dies (SIGPIPE, exit) and is
             // reaped by launchd while its descendants keep the group alive.
@@ -319,10 +333,17 @@ enum DroneJobProof {
         let page = try engine.events(id: job.id, controllerID: controllerID, afterSequence: 0)
         expect(page.events.contains { $0.payload == .notice(.processGroupUnverified) },
                "the surviving group was not recorded on the job")
+        // Revocation still deletes the controller's record (request, output,
+        // result) at once; the worker keeps only its own ledger entry.
         _ = try engine.removeFinishedJobs(controllerID: controllerID)
-        _ = try engine.purgeExpiredJobs()
-        expect((try? engine.snapshot(id: job.id, controllerID: controllerID)) != nil,
-               "a record with an unverified group was purged")
+        expect((try? engine.snapshot(id: job.id, controllerID: controllerID)) == nil,
+               "revocation kept a finished record because its group was unverified")
+        expect(engine.unverifiedProcessGroupCount == 1, "revocation discarded the unverified-group evidence")
+        let ledger = root.appendingPathComponent("finish-survivor/unverified-groups/\(job.id.rawValue.uuidString).json")
+        let entry = (try? Data(contentsOf: ledger)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        expect(entry != nil, "the unverified group was not written to the worker's ledger")
+        expect(entry.map { Set($0.keys).isDisjoint(with: ["controllerID", "idempotencyKey", "request", "events", "result"]) } == true,
+               "the worker's ledger kept controller data")
         let stopped = await engine.shutdown()
         expect(stopped, "finish-survivor engine did not shut down")
     }
@@ -401,18 +422,28 @@ enum DroneJobProof {
         let engine = try DroneJobEngine(stateURL: state, workspaces: registry, now: { clock.now() })
         expect(engine.unverifiedProcessGroupCount == 2, "a restart forgot the unverified groups")
 
-        // Past the idempotency lifetime, unverified records are kept as
-        // evidence while finished, verified ones are purged as usual.
+        // Past the idempotency lifetime every finished record expires as
+        // usual, flagged or not, and its key is free again; the evidence of
+        // an unverified group stays in the worker's own ledger.
         clock.advance(by: limits.idempotencyLifetime + 1)
         let expired = try DroneJobStore(stateURL: state, limits: limits, now: { clock.now() })
         _ = try expired.purgeExpired()
         _ = try expired.removeFinishedJobs(controllerID: controllerID)
-        expect(expired.unverifiedProcessGroupCount == 2 && storedFlag(state, "unverified-own-group-01") == true
-                && storedFlag(state, "unverified-no-group-001") == true,
-               "a record with an unverified group was purged")
-        expect(storedFlag(state, "unverified-clean-00001") == nil, "an expired verified record was kept")
-        let retriedNotices = try unverifiedNotices(expired, refused.id)
-        expect(retriedNotices == 1, "a retried check duplicated the notice")
+        expect(expired.unverifiedProcessGroupCount == 2, "expiry discarded the unverified-group evidence")
+        for key in ["unverified-own-group-01", "unverified-no-group-001", "unverified-clean-00001"] {
+            expect(storedFlag(state, key) == nil, "an expired record was kept")
+        }
+        expect((try? expired.snapshot(id: refused.id, controllerID: controllerID)) == nil,
+               "an expired record with an unverified group stayed readable")
+        let reused = try expired.create(process("unverified-own-group-01"))
+        expect(reused.isNew && reused.snapshot.id != refused.id,
+               "an expired record with an unverified group kept its idempotency key")
+        let ledgerEntries = (try? FileManager.default.contentsOfDirectory(
+            atPath: state.appendingPathComponent("unverified-groups").path
+        ))?.filter { $0.hasSuffix(".json") } ?? []
+        expect(ledgerEntries.count == 2, "the worker's ledger does not hold one entry per unverified group")
+        let restarted = try DroneJobStore(stateURL: state, limits: limits, now: { clock.now() })
+        expect(restarted.unverifiedProcessGroupCount == 2, "a restart forgot unverified groups whose records expired")
 
         // A kill that does not finish within its bound is unverified too; a
         // later recovery that confirms the group gone clears the flag.
@@ -470,6 +501,88 @@ enum DroneJobProof {
         _ = pthread_kill(pthread_self(), SIGKILL)
         _ = Darwin.kill(getpid(), SIGKILL)
         while true { _ = Darwin.pause() }
+    }
+
+    /// #441: a zombie never blocks recovery. `proc_pidinfo` cannot read a
+    /// zombie although `kill(pid, 0)` still succeeds, so a recorded group
+    /// whose leader was reaped, with one live member and one exited but
+    /// unreaped child, must still be killed and confirmed gone.
+    private static func verifyOrphanedGroupWithZombieMember(in workspace: URL) async throws {
+        let pidFile = workspace.appendingPathComponent("zombie-member.pid")
+        try? FileManager.default.removeItem(at: pidFile)
+        // The member execs a sleep that never reaps its short-lived child,
+        // which therefore stays a zombie inside the group.
+        let leader = try spawnSuspendedGroupLeader("/bin/sh", ["-c", """
+            /bin/sh -c '/bin/sleep 0.1 & exec /bin/sleep 30' &
+            echo $! > "$1/zombie-member.tmp" && /bin/mv "$1/zombie-member.tmp" "$1/zombie-member.pid"
+            """, "sh", workspace.path])
+        guard let record = DroneProcessGroupRecord.capture(leader: leader) else {
+            _ = Darwin.kill(-leader, SIGKILL)
+            throw ProofError.failed("zombie proof leader could not be captured")
+        }
+        _ = Darwin.kill(leader, SIGCONT)
+        var status: Int32 = 0
+        while Darwin.waitpid(leader, &status, 0) < 0, errno == EINTR {}
+        var member: pid_t?
+        try await waitUntil("zombie proof member never started") {
+            member = (try? String(contentsOf: pidFile, encoding: .utf8))
+                .flatMap { pid_t($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            return member != nil
+        }
+        guard let member else { throw ProofError.failed("zombie proof member never started") }
+        defer { _ = Darwin.kill(-record.groupID, SIGKILL) }
+        var zombie: pid_t?
+        try await waitUntil("zombie proof child never became a zombie") {
+            zombie = DroneProcessTable.members(ofGroup: record.groupID)?.first {
+                DroneProcessTable.entry($0)?.isZombie == true
+            }
+            return zombie != nil
+        }
+        expect(zombie.map { Darwin.kill($0, 0) } == 0, "zombie proof child was reaped before the check")
+        expect(DroneProcessTable.liveMembers(ofGroup: record.groupID) == [member],
+               "a zombie was counted as a running group member")
+        expect(DroneProcessTable.killOrphanedGroup(record),
+               "a zombie member kept recovery from killing and confirming its group gone")
+        try await waitUntilGone(member)
+        expect(Darwin.kill(member, 0) != 0, "recovery left the group's live member running")
+    }
+
+    /// #441: libproc reports a failed listing as 0 bytes with errno set, which
+    /// must never read as an empty (gone) group.
+    private static func verifyGroupListingFailureIsNotEmpty() {
+        expect(DroneProcessTable.listedCount(bytes: 0, error: ENOMEM, limit: 16) == nil,
+               "a failed group listing was reported as an empty group")
+        expect(DroneProcessTable.listedCount(bytes: -1, error: EPERM, limit: 16) == nil,
+               "a rejected group listing was reported as an empty group")
+        expect(DroneProcessTable.listedCount(bytes: 0, error: 0, limit: 16) == 0,
+               "an empty group listing was reported as a failure")
+        expect(DroneProcessTable.members(ofGroup: getpgrp())?.contains(getpid()) == true,
+               "the proof's own process group could not be listed")
+    }
+
+    private static func spawnSuspendedGroupLeader(_ executable: String, _ arguments: [String]) throws -> pid_t {
+        var attributes: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attributes) == 0 else { throw ProofError.failed("spawn attributes") }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawnattr_setpgroup(&attributes, 0) == 0,
+              posix_spawnattr_setflags(
+                  &attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_START_SUSPENDED)
+              ) == 0
+        else { throw ProofError.failed("spawn attributes") }
+        let values = ([executable] + arguments).map { strdup($0) }
+        defer { for value in values { free(value) } }
+        var pointers = values
+        pointers.append(nil)
+        var pid = pid_t()
+        let result = posix_spawn(&pid, executable, nil, &attributes, &pointers, environ)
+        guard result == 0 else { throw ProofError.failed("spawn failed: \(result)") }
+        return pid
+    }
+
+    private static func storedRecord(_ state: URL, _ controller: UUID, _ key: String) -> [String: Any]? {
+        let url = state.appendingPathComponent("controllers/\(controller.uuidString)/jobs/\(key).json")
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
     private static func waitUntilGone(_ pid: pid_t) async throws {

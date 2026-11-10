@@ -28,12 +28,11 @@ struct DroneStoredJob: Codable, Equatable {
     /// nothing identifies a leader that may still exist.
     var launching: Bool?
     /// Set when this job was recorded finished while its process group could
-    /// not be confirmed gone. Such a record keeps storage unhealthy and is
-    /// never deleted automatically; recovery retries the kill on each start.
+    /// not be confirmed gone, so the controller sees why. The evidence that
+    /// keeps storage unhealthy lives in the worker's own ledger
+    /// (`DroneUnverifiedProcessGroup`), so this record still expires and is
+    /// deleted on revocation like any other finished record.
     var processGroupUnverified: Bool?
-
-    /// Finished, and nothing suggests its process group may still run.
-    var isDeletable: Bool { state.isTerminal && processGroupUnverified != true }
 
     var snapshot: DroneJobSnapshot {
         DroneJobSnapshot(
@@ -54,6 +53,23 @@ struct DroneStoredJob: Codable, Equatable {
     }
 }
 
+/// Worker-owned evidence that a job's process group could not be confirmed
+/// gone (#441). Stored apart from the controller's job record, under
+/// `unverified-groups/`, and holding nothing a controller supplied or can
+/// read: deleting the job record on expiry or revocation, and reusing its
+/// idempotency key, never discards this evidence. Each entry keeps storage
+/// unhealthy until a recovery confirms the group gone, or an owner removes it.
+struct DroneUnverifiedProcessGroup: Codable, Equatable {
+    static let maximumStoredBytes = 4 * 1_024
+
+    var jobID: DroneJobID
+    var processGroup: DroneProcessGroupRecord?
+    /// The job was spawning (or about to) with no recorded group: nothing
+    /// identifies a leader that may still exist, so only an owner can clear it.
+    var launching: Bool
+    var recordedAt: TimeInterval
+}
+
 final class DroneJobStore: @unchecked Sendable {
     private struct JobKey: Hashable {
         var controllerID: UUID
@@ -68,6 +84,7 @@ final class DroneJobStore: @unchecked Sendable {
     private var jobs: [DroneJobID: DroneStoredJob] = [:]
     private var keys: [JobKey: DroneJobID] = [:]
     private var quarantinedEntries = 0
+    private var unverifiedGroups: [DroneJobID: DroneUnverifiedProcessGroup] = [:]
     /// Records that existed when their controller was revoked and are not yet
     /// deleted: jobs still running then, or finished ones whose removal failed.
     /// Each is removed by the first purge after it finishes, and `remove(_:)`
@@ -102,12 +119,13 @@ final class DroneJobStore: @unchecked Sendable {
         return quarantinedEntries
     }
 
-    /// Records whose process group could not be confirmed gone when the job
-    /// was recorded finished. Nonzero means storage is unhealthy (#441).
+    /// Ledger entries for process groups that could not be confirmed gone,
+    /// whether or not their job records still exist. Nonzero means storage is
+    /// unhealthy (#441).
     var unverifiedProcessGroupCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        return jobs.values.filter { $0.processGroupUnverified == true }.count
+        return unverifiedGroups.count
     }
 
     func create(_ create: DroneJobCreate) throws -> (snapshot: DroneJobSnapshot, isNew: Bool) {
@@ -116,7 +134,7 @@ final class DroneJobStore: @unchecked Sendable {
         let key = JobKey(controllerID: create.controllerID, idempotencyKey: create.idempotencyKey)
         if let existingID = keys[key], let existing = jobs[existingID] {
             if now() - existing.createdAt >= limits.idempotencyLifetime,
-               existing.isDeletable {
+               existing.state.isTerminal {
                 try remove(existing)
             } else {
                 guard existing.request == create.request else {
@@ -278,6 +296,9 @@ final class DroneJobStore: @unchecked Sendable {
         failure: DroneJobFailure?,
         processGroupSurvived: Bool = false
     ) throws {
+        // Write the worker-owned evidence before the record turns terminal,
+        // so no later deletion of the record can lose it.
+        if processGroupSurvived { try recordUnverifiedGroup(id: id) }
         try update(id: id) { job in
             guard !job.state.isTerminal else { return }
             if processGroupSurvived { markProcessGroupUnverified(&job) }
@@ -295,12 +316,33 @@ final class DroneJobStore: @unchecked Sendable {
         append(.notice(.processGroupUnverified), to: &job)
     }
 
-    /// Kills what a dead worker may have left of this job's process group.
+    private func recordUnverifiedGroup(id: DroneJobID) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let job = jobs[id], !job.state.isTerminal else { return }
+        try recordUnverifiedGroup(of: job)
+    }
+
+    /// Caller holds `lock` (or is recovering). Kept in memory even when the
+    /// write fails, so health reports it for the life of this process.
+    private func recordUnverifiedGroup(of job: DroneStoredJob) throws {
+        guard unverifiedGroups[job.id] == nil else { return }
+        let entry = DroneUnverifiedProcessGroup(
+            jobID: job.id,
+            processGroup: job.processGroup,
+            launching: job.launching == true,
+            recordedAt: now()
+        )
+        unverifiedGroups[job.id] = entry
+        try write(encoder().encode(entry), to: unverifiedGroupURL(for: job.id))
+    }
+
+    /// Kills what a dead worker may have left of a process group.
     /// True only when nothing of the group can still be running.
-    private func reapLeftoverGroup(of job: DroneStoredJob) -> Bool {
-        if let group = job.processGroup { return reapOrphanedGroup(group) }
+    private func reapLeftoverGroup(_ group: DroneProcessGroupRecord?, launching: Bool) -> Bool {
+        if let group { return reapOrphanedGroup(group) }
         // Spawned (or about to be) but never recorded: nothing identifies it.
-        return job.launching != true
+        return !launching
     }
 
     private func update(id: DroneJobID, mutation: (inout DroneStoredJob) -> Void) throws {
@@ -359,7 +401,7 @@ final class DroneJobStore: @unchecked Sendable {
         defer { lock.unlock() }
         let current = now()
         let expired = jobs.values.filter {
-            $0.isDeletable
+            $0.state.isTerminal
                 && (current - $0.createdAt >= limits.idempotencyLifetime
                     || retiredJobs.contains($0.id))
         }
@@ -376,7 +418,7 @@ final class DroneJobStore: @unchecked Sendable {
         defer { lock.unlock() }
         let owned = jobs.values.filter { $0.controllerID == controllerID }
         retiredJobs.formUnion(owned.map(\.id))
-        let finished = owned.filter(\.isDeletable)
+        let finished = owned.filter(\.state.isTerminal)
         try removeEach(finished)
         return finished.count
     }
@@ -396,7 +438,7 @@ final class DroneJobStore: @unchecked Sendable {
 
     private func purgeExpired(controllerID: UUID) throws {
         let expired = jobs.values.filter {
-            $0.controllerID == controllerID && $0.isDeletable
+            $0.controllerID == controllerID && $0.state.isTerminal
                 && now() - $0.createdAt >= limits.idempotencyLifetime
         }
         for job in expired { try remove(job) }
@@ -415,6 +457,7 @@ final class DroneJobStore: @unchecked Sendable {
     /// is moved into `quarantine/` instead of aborting startup, so one bad or
     /// newer-version record never keeps the daemon down.
     private func recover() throws {
+        let carried = try loadUnverifiedGroups()
         let controllersURL = stateURL.appendingPathComponent("controllers", isDirectory: true)
         try Self.createPrivateDirectory(at: controllersURL)
         guard let controllers = FileManager.default.enumerator(
@@ -422,6 +465,9 @@ final class DroneJobStore: @unchecked Sendable {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
         ) else { throw DroneJobError.storeCorrupted }
+        var loaded: [(job: DroneStoredJob, key: JobKey)] = []
+        var loadedIDs: Set<DroneJobID> = []
+        var loadedKeys: Set<JobKey> = []
         // Snapshot listings before moving entries out of the enumerated directory.
         for controllerURL in controllers.allObjects.compactMap({ $0 as? URL }) {
             guard let controllerID = UUID(uuidString: controllerURL.lastPathComponent),
@@ -438,55 +484,109 @@ final class DroneJobStore: @unchecked Sendable {
             var controllerCount = 0
             for recordURL in records.allObjects.compactMap({ $0 as? URL }) {
                 guard controllerCount < limits.maximumJobsPerController,
-                      var job = loadRecord(at: recordURL, controllerID: controllerID)
+                      let job = loadRecord(at: recordURL, controllerID: controllerID)
                 else {
                     try quarantine(recordURL)
                     continue
                 }
                 let key = JobKey(controllerID: job.controllerID, idempotencyKey: job.idempotencyKey)
-                guard jobs[job.id] == nil, keys[key] == nil else {
+                guard !loadedIDs.contains(job.id), !loadedKeys.contains(key) else {
                     try quarantine(recordURL)
                     continue
                 }
-                // A job still running when the worker died, or one recorded
-                // finished while its group survived, may have left processes
-                // behind: kill them before anything else (#441). A group that
-                // cannot be confirmed gone is recorded on the job and keeps
-                // storage unhealthy instead of being finalized silently.
+                // A job still running when the worker died may have left
+                // processes behind: kill them before anything else (#441). A
+                // group that cannot be confirmed gone is written to the
+                // worker's ledger before the record is finalized or deleted.
+                // A ledger entry carried over is retried below instead.
                 let needsReap = !job.state.isTerminal || job.processGroupUnverified == true
-                let groupGone = !needsReap || reapLeftoverGroup(of: job)
+                if needsReap, unverifiedGroups[job.id] == nil,
+                   !reapLeftoverGroup(job.processGroup, launching: job.launching == true) {
+                    try recordUnverifiedGroup(of: job)
+                }
                 // Never reload a record past the idempotency lifetime: every job is
                 // final after a restart, so it is purged here for every controller
-                // (#444), unless its process group is still unverified.
-                if now() - job.createdAt >= limits.idempotencyLifetime, groupGone {
+                // (#444). Any unverified group survives in the ledger.
+                if now() - job.createdAt >= limits.idempotencyLifetime {
                     try FileManager.default.removeItem(at: recordURL)
                     continue
                 }
                 controllerCount += 1
-                job.schemaVersion = DroneStoredJob.currentSchemaVersion
-                let loaded = job
-                if !job.state.isTerminal {
-                    if !groupGone { markProcessGroupUnverified(&job) }
-                    append(.notice(.recoveredAfterRestart), to: &job)
-                    job.state = job.cancellationRequested ? .cancelled : .failed
-                    if !job.cancellationRequested {
-                        job.failure = DroneJobFailure(
-                            code: .workerRestarted,
-                            message: "The worker restarted before this job reached a final state."
-                        )
-                    }
-                } else if groupGone {
-                    job.processGroupUnverified = nil
-                }
-                if job != loaded {
-                    job.updatedAt = now()
-                    try persist(job)
-                }
-                jobs[job.id] = job
-                keys[key] = job.id
+                loadedIDs.insert(job.id)
+                loadedKeys.insert(key)
+                loaded.append((job, key))
             }
         }
+        // Retry every group an earlier run could not confirm gone, whether
+        // or not its job record still exists.
+        for id in carried {
+            guard let entry = unverifiedGroups[id],
+                  reapLeftoverGroup(entry.processGroup, launching: entry.launching)
+            else { continue }
+            try FileManager.default.removeItem(at: unverifiedGroupURL(for: id))
+            unverifiedGroups.removeValue(forKey: id)
+        }
+        for (original, key) in loaded {
+            var job = original
+            job.schemaVersion = DroneStoredJob.currentSchemaVersion
+            let unverified = unverifiedGroups[job.id] != nil
+            if !job.state.isTerminal {
+                if unverified { markProcessGroupUnverified(&job) }
+                append(.notice(.recoveredAfterRestart), to: &job)
+                job.state = job.cancellationRequested ? .cancelled : .failed
+                if !job.cancellationRequested {
+                    job.failure = DroneJobFailure(
+                        code: .workerRestarted,
+                        message: "The worker restarted before this job reached a final state."
+                    )
+                }
+            } else if unverified {
+                markProcessGroupUnverified(&job)
+            } else {
+                job.processGroupUnverified = nil
+            }
+            if job != original {
+                job.updatedAt = now()
+                try persist(job)
+            }
+            jobs[job.id] = job
+            keys[key] = job.id
+        }
         quarantinedEntries = Self.entryCount(in: quarantineURL)
+    }
+
+    private var unverifiedGroupsURL: URL {
+        stateURL.appendingPathComponent("unverified-groups", isDirectory: true)
+    }
+
+    private func unverifiedGroupURL(for id: DroneJobID) -> URL {
+        unverifiedGroupsURL.appendingPathComponent("\(id.rawValue.uuidString).json")
+    }
+
+    /// Loads the ledger and returns the job IDs it held. An entry that cannot
+    /// be read or trusted is quarantined, which keeps storage unhealthy too.
+    private func loadUnverifiedGroups() throws -> [DroneJobID] {
+        try Self.createPrivateDirectory(at: unverifiedGroupsURL)
+        guard let entries = FileManager.default.enumerator(
+            at: unverifiedGroupsURL,
+            includingPropertiesForKeys: [.fileSizeKey],
+            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+        ) else { throw DroneJobError.storeCorrupted }
+        for url in entries.allObjects.compactMap({ $0 as? URL }) {
+            guard url.pathExtension == "json",
+                  let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+                  size <= DroneUnverifiedProcessGroup.maximumStoredBytes,
+                  let data = try? Data(contentsOf: url, options: []),
+                  let entry = try? decoder().decode(DroneUnverifiedProcessGroup.self, from: data),
+                  url.lastPathComponent == "\(entry.jobID.rawValue.uuidString).json",
+                  unverifiedGroups[entry.jobID] == nil
+            else {
+                try quarantine(url)
+                continue
+            }
+            unverifiedGroups[entry.jobID] = entry
+        }
+        return Array(unverifiedGroups.keys)
     }
 
     /// Size is checked before any read so an oversized record is never allocated.
@@ -532,12 +632,16 @@ final class DroneJobStore: @unchecked Sendable {
     }
 
     private func persist(_ job: DroneStoredJob) throws {
-        let url = fileURL(for: job)
-        try Self.createPrivateDirectory(at: url.deletingLastPathComponent())
         let data = try encoder().encode(job)
         guard data.count <= limits.maximumStoredRecordBytes else {
             throw DroneJobError.resourceLimit
         }
+        try write(data, to: fileURL(for: job))
+    }
+
+    /// Atomically replaces `url` with a private, fsynced copy of `data`.
+    private func write(_ data: Data, to url: URL) throws {
+        try Self.createPrivateDirectory(at: url.deletingLastPathComponent())
         let temporaryURL = url.deletingLastPathComponent()
             .appendingPathComponent(".\(UUID().uuidString).tmp")
         do {

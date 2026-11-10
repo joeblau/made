@@ -77,8 +77,9 @@ final class DroneJobEngine: @unchecked Sendable {
     /// Job records recovery moved aside instead of loading; nonzero is unhealthy storage.
     var quarantinedRecordCount: Int { store.quarantinedEntryCount }
 
-    /// Jobs recorded finished while their process group could not be
-    /// confirmed gone; nonzero is unhealthy storage (#441).
+    /// Worker ledger entries for process groups that could not be confirmed
+    /// gone, kept even after the job records expire; nonzero is unhealthy
+    /// storage (#441).
     var unverifiedProcessGroupCount: Int { store.unverifiedProcessGroupCount }
 
     func createJob(_ create: DroneJobCreate) throws -> DroneJobSnapshot {
