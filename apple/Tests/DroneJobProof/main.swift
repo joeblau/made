@@ -146,6 +146,8 @@ enum DroneJobProof {
         expect(recoveredSnapshot.state == .failed, "interrupted job was rerun or left ambiguous")
         expect(recoveredSnapshot.failure?.code == .workerRestarted, "restart failure was not explicit")
         try verifyQuarantinedRecovery(in: workspace, root: root)
+        try verifyUnrecoverableRecordQuarantine(in: workspace, root: root)
+        try verifyUnremovableExpiredRecord(in: workspace, root: root)
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
     }
 
@@ -620,6 +622,185 @@ enum DroneJobProof {
         ) as? [String: Any]
         expect((migrated?["schemaVersion"] as? Int) == DroneStoredJob.currentSchemaVersion,
                "recovered legacy record was not rewritten with the current schema version")
+    }
+
+    /// #440: a record that decodes and passes the schema, owner and name checks
+    /// but cannot be recovered (overflow-prone counters, out-of-order history,
+    /// or a recovery persist that throws) is quarantined, and the rest of the
+    /// store still loads instead of trapping or failing startup. #441: the
+    /// non-final `UInt64.max` record names a live process group, which must be
+    /// killed even though the record itself is rejected.
+    private static func verifyUnrecoverableRecordQuarantine(in workspace: URL, root: URL) throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let controllerID = UUID()
+        let files = FileManager.default
+        func create(_ key: String) -> DroneJobCreate {
+            DroneJobCreate(controllerID: controllerID, idempotencyKey: key, request: DroneJobRequest(
+                workspaceID: workspaceID,
+                operation: .readFile(DroneReadFileOperation(relativePath: "main.swift"))
+            ))
+        }
+        func recordURL(_ state: URL, _ key: String) -> URL {
+            state.appendingPathComponent("controllers/\(controllerID.uuidString)/jobs/\(key).json")
+        }
+        // Records are written with sorted keys, so each field is followed by another.
+        func replace(_ url: URL, _ old: String, _ new: String) throws {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            guard text.contains(old) else { throw ProofError.failed("record fixture lacked \(old)") }
+            try Data(text.replacingOccurrences(of: old, with: new).utf8).write(to: url)
+        }
+
+        let counterState = root.appendingPathComponent("unrecoverable-counters", isDirectory: true)
+        let seeded = try DroneJobStore(stateURL: counterState, limits: DroneJobEngineLimits())
+        let kept = try seeded.create(create("unrecoverable-kept-01")).snapshot
+        // Non-final records: recovery appends a notice, so these exercise the
+        // sequence arithmetic. Without the bound, UInt64.max traps the daemon.
+        _ = try seeded.create(create("unrecoverable-maxseq-1"))
+        _ = try seeded.create(create("unrecoverable-ceiling1"))
+        _ = try seeded.create(create("unrecoverable-order-01"))
+        let dropped = try seeded.create(create("unrecoverable-dropped")).snapshot
+        try seeded.finish(id: dropped.id, state: .completed, result: nil, failure: nil)
+        try replace(recordURL(counterState, "unrecoverable-maxseq-1"),
+                    "\"latestSequence\":1,", "\"latestSequence\":\(UInt64.max),")
+        let leader = try spawnGroupLeader()
+        var reaped = false
+        defer {
+            if !reaped {
+                _ = Darwin.kill(-leader, SIGKILL)
+                var status: Int32 = 0
+                _ = waitpid(leader, &status, 0)
+            }
+        }
+        guard let group = DroneProcessGroupRecord.capture(leader: leader) else {
+            throw ProofError.failed("could not capture the fixture's process group")
+        }
+        let groupJSON = String(decoding: try JSONEncoder().encode(group), as: UTF8.self)
+        let maxSequenceURL = recordURL(counterState, "unrecoverable-maxseq-1")
+        var maxSequenceText = try String(contentsOf: maxSequenceURL, encoding: .utf8)
+        guard !maxSequenceText.contains("\"processGroup\""),
+              let brace = maxSequenceText.firstIndex(of: "{")
+        else { throw ProofError.failed("record fixture could not take a process group") }
+        maxSequenceText.replaceSubrange(brace...brace, with: "{\"processGroup\":\(groupJSON),")
+        try Data(maxSequenceText.utf8).write(to: maxSequenceURL)
+        try replace(recordURL(counterState, "unrecoverable-ceiling1"),
+                    "\"latestSequence\":1,", "\"latestSequence\":\(DroneStoredJob.maximumCounter),")
+        try replace(recordURL(counterState, "unrecoverable-order-01"), "\"sequence\":1,", "\"sequence\":5,")
+        try replace(recordURL(counterState, "unrecoverable-dropped"),
+                    "\"droppedEventCount\":0,", "\"droppedEventCount\":\(UInt64.max),")
+
+        let engine = try DroneJobEngine(stateURL: counterState, workspaces: registry)
+        expect(engine.quarantinedRecordCount == 4,
+               "recovery quarantined \(engine.quarantinedRecordCount) unrecoverable records, expected 4")
+        var status: Int32 = 0
+        for _ in 0..<200 {
+            if waitpid(leader, &status, WNOHANG) == leader {
+                reaped = true
+                break
+            }
+            usleep(10_000)
+        }
+        expect(reaped && status & 0x7f == SIGKILL,
+               "an inconsistent non-final record was quarantined without killing its process group")
+        let recovered = try engine.snapshot(id: kept.id, controllerID: controllerID)
+        expect(recovered.state == .failed && recovered.failure?.code == .workerRestarted,
+               "a valid record beside unrecoverable ones was not recovered")
+        for key in ["unrecoverable-maxseq-1", "unrecoverable-ceiling1", "unrecoverable-order-01", "unrecoverable-dropped"] {
+            expect(!files.fileExists(atPath: recordURL(counterState, key).path), "\(key) was left in place")
+            expect((try? engine.snapshot(controllerID: controllerID, idempotencyKey: key)) == nil,
+                   "\(key) was loaded despite untrusted counters")
+        }
+
+        // Persist: both records decode within the size bound, but the recovery
+        // notice and failure push the non-final record past it, so re-persisting
+        // it throws resourceLimit. That record is quarantined intact; startup continues.
+        let persistState = root.appendingPathComponent("unrecoverable-persist", isDirectory: true)
+        let writer = try DroneJobStore(stateURL: persistState, limits: DroneJobEngineLimits())
+        _ = try writer.create(create("unpersistable-job-01"))
+        let finished = try writer.create(create("persistable-finished")).snapshot
+        try writer.finish(id: finished.id, state: .completed, result: nil, failure: nil)
+        let pending = try Data(contentsOf: recordURL(persistState, "unpersistable-job-01"))
+        let finishedBytes = try Data(contentsOf: recordURL(persistState, "persistable-finished")).count
+        var tight = DroneJobEngineLimits()
+        tight.maximumStoredRecordBytes = max(pending.count, finishedBytes)
+        let reopened = try DroneJobStore(stateURL: persistState, limits: tight)
+        expect(reopened.quarantinedEntryCount == 1, "a record whose recovery persist failed was not quarantined")
+        let survivor = try? reopened.snapshot(controllerID: controllerID, idempotencyKey: "persistable-finished")
+        expect(survivor?.state == .completed, "a persistable record was lost when another record's persist failed")
+        expect((try? reopened.snapshot(controllerID: controllerID, idempotencyKey: "unpersistable-job-01")) == nil,
+               "a record whose recovery could not be persisted was served")
+        expect(!files.fileExists(atPath: recordURL(persistState, "unpersistable-job-01").path),
+               "an unpersistable record was left where it would be retried on every start")
+        let entries = (try? files.contentsOfDirectory(
+            at: persistState.appendingPathComponent("quarantine", isDirectory: true),
+            includingPropertiesForKeys: nil
+        )) ?? []
+        expect(entries.count == 1 && entries.first.flatMap {
+            try? Data(contentsOf: $0.appendingPathComponent("unpersistable-job-01.json"))
+        } == pending, "the unpersistable record was not quarantined unchanged")
+    }
+
+    /// Starts `/bin/sleep` as the leader of its own process group, the shape
+    /// `DroneProcessRunner` records in `processGroup`. The caller reaps it.
+    private static func spawnGroupLeader() throws -> pid_t {
+        var attributes: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attributes) == 0 else {
+            throw ProofError.failed("posix_spawnattr_init failed")
+        }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawnattr_setpgroup(&attributes, 0) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP)) == 0
+        else { throw ProofError.failed("could not configure the fixture's process group") }
+        let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("30"), nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, "/bin/sleep", nil, &attributes, argv, nil) == 0 else {
+            throw ProofError.failed("could not start the fixture's process group")
+        }
+        return pid
+    }
+
+    /// #440: an expired record whose `jobs/` directory is read-only can be
+    /// neither unlinked nor renamed into `quarantine/` (both need write access
+    /// to the parent). Startup must skip it and report unhealthy storage, not
+    /// fail with `storeCorrupted` and crash-loop under launchd.
+    private static func verifyUnremovableExpiredRecord(in workspace: URL, root: URL) throws {
+        // Root bypasses directory permissions, so the fixture cannot block the delete.
+        guard geteuid() != 0 else { return }
+        let workspaceID = UUID()
+        let controllerID = UUID()
+        let key = "unremovable-expired-1"
+        let state = root.appendingPathComponent("unremovable-expired", isDirectory: true)
+        let jobsURL = state.appendingPathComponent("controllers/\(controllerID.uuidString)/jobs", isDirectory: true)
+        let recordURL = jobsURL.appendingPathComponent("\(key).json")
+        let seeded = try DroneJobStore(stateURL: state, limits: DroneJobEngineLimits())
+        let finished = try seeded.create(DroneJobCreate(
+            controllerID: controllerID, idempotencyKey: key,
+            request: DroneJobRequest(
+                workspaceID: workspaceID,
+                operation: .readFile(DroneReadFileOperation(relativePath: "main.swift"))
+            )
+        )).snapshot
+        try seeded.finish(id: finished.id, state: .completed, result: nil, failure: nil)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: jobsURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: jobsURL.path) }
+        let lifetime = DroneJobEngineLimits().idempotencyLifetime
+        let reopened: DroneJobStore
+        do {
+            reopened = try DroneJobStore(
+                stateURL: state, limits: DroneJobEngineLimits(),
+                now: { Date().timeIntervalSince1970 + lifetime + 1 }
+            )
+        } catch {
+            throw ProofError.failed("an unremovable expired record failed startup: \(error)")
+        }
+        expect(reopened.quarantinedEntryCount == 1,
+               "an unremovable expired record reported \(reopened.quarantinedEntryCount) unhealthy entries, expected 1")
+        expect((try? reopened.snapshot(controllerID: controllerID, idempotencyKey: key)) == nil,
+               "an unremovable expired record was served")
+        expect(FileManager.default.fileExists(atPath: recordURL.path),
+               "the fixture did not block deleting the expired record")
     }
 
     private static func terminal(
