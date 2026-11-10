@@ -533,6 +533,13 @@ final class SecureChannelTests: XCTestCase {
             responder.state == .connected
         }
 
+        // The responder hands msg2 to the socket and then transitions to
+        // .connected in the same main-actor task, but the test peer records
+        // the datagram only after loopback delivery and a main-queue hop, so
+        // wait for msg2 itself rather than reading it straight after connect.
+        try await waitUntil("responder msg2 reply") {
+            peer.datagrams.contains { (try? PacketCodec.parse($0))?.type == .handshake }
+        }
         let reply = try XCTUnwrap(
             peer.datagrams
                 .compactMap { try? PacketCodec.parse($0) }
@@ -543,14 +550,21 @@ final class SecureChannelTests: XCTestCase {
 
         // The responder is genuinely usable: it sends traffic the initiator's
         // keys can open, instead of refusing with "Not connected".
+        // Look up the ping by type rather than by index: a late duplicate
+        // msg2 from the cached re-send path may land after `sentBefore`.
         let sentBefore = peer.datagrams.count
+        func firstControlPacket() -> Data? {
+            peer.datagrams.dropFirst(sentBefore).first {
+                (try? PacketCodec.parse($0))?.type == .reliableControl
+            }
+        }
         responder.sendText("ping")
         try await waitUntil("responder sends encrypted text") {
-            peer.datagrams.count > sentBefore
+            firstControlPacket() != nil
         }
         let receive = SecureChannelCore.Role.initiator.receiveKey(from: initiatorKeys)
         let opened = try PacketCodec.open(
-            peer.datagrams[sentBefore],
+            try XCTUnwrap(firstControlPacket()),
             key: receive.key,
             baseNonce: receive.nonce
         )
