@@ -35,6 +35,7 @@ enum DroneWorkerProof {
         let beforeStart = await service.healthSnapshot()
         expect(!beforeStart.listenerReady && !beforeStart.paired && beforeStart.storageHealthy,
                "initial health invented listener or pairing state")
+        try await verifyQuarantinedStorageHealth(root: root, workspace: workspace)
         let observed = ProofObserved()
         await service.setOnListening { observed.set(port: $0) }
         await service.start(bonjourInstanceID: "drone-proof-\(UUID().uuidString)")
@@ -1042,6 +1043,38 @@ extension DroneWorkerProof {
         }
         transport.stop()
         throw ProofError.failed("second controller failed to authenticate")
+    }
+
+    /// #440: undecodable persisted records are quarantined; the worker starts and
+    /// reports unhealthy storage instead of exiting into a launchd restart loop.
+    private static func verifyQuarantinedStorageHealth(root: URL, workspace: URL) async throws {
+        let state = root.appendingPathComponent("quarantine-state", isDirectory: true)
+        let terminals = state.appendingPathComponent("terminals", isDirectory: true)
+        let jobRecords = state.appendingPathComponent("jobs/controllers/\(UUID().uuidString)/jobs", isDirectory: true)
+        try FileManager.default.createDirectory(at: terminals, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: jobRecords, withIntermediateDirectories: true)
+        try Data("not a terminal catalog".utf8).write(to: terminals.appendingPathComponent("terminals.json"))
+        try Data(#"{"schemaVersion":99}"#.utf8).write(to: jobRecords.appendingPathComponent("future-schema-0001.json"))
+        let identity = DroneIdentityStore(role: .worker, storage: ProofPairingStorage())
+        let pairingStorage = ProofPairingStorage()
+        let service = try DroneWorkerService(
+            workspace: workspace,
+            stateDirectory: state,
+            transport: DroneLANTransport(
+                role: .worker,
+                identityStore: identity,
+                pairingStore: DronePairingStore(role: .worker, storage: pairingStorage)
+            ),
+            workerID: try identity.loadOrCreatePeerID().rawValue,
+            pairingStore: DronePairingStore(role: .worker, storage: pairingStorage)
+        )
+        let health = await service.healthSnapshot()
+        await service.stop()
+        expect(!health.storageHealthy, "quarantined records were reported as healthy storage")
+        expect(!FileManager.default.fileExists(atPath: terminals.appendingPathComponent("terminals.json").path),
+               "undecodable terminal catalog was left in place")
+        expect(!FileManager.default.fileExists(atPath: jobRecords.appendingPathComponent("future-schema-0001.json").path),
+               "undecodable job record was left in place")
     }
 
     private static func verifyTerminalPumps() async {

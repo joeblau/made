@@ -36,6 +36,9 @@ final class DroneJobEngine: @unchecked Sendable {
         store = try DroneJobStore(stateURL: stateURL, limits: limits, now: now)
     }
 
+    /// Job records recovery moved aside instead of loading; nonzero is unhealthy storage.
+    var quarantinedRecordCount: Int { store.quarantinedEntryCount }
+
     func createJob(_ create: DroneJobCreate) throws -> DroneJobSnapshot {
         do {
             try DroneJobRequestValidator.validate(create, limits: limits)
