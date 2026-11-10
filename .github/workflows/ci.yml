@@ -126,9 +126,7 @@ jobs:
       - name: Validate application icons
         run: apple/bin/app-icon-tool.swift validate
       - name: Verify generated Xcode project
-        run: |
-          apple/bin/install-xcodegen.sh generate --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/made.xcodeproj
+        run: apple/bin/install-xcodegen.sh check-committed
       - name: Validate Apple CI script orchestration
         run: bash apple/bin/test-apple-ci-scripts.sh
       # build-ci.sh and test.sh share per-platform derived data so the test
