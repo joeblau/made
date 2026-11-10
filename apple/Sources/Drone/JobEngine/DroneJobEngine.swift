@@ -16,17 +16,21 @@ final class DroneJobEngine: @unchecked Sendable {
     private var stopping = false
     private var controls: [DroneJobID: DroneProcessGroupControl] = [:]
     private let purgeTimer: any DispatchSourceTimer
+    private let processGroupMembers: DroneProcessGroupMembers
 
     /// `purgeInterval` bounds how long a finished record may outlive the
     /// idempotency lifetime (or its controller's revocation) on disk and in
     /// memory, independent of whether any controller creates new jobs.
+    /// `processGroupMembers` lists a finished job's surviving group members;
+    /// only proofs replace it, to model a member that outlives SIGKILL.
     init(
         stateURL: URL,
         workspaces: DroneWorkspaceRegistry,
         limits: DroneJobEngineLimits = DroneJobEngineLimits(),
         gitExecutablePath: String = "/usr/bin/git",
         purgeInterval: TimeInterval = 15 * 60,
-        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
+        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 },
+        processGroupMembers: @escaping DroneProcessGroupMembers = { DroneProcessTable.liveMembers(ofGroup: $0) }
     ) throws {
         guard limits.maximumJobsPerController > 0,
               limits.maximumConcurrentJobs > 0,
@@ -34,9 +38,12 @@ final class DroneJobEngine: @unchecked Sendable {
               limits.maximumHistoryOutputBytes > 0,
               limits.maximumStoredRecordBytes > 0,
               limits.cancellationGracePeriod >= 0,
+              limits.processGroupExitTimeout.isFinite,
+              limits.processGroupExitTimeout >= 0, limits.processGroupExitTimeout <= 10,
               purgeInterval.isFinite, purgeInterval > 0
         else { throw DroneJobError.invalidRequest }
         self.limits = limits
+        self.processGroupMembers = processGroupMembers
         self.workspaces = workspaces
         self.gitExecutablePath = gitExecutablePath
         let store = try DroneJobStore(stateURL: stateURL, limits: limits, now: now)
@@ -69,6 +76,11 @@ final class DroneJobEngine: @unchecked Sendable {
 
     /// Job records recovery moved aside instead of loading; nonzero is unhealthy storage.
     var quarantinedRecordCount: Int { store.quarantinedEntryCount }
+
+    /// Worker ledger entries for process groups that could not be confirmed
+    /// gone, kept even after the job records expire; nonzero is unhealthy
+    /// storage (#441).
+    var unverifiedProcessGroupCount: Int { store.unverifiedProcessGroupCount }
 
     func createJob(_ create: DroneJobCreate) throws -> DroneJobSnapshot {
         do {
@@ -175,7 +187,11 @@ final class DroneJobEngine: @unchecked Sendable {
 
     // Caller holds controlsLock only for task registration, never persistence.
     private func startLocked(id: DroneJobID) {
-        let control = DroneProcessGroupControl(gracePeriod: limits.cancellationGracePeriod)
+        let control = DroneProcessGroupControl(
+            gracePeriod: limits.cancellationGracePeriod,
+            exitTimeout: limits.processGroupExitTimeout,
+            liveMembers: processGroupMembers
+        )
         if stopping { control.cancel() }
         controls[id] = control
         DispatchQueue.global(qos: .utility).async { [self] in
@@ -192,11 +208,14 @@ final class DroneJobEngine: @unchecked Sendable {
                     controllerID: controllerID(for: id)
                 ).cancellationRequested { control.cancel() }
                 let outcome = try execute(id: id, control: control)
+                // The runner has already killed the group and waited for it
+                // to disappear; a survivor is recorded on the job (#441).
                 try store.finish(
                     id: id,
                     state: outcome.state,
                     result: outcome.result,
-                    failure: outcome.failure
+                    failure: outcome.failure,
+                    processGroupSurvived: control.processGroupSurvived
                 )
             } catch {
                 let code: DroneJobFailureCode = switch operationKind(for: id) {
@@ -207,7 +226,8 @@ final class DroneJobEngine: @unchecked Sendable {
                     id: id,
                     state: .failed,
                     result: nil,
-                    failure: DroneJobFailure(code: code, message: String(describing: error))
+                    failure: DroneJobFailure(code: code, message: String(describing: error)),
+                    processGroupSurvived: control.processGroupSurvived
                 )
             }
         }
@@ -317,6 +337,9 @@ final class DroneJobEngine: @unchecked Sendable {
             currentDirectory: directory,
             environment: environment,
             control: control,
+            beforeLaunch: { [store] in
+                try store.markLaunching(id: id)
+            },
             onLaunch: { [store] group in
                 try store.recordProcessGroup(id: id, group: group)
             },

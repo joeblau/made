@@ -35,33 +35,57 @@ struct DroneProcessGroupRecord: Codable, Equatable, Sendable {
     }
 }
 
+/// Lists the members of a process group that are still running (zombies
+/// excluded), or nil when the group cannot be listed. Injectable so proofs can
+/// model a member that outlives SIGKILL: another user's setuid descendant, or
+/// one blocked in uninterruptible I/O.
+typealias DroneProcessGroupMembers = @Sendable (pid_t) -> [pid_t]?
+
 enum DroneProcessTable {
+    /// `SZOMB` in `<sys/proc.h>`: exited, waiting for its parent to reap it.
+    private static let zombieStatus: UInt32 = 5
+
     struct Entry {
         var groupID: pid_t
         var userID: uid_t
+        var status: UInt32
         var startSeconds: UInt64
         var startMicroseconds: UInt64
+
+        var isZombie: Bool { status == DroneProcessTable.zombieStatus }
     }
 
+    /// Reads a process through `sysctl(KERN_PROC_PID)`, which, unlike
+    /// `proc_pidinfo(PROC_PIDTBSDINFO)`, also describes a zombie (that call
+    /// fails with ESRCH once a process has exited, even before it is reaped).
+    /// The start time is the same value `proc_pidinfo` reports, so records
+    /// written by either read compare equal. Nil means no such process.
     static func entry(_ pid: pid_t) -> Entry? {
         guard pid > 0 else { return nil }
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
-              pid_t(bitPattern: info.pbi_pid) == pid
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard Darwin.sysctl(&name, u_int(name.count), &info, &size, nil, 0) == 0,
+              size == MemoryLayout<kinfo_proc>.size,
+              info.kp_proc.p_pid == pid
         else { return nil }
+        let start = info.kp_proc.p_un.__p_starttime
+        guard start.tv_sec >= 0, start.tv_usec >= 0 else { return nil }
         return Entry(
-            groupID: pid_t(bitPattern: info.pbi_pgid),
-            userID: info.pbi_uid,
-            startSeconds: info.pbi_start_tvsec,
-            startMicroseconds: info.pbi_start_tvusec
+            groupID: info.kp_eproc.e_pgid,
+            userID: info.kp_eproc.e_ucred.cr_uid,
+            status: UInt32(UInt8(bitPattern: info.kp_proc.p_stat)),
+            startSeconds: UInt64(start.tv_sec),
+            startMicroseconds: UInt64(start.tv_usec)
         )
     }
 
-    /// Bounded: a group larger than `limit` is reported only partially.
-    static func members(ofGroup groupID: pid_t, limit: Int = 4_096) -> [pid_t] {
-        guard groupID > 0 else { return [] }
+    /// Bounded: a group larger than `limit` is reported only partially. Nil
+    /// means the kernel could not list the group, which never proves it empty.
+    static func members(ofGroup groupID: pid_t, limit: Int = 4_096) -> [pid_t]? {
+        guard groupID > 0, limit > 0 else { return nil }
         var pids = [pid_t](repeating: 0, count: limit)
+        errno = 0
         let bytes = pids.withUnsafeMutableBytes { buffer in
             proc_listpids(
                 UInt32(PROC_PGRP_ONLY),
@@ -70,37 +94,120 @@ enum DroneProcessTable {
                 Int32(clamping: buffer.count)
             )
         }
-        guard bytes > 0 else { return [] }
-        let count = min(limit, Int(bytes) / MemoryLayout<pid_t>.stride)
+        guard let count = listedCount(bytes: bytes, error: errno, limit: limit) else { return nil }
         return pids.prefix(count).filter { $0 > 0 }
     }
 
+    /// Interprets a `proc_listpids` result. libproc maps a failed listing to
+    /// 0 (not -1) and leaves errno set, so with errno cleared before the call
+    /// only errno tells a failure apart from an empty group.
+    static func listedCount(bytes: Int32, error: Int32, limit: Int) -> Int? {
+        guard bytes >= 0, bytes > 0 || error == 0 else { return nil }
+        return min(limit, Int(bytes) / MemoryLayout<pid_t>.stride)
+    }
+
+    /// Members that are still running; a zombie never runs again and is never
+    /// counted. A listed PID that cannot be read but still exists (`kill(pid,
+    /// 0)` succeeds or is denied) counts, so an unreadable process is never
+    /// mistaken for an exited one.
+    static func liveMembers(ofGroup groupID: pid_t) -> [pid_t]? {
+        Self.members(ofGroup: groupID)?.filter { pid in
+            if let member = Self.entry(pid) { return !member.isZombie && member.groupID == groupID }
+            return Darwin.kill(pid, 0) == 0 || errno == EPERM
+        }
+    }
+
+    /// Polls until no member of `groupID` is still running, or `timeout`
+    /// passes. `unreapedLeader` is a child of this process that is still
+    /// waiting to be reaped: it counts as gone once it has exited, because a
+    /// zombie never runs again and its PID (the group ID) stays reserved until
+    /// the caller reaps it. `resignal` runs on every poll that still finds a
+    /// member running, so a child forked while an earlier SIGKILL was being
+    /// delivered is signalled again. False means a member was still running,
+    /// or the group could not be listed, when the wait gave up.
+    static func waitForGroupExit(
+        _ groupID: pid_t,
+        unreapedLeader: pid_t? = nil,
+        timeout: TimeInterval,
+        liveMembers: DroneProcessGroupMembers = { DroneProcessTable.liveMembers(ofGroup: $0) },
+        resignal: ((pid_t) -> Void)? = nil
+    ) -> Bool {
+        let bounded = timeout.isFinite ? max(0, min(timeout, 10)) : 0
+        let deadline = Date().addingTimeInterval(bounded)
+        while true {
+            if let members = liveMembers(groupID),
+               members.allSatisfy({ $0 == unreapedLeader }),
+               unreapedLeader.map(childHasExited) ?? true {
+                return true
+            }
+            guard Date() < deadline else { return false }
+            resignal?(groupID)
+            usleep(10_000)
+        }
+    }
+
+    private static func childHasExited(_ pid: pid_t) -> Bool {
+        var info = siginfo_t()
+        let result = Darwin.waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+        if result == 0 { return info.si_pid == pid }
+        return errno == ECHILD
+    }
+
     /// Kills a group that a crashed worker left behind, then waits a bounded
-    /// time for it to disappear. Signals nothing unless the record still
-    /// matches: a live PID with another start time means the group is gone
-    /// (a PID is never reused while its process group exists), and with the
-    /// leader already reaped every surviving member must belong to this user
-    /// and have started no earlier than the recorded leader.
-    @discardableResult
+    /// time for it to disappear, signalling it again on every poll while it
+    /// still matches the record. Returns true only when nothing of the
+    /// recorded group can still be running; recovery treats false as an
+    /// unverified group (#441) and never silently finalizes it.
     static func killOrphanedGroup(_ record: DroneProcessGroupRecord, timeout: TimeInterval = 1) -> Bool {
         let groupID = pid_t(record.groupID)
         guard groupID > 1, groupID != getpid(), groupID != getpgrp() else { return false }
+        switch orphanedGroupState(record) {
+        case .gone: return true
+        case .unsafe: return false
+        case .killable: break
+        }
+        guard Darwin.kill(-groupID, SIGKILL) == 0 else { return errno == ESRCH }
+        return waitForGroupExit(groupID, timeout: timeout, resignal: { groupID in
+            // The leader is not this process's child, so the group ID is only
+            // known to be the recorded one while the group still matches.
+            if case .killable = orphanedGroupState(record) { _ = Darwin.kill(-groupID, SIGKILL) }
+        })
+    }
+
+    private enum OrphanedGroupState {
+        /// Nothing of the recorded group is still running.
+        case gone
+        /// Every running member provably belongs to the recorded group.
+        case killable
+        /// A member that cannot be attributed to the record, or no listing.
+        case unsafe
+    }
+
+    /// Classifies a recorded group without signalling it. A live or zombie
+    /// leader with another start time means the recorded group is gone (a PID
+    /// is never reused while its process group exists). With the leader
+    /// already reaped, every running member must belong to this user and have
+    /// started no earlier than the recorded leader. Zombies never block: they
+    /// have exited and are only waiting for a parent to reap them.
+    private static func orphanedGroupState(_ record: DroneProcessGroupRecord) -> OrphanedGroupState {
+        let groupID = pid_t(record.groupID)
         if let leader = Self.entry(groupID) {
-            guard record.isLeader(leader) else { return false }
-        } else {
-            let survivors = Self.members(ofGroup: groupID).compactMap { Self.entry($0) }
-            guard !survivors.isEmpty,
-                  survivors.allSatisfy({
-                      $0.groupID == groupID && $0.userID == getuid() && record.startedNoLaterThan($0)
-                  })
-            else { return false }
+            return record.isLeader(leader) ? .killable : .gone
         }
-        guard Darwin.kill(-groupID, SIGKILL) == 0 else { return false }
-        let deadline = Date().addingTimeInterval(max(0, min(timeout, 5)))
-        while Darwin.kill(-groupID, 0) == 0, Date() < deadline {
-            usleep(10_000)
+        guard let survivors = Self.liveMembers(ofGroup: groupID) else { return .unsafe }
+        var running = false
+        for pid in survivors {
+            guard let member = Self.entry(pid) else {
+                // Exited since the listing, or unreadable: only the latter blocks.
+                if Darwin.kill(pid, 0) == 0 || errno == EPERM { return .unsafe }
+                continue
+            }
+            // Exited or left the group since the listing.
+            if member.isZombie || member.groupID != groupID { continue }
+            guard member.userID == getuid(), record.startedNoLaterThan(member) else { return .unsafe }
+            running = true
         }
-        return true
+        return running ? .killable : .gone
     }
 }
 
@@ -117,9 +224,29 @@ final class DroneProcessGroupControl: @unchecked Sendable {
     private var stopReason: StopReason?
     private var wake: (() -> Void)?
     private var finished = false
+    private var survived = false
+    private let exitTimeout: TimeInterval
+    private let liveMembers: DroneProcessGroupMembers
 
-    init(gracePeriod: TimeInterval) {
+    /// `exitTimeout` bounds how long `finish()` waits for the killed group to
+    /// disappear before the job may be recorded finished.
+    init(
+        gracePeriod: TimeInterval,
+        exitTimeout: TimeInterval = 2,
+        liveMembers: @escaping DroneProcessGroupMembers = { DroneProcessTable.liveMembers(ofGroup: $0) }
+    ) {
         self.gracePeriod = gracePeriod
+        self.exitTimeout = exitTimeout
+        self.liveMembers = liveMembers
+    }
+
+    /// True once `finish()` gave up with a group member still running (for
+    /// example another user's setuid descendant, which this user cannot
+    /// kill). The job must then be recorded as leaving an unverified group.
+    var processGroupSurvived: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return survived
     }
 
     var requestedStop: StopReason? {
@@ -154,17 +281,43 @@ final class DroneProcessGroupControl: @unchecked Sendable {
         wake?()
     }
 
-    func finish() {
+    /// Kills the group and waits, bounded by `exitTimeout`, until none of it
+    /// is still running. Returns false (and latches `processGroupSurvived`)
+    /// when a member outlived the wait.
+    @discardableResult
+    func finish() -> Bool {
         lock.lock()
-        defer { lock.unlock() }
-        // The runner retains the unreaped group leader until this point, so
-        // its PID (and therefore the group ID) cannot be recycled. Kill the
-        // group on every exit path, not only after a stop request: a leader
-        // that exits normally can leave descendants that redirected their
-        // output, and nothing else would ever signal them (#441).
+        // The runner retains the unreaped group leader until after this
+        // returns, so its PID (and therefore the group ID) cannot be recycled.
+        // Kill the group on every exit path, not only after a stop request: a
+        // leader that exits normally can leave descendants that redirected
+        // their output, and nothing else would ever signal them (#441).
+        let groupID = self.groupID
         if let groupID { _ = Darwin.kill(-groupID, SIGKILL) }
         finished = true
-        groupID = nil
+        self.groupID = nil
+        lock.unlock()
+        guard let groupID else { return true }
+        // SIGKILL is asynchronous: confirm the group is gone before the
+        // caller records the job finished. Wait outside the lock so a
+        // concurrent cancel never blocks behind it.
+        // Re-send SIGKILL on every poll: a member forking at the moment of
+        // the first signal can create a child that signal missed. The
+        // unreaped leader reserves the group ID, so this never reaches
+        // another group (#441).
+        let gone = DroneProcessTable.waitForGroupExit(
+            groupID,
+            unreapedLeader: groupID,
+            timeout: exitTimeout,
+            liveMembers: liveMembers,
+            resignal: { _ = Darwin.kill(-$0, SIGKILL) }
+        )
+        if !gone {
+            lock.lock()
+            survived = true
+            lock.unlock()
+        }
+        return gone
     }
 
     private func terminateThenKill(_ groupID: pid_t) {
@@ -186,6 +339,7 @@ enum DroneProcessRunner {
         currentDirectory: URL,
         environment: [String: String],
         control: DroneProcessGroupControl,
+        beforeLaunch: () throws -> Void = {},
         onLaunch: (DroneProcessGroupRecord) throws -> Void = { _ in },
         onOutput: @escaping (DroneJobStream, Data) throws -> Void,
         onTruncated: @escaping (DroneJobStream) throws -> Void
@@ -205,6 +359,12 @@ enum DroneProcessRunner {
         let stderrPipe = try NonblockingPipe()
         defer { stderrPipe.closeAll() }
         let waker = try DroneProcessWaker()
+        // Mark the job as launching before any process exists. The PID is
+        // unknown until posix_spawn returns, so a worker that dies between the
+        // spawn and `onLaunch` leaves only this marker: recovery then reports
+        // the group as unverified instead of finalizing silently (#441). The
+        // leader in that window is still suspended and has run nothing.
+        try beforeLaunch()
         let pid = try spawn(
             operation: operation,
             currentDirectory: currentDirectory,

@@ -132,6 +132,18 @@ and reported as unhealthy storage rather than aborting startup; it was already
 due for deletion. Startup fails only if the worker cannot move aside any other
 entry, because then it would later overwrite the only copy.
 
+Storage is also reported unhealthy while `jobs/unverified-groups/` has
+entries: a job was recorded finished, or recovered after a crash, without proof
+that its process group exited. Each entry names the job ID and its recorded
+process group; it is kept apart from the controller's job record, which still
+expires and is deleted on revocation as usual. Each restart retries the kill
+and removes the entry once the group is confirmed gone. If it stays, inspect
+the user's processes for leftovers from that group (a setuid descendant or a
+process stuck in uninterruptible I/O), stop them, and restart. An entry with
+`launching` set and no `processGroup` has no recorded group to check: after
+confirming nothing from that job is running, remove the entry file and
+restart.
+
 ## Execution and recovery semantics
 
 - Remote tmux sessions survive Cockpit disconnects and application restarts.

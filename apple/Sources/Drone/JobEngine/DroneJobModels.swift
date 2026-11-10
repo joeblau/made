@@ -231,6 +231,9 @@ struct DroneJobOutput: Codable, Equatable, Sendable {
 enum DroneJobNotice: String, Codable, Sendable {
     case outputTruncated
     case recoveredAfterRestart
+    /// The job's process group could not be confirmed gone when it was
+    /// recorded finished; the worker reports unhealthy storage (#441).
+    case processGroupUnverified
 }
 
 enum DroneJobEventPayload: Codable, Equatable, Sendable {
@@ -284,6 +287,9 @@ struct DroneJobEngineLimits: Sendable {
     var maximumPathBytes = 4 * 1_024
     var maximumStoredRecordBytes = 16 * 1_024 * 1_024
     var cancellationGracePeriod: TimeInterval = 0.25
+    /// How long a finished job waits for its killed process group to
+    /// disappear before it is recorded finished anyway, as unverified.
+    var processGroupExitTimeout: TimeInterval = 2
 
     init() {}
 }

@@ -46,4 +46,43 @@ extension DroneWorkerProof {
         } == true, "job record was not moved into one quarantine entry")
         await service.stop()
     }
+
+    /// #441: a job recovered without proof that its process group exited is
+    /// reported as unhealthy storage, never finalized silently.
+    static func verifyUnverifiedProcessGroupHealth(root: URL, workspace: URL) async throws {
+        let state = root.appendingPathComponent("unverified-group-state", isDirectory: true)
+        let seeded = try DroneJobStore(
+            stateURL: state.appendingPathComponent("jobs", isDirectory: true),
+            limits: DroneJobEngineLimits()
+        )
+        let job = try seeded.create(DroneJobCreate(
+            controllerID: UUID(),
+            idempotencyKey: "unverified-health-0001",
+            request: DroneJobRequest(workspaceID: DroneWorkspaceIDs.default, operation: .process(
+                DroneProcessOperation(executablePath: "/bin/sleep", arguments: ["30"])
+            ))
+        )).snapshot
+        try seeded.markRunning(id: job.id)
+        try seeded.markLaunching(id: job.id)
+        // Recovery refuses to signal the worker's own group, so it cannot be confirmed gone.
+        try seeded.recordProcessGroup(id: job.id, group: DroneProcessGroupRecord(
+            groupID: getpgrp(), leaderStartSeconds: 0, leaderStartMicroseconds: 0
+        ))
+        let identity = DroneIdentityStore(role: .worker, storage: ProofPairingStorage())
+        let pairingStorage = ProofPairingStorage()
+        let service = try DroneWorkerService(
+            workspace: workspace,
+            stateDirectory: state,
+            transport: DroneLANTransport(
+                role: .worker,
+                identityStore: identity,
+                pairingStore: DronePairingStore(role: .worker, storage: pairingStorage)
+            ),
+            workerID: try identity.loadOrCreatePeerID().rawValue,
+            pairingStore: DronePairingStore(role: .worker, storage: pairingStorage)
+        )
+        let health = await service.healthSnapshot()
+        expect(!health.storageHealthy, "a job with an unverified process group was reported as healthy storage")
+        await service.stop()
+    }
 }

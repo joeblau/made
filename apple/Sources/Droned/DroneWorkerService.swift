@@ -172,6 +172,13 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         } catch {
             storageHealthy = false
         }
+        // A job recorded finished while its process group could not be
+        // confirmed gone (recovery or a member that outlived SIGKILL) keeps
+        // storage unhealthy until recovery confirms it or the owner acts (#441).
+        if storageHealthy, jobs.unverifiedProcessGroupCount > 0 {
+            storageHealthy = false
+            onAudit?("job.processGroupUnverified")
+        }
         return DroneWorkerHealthSnapshot(
             listenerReady: listenerReady && !stopping, paired: paired, storageHealthy: storageHealthy
         )

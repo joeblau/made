@@ -36,6 +36,7 @@ enum DroneWorkerProof {
         expect(!beforeStart.listenerReady && !beforeStart.paired && beforeStart.storageHealthy,
                "initial health invented listener or pairing state")
         try await verifyQuarantinedStorageHealth(root: root, workspace: workspace)
+        try await verifyUnverifiedProcessGroupHealth(root: root, workspace: workspace)
         let observed = ProofObserved()
         await service.setOnListening { observed.set(port: $0) }
         await service.start(bonjourInstanceID: "drone-proof-\(UUID().uuidString)")
