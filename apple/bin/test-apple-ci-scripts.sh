@@ -120,6 +120,82 @@ reset_log() {
   : > "$CI_TEST_ACTIONS"
 }
 
+# Every Apple release job builds exactly the commit release-metadata validated
+# (#423): release-metadata exports that SHA, every other checkout pins it and
+# is immediately followed by a HEAD check, and publish re-checks the tag.
+release_workflow="$APPLE_ROOT/../.github/workflows/apple-release.yml"
+# shellcheck disable=SC2016 # a literal GitHub Actions expression
+validated_ref='${{ needs.release-metadata.outputs.commit }}'
+verify_step='Verify the validated release commit'
+awk -v ref="$validated_ref" -v verify="$verify_step" '
+  function bad(message) { printf "%s\n", message; failed = 1 }
+  function close_job() {
+    if (job == "release-metadata") {
+      if (!exports_commit) bad("release-metadata does not output the validated commit")
+    } else if (job != "" && checkouts > 0 && verified < checkouts) {
+      bad(job ": checkout is not immediately followed by \"" verify "\"")
+    }
+  }
+  /^jobs:$/ { in_jobs = 1; next }
+  in_jobs && /^  [A-Za-z0-9_-]+:$/ {
+    close_job()
+    job = $1; sub(/:$/, "", job)
+    checkouts = 0; verified = 0; exports_commit = 0; in_checkout = 0
+    next
+  }
+  job == "release-metadata" && $0 == "      commit: ${{ steps.release.outputs.commit }}" { exports_commit = 1 }
+  /^      - / {
+    if (in_checkout && job != "release-metadata" && checkout_ref != ref)
+      bad(job ": checkout ref is \"" checkout_ref "\", not the validated commit")
+    if (in_checkout && job != "release-metadata" && $0 == "      - name: " verify) verified++
+    in_checkout = ($0 ~ /uses: actions\/checkout@/)
+    if (in_checkout) { checkouts++; checkout_ref = "" }
+    next
+  }
+  in_checkout && /^          ref: / { checkout_ref = $0; sub(/^          ref: /, "", checkout_ref) }
+  END {
+    close_job()
+    if (!in_jobs) bad("no jobs found")
+    exit failed
+  }
+' "$release_workflow" || fail "release jobs do not all build the validated release commit"
+grep -Fq "printf 'commit=%s\\n' \"\$release_commit\" >> \"\$GITHUB_OUTPUT\"" "$release_workflow" ||
+  fail "release-metadata does not export the commit it validated"
+# shellcheck disable=SC2016 # literal workflow shell text
+grep -Fq '"$GITHUB_SHA^{commit}")" ]]; then' "$release_workflow" ||
+  fail "release-metadata accepts a tag moved after the push that triggered it"
+awk '
+  /- name: Verify the release tag still names the validated commit$/ { recheck = NR }
+  /- name: Publish the tagged release$/ { publish = NR }
+  END { exit !(recheck && publish && recheck < publish) }
+' "$release_workflow" || fail "publish does not re-check the release tag before creating the release"
+
+# Execute the HEAD check exactly as the workflow embeds it.
+verify_script="$work/verify-release-commit.sh"
+awk -v name="      - name: $verify_step" '
+  $0 == name { step = 1; next }
+  step && /^        run: \|$/ { body = 1; next }
+  body && /^          / { sub(/^          /, ""); print; next }
+  body { exit }
+' "$release_workflow" > "$verify_script"
+[[ -s "$verify_script" ]] || fail "could not extract the release commit check"
+release_repo="$work/release-repo"
+git init -q "$release_repo"
+git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
+  commit -q --allow-empty -m validated
+validated_commit="$(git -C "$release_repo" rev-parse HEAD)"
+git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
+  commit -q --allow-empty -m moved
+(cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$verify_script") 2>/dev/null &&
+  fail "the release commit check accepted a checkout of a different commit"
+(cd "$release_repo" && RELEASE_COMMIT=v1.2.3 bash "$verify_script") 2>/dev/null &&
+  fail "the release commit check accepted a non-SHA release commit"
+(cd "$release_repo" && RELEASE_COMMIT='' bash "$verify_script") 2>/dev/null &&
+  fail "the release commit check accepted an empty release commit"
+git -C "$release_repo" checkout -q --detach "$validated_commit"
+(cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$verify_script") ||
+  fail "the release commit check rejected the validated commit"
+
 root="$TMPDIR/blau-apple-ci"
 macos="-derivedDataPath $root/macos-debug "
 simulator="-derivedDataPath $root/ios-simulator-debug "

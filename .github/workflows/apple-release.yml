@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build-number: ${{ steps.release.outputs.build-number }}
+      commit: ${{ steps.release.outputs.commit }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
@@ -57,6 +58,21 @@ jobs:
             "refs/tags/$release_tag:refs/tags/$release_tag" \
             main:refs/remotes/origin/main
           release_commit="$(git rev-parse "refs/tags/$release_tag^{commit}")"
+          [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Release tag did not resolve to a commit: %s\n' \
+              "$release_tag" >&2
+            exit 1
+          }
+          # A tag push names the commit that triggered this run; refuse a tag
+          # that was moved before validation instead of releasing its new
+          # target. Peel GITHUB_SHA in case it names an annotated tag object.
+          if [[ "$GITHUB_EVENT_NAME" == "push" &&
+            "$release_commit" != "$(git rev-parse --verify --quiet \
+              "$GITHUB_SHA^{commit}")" ]]; then
+            printf 'Release tag moved after it was pushed: %s\n' \
+              "$release_tag" >&2
+            exit 1
+          fi
           git merge-base --is-ancestor \
             "$release_commit" refs/remotes/origin/main || {
             printf 'Release tag is not on origin/main: %s\n' \
@@ -96,6 +112,7 @@ jobs:
             done
           fi
 
+          printf 'commit=%s\n' "$release_commit" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "${release_tag#v}" >> "$GITHUB_OUTPUT"
           printf 'build-number=%s.%s\n' \
@@ -119,7 +136,25 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-          ref: ${{ needs.release-metadata.outputs.tag }}
+          ref: ${{ needs.release-metadata.outputs.commit }}
+      # Build the commit release-metadata validated, never whatever the tag
+      # names now: the tag can move while the apple-release approval waits.
+      - name: Verify the validated release commit
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          head="$(git rev-parse HEAD)"
+          [[ "$head" == "$RELEASE_COMMIT" ]] || {
+            printf 'Checked out %s instead of validated release commit %s\n' \
+              "$head" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Verify artifact toolchain
         run: |
           xcodebuild -version
@@ -195,7 +230,25 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-          ref: ${{ needs.release-metadata.outputs.tag }}
+          ref: ${{ needs.release-metadata.outputs.commit }}
+      # Build the commit release-metadata validated, never whatever the tag
+      # names now: the tag can move while the apple-release approval waits.
+      - name: Verify the validated release commit
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          head="$(git rev-parse HEAD)"
+          [[ "$head" == "$RELEASE_COMMIT" ]] || {
+            printf 'Checked out %s instead of validated release commit %s\n' \
+              "$head" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Install the recovered release test harness
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -487,6 +540,25 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
+          ref: ${{ needs.release-metadata.outputs.commit }}
+      # Build the commit release-metadata validated, never whatever the tag
+      # names now: the tag can move while the apple-release approval waits.
+      - name: Verify the validated release commit
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          head="$(git rev-parse HEAD)"
+          [[ "$head" == "$RELEASE_COMMIT" ]] || {
+            printf 'Checked out %s instead of validated release commit %s\n' \
+              "$head" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Require release credentials
         shell: bash
         run: |
@@ -620,6 +692,35 @@ jobs:
           shasum -a 256 -c "$asset.sha256"
           shasum -a 256 -c Cockpit.dmg.sha256
           grep -Fq 'sparkle:edSignature=' appcast.xml
+      # gh release create --verify-tag attaches the release to whatever the
+      # tag names now; refuse to publish if that is not the built commit.
+      - name: Verify the release tag still names the validated commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          object="$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+            --jq '.object.type + " " + .object.sha')"
+          # Peel annotated tags (bounded) down to the commit they name.
+          for _ in 1 2 3 4; do
+            [[ "${object%% *}" == tag ]] || break
+            object="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/tags/${object#* }" \
+              --jq '.object.type + " " + .object.sha')"
+          done
+          [[ "$object" == "commit $RELEASE_COMMIT" ]] || {
+            printf 'Release tag %s now names %s, not validated commit %s\n' \
+              "$RELEASE_TAG" "$object" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Publish the tagged release
         shell: bash
         env:
