@@ -253,7 +253,7 @@ enum DroneJobProof {
                 arguments: ["-c", """
                 /bin/sh -c 'trap "" TERM HUP
                 echo $$ $PPID > crash-orphan.tmp && /bin/mv crash-orphan.tmp crash-orphan.pid
-                while :; do /bin/sleep 1; done' >/dev/null 2>&1 &
+                i=0; while [ $i -lt 60 ]; do /bin/sleep 1; i=$((i + 1)); done' >/dev/null 2>&1 &
                 exec /bin/sleep 30
                 """],
                 timeoutMilliseconds: 60_000
@@ -264,8 +264,11 @@ enum DroneJobProof {
             if FileManager.default.fileExists(atPath: pidFile.path) { break }
             try await Task.sleep(for: .milliseconds(10))
         }
+        // A process-directed SIGKILL may be delivered on another thread while
+        // this one keeps running, so never fall through to a normal exit.
+        _ = pthread_kill(pthread_self(), SIGKILL)
         _ = Darwin.kill(getpid(), SIGKILL)
-        Darwin._exit(70)
+        while true { _ = Darwin.pause() }
     }
 
     private static func waitUntilGone(_ pid: pid_t) async throws {
