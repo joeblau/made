@@ -412,3 +412,98 @@ struct DeviceKindPropertyTests {
         #expect(ConnectedDeviceKind.unknown.usesFillVariant == false)
     }
 }
+
+/// Issue #431: Pilot's mirrored ink must match Plotter's drawing index for
+/// index, so `.addStroke` / `.undo` may only describe a provable append or
+/// last-stroke removal.
+@Suite("Annotation mirror sync")
+struct AnnotationMirrorSyncTests {
+    private func stroke(_ id: Double) -> AnnotationStroke {
+        AnnotationStroke(
+            color: AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1),
+            width: 0.01,
+            points: [AnnotationPoint(x: id / 10, y: 0.1), AnnotationPoint(x: id / 10, y: 0.9)]
+        )
+    }
+
+    /// Pilot's `RemoteInkModel.handle` semantics, applied to plain strokes.
+    private func applyOnPilot(_ message: AnnotationMessage?, to strokes: [AnnotationStroke]) -> [AnnotationStroke] {
+        guard let message else { return strokes }
+        switch message {
+        case .replaceDrawing(let drawing): return drawing.strokes
+        case .addStroke(let stroke): return strokes + [stroke]
+        case .clear: return []
+        case .undo: return Array(strokes.dropLast())
+        }
+    }
+
+    @Test("Unchanged drawing sends nothing")
+    func unchanged() {
+        let strokes = [stroke(1), stroke(2)]
+        #expect(AnnotationMirrorSync.message(from: strokes, to: strokes) == nil)
+    }
+
+    @Test("A provable append sends only the new stroke")
+    func append() {
+        let a = stroke(1), b = stroke(2)
+        #expect(AnnotationMirrorSync.message(from: [a], to: [a, b]) == .addStroke(b))
+    }
+
+    @Test("Removing the newest stroke sends undo")
+    func undoLast() {
+        let a = stroke(1), b = stroke(2)
+        #expect(AnnotationMirrorSync.message(from: [a, b], to: [a]) == .undo)
+    }
+
+    @Test("Erasing every stroke sends clear")
+    func cleared() {
+        #expect(AnnotationMirrorSync.message(from: [stroke(1), stroke(2)], to: []) == .clear)
+    }
+
+    @Test("An eraser removing a middle stroke sends a full resync")
+    func eraserMiddleStroke() {
+        let a = stroke(1), b = stroke(2), c = stroke(3)
+        let message = AnnotationMirrorSync.message(from: [a, b, c], to: [a, c])
+        #expect(message == .replaceDrawing(AnnotationDrawing(strokes: [a, c])))
+        #expect(applyOnPilot(message, to: [a, b, c]) == [a, c])
+    }
+
+    @Test("Undoing an erase that restores a middle stroke sends a full resync")
+    func undoEraseRestoresMiddleStroke() {
+        let a = stroke(1), b = stroke(2), c = stroke(3)
+        let message = AnnotationMirrorSync.message(from: [a, c], to: [a, b, c])
+        #expect(message == .replaceDrawing(AnnotationDrawing(strokes: [a, b, c])))
+        #expect(applyOnPilot(message, to: [a, c]) == [a, b, c])
+    }
+
+    @Test("An erase that splits a stroke without changing the count sends a full resync")
+    func eraserSplitSameCount() {
+        let a = stroke(1), b = stroke(2), c = stroke(3)
+        let message = AnnotationMirrorSync.message(from: [a, b], to: [a, c])
+        #expect(message == .replaceDrawing(AnnotationDrawing(strokes: [a, c])))
+    }
+
+    @Test("Pilot stays identical to the canvas across mixed edits")
+    func pilotMirrorsEveryEdit() {
+        let s = (0..<6).map { stroke(Double($0)) }
+        let canvasHistory: [[AnnotationStroke]] = [
+            [s[0]],
+            [s[0], s[1]],
+            [s[0], s[1], s[2]],
+            [s[0], s[2]],             // eraser removes a middle stroke
+            [s[0], s[1], s[2]],       // undo restores it at its old index
+            [s[0], s[1], s[2], s[3]],
+            [s[0], s[1], s[2]],       // undo of the newest stroke
+            [s[4], s[5]],             // multi-stroke replacement
+            [],
+        ]
+        var mirrored: [AnnotationStroke] = []
+        var pilot: [AnnotationStroke] = []
+        for canvas in canvasHistory {
+            let message = AnnotationMirrorSync.message(from: mirrored, to: canvas)
+            mirrored = canvas
+            pilot = applyOnPilot(message, to: pilot)
+            #expect(pilot == canvas)
+        }
+    }
+}
