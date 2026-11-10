@@ -86,6 +86,8 @@ actor AndroidInputInjector {
     /// the write, and only a GCD thread may absorb that. The actor suspends on
     /// a continuation meanwhile, so `shutdown()` stays free to preempt — its
     /// SIGTERM makes the blocked write fail with EPIPE and everything unwinds.
+    /// The stdin descriptor is also closed on this queue, so a close can never
+    /// race an in-flight write on the same (possibly reused) descriptor.
     private let writeQueue = DispatchQueue(label: "app.blau.pilot.android.input-write", qos: .userInitiated)
 
     private var process: Process?
@@ -94,6 +96,10 @@ actor AndroidInputInjector {
     private var pending: [AndroidInputCommand] = []
     private var writerRunning = false
     private var shutDown = false
+    /// Writes that failed with a catchable error (EPIPE from a dead shell).
+    /// Diagnostic only; the tests use it to prove a dead shell surfaces as an
+    /// error rather than a process-killing SIGPIPE.
+    private(set) var failedWriteCount = 0
 
     /// Input is transient: when the device stalls, drop the newest commands
     /// rather than queueing unboundedly.
@@ -130,6 +136,16 @@ actor AndroidInputInjector {
         child.standardInput = input
         child.standardOutput = output
         child.standardError = errors
+        // Invariant (#445): a write to a shell that already exited must fail
+        // with a catchable EPIPE, never raise SIGPIPE — whose default action
+        // terminates Cockpit with every open pane and agent. `isRunning` can't
+        // guard this: adb may exit between the check and the write. Refuse to
+        // launch rather than hand out a descriptor that could kill the app.
+        guard fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) == 0 else {
+            let failure = errno
+            logger.error("input shell launch refused: F_SETNOSIGPIPE failed (errno \(failure, privacy: .public))")
+            return nil
+        }
         // Drain-and-discard both output streams so the pipes can never fill
         // and backpressure the shell. The handler must detach itself at EOF —
         // a readability source is level-triggered and would otherwise spin at
@@ -157,7 +173,12 @@ actor AndroidInputInjector {
 
     private func terminateShell() {
         if let stdin {
-            try? stdin.close()
+            // Close on the write queue, behind any in-flight write: closing
+            // here on the actor could free the descriptor while a blocked
+            // write still targets it. The SIGTERM below unblocks that write.
+            writeQueue.async {
+                try? stdin.close()
+            }
         }
         stdin = nil
         for handle in drainHandles {
@@ -191,6 +212,7 @@ actor AndroidInputInjector {
                 // Broken pipe: the shell died (device unplugged, adb server
                 // restarted, shutdown() preempted a blocked write). Drop the
                 // command; the next send respawns.
+                failedWriteCount += 1
                 logger.warning("input shell write failed: \(error.localizedDescription, privacy: .public)")
                 if !shutDown { terminateShell() }
                 return
