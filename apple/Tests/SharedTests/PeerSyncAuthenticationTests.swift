@@ -18,6 +18,67 @@ final class PeerSyncAuthenticationTests: XCTestCase {
         XCTAssertFalse(service.isConnected)
     }
 
+    @MainActor
+    func testServiceAdvertisesTheStoredKeyAfterAnIdentityRotation() async {
+        // A private center and loader stand in for the Keychain identity, so
+        // this drives the production path: rotation notification ->
+        // observer -> reload through the loader -> rebuilt authenticator.
+        let center = NotificationCenter()
+        let stored = Curve25519.KeyAgreement.PrivateKey()
+        let storedRaw = stored.rawRepresentation
+        let storedPublic = stored.publicKey.rawRepresentation.base64EncodedString()
+        let service = PeerSyncService(
+            role: .advertiser,
+            displayName: "Rotation Test",
+            usesEphemeralIdentity: true,
+            identityChanges: DeviceIdentity.ChangeSource(
+                center: center,
+                load: { try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: storedRaw) }
+            )
+        )
+        let original = await service.localIdentityPublicKeyBase64()
+        XCTAssertNotEqual(original, storedPublic)
+
+        // `post` runs the observer synchronously and the reload is queued on
+        // the transport queue ahead of the getter, so this read is ordered.
+        center.post(name: DeviceIdentity.didChangeNotification, object: nil)
+
+        let advertised = await service.localIdentityPublicKeyBase64()
+        XCTAssertEqual(
+            advertised,
+            storedPublic,
+            "after regeneration the sync transport must advertise and prove the stored key"
+        )
+    }
+
+    func testRotatedLocalIdentityKeepsPinAndProvesOnlyTheNewKey() throws {
+        let keys = makeAuthenticators()
+        var pilot = keys.pilot
+        var copilot = keys.copilot
+        try authenticate(&pilot, &copilot)
+
+        let rotatedKey = Curve25519.KeyAgreement.PrivateKey()
+        let rotatedPublic = rotatedKey.publicKey.rawRepresentation.base64EncodedString()
+        var rotated = pilot.replacingLocalKey(rotatedKey)
+        XCTAssertEqual(rotated.localPublicKeyBase64, rotatedPublic)
+        XCTAssertEqual(rotated.peerPublicKeyBase64, pilot.peerPublicKeyBase64)
+        XCTAssertFalse(rotated.isAuthenticated, "no session may survive a rotation")
+        XCTAssertNil(rotated.sealMessage(Data("stale".utf8)))
+
+        // The peer still pins the old key, so the rotated hello is refused
+        // until the user approves the key change.
+        _ = copilot.beginSession(random: { Data(repeating: 0x51, count: $0) })
+        let rotatedHello = try XCTUnwrap(rotated.beginSession(
+            random: { Data(repeating: 0x52, count: $0) }
+        ))
+        XCTAssertNil(copilot.open(rotatedHello))
+
+        XCTAssertTrue(copilot.trust(peerPublicKeyBase64: rotatedPublic))
+        try authenticate(&rotated, &copilot, pilotNonce: 0x61, copilotNonce: 0x62)
+        let command = try XCTUnwrap(rotated.sealMessage(Data("fresh".utf8)))
+        XCTAssertEqual(copilot.open(command), .message(Data("fresh".utf8)))
+    }
+
     func testUnknownAndChangedAdvertisersRequireExplicitApproval() {
         let trusted = Curve25519.KeyAgreement.PrivateKey()
             .publicKey.rawRepresentation.base64EncodedString()

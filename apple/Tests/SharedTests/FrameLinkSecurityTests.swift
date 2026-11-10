@@ -15,6 +15,9 @@ final class FrameLinkSecurityTests: XCTestCase {
         let plotterHello = try XCTUnwrap(plotter.begin(random: { Data(repeating: 2, count: $0) }))
         let plotterRequest = try pairingRequest(pilot.receive(plotterHello, displayName: "Plotter"))
         let pilotRequest = try pairingRequest(plotter.receive(pilotHello, displayName: "Pilot"))
+        // `localPublicKeyBase64` reports the key the hello actually carries.
+        XCTAssertEqual(pilotRequest.publicKey, pilot.localPublicKeyBase64)
+        XCTAssertEqual(plotterRequest.publicKey, plotter.localPublicKeyBase64)
         XCTAssertFalse(pilot.isAuthenticated)
         XCTAssertFalse(plotter.isAuthenticated)
 
@@ -129,6 +132,35 @@ final class FrameLinkSecurityTests: XCTestCase {
         let plotterApproval = try XCTUnwrap(plotter.approvePending(publicKey: pilotRequest.publicKey))
         XCTAssertTrue(plotterApproval.authenticated)
         XCTAssertEqual(pilot.receive(plotterApproval.proof), .authenticated)
+    }
+
+    func testFrameLinkEndpointsProveTheStoredKeyAfterAnIdentityRotation() async {
+        // A private center and loader stand in for the Keychain identity, so
+        // this drives the production path: rotation notification ->
+        // observer -> reload through the loader -> rebuilt FrameLink identity.
+        let center = NotificationCenter()
+        let stored = Curve25519.KeyAgreement.PrivateKey()
+        let storedRaw = stored.rawRepresentation
+        let storedPublic = stored.publicKey.rawRepresentation.base64EncodedString()
+        let changes = DeviceIdentity.ChangeSource(
+            center: center,
+            load: { try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: storedRaw) }
+        )
+        let sender = FrameSender(usesEphemeralIdentity: true, identityChanges: changes)
+        let receiver = FrameReceiver(identityChanges: changes)
+        let originalSender = await sender.localIdentityPublicKeyBase64()
+        let originalReceiver = await receiver.localIdentityPublicKeyBase64()
+        XCTAssertNotEqual(originalSender, storedPublic)
+        XCTAssertNotEqual(originalReceiver, storedPublic)
+
+        // `post` runs both observers synchronously and each reload is queued
+        // on its endpoint's queue ahead of the getter, so these reads are ordered.
+        center.post(name: DeviceIdentity.didChangeNotification, object: nil)
+
+        let senderKey = await sender.localIdentityPublicKeyBase64()
+        let receiverKey = await receiver.localIdentityPublicKeyBase64()
+        XCTAssertEqual(senderKey, storedPublic, "Pilot's FrameLink must prove the stored key")
+        XCTAssertEqual(receiverKey, storedPublic, "Plotter's FrameLink must prove the stored key")
     }
 
     private func authenticateTrusted(
