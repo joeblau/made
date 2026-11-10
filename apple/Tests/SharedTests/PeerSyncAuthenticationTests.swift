@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+@preconcurrency import MultipeerConnectivity
 import XCTest
 
 @testable import Copilot
@@ -234,6 +235,170 @@ final class PeerSyncAuthenticationTests: XCTestCase {
         )
     }
 
+    /// #430 through the real service: the peer's hello reaches the delegate
+    /// before `.connected`, is held, and is replayed after `beginSession()`.
+    @MainActor
+    func testServiceAuthenticatesWhenPeerHelloArrivesBeforeConnected() async throws {
+        let harness = makeServiceHarness(authenticationTimeout: 60)
+        var copilot = harness.copilot
+        harness.service.start()
+        await transportBarrier(harness.service)
+        let disconnectsAfterStart = harness.transport.disconnectCount
+
+        let copilotHello = try XCTUnwrap(copilot.beginSession(
+            random: { Data(repeating: 0x22, count: $0) }
+        ))
+        harness.service.session(harness.mcSession, didReceive: copilotHello, fromPeer: harness.peer)
+        harness.transport.connect(harness.peer)
+        harness.service.session(harness.mcSession, peer: harness.peer, didChange: .connected)
+        await transportBarrier(harness.service)
+
+        let sent = harness.transport.sent
+        XCTAssertEqual(sent.count, 2, "the service sends its hello, then answers the replayed early hello")
+        guard sent.count == 2,
+              case .helloResponse(let readyForPilot)? = copilot.open(sent[0]) else {
+            return XCTFail("expected the service hello followed by its ready")
+        }
+        XCTAssertEqual(copilot.open(sent[1]), .authenticated)
+
+        harness.service.session(harness.mcSession, didReceive: readyForPilot, fromPeer: harness.peer)
+        let accepted = await harness.service.sendReliably(.mouseClick(MouseClick(button: 0)))
+        XCTAssertTrue(accepted, "the service must authenticate and seal commands after the replay")
+        let command = try XCTUnwrap(harness.transport.sent.last)
+        guard case .message(let payload)? = copilot.open(command) else {
+            return XCTFail("the peer must accept the authenticated command")
+        }
+        XCTAssertNotNil(try? JSONDecoder().decode(SyncMessage.self, from: payload))
+        let connected = await waitUntil { harness.service.isConnected }
+        XCTAssertTrue(connected)
+        XCTAssertEqual(harness.transport.disconnectCount, disconnectsAfterStart)
+        XCTAssertTrue(harness.transport.cancelledPeers.isEmpty)
+    }
+
+    /// #430: a repeated `.connected` must not mint a second hello whose new
+    /// nonce the peer would reject; the first handshake still completes.
+    @MainActor
+    func testRepeatedConnectedCallbackSendsOneHelloAndStillAuthenticates() async throws {
+        let harness = makeServiceHarness(authenticationTimeout: 60)
+        var copilot = harness.copilot
+        harness.service.start()
+        await transportBarrier(harness.service)
+        harness.transport.connect(harness.peer)
+        harness.service.session(harness.mcSession, peer: harness.peer, didChange: .connected)
+        harness.service.session(harness.mcSession, peer: harness.peer, didChange: .connected)
+        await transportBarrier(harness.service)
+
+        XCTAssertEqual(harness.transport.sent.count, 1, "a repeated .connected must not send a second hello")
+        XCTAssertTrue(harness.transport.cancelledPeers.isEmpty, "the active peer must not be cancelled")
+
+        let copilotHello = try XCTUnwrap(copilot.beginSession(
+            random: { Data(repeating: 0x33, count: $0) }
+        ))
+        guard let pilotHello = harness.transport.sent.first,
+              case .helloResponse(let readyForPilot)? = copilot.open(pilotHello) else {
+            return XCTFail("the first hello must stay valid after a repeated .connected")
+        }
+        harness.service.session(harness.mcSession, didReceive: copilotHello, fromPeer: harness.peer)
+        harness.service.session(harness.mcSession, didReceive: readyForPilot, fromPeer: harness.peer)
+        await transportBarrier(harness.service)
+
+        let sent = harness.transport.sent
+        XCTAssertEqual(sent.count, 2)
+        guard sent.count == 2 else { return }
+        XCTAssertEqual(copilot.open(sent[1]), .authenticated)
+        let accepted = await harness.service.sendReliably(.mouseClick(MouseClick(button: 0)))
+        XCTAssertTrue(accepted, "the handshake must authenticate despite the repeated callback")
+    }
+
+    /// #430: a peer that never answers is torn down at the (shortened)
+    /// authentication deadline, the reconnect is no longer blocked by a
+    /// connected peer, and the next connection starts a fresh handshake.
+    @MainActor
+    func testStalledHandshakeIsTornDownAtTheDeadlineAndReconnects() async throws {
+        let harness = makeServiceHarness(authenticationTimeout: 0.05, reconnectDelay: 0.05)
+        var copilot = harness.copilot
+        harness.service.start()
+        await transportBarrier(harness.service)
+        let disconnectsAfterStart = harness.transport.disconnectCount
+
+        harness.transport.connect(harness.peer)
+        harness.service.session(harness.mcSession, peer: harness.peer, didChange: .connected)
+        await transportBarrier(harness.service)
+        XCTAssertEqual(harness.transport.sent.count, 1)
+
+        let tornDown = await waitUntil { harness.transport.disconnectCount > disconnectsAfterStart }
+        XCTAssertTrue(tornDown, "a stalled handshake must be disconnected at the deadline")
+        XCTAssertEqual(harness.transport.cancelledPeers, [harness.peer])
+        XCTAssertTrue(harness.transport.connectedPeers.isEmpty)
+        let restarted = await waitUntil { harness.service.statusText == "Restarting sync advertisement" }
+        XCTAssertTrue(restarted, "teardown must let the reconnect restart discovery")
+        XCTAssertFalse(harness.service.isConnected)
+
+        harness.transport.connect(harness.peer)
+        harness.service.session(harness.mcSession, peer: harness.peer, didChange: .connected)
+        await transportBarrier(harness.service)
+        let sent = harness.transport.sent
+        XCTAssertEqual(sent.count, 2, "the reconnected peer must receive a fresh hello")
+        guard sent.count == 2 else { return }
+        XCTAssertNotEqual(sent[0], sent[1])
+        _ = copilot.beginSession(random: { Data(repeating: 0x44, count: $0) })
+        guard case .helloResponse? = copilot.open(sent[1]) else {
+            return XCTFail("the fresh hello must be a valid start of a new handshake")
+        }
+    }
+
+    private struct ServiceHarness {
+        let service: PeerSyncService
+        let transport: RecordingSyncTransport
+        let copilot: PeerSyncAuthenticator
+        let peer: MCPeerID
+        let mcSession: MCSession
+    }
+
+    /// A Cockpit-role service pinned to the returned Walkie authenticator,
+    /// driven through its real MCSession delegate callbacks.
+    private func makeServiceHarness(
+        authenticationTimeout: TimeInterval,
+        reconnectDelay: TimeInterval = 60
+    ) -> ServiceHarness {
+        let keys = makeAuthenticators()
+        let transport = RecordingSyncTransport()
+        let peer = MCPeerID(displayName: "Walkie Handshake Test")
+        return ServiceHarness(
+            service: PeerSyncService(
+                role: .advertiser,
+                displayName: "Cockpit Handshake Test",
+                authenticator: keys.pilot,
+                transport: transport,
+                authenticationTimeout: authenticationTimeout,
+                reconnectDelay: reconnectDelay
+            ),
+            transport: transport,
+            copilot: keys.copilot,
+            peer: peer,
+            mcSession: MCSession(peer: peer)
+        )
+    }
+
+    /// Returns after everything already queued on the service's serial
+    /// transport queue has run.
+    private func transportBarrier(_ service: PeerSyncService) async {
+        _ = await service.localIdentityPublicKeyBase64()
+    }
+
+    @MainActor
+    private func waitUntil(
+        timeout: TimeInterval = 5,
+        _ condition: @MainActor () -> Bool
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { return false }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return true
+    }
+
     private func makeAuthenticators() -> (
         pilot: PeerSyncAuthenticator,
         copilot: PeerSyncAuthenticator
@@ -273,5 +438,41 @@ final class PeerSyncAuthenticationTests: XCTestCase {
         XCTAssertEqual(copilot.open(readyForCopilot), .authenticated)
         XCTAssertTrue(pilot.isAuthenticated)
         XCTAssertTrue(copilot.isAuthenticated)
+    }
+}
+
+/// Records what `PeerSyncService` asks of its MCSession so tests drive the
+/// real delegate callbacks, replay and deadline logic without radios (#430).
+/// The service calls it on its transport queue; tests read it on the main actor.
+private final class RecordingSyncTransport: PeerSyncSessionTransport, @unchecked Sendable {
+    private let lock = NSLock()
+    private var peers: [MCPeerID] = []
+    private var frames: [Data] = []
+    private var cancelled: [MCPeerID] = []
+    private var disconnects = 0
+
+    var connectedPeers: [MCPeerID] { lock.withLock { peers } }
+    var sent: [Data] { lock.withLock { frames } }
+    var cancelledPeers: [MCPeerID] { lock.withLock { cancelled } }
+    var disconnectCount: Int { lock.withLock { disconnects } }
+
+    func connect(_ peer: MCPeerID) {
+        lock.withLock { peers = [peer] }
+    }
+
+    func send(_ data: Data, toPeers peerIDs: [MCPeerID], with mode: MCSessionSendDataMode) throws {
+        lock.withLock { frames.append(data) }
+    }
+
+    func cancelConnectPeer(_ peerID: MCPeerID) {
+        lock.withLock { cancelled.append(peerID) }
+    }
+
+    /// Like MCSession, disconnecting drops every connected peer.
+    func disconnect() {
+        lock.withLock {
+            disconnects += 1
+            peers = []
+        }
     }
 }
