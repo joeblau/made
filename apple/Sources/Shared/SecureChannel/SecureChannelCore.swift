@@ -353,6 +353,12 @@ final class SecureChannelCore {
         }
     }
 
+    /// Transport keys are installed only while in `.handshake`, so holding
+    /// `transportKeys` always means the channel reached `.connected` (#427).
+    /// The receive loop starts during `.holePunching`, and an initiator retry
+    /// can land inside the responder's hole-punch window; such a packet is
+    /// dropped here (the initiator keeps retrying) instead of installing keys
+    /// whose `.holePunching -> .connected` edge the state machine rejects.
     private func handleHandshake(_ body: Data) {
         switch role {
         case .initiator:
@@ -363,9 +369,11 @@ final class SecureChannelCore {
     }
 
     private func handleInitiatorHandshakeReply(_ body: Data) {
-        guard let state = initiatorHandshake, transportKeys == nil else { return }
+        guard state == .handshake, let handshake = initiatorHandshake, transportKeys == nil else {
+            return
+        }
         do {
-            transportKeys = try state.receive(body).keys
+            transportKeys = try handshake.receive(body).keys
             initiatorHandshake = nil
             handshakePacket = nil
             handshakeRetryTask?.cancel()
@@ -379,10 +387,14 @@ final class SecureChannelCore {
 
     private func handleResponderHandshakeInit(_ body: Data) {
         if transportKeys != nil {
-            if let response = handshakeResponseCache.response(for: body) {
+            if state.isConnected, let response = handshakeResponseCache.response(for: body) {
                 appendLog("↻ duplicate handshake msg1; re-sending msg2")
                 sendRaw(response)
             }
+            return
+        }
+        guard state == .handshake else {
+            appendLog("Ignored handshake msg1 outside the handshake state.")
             return
         }
         do {
@@ -418,7 +430,7 @@ final class SecureChannelCore {
         case .handshake:
             handleHandshake(packet.ciphertextAndTag)
         case .reliableControl, .ack, .bestEffortBlob:
-            guard let keys = transportKeys else { return }
+            guard state.isConnected, let keys = transportKeys else { return }
             let receive = role.receiveKey(from: keys)
             guard let opened = try? PacketCodec.open(
                 data,
@@ -529,6 +541,9 @@ final class SecureChannelCore {
         handshakeDeadlineTask?.cancel()
         handshakeDeadlineTask = nil
         handshakePacket = nil
+        // Keys exist only while `.connected` (#427): a failed channel neither
+        // decrypts inbound traffic nor retransmits outbound messages.
+        transportKeys = nil
         state = .failed(reason: reason)
         appendLog("Failed: \(reason)")
     }

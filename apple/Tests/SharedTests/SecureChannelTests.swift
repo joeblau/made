@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 import CryptoKit
+import Network
 
 @testable import Copilot
 
@@ -453,7 +454,131 @@ final class SecureChannelTests: XCTestCase {
         XCTAssertEqual(sender.abandoned, Array(93...100))
     }
 
+    // MARK: - SecureChannelCore handshake state (#427)
+
+    /// An initiator msg1 retry can land inside the responder's hole-punch
+    /// window because the receive loop is already running. Before #427 the
+    /// responder installed transport keys there, the `.holePunching ->
+    /// .connected` edge was silently dropped, and the responder stayed in
+    /// `.handshake` forever: later retries only re-sent msg2 and `sendText`
+    /// refused to send. Keys are now installed only in `.handshake`, so the
+    /// early msg1 is ignored and the next retry completes the channel.
+    @MainActor
+    func testHandshakeDuringHolePunchingDoesNotStrandResponder() async throws {
+        let initiatorStatic = Curve25519.KeyAgreement.PrivateKey()
+        let responderStatic = Curve25519.KeyAgreement.PrivateKey()
+        let responderPort = SecureChannelCore.randomEphemeralPort()
+        var peerPort = SecureChannelCore.randomEphemeralPort()
+        while peerPort == responderPort {
+            peerPort = SecureChannelCore.randomEphemeralPort()
+        }
+
+        // The test plays the initiator over a real loopback UDP socket so it
+        // controls exactly when msg1 reaches the responder.
+        let peer = try LoopbackUDPPeer(localPort: peerPort, remotePort: responderPort)
+        defer { peer.stop() }
+        try await waitUntil("test peer socket ready") { peer.isReady }
+
+        RendezvousStubProtocol.peerResponse = try JSONSerialization.data(withJSONObject: [
+            "publicKey": initiatorStatic.publicKey.rawRepresentation.base64EncodedString(),
+            "ip": "127.0.0.1",
+            "port": Int(peerPort),
+        ])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RendezvousStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            session.invalidateAndCancel()
+            RendezvousStubProtocol.peerResponse = nil
+        }
+
+        let signaling = try SignalingClient(session: session)
+        let token = try SecurePairingStore.generateToken()
+        let responder = SecureChannelCore(
+            role: .responder,
+            signaling: signaling,
+            token: token,
+            staticKey: responderStatic,
+            peerStatic: initiatorStatic.publicKey,
+            localPort: responderPort,
+            handshakeSchedule: HandshakeRetrySchedule(
+                interval: .milliseconds(500),
+                timeout: .seconds(30)
+            )
+        )
+        defer { responder.disconnect() }
+        responder.connect()
+
+        // The first hole-punch byte proves the responder's socket and receive
+        // loop are live while it is still in its 750 ms hole-punch window.
+        try await waitUntil("responder hole-punch byte") { !peer.datagrams.isEmpty }
+        let stateWhenMsg1Sent = responder.state
+        XCTAssertEqual(stateWhenMsg1Sent, .holePunching)
+
+        let (initiator, msg1) = try NoiseIK.Initiator.start(
+            staticKey: initiatorStatic,
+            responderStatic: responderStatic.publicKey
+        )
+        var msg1Packet = PacketCodec.encodeHeader(type: .handshake, counter: 0)
+        msg1Packet.append(msg1)
+        peer.send(msg1Packet)
+
+        try await waitUntil("responder leaves hole punching") {
+            responder.state != .holePunching
+        }
+
+        // The initiator's retry timer re-sends the identical msg1 packet.
+        peer.send(msg1Packet)
+        try await waitUntil("responder connects on the retried msg1") {
+            responder.state == .connected
+        }
+
+        let reply = try XCTUnwrap(
+            peer.datagrams
+                .compactMap { try? PacketCodec.parse($0) }
+                .first { $0.type == .handshake },
+            "responder must answer the retried msg1 with msg2"
+        )
+        let initiatorKeys = try initiator.receive(reply.ciphertextAndTag).keys
+
+        // The responder is genuinely usable: it sends traffic the initiator's
+        // keys can open, instead of refusing with "Not connected".
+        let sentBefore = peer.datagrams.count
+        responder.sendText("ping")
+        try await waitUntil("responder sends encrypted text") {
+            peer.datagrams.count > sentBefore
+        }
+        let receive = SecureChannelCore.Role.initiator.receiveKey(from: initiatorKeys)
+        let opened = try PacketCodec.open(
+            peer.datagrams[sentBefore],
+            key: receive.key,
+            baseNonce: receive.nonce
+        )
+        XCTAssertEqual(opened.type, .reliableControl)
+        let envelope = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: opened.plaintext) as? [String: Any]
+        )
+        XCTAssertEqual(envelope["text"] as? String, "ping")
+    }
+
     // MARK: - Helpers
+
+    private struct WaitTimedOut: Error {
+        let condition: String
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ condition: String,
+        timeout: Duration = .seconds(5),
+        _ predicate: () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !predicate(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard predicate() else { throw WaitTimedOut(condition: condition) }
+    }
 
     private func completeHandshake() throws -> (initiator: TransportKeys, responder: TransportKeys) {
         let initiatorStatic = Curve25519.KeyAgreement.PrivateKey()
@@ -470,5 +595,78 @@ final class SecureChannelTests: XCTestCase {
         let (responderKeys, msg2) = try responder.respond()
         let (initiatorKeys, _) = try initiatorState.receive(msg2)
         return (initiatorKeys, responderKeys)
+    }
+
+    /// Answers every rendezvous request with the configured peer endpoint so a
+    /// `SecureChannelCore` proceeds straight to hole punching.
+    private final class RendezvousStubProtocol: URLProtocol {
+        nonisolated(unsafe) static var peerResponse: Data?
+
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+        override func startLoading() {
+            guard let url = request.url,
+                  let body = Self.peerResponse,
+                  let response = HTTPURLResponse(
+                      url: url,
+                      statusCode: 200,
+                      httpVersion: nil,
+                      headerFields: nil
+                  )
+            else {
+                client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+                return
+            }
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+
+        override func stopLoading() {}
+    }
+}
+
+/// A connected loopback UDP socket that stands in for the remote secure-channel
+/// peer, recording every datagram it receives.
+@MainActor
+private final class LoopbackUDPPeer {
+    private let connection: NWConnection
+    private(set) var isReady = false
+    private(set) var datagrams: [Data] = []
+
+    init(localPort: UInt16, remotePort: UInt16) throws {
+        guard let local = NWEndpoint.Port(rawValue: localPort),
+              let remote = NWEndpoint.Port(rawValue: remotePort)
+        else { throw URLError(.badURL) }
+        let parameters = NWParameters.udp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: local)
+        parameters.allowLocalEndpointReuse = true
+        connection = NWConnection(host: "127.0.0.1", port: remote, using: parameters)
+        connection.stateUpdateHandler = { [weak self] state in
+            MainActor.assumeIsolated {
+                if case .ready = state { self?.isReady = true }
+            }
+        }
+        connection.start(queue: .main)
+        receiveNext()
+    }
+
+    func send(_ data: Data) {
+        connection.send(content: data, completion: .contentProcessed { _ in })
+    }
+
+    func stop() {
+        connection.cancel()
+    }
+
+    private func receiveNext() {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if let data, !data.isEmpty { self.datagrams.append(data) }
+                if error == nil { self.receiveNext() }
+            }
+        }
     }
 }
