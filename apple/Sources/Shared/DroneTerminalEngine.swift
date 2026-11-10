@@ -479,19 +479,26 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         try? persist()
     }
 
-    private func receiveOutput(_ data: Data, sessionID: DroneSessionID) {
-        guard let session = sessions[sessionID], session.record.closedAt == nil,
-              !session.record.exited
-        else { return }
+    /// The only place a PTY chunk is appended. `source` keeps its read gate
+    /// claimed until this returns, so chunks arrive here one at a time and in
+    /// read order; a chunk from a PTY the session no longer owns is dropped.
+    private func receiveOutput(_ data: Data, sessionID: DroneSessionID, source: DronePTY) {
+        guard let session = sessions[sessionID], session.pty === source,
+              session.record.closedAt == nil, !session.record.exited
+        else {
+            source.completeOutputDelivery(resumeReading: false)
+            return
+        }
         do {
             try session.buffer.append(data: data)
             session.record.cursor = session.buffer.endCursor
             session.record.lastOutputTimestamp = Date().timeIntervalSince1970
             updateBackpressure(session)
-            if !session.isBackpressured { session.pty?.resumeReading() }
+            source.completeOutputDelivery(resumeReading: !session.isBackpressured)
         } catch {
-            session.pty?.pauseReading()
+            source.pauseReading()
             session.isBackpressured = true
+            source.completeOutputDelivery(resumeReading: false)
         }
     }
 
@@ -528,8 +535,8 @@ actor DroneTerminalEngine: DroneTerminalServicing {
             environment: environment,
             columns: session.record.columns,
             rows: session.record.rows,
-            onOutput: { data in
-                Task { await self.receiveOutput(data, sessionID: sessionID) }
+            onOutput: { source, data in
+                Task { await self.receiveOutput(data, sessionID: sessionID, source: source) }
             },
             onExit: {
                 Task { await self.receiveExit(sessionID: sessionID) }
