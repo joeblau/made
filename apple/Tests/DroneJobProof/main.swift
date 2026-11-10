@@ -262,6 +262,17 @@ enum DroneJobProof {
         }
         expect(recordExists(timerState, idle, "purge-timer-idle-0001"), "purge removed an unexpired record")
 
+        // Re-pair: the same controller ID approved again keeps its new records
+        // for the full idempotency lifetime; only records from before the
+        // revocation were retired.
+        let repaired = try engine.createJob(read(revoked, "purge-repaired-new-01"))
+        _ = try await terminal(repaired.id, controllerID: revoked, engine: engine, expected: .completed)
+        try await Task.sleep(for: .milliseconds(300))
+        expect(recordExists(timerState, revoked, "purge-repaired-new-01"),
+               "purge deleted a re-paired controller's unexpired record from disk")
+        expect((try? engine.snapshot(id: repaired.id, controllerID: revoked))?.state == .completed,
+               "purge dropped a re-paired controller's unexpired record from memory")
+
         // Timer: an idle controller's expired record is purged with no further creates.
         clock.advance(by: lifetime + 1)
         try await waitUntil("idle controller's expired record was never purged") {

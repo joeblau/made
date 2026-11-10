@@ -346,7 +346,9 @@ for every controller: at startup they are removed rather than reloaded, and a
 periodic purge removes them while the worker runs, whether or not that
 controller creates more jobs. Revoking a controller deletes its finished
 records at once; its in-flight records are deleted by the next purge after
-they finish.
+they finish. Only records that exist at revocation are affected: a controller
+approved again under the same peer ID keeps its new records for the full
+idempotency lifetime.
 
 Authorization, resource-governance and recovery acceptance remains tracked in
 #326/#327. Keep detailed security findings and remediation evidence in private

@@ -47,10 +47,15 @@ final class DroneJobStore: @unchecked Sendable {
     private let now: @Sendable () -> TimeInterval
     private var jobs: [DroneJobID: DroneStoredJob] = [:]
     private var keys: [JobKey: DroneJobID] = [:]
-    /// Revoked controllers whose finished records are removed without
-    /// waiting for the idempotency lifetime. In memory only: after a restart,
-    /// any record left behind still expires through `purgeExpired()`.
-    private var retiredControllers: Set<UUID> = []
+    /// Records that existed when their controller was revoked and are not yet
+    /// deleted: jobs still running then, or finished ones whose removal failed.
+    /// Each is removed by the first purge after it finishes, and `remove(_:)`
+    /// drops its ID, so the set never outgrows the live records. Retiring
+    /// records rather than controllers lets a controller that re-pairs with the
+    /// same peer ID keep its new records for the full idempotency lifetime.
+    /// In memory only: after a restart, any record left behind still expires
+    /// through `purgeExpired()`.
+    private var retiredJobs: Set<DroneJobID> = []
 
     init(
         stateURL: URL,
@@ -277,7 +282,7 @@ final class DroneJobStore: @unchecked Sendable {
     }
 
     /// Removes every finished record past the idempotency lifetime, for all
-    /// controllers, plus finished records of retired controllers. Running jobs
+    /// controllers, plus retired jobs that have since finished. Running jobs
     /// are never removed; they become eligible once they reach a final state.
     @discardableResult
     func purgeExpired() throws -> Int {
@@ -287,21 +292,22 @@ final class DroneJobStore: @unchecked Sendable {
         let expired = jobs.values.filter {
             $0.state.isTerminal
                 && (current - $0.createdAt >= limits.idempotencyLifetime
-                    || retiredControllers.contains($0.controllerID))
+                    || retiredJobs.contains($0.id))
         }
         try removeEach(expired)
         return expired.count
     }
 
-    /// Deletes a revoked controller's finished records now and retires the
-    /// controller so its in-flight records are deleted by the next purge after
-    /// they finish.
+    /// Deletes a revoked controller's finished records now and retires its
+    /// in-flight records so the next purge after they finish deletes them.
+    /// Records created later (after re-pairing) are not affected.
     @discardableResult
     func removeFinishedJobs(controllerID: UUID) throws -> Int {
         lock.lock()
         defer { lock.unlock() }
-        retiredControllers.insert(controllerID)
-        let finished = jobs.values.filter { $0.controllerID == controllerID && $0.state.isTerminal }
+        let owned = jobs.values.filter { $0.controllerID == controllerID }
+        retiredJobs.formUnion(owned.map(\.id))
+        let finished = owned.filter(\.state.isTerminal)
         try removeEach(finished)
         return finished.count
     }
@@ -332,6 +338,7 @@ final class DroneJobStore: @unchecked Sendable {
         try FileManager.default.removeItem(at: fileURL(for: job))
         jobs.removeValue(forKey: job.id)
         keys.removeValue(forKey: key)
+        retiredJobs.remove(job.id)
     }
 
     private func recover() throws {
