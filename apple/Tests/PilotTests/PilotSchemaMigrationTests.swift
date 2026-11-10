@@ -119,8 +119,12 @@ struct PilotSchemaMigrationTests {
         ],
     ]
 
-    /// V1 and V2 predate hash pinning; their frozen snapshots are exercised by
-    /// the V1/V2 store-migration fixtures below instead.
+    /// V1 and V2 hashes are not pinned yet: no real V1/V2 store was available to
+    /// record their shipped hashes against. An in-place edit to the V1 or V2
+    /// snapshot is therefore NOT caught. The V1/V2 store-migration fixtures below
+    /// build their stores from the current snapshot classes, so an edited snapshot
+    /// stamps the edited hash and still migrates. Pin these once their hashes are
+    /// confirmed against the frozen snapshots.
     private static let unpinnedLegacySchemas: Set<String> = ["PilotSchemaV1", "PilotSchemaV2"]
 
     @Test("Every shipped schema version keeps the entity hashes stamped into user stores")
