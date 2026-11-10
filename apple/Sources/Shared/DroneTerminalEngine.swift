@@ -133,7 +133,10 @@ actor DroneTerminalEngine: DroneTerminalServicing {
             }
             return snapshot(session)
         }
-        guard creates.count < configuration.maximumIdempotencyEntries,
+        // Idempotency records are an allowance per pairing (#442): one
+        // controller filling its table must not block every other controller.
+        guard creates.count(where: { $0.pairingID == pairingID })
+                < configuration.maximumIdempotencyEntries,
               liveSessions.count < configuration.maximumLiveSessions
         else { throw DroneTerminalError.resourceLimit }
         guard let directory = workspaces[body.workspaceID],

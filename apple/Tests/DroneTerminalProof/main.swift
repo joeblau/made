@@ -111,7 +111,58 @@ enum DroneTerminalProof {
         )
         try await recovered.close(created.sessionID, pairingID: pairingID, connectionID: secondConnection)
         try await recovered.close(created.sessionID, pairingID: pairingID, connectionID: secondConnection)
-        print("Drone terminal proof passed: real PTY, Unicode, resize, cwd, reattach, restart, authorization, and close.")
+        await recovered.shutdown()
+        try await proveIdempotencyAllowanceIsPerPairing(root: root, workspaceID: workspaceID, workspace: workspace)
+        print(
+            "Drone terminal proof passed: real PTY, Unicode, resize, cwd, reattach, restart, authorization, "
+                + "close, and per-pairing idempotency limits."
+        )
+    }
+
+    /// One controller exhausting its create-idempotency allowance must not
+    /// starve another controller, before or after a restart (#442).
+    private static func proveIdempotencyAllowanceIsPerPairing(
+        root: URL,
+        workspaceID: UUID,
+        workspace: URL
+    ) async throws {
+        var configuration = DroneTerminalConfiguration()
+        configuration.maximumIdempotencyEntries = 1
+        let state = root.appendingPathComponent("limit-state", isDirectory: true)
+        let socket = "drone-proof-limit-\(UUID().uuidString)"
+        let body = DroneCreateBody(workspaceID: workspaceID, environment: [:], columns: 80, rows: 24)
+        let first = UUID()
+        let second = UUID()
+        let engine = try DroneTerminalEngine(
+            workspaces: [workspaceID: workspace],
+            stateDirectory: state,
+            tmuxSocketName: socket,
+            configuration: configuration
+        )
+        let firstTerminal = try await engine.create(body, pairingID: first, idempotencyKey: "terminal-limit-first-0001")
+        try await engine.close(firstTerminal.sessionID, pairingID: first)
+        do {
+            _ = try await engine.create(body, pairingID: first, idempotencyKey: "terminal-limit-first-0002")
+            throw ProofError.failed("a pairing exceeded its idempotency allowance")
+        } catch DroneTerminalError.resourceLimit {}
+        let secondTerminal = try await engine.create(body, pairingID: second, idempotencyKey: "terminal-limit-second-0001")
+        try await engine.close(secondTerminal.sessionID, pairingID: second)
+        await engine.shutdown()
+
+        let restarted = try DroneTerminalEngine(
+            workspaces: [workspaceID: workspace],
+            stateDirectory: state,
+            tmuxSocketName: socket,
+            configuration: configuration
+        )
+        do {
+            _ = try await restarted.create(body, pairingID: first, idempotencyKey: "terminal-limit-first-0003")
+            throw ProofError.failed("a pairing's idempotency allowance reset across restart")
+        } catch DroneTerminalError.resourceLimit {}
+        let third = UUID()
+        let thirdTerminal = try await restarted.create(body, pairingID: third, idempotencyKey: "terminal-limit-third-0001")
+        try await restarted.close(thirdTerminal.sessionID, pairingID: third)
+        await restarted.shutdown()
     }
 
     private static func output(
