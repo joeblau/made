@@ -151,12 +151,12 @@ final class ExtensionWorkspaceController {
         }
 
         let workspace: Workspace
-        var deletedDevicePaneIDs: Set<UUID> = []
+        var runtimeTeardowns: [PaneRuntimeTeardown] = []
         if let existing = workspacesBySourceID[source.id] {
             workspace = existing
         } else {
             let persisted = persistedWorkspace(for: source.id)
-            deletedDevicePaneIDs = persisted.deletedDevicePaneIDs
+            runtimeTeardowns = persisted.runtimeTeardowns
             workspace = persisted.workspace ?? makePersistedWorkspace(from: source)
             workspacesBySourceID[source.id] = workspace
         }
@@ -167,10 +167,10 @@ final class ExtensionWorkspaceController {
         selectedSourceID = source.id
         guard modelContext.saveReporting(
             operation: "Saving Extendo workspace",
-            rollbackOnFailure: !deletedDevicePaneIDs.isEmpty,
+            rollbackOnFailure: !runtimeTeardowns.isEmpty,
             performSave: performSave
         ) else { return }
-        clearDevicePreferences(for: deletedDevicePaneIDs)
+        performRuntimeTeardowns(runtimeTeardowns)
     }
 
     func workspace(forSourceID sourceID: UUID) -> Workspace? {
@@ -228,20 +228,20 @@ final class ExtensionWorkspaceController {
 
     private func persistedWorkspace(
         for sourceWorkspaceID: UUID
-    ) -> (workspace: Workspace?, deletedDevicePaneIDs: Set<UUID>) {
+    ) -> (workspace: Workspace?, runtimeTeardowns: [PaneRuntimeTeardown]) {
         let matchingLinks = links().filter { $0.sourceWorkspaceID == sourceWorkspaceID }
         let retainedLink = matchingLinks.first { $0.workspace != nil }
-        var deletedDevicePaneIDs: Set<UUID> = []
+        var runtimeTeardowns: [PaneRuntimeTeardown] = []
         for duplicate in matchingLinks where duplicate !== retainedLink {
             if let workspace = duplicate.workspace {
-                deletedDevicePaneIDs.formUnion(prepareForDeletion(workspace))
+                runtimeTeardowns += prepareForDeletion(workspace)
             }
             modelContext.delete(duplicate)
         }
         if matchingLinks.count > 1 {
             onMembershipChange()
         }
-        return (retainedLink?.workspace, deletedDevicePaneIDs)
+        return (retainedLink?.workspace, runtimeTeardowns)
     }
 
     private func links() -> [ExtensionWorkspaceLink] {
@@ -250,10 +250,10 @@ final class ExtensionWorkspaceController {
 
     private func deleteOrphanedLinks(excluding validSourceIDs: Set<UUID>) {
         var deletedLink = false
-        var deletedDevicePaneIDs: Set<UUID> = []
+        var runtimeTeardowns: [PaneRuntimeTeardown] = []
         for link in links() where !validSourceIDs.contains(link.sourceWorkspaceID) {
             if let workspace = link.workspace {
-                deletedDevicePaneIDs.formUnion(prepareForDeletion(workspace))
+                runtimeTeardowns += prepareForDeletion(workspace)
             }
             modelContext.delete(link)
             deletedLink = true
@@ -267,7 +267,7 @@ final class ExtensionWorkspaceController {
                 onMembershipChange()
                 return
             }
-            clearDevicePreferences(for: deletedDevicePaneIDs)
+            performRuntimeTeardowns(runtimeTeardowns)
             onMembershipChange()
         }
     }
@@ -289,17 +289,15 @@ final class ExtensionWorkspaceController {
         }
     }
 
-    private func prepareForDeletion(_ workspace: Workspace) -> Set<UUID> {
-        let devicePaneIDs = Set(workspace.panes.filter { $0.kind.isAppleTool }.map(\.id))
-        for pane in workspace.panes {
-            pane.tearDownRuntimeResources(preservingDevicePreference: true)
-        }
-        return devicePaneIDs
+    /// Captures, without destroying, the runtime of every pane in a workspace
+    /// about to be deleted. The caller performs it only after the save (#438).
+    private func prepareForDeletion(_ workspace: Workspace) -> [PaneRuntimeTeardown] {
+        workspace.panes.map { $0.prepareRuntimeTeardown() }
     }
 
-    private func clearDevicePreferences(for paneIDs: Set<UUID>) {
-        for paneID in paneIDs {
-            DeviceCaptureRegistry.shared.clearPreference(paneID: paneID)
+    private func performRuntimeTeardowns(_ teardowns: [PaneRuntimeTeardown]) {
+        for teardown in teardowns {
+            teardown.perform()
         }
     }
 }

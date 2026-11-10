@@ -721,10 +721,9 @@ final class WorkspaceStore {
         let wasSelected = selectedWorkspaceID == workspace.id
         let deletedLinks = extensionWorkspaceLinks.filter { $0.sourceWorkspaceID == workspace.id }
         let deletedPanes = deletedLinks.compactMap(\.workspace).flatMap(\.panes) + workspace.panes
-        let deletedDevicePaneIDs = Set(deletedPanes.filter { $0.kind.isAppleTool }.map(\.id))
-        for pane in deletedPanes {
-            pane.tearDownRuntimeResources(preservingDevicePreference: true)
-        }
+        // Runtime state is captured now and destroyed only after the deletion
+        // is saved; a rollback must find every pane's runtime intact (#438).
+        let runtimeTeardowns = deletedPanes.map { $0.prepareRuntimeTeardown() }
         for link in deletedLinks {
             modelContext.delete(link)
         }
@@ -739,8 +738,8 @@ final class WorkspaceStore {
             return false
         }
         workspaceGroups.forget(workspace.id)
-        for paneID in deletedDevicePaneIDs {
-            DeviceCaptureRegistry.shared.clearPreference(paneID: paneID)
+        for teardown in runtimeTeardowns {
+            teardown.perform()
         }
         changeCount += 1
         if wasSelected {

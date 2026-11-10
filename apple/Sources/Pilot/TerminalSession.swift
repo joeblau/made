@@ -881,13 +881,15 @@ final class TerminalSessionProvider: @unchecked Sendable {
         }
     }
 
-    func invalidate(pane: Pane, session: any CockpitTerminalSession) {
+    /// Keyed by identifier so a deletion can invalidate the session after its
+    /// save has already deleted the pane model.
+    func invalidate(paneID: UUID, session: any CockpitTerminalSession) {
         lock.withLock {
-            guard records[pane.id]?.session.identity == session.identity else { return }
+            guard records[paneID]?.session.identity == session.identity else { return }
             (session as? DroneTerminalSession)?.retire()
-            resumeStates.removeValue(forKey: pane.id)
-            records.removeValue(forKey: pane.id)
-            generations[pane.id] = session.identity.generation + 1
+            resumeStates.removeValue(forKey: paneID)
+            records.removeValue(forKey: paneID)
+            generations[paneID] = session.identity.generation + 1
         }
     }
 

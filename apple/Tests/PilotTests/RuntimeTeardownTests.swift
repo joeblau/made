@@ -211,6 +211,98 @@ struct RuntimeTeardownTests {
         #expect(try container.mainContext.fetch(FetchDescriptor<ExtensionWorkspaceLink>()).contains { $0 === link })
     }
 
+    @Test("Failed pane deletion keeps the terminal's session and fast command")
+    func failedPaneDeletionPreservesTerminalRuntime() throws {
+        let container = try makeContainer()
+        let workspace = Workspace(name: "Terminal rollback")
+        let terminal = workspace.panes[0]
+        let browser = Pane(kind: .browser, sortOrder: 1)
+        workspace.panes = [terminal, browser]
+        browser.workspace = workspace
+        container.mainContext.insert(workspace)
+        try container.mainContext.save()
+
+        defer { TerminalFastCommandStore.removeCommand(for: terminal.id) }
+        TerminalFastCommandStore.setCommand("bun dev", for: terminal.id)
+        let originalIdentity = terminal.terminalSession.identity
+
+        let deleted = workspace.removePane(terminal) { _ in
+            #expect(TerminalFastCommandStore.command(for: terminal.id) == "bun dev")
+            throw InjectedFailure.unavailable
+        }
+
+        #expect(!deleted)
+        #expect(try container.mainContext.fetch(FetchDescriptor<Pane>()).contains { $0.id == terminal.id })
+        #expect(TerminalFastCommandStore.command(for: terminal.id) == "bun dev")
+        let restoredSession = try #require(TerminalSessionProvider.shared.existingSession(for: terminal))
+        #expect(restoredSession.identity == originalIdentity)
+    }
+
+    @Test("Terminal runtime is destroyed only after the pane deletion is saved")
+    func terminalRuntimeTeardownWaitsForSave() throws {
+        let container = try makeContainer()
+        let workspace = Workspace(name: "Terminal teardown")
+        let terminal = workspace.panes[0]
+        let browser = Pane(kind: .browser, sortOrder: 1)
+        workspace.panes = [terminal, browser]
+        browser.workspace = workspace
+        container.mainContext.insert(workspace)
+        try container.mainContext.save()
+
+        let terminalID = terminal.id
+        defer { TerminalFastCommandStore.removeCommand(for: terminalID) }
+        TerminalFastCommandStore.setCommand("swift test", for: terminalID)
+        let originalIdentity = terminal.terminalSession.identity
+
+        let deleted = workspace.removePane(terminal) { context in
+            #expect(TerminalFastCommandStore.command(for: terminalID) == "swift test")
+            #expect(TerminalSessionProvider.shared.existingSession(for: terminal)?.identity == originalIdentity)
+            try context.save()
+        }
+
+        #expect(deleted)
+        #expect(TerminalFastCommandStore.command(for: terminalID).isEmpty)
+    }
+
+    @Test("Failed workspace deletion keeps main and Extension terminal runtime")
+    func failedWorkspaceDeletionPreservesTerminalRuntime() throws {
+        let container = try makeContainer()
+        let source = Workspace(name: "Workspace terminal rollback")
+        let sourceTerminal = source.panes[0]
+        let extensionWorkspace = Workspace(name: "Extension terminal rollback")
+        let extensionTerminal = extensionWorkspace.panes[0]
+        let link = ExtensionWorkspaceLink(sourceWorkspaceID: source.id, workspace: extensionWorkspace)
+        container.mainContext.insert(source)
+        container.mainContext.insert(extensionWorkspace)
+        container.mainContext.insert(link)
+        try container.mainContext.save()
+        let store = WorkspaceStore(modelContext: container.mainContext)
+
+        let terminals = [sourceTerminal, extensionTerminal]
+        defer { terminals.forEach { TerminalFastCommandStore.removeCommand(for: $0.id) } }
+        var identities: [UUID: TerminalSessionIdentity] = [:]
+        for (index, terminal) in terminals.enumerated() {
+            TerminalFastCommandStore.setCommand("make serve-\(index)", for: terminal.id)
+            identities[terminal.id] = terminal.terminalSession.identity
+        }
+
+        let deleted = store.deleteWorkspace(source) { _ in
+            for (index, terminal) in terminals.enumerated() {
+                #expect(TerminalFastCommandStore.command(for: terminal.id) == "make serve-\(index)")
+            }
+            throw InjectedFailure.unavailable
+        }
+
+        #expect(!deleted)
+        let paneIDs = try container.mainContext.fetch(FetchDescriptor<Pane>()).map(\.id)
+        for (index, terminal) in terminals.enumerated() {
+            #expect(paneIDs.contains(terminal.id))
+            #expect(TerminalFastCommandStore.command(for: terminal.id) == "make serve-\(index)")
+            let restoredSession = try #require(TerminalSessionProvider.shared.existingSession(for: terminal))
+            #expect(restoredSession.identity == identities[terminal.id])
+        }
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema([
             Workspace.self,
