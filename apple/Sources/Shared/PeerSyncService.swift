@@ -142,13 +142,16 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     /// authentication deadline and reconnect logic over `transport`, with
     /// `authenticator` carrying the pinned peer and no advertiser or browser.
     /// Short timings let a test observe the deadline without sleeping 10 s.
+    /// `identityChanges` drives identity rotation through a started service
+    /// (#429); `nil` never rotates.
     convenience init(
         role: Role,
         displayName: String,
         authenticator: PeerSyncAuthenticator,
         transport: any PeerSyncSessionTransport,
         authenticationTimeout: TimeInterval,
-        reconnectDelay: TimeInterval
+        reconnectDelay: TimeInterval,
+        identityChanges: DeviceIdentity.ChangeSource? = nil
     ) {
         let peerID = MCPeerID(displayName: displayName)
         self.init(
@@ -158,7 +161,7 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             transport: transport,
             discoversPeers: false,
             authenticator: authenticator,
-            identityChanges: nil,
+            identityChanges: identityChanges,
             authenticationDeadline: authenticationTimeout,
             reconnectDelay: reconnectDelay
         )
@@ -190,6 +193,9 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             identityObserver = DeviceIdentity.observeChanges(center: center) { [weak self] in
                 self?.reloadLocalIdentity()
             }
+            // The key above was loaded before this observer existed; reload
+            // once so a rotation in between is not missed (issue #429).
+            reloadLocalIdentity()
         }
     }
 

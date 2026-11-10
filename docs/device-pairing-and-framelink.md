@@ -114,7 +114,11 @@ incremental messages until a replacement or clear arrives.
   old key at once and reconnect with the new one, so the other device sees a
   key-change warning and must explicitly approve the new verification code.
   Rejecting it preserves the old pin. Settings shows "Waiting" rather than
-  "Synced" until the approved peer reconnects.
+  "Synced" until the approved peer reconnects. A secure-messaging channel
+  (connected or still handshaking) is closed and marked failed; it never
+  restarts with the old key, and **Connect** builds a new channel with the new
+  one. Each transport also reloads the stored key right after it subscribes,
+  so a rotation during startup is not missed.
 - Uninstalling an app or clearing its Keychain removes its local identity and
   therefore requires a new pairing ceremony.
 

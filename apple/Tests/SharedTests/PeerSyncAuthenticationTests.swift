@@ -20,36 +20,118 @@ final class PeerSyncAuthenticationTests: XCTestCase {
     }
 
     @MainActor
-    func testServiceAdvertisesTheStoredKeyAfterAnIdentityRotation() async {
-        // A private center and loader stand in for the Keychain identity, so
-        // this drives the production path: rotation notification ->
-        // observer -> reload through the loader -> rebuilt authenticator.
-        let center = NotificationCenter()
-        let stored = Curve25519.KeyAgreement.PrivateKey()
-        let storedRaw = stored.rawRepresentation
-        let storedPublic = stored.publicKey.rawRepresentation.base64EncodedString()
+    func testServiceAdvertisesTheStoredKeyAfterAnIdentityRotation() async throws {
+        // An in-memory vault stands in for the Keychain identity, so this
+        // drives the production path: regenerate -> notification ->
+        // observer -> reload through the vault -> rebuilt authenticator.
+        let vault = DeviceIdentity.Vault.inMemory()
+        let stored = try base64(vault.loadOrCreate())
         let service = PeerSyncService(
             role: .advertiser,
             displayName: "Rotation Test",
             usesEphemeralIdentity: true,
-            identityChanges: DeviceIdentity.ChangeSource(
-                center: center,
-                load: { try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: storedRaw) }
-            )
+            identityChanges: vault.changeSource
         )
-        let original = await service.localIdentityPublicKeyBase64()
-        XCTAssertNotEqual(original, storedPublic)
+        // The service began from an ephemeral key; it reloads once after
+        // subscribing, so a rotation before the observer existed is not missed.
+        let atStart = await service.localIdentityPublicKeyBase64()
+        XCTAssertEqual(atStart, stored, "a new service must prove the stored key")
 
         // `post` runs the observer synchronously and the reload is queued on
         // the transport queue ahead of the getter, so this read is ordered.
-        center.post(name: DeviceIdentity.didChangeNotification, object: nil)
+        let rotated = try base64(vault.regenerate())
+        XCTAssertNotEqual(rotated, stored)
 
         let advertised = await service.localIdentityPublicKeyBase64()
         XCTAssertEqual(
             advertised,
-            storedPublic,
+            rotated,
             "after regeneration the sync transport must advertise and prove the stored key"
         )
+    }
+
+    /// #429 through a started service: an authenticated session is torn down
+    /// the moment the identity rotates, and the reconnect proves only the new
+    /// key, which the peer accepts once it approves the key change.
+    @MainActor
+    func testRotationTearsDownTheLiveSessionAndAdvertisesTheNewKey() async throws {
+        let pilotKey = Curve25519.KeyAgreement.PrivateKey()
+        let copilotKey = Curve25519.KeyAgreement.PrivateKey()
+        let slot = InMemoryIdentitySlot()
+        slot.data = pilotKey.rawRepresentation
+        let vault = DeviceIdentity.Vault.inMemory(slot: slot)
+        let transport = RecordingSyncTransport()
+        let peer = MCPeerID(displayName: "Walkie Rotation Test")
+        let mcSession = MCSession(peer: peer)
+        let service = PeerSyncService(
+            role: .advertiser,
+            displayName: "Cockpit Rotation Test",
+            authenticator: PeerSyncAuthenticator(
+                localKey: pilotKey,
+                peerPublicKeyBase64: base64(copilotKey)
+            ),
+            transport: transport,
+            authenticationTimeout: 60,
+            reconnectDelay: 60,
+            identityChanges: vault.changeSource
+        )
+        var copilot = PeerSyncAuthenticator(localKey: copilotKey, peerPublicKeyBase64: base64(pilotKey))
+        service.start()
+        await transportBarrier(service)
+
+        // Authenticate a live session with the stored (current) key.
+        transport.connect(peer)
+        service.session(mcSession, peer: peer, didChange: .connected)
+        await transportBarrier(service)
+        let copilotHello = try XCTUnwrap(copilot.beginSession(
+            random: { Data(repeating: 0x55, count: $0) }
+        ))
+        guard let pilotHello = transport.sent.first,
+              case .helloResponse(let readyForPilot)? = copilot.open(pilotHello) else {
+            return XCTFail("expected the service hello")
+        }
+        service.session(mcSession, didReceive: copilotHello, fromPeer: peer)
+        service.session(mcSession, didReceive: readyForPilot, fromPeer: peer)
+        await transportBarrier(service)
+        guard transport.sent.count == 2 else { return XCTFail("expected the service ready") }
+        XCTAssertEqual(copilot.open(transport.sent[1]), .authenticated)
+        let acceptedBefore = await service.sendReliably(.mouseClick(MouseClick(button: 0)))
+        XCTAssertTrue(acceptedBefore)
+        let connected = await waitUntil { service.isConnected }
+        XCTAssertTrue(connected)
+        let disconnectsBefore = transport.disconnectCount
+
+        let rotatedKey = try vault.regenerate()
+        await transportBarrier(service)
+
+        XCTAssertEqual(
+            transport.disconnectCount,
+            disconnectsBefore + 1,
+            "the session proven with the rotated-out key must be torn down"
+        )
+        XCTAssertTrue(transport.connectedPeers.isEmpty)
+        let advertised = await service.localIdentityPublicKeyBase64()
+        XCTAssertEqual(advertised, base64(rotatedKey), "the service must advertise the new key")
+        let acceptedAfter = await service.sendReliably(.mouseClick(MouseClick(button: 0)))
+        XCTAssertFalse(acceptedAfter, "nothing may be sealed for the torn-down session")
+        let dropped = await waitUntil { !service.isConnected }
+        XCTAssertTrue(dropped, "the UI must stop reporting the old session as connected")
+
+        // The reconnect starts a fresh handshake that proves only the new key.
+        let sentBefore = transport.sent.count
+        transport.connect(peer)
+        service.session(mcSession, peer: peer, didChange: .connected)
+        await transportBarrier(service)
+        XCTAssertEqual(transport.sent.count, sentBefore + 1, "the reconnect must send a fresh hello")
+        let rotatedHello = try XCTUnwrap(transport.sent.last)
+        var stalePin = PeerSyncAuthenticator(localKey: copilotKey, peerPublicKeyBase64: base64(pilotKey))
+        _ = stalePin.beginSession(random: { Data(repeating: 0x66, count: $0) })
+        XCTAssertNil(stalePin.open(rotatedHello), "a peer pinning the old key must refuse the new hello")
+        var approved = PeerSyncAuthenticator(localKey: copilotKey, peerPublicKeyBase64: base64(rotatedKey))
+        _ = approved.beginSession(random: { Data(repeating: 0x77, count: $0) })
+        guard case .helloResponse? = approved.open(rotatedHello) else {
+            return XCTFail("the peer must accept the new key once it approves the change")
+        }
     }
 
     func testRotatedLocalIdentityKeepsPinAndProvesOnlyTheNewKey() throws {
@@ -398,6 +480,10 @@ final class PeerSyncAuthenticationTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
         return true
+    }
+
+    private func base64(_ key: Curve25519.KeyAgreement.PrivateKey) -> String {
+        key.publicKey.rawRepresentation.base64EncodedString()
     }
 
     private func makeAuthenticators() -> (
