@@ -330,21 +330,34 @@ awk -v name='Require a release above every published version' -v out="$release_g
     in_step = 0
     blanks = 0
   }
+  in_env {
+    if (substr($0, 1, 10) == "          ") {
+      print substr($0, 11) > (out "-" found ".env")
+      next
+    }
+    in_env = 0
+  }
   $0 == "      - name: " name { found += 1; in_step = 1; next }
   /^      - / || /^  [^ ]/ { in_step = 0 }
+  in_step && $0 == "        env:" { in_env = 1; next }
   in_step && $0 == "        run: |" { in_run = 1 }
 ' "$release_workflow"
 [[ -s "$release_guard/step-1.sh" && -s "$release_guard/step-2.sh" && ! -e "$release_guard/step-3.sh" ]] ||
   fail "apple-release.yml must run the release ordering check in release-metadata and publish"
 cmp -s "$release_guard/step-1.sh" "$release_guard/step-2.sh" ||
   fail "release-metadata and publish ordering checks differ"
+# Each guard step's own env block must feed it from its own job's outputs; a
+# whole-file search would also match the macOS/TestFlight job env and the
+# publish step that already read needs.release-metadata.outputs.
+step=0
 for expression in steps.release.outputs needs.release-metadata.outputs; do
-  for output in build-number tag; do
-    variable=RELEASE_TAG
-    [[ "$output" == build-number ]] && variable=RELEASE_BUILD_NUMBER
-    grep -Fq "$variable: \${{ $expression.$output }}" "$release_workflow" ||
-      fail "an ordering check does not receive $variable from $expression"
-  done
+  step=$((step + 1))
+  printf '%s\n' \
+    "GH_TOKEN: \${{ github.token }}" \
+    "RELEASE_BUILD_NUMBER: \${{ $expression.build-number }}" \
+    "RELEASE_TAG: \${{ $expression.tag }}" > "$release_guard/expected-$step.env"
+  cmp -s "$release_guard/expected-$step.env" "$release_guard/step-$step.env" ||
+    fail "ordering check $step must receive GH_TOKEN, RELEASE_BUILD_NUMBER, and RELEASE_TAG from $expression"
 done
 cat > "$release_guard/tools/gh" <<'TOOL'
 #!/bin/bash
