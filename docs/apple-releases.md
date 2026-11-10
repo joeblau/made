@@ -139,7 +139,14 @@ not reachable from `main`.
 ## Cut a release
 
 Run the normal pull-request CI on the intended commit, merge it to `main`, and
-then push the version tag:
+then push the version tag. Pull-request CI only tests a merge preview, so every
+push to `main` also runs CI with all gates selected. Before it builds or signs
+anything, the release workflow requires a successful `push` or
+`workflow_dispatch` CI run of the exact tagged commit in which `apple-lint` and
+`apple-build-test` (`apple/bin/test.sh all`) both succeeded. It waits for a run
+still in progress and refuses the tag when that run fails or skips either job.
+For a commit that has no CI run, dispatch `ci.yml` on the tag
+(`gh workflow run ci.yml --ref v1.2.3`) and re-run the release once it passes.
 
 ```bash
 git switch main
