@@ -41,7 +41,21 @@ enum WingmanCommandDecision: Equatable {
 /// A tiny, deterministic idempotency boundary for time-sensitive Watch
 /// commands. Duplicate live deliveries are acknowledged (so a lost reply can
 /// be retried safely) but are never executed twice.
+///
+/// Invariant: a command ID stays in the ledger for as long as a delivery of
+/// that command is still accepted as fresh. Entries are therefore keyed to
+/// the command's own `sentAt` (the same clock the freshness check uses), not
+/// to the phone's acceptance time: when the watch clock runs ahead, a command
+/// is accepted with a negative age and stays fresh for longer than
+/// `maximumAge` of phone time, so acceptance-time expiry would forget it while
+/// a reply-loss retry could still execute it a second time.
 struct WingmanCommandLedger {
+    /// How far ahead of the phone's clock a watch `sentAt` may be and still be
+    /// accepted.
+    static let maximumFutureSkew: TimeInterval = 1
+
+    /// Accepted command ID -> the latest `sentAt` seen for it. An entry is
+    /// retained exactly while that `sentAt` still passes the freshness bound.
     private(set) var accepted: [UUID: Date] = [:]
 
     mutating func decide(
@@ -50,21 +64,30 @@ struct WingmanCommandLedger {
         isPilotConnected: Bool
     ) -> WingmanCommandDecision {
         accepted = accepted.filter {
-            now.timeIntervalSince($0.value) <= WingmanGesturePayload.maximumAge
+            Self.isWithinMaximumAge(sentAt: $0.value, now: now)
         }
 
-        let age = now.timeIntervalSince(command.sentAt)
-        guard age >= -1, age <= WingmanGesturePayload.maximumAge else {
+        guard now.timeIntervalSince(command.sentAt) >= -Self.maximumFutureSkew,
+              Self.isWithinMaximumAge(sentAt: command.sentAt, now: now) else {
             return .rejectStale
         }
-        if accepted[command.id] != nil {
+        if let retainedSentAt = accepted[command.id] {
+            // A duplicate carrying a later sentAt stays fresh for longer, so
+            // extend retention to cover it too.
+            accepted[command.id] = max(retainedSentAt, command.sentAt)
             return .acknowledgeDuplicate
         }
         guard isPilotConnected else {
             return .rejectUnavailable
         }
-        accepted[command.id] = now
+        accepted[command.id] = command.sentAt
         return .acceptAndExecute
+    }
+
+    /// The single freshness upper bound shared by acceptance and pruning, so
+    /// the two windows cannot drift apart.
+    private static func isWithinMaximumAge(sentAt: Date, now: Date) -> Bool {
+        now.timeIntervalSince(sentAt) <= WingmanGesturePayload.maximumAge
     }
 }
 
