@@ -138,7 +138,7 @@ final class FrameProtocolTests: XCTestCase {
         let drawing = AnnotationDrawing(strokes: [
             AnnotationStroke(
                 color: AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1),
-                width: 4,
+                width: 0.006,
                 points: [AnnotationPoint(x: 0.1, y: 0.2), AnnotationPoint(x: 0.3, y: 0.4)]
             )
         ])
@@ -148,6 +148,59 @@ final class FrameProtocolTests: XCTestCase {
         }
         XCTAssertEqual(seq, 99)
         XCTAssertEqual(message, .replaceDrawing(drawing))
+    }
+
+    /// Issue #431: stroke width is normalized to the content rect's shorter
+    /// side, so the widths Plotter really produces must cross the wire.
+    func testAnnotationStrokeWidthIsNormalizedOnTheWire() {
+        func stroke(width: Double) -> AnnotationStroke {
+            AnnotationStroke(
+                color: AnnotationColor(red: 0, green: 0, blue: 1, alpha: 1),
+                width: width,
+                points: [AnnotationPoint(x: 0.1, y: 0.2), AnnotationPoint(x: 0.3, y: 0.4)]
+            )
+        }
+        // A 4 pt pen on an iPad content rect (about 0.006), the 1.5 pt pen
+        // floor on an 8K-wide rect, and a stroke as wide as the short side.
+        let ipad = AnnotationStroke.normalizedWidth(penWidth: 4, contentWidth: 1_024, contentHeight: 700)
+        XCTAssertEqual(ipad, 4.0 / 700, accuracy: 1e-12)
+        for width in [ipad, 1.5 / 8_192, FrameProtocol.annotationStrokeWidthRange.upperBound] {
+            guard case .annotation(_, let message)? =
+                    roundtrip(.annotation(seq: 1, message: .addStroke(stroke(width: width)))) else {
+                return XCTFail("normalized width \(width) must encode and decode")
+            }
+            XCTAssertEqual(message, .addStroke(stroke(width: width)))
+        }
+
+        // Outside the normalized range (including an absolute point width) is
+        // refused when encoding and when decoding a hand-built payload.
+        for width: Double in [0, -0.01, 0.000_01, 1.01, 4, 256, .nan, .infinity] {
+            XCTAssertTrue(
+                FrameProtocol.encode(.annotation(seq: 1, message: .addStroke(stroke(width: width)))).isEmpty,
+                "width \(width) must not encode"
+            )
+        }
+        var forged = Data([FrameProtocol.Kind.annotation.rawValue])
+        appendUInt32(7, to: &forged)
+        forged.append(Data(#"{"addStroke":{"_0":{"color":{"red":0,"green":0,"blue":1,"alpha":1},"width":4,"points":[{"x":0.1,"y":0.2},{"x":0.3,"y":0.4}]}}}"#.utf8))
+        XCTAssertNil(FrameProtocol.decode(forged))
+        var valid = Data([FrameProtocol.Kind.annotation.rawValue])
+        appendUInt32(7, to: &valid)
+        valid.append(Data(#"{"addStroke":{"_0":{"color":{"red":0,"green":0,"blue":1,"alpha":1},"width":0.004,"points":[{"x":0.1,"y":0.2},{"x":0.3,"y":0.4}]}}}"#.utf8))
+        guard case .annotation(7, .addStroke(let decoded))? = FrameProtocol.decode(valid) else {
+            return XCTFail("a hand-built payload with a normalized width must decode")
+        }
+        XCTAssertEqual(decoded.width, 0.004)
+
+        // Degenerate content rects and pen widths still clamp into range.
+        XCTAssertEqual(
+            AnnotationStroke.normalizedWidth(penWidth: 40, contentWidth: 0, contentHeight: 0),
+            FrameProtocol.annotationStrokeWidthRange.upperBound
+        )
+        XCTAssertEqual(
+            AnnotationStroke.normalizedWidth(penWidth: .nan, contentWidth: 1e9, contentHeight: 1e9),
+            FrameProtocol.annotationStrokeWidthRange.lowerBound
+        )
     }
 
     func testAnnotationAckRoundtrips() {

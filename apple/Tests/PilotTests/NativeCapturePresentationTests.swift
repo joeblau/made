@@ -429,21 +429,36 @@ final class NativeCapturePresentationTests: XCTestCase {
     }
 
     /// Issue #431, end to end: Plotter's ``AnnotationMirrorSync`` drives the
-    /// real ``RemoteInkModel``. Plotter enforces Pilot's ceilings before
-    /// sending, so Pilot never rejects; past the ceilings Pilot shows no ink
+    /// real ``RemoteInkModel`` through the wire format, so every message is
+    /// `FrameProtocol`-encoded (a refused encode is an undelivered send, as in
+    /// `FrameReceiver.sendAnnotation`) and Pilot applies what it decodes.
+    /// Plotter enforces Pilot's ceilings before sending, so Pilot never
+    /// rejects; past the ceilings or `maxAnnotationBytes` Pilot shows no ink
     /// and Plotter reports out of sync until a full replacement fits again.
     func testPlotterMirrorNeverSendsInkPilotRejects() {
         let color = AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1)
+        // The width Plotter's normalization produces for a 4 pt pen on an
+        // iPad-sized content rect.
+        let width = AnnotationStroke.normalizedWidth(penWidth: 4, contentWidth: 1_024, contentHeight: 700)
         func stroke(_ id: Int, points: Int) -> AnnotationStroke {
-            AnnotationStroke(color: color, width: 0.01,
-                             points: Array(repeating: AnnotationPoint(x: Double(id) / 100, y: 0.5),
+            AnnotationStroke(color: color, width: width,
+                             points: Array(repeating: AnnotationPoint(x: Double(id) / 10_000, y: 0.5),
                                            count: points))
         }
         let pilot = RemoteInkModel()
         var plotter = AnnotationMirrorSync()
+        var seq: UInt32 = 0
         var rejections = 0
+        var undecodable = 0
         let send: (AnnotationMessage) -> Bool = { message in
-            if !pilot.handle(message) { rejections += 1 }
+            seq &+= 1
+            let payload = FrameProtocol.encode(.annotation(seq: seq, message: message))
+            guard !payload.isEmpty else { return false }
+            guard case .annotation(_, let decoded)? = FrameProtocol.decode(payload) else {
+                undecodable += 1
+                return true
+            }
+            if !pilot.handle(decoded) { rejections += 1 }
             return true
         }
         func assertMirrors(_ canvas: [AnnotationStroke], line: UInt = #line) {
@@ -457,11 +472,50 @@ final class NativeCapturePresentationTests: XCTestCase {
                     canvas.map { $0.points.first?.x ?? -1 },
                     line: line
                 )
+                XCTAssertEqual(pilot.strokes.map { Double($0.width) }, canvas.map(\.width), line: line)
             }
         }
 
+        // The very first real stroke reaches Pilot: its normalized width is
+        // accepted by the wire format.
+        var canvas = [stroke(0, points: 2)]
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Stroke ceiling: every message here fits in `maxAnnotationBytes`.
+        canvas = (0..<(FrameProtocol.maxAnnotationStrokes - 1)).map { stroke($0, points: 2) }
+        plotter.sync(to: canvas, send: send)
+        canvas.append(stroke(FrameProtocol.maxAnnotationStrokes - 1, points: 2))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // One stroke past Pilot's stroke ceiling: not sent as `.addStroke`.
+        canvas.append(stroke(FrameProtocol.maxAnnotationStrokes, points: 2))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertTrue(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Undoing it is not sent as `.undo` (which would drop the previous
+        // stroke on Pilot); the full drawing is replaced instead.
+        canvas.removeLast()
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Eraser in the middle, then incremental ops again.
+        canvas.remove(at: 1)
+        plotter.sync(to: canvas, send: send)
+        canvas.append(stroke(9_000, points: 2))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Point ceiling, built from appends that each fit on the wire.
+        canvas = []
+        plotter.sync(to: canvas, send: send)
         let quarter = FrameProtocol.maxAnnotationPoints / 4
-        var canvas: [AnnotationStroke] = []
         for id in 0..<4 {
             canvas.append(stroke(id, points: quarter))
             plotter.sync(to: canvas, send: send)
@@ -475,20 +529,25 @@ final class NativeCapturePresentationTests: XCTestCase {
         XCTAssertTrue(plotter.isOutOfSync)
         assertMirrors(canvas)
 
-        // Undoing it is not sent as `.undo` (which would drop stroke 3 on
-        // Pilot); the full drawing is replaced instead.
+        // Undoing it needs a replacement over `maxAnnotationBytes`, so Pilot
+        // stays cleared rather than receiving `.undo`.
         canvas.removeLast()
+        plotter.sync(to: canvas, send: send)
+        XCTAssertTrue(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Once the drawing fits in one message again, sync is restored.
+        canvas = [canvas[0]]
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+        canvas.append(stroke(5, points: 3))
         plotter.sync(to: canvas, send: send)
         XCTAssertFalse(plotter.isOutOfSync)
         assertMirrors(canvas)
 
-        // Eraser in the middle, then incremental ops again.
-        canvas.remove(at: 1)
-        plotter.sync(to: canvas, send: send)
-        canvas.append(stroke(5, points: 3))
-        plotter.sync(to: canvas, send: send)
-        assertMirrors(canvas)
         XCTAssertEqual(rejections, 0)
+        XCTAssertEqual(undecodable, 0)
     }
 
     private func buttons(in root: NSView) -> [NSButton] {

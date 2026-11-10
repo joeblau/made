@@ -421,7 +421,6 @@ private struct ZoomableMirrorView: UIViewRepresentable {
     /// it has too few in-bounds points to be meaningful.
     static func annotationStroke(from stroke: PKStroke, contentRect: CGRect) -> AnnotationStroke? {
         let drawRect = contentRect
-        let scaleBase = max(1, min(drawRect.width, drawRect.height))
         let points = stroke.path.compactMap { point -> AnnotationPoint? in
             guard let normalized = PlotterGeometry.normalizedPoint(point.location, in: drawRect) else {
                 return nil
@@ -440,7 +439,11 @@ private struct ZoomableMirrorView: UIViewRepresentable {
 
         return AnnotationStroke(
             color: AnnotationColor(red: rgba.red, green: rgba.green, blue: rgba.blue, alpha: rgba.alpha),
-            width: max(1.5, averageWidth) / scaleBase,
+            width: AnnotationStroke.normalizedWidth(
+                penWidth: Double(averageWidth),
+                contentWidth: Double(drawRect.width),
+                contentHeight: Double(drawRect.height)
+            ),
             points: points
         )
     }

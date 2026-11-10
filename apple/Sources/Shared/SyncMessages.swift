@@ -116,6 +116,19 @@ public struct AnnotationStroke: Codable, Sendable, Hashable {
     }
 }
 
+extension AnnotationStroke {
+    /// The wire `width` for a pen `penWidth` points wide drawn over a video
+    /// content rect `contentWidth` x `contentHeight` points: a fraction of the
+    /// rect's shorter side, clamped into what ``FrameProtocol`` accepts so a
+    /// real stroke is never refused for its width (issue #431).
+    static func normalizedWidth(penWidth: Double, contentWidth: Double, contentHeight: Double) -> Double {
+        let range = FrameProtocol.annotationStrokeWidthRange
+        let scaleBase = max(1, min(contentWidth, contentHeight))
+        let width = max(1.5, penWidth.isFinite ? penWidth : 1.5) / scaleBase
+        return min(range.upperBound, max(range.lowerBound, width))
+    }
+}
+
 public struct AnnotationDrawing: Codable, Sendable, Hashable {
     public let strokes: [AnnotationStroke]
 

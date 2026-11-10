@@ -532,10 +532,20 @@ struct AnnotationMirrorSyncTests {
     @Test("FrameReceiver refuses, rather than queues, an annotation too large to encode")
     func receiverRefusesOversizedAnnotation() {
         // Within the per-message stroke/point ceilings, but over 1 MiB of JSON.
-        let oversized = AnnotationMessage.replaceDrawing(AnnotationDrawing(
-            strokes: (0..<40).map { denseStroke($0, points: 1_000) }
-        ))
+        let strokes = (0..<40).map { denseStroke($0, points: 1_000) }
+        let oversized = AnnotationMessage.replaceDrawing(AnnotationDrawing(strokes: strokes))
         #expect(FrameProtocol.encode(.annotation(seq: 1, message: oversized)).isEmpty)
+        // It is refused only for `maxAnnotationBytes`: the same strokes (and
+        // their normalized width) encode and decode when there are fewer.
+        let fitting = AnnotationMessage.replaceDrawing(AnnotationDrawing(strokes: Array(strokes.prefix(10))))
+        let fittingPayload = FrameProtocol.encode(.annotation(seq: 1, message: fitting))
+        #expect(!fittingPayload.isEmpty)
+        #expect(fittingPayload.count <= FrameProtocol.maxAnnotationBytes + 5)
+        guard case .annotation(_, let decoded)? = FrameProtocol.decode(fittingPayload) else {
+            Issue.record("a replace under maxAnnotationBytes must decode")
+            return
+        }
+        #expect(decoded == fitting)
 
         let receiver = FrameReceiver()
         #expect(receiver.sendAnnotation(oversized, seq: 1) == false)
