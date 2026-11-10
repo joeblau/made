@@ -1068,13 +1068,26 @@ extension DroneWorkerProof {
             workerID: try identity.loadOrCreatePeerID().rawValue,
             pairingStore: DronePairingStore(role: .worker, storage: pairingStorage)
         )
+        // Inspect the filesystem before stop(): terminal shutdown persists a
+        // fresh empty catalog at the original path.
         let health = await service.healthSnapshot()
-        await service.stop()
         expect(!health.storageHealthy, "quarantined records were reported as healthy storage")
         expect(!FileManager.default.fileExists(atPath: terminals.appendingPathComponent("terminals.json").path),
                "undecodable terminal catalog was left in place")
         expect(!FileManager.default.fileExists(atPath: jobRecords.appendingPathComponent("future-schema-0001.json").path),
                "undecodable job record was left in place")
+        let files = FileManager.default
+        let terminalQuarantine = (try? files.contentsOfDirectory(
+            at: terminals.appendingPathComponent("quarantine"), includingPropertiesForKeys: nil)) ?? []
+        expect(terminalQuarantine.count == 1 && terminalQuarantine.first.flatMap {
+            try? Data(contentsOf: $0.appendingPathComponent("terminals.json"))
+        } == Data("not a terminal catalog".utf8), "terminal catalog was not moved intact into one quarantine entry")
+        let jobQuarantine = (try? files.contentsOfDirectory(
+            at: state.appendingPathComponent("jobs/quarantine"), includingPropertiesForKeys: nil)) ?? []
+        expect(jobQuarantine.count == 1 && jobQuarantine.first.map {
+            files.fileExists(atPath: $0.appendingPathComponent("future-schema-0001.json").path)
+        } == true, "job record was not moved into one quarantine entry")
+        await service.stop()
     }
 
     private static func verifyTerminalPumps() async {
