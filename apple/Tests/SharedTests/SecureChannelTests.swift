@@ -475,7 +475,7 @@ final class SecureChannelTests: XCTestCase {
 
         // The test plays the initiator over a real loopback UDP socket so it
         // controls exactly when msg1 reaches the responder.
-        let peer = try LoopbackUDPPeer(localPort: peerPort, remotePort: responderPort)
+        let peer = try LoopbackUDPPeer(localPort: peerPort)
         defer { peer.stop() }
         try await waitUntil("test peer socket ready") { peer.isReady }
 
@@ -641,45 +641,75 @@ final class SecureChannelTests: XCTestCase {
     }
 }
 
-/// A connected loopback UDP socket that stands in for the remote secure-channel
-/// peer, recording every datagram it receives.
+/// A loopback UDP listener that stands in for the remote secure-channel peer,
+/// recording every datagram it receives and replying on the flow the
+/// responder opened. A socket connected to the responder's configured port
+/// would drop everything: the iOS Simulator does not keep a `0.0.0.0`-bound
+/// `NWConnection`'s required local port as the datagram source port, so the
+/// responder's packets arrive from an ephemeral port. Replying on the accepted
+/// flow still reaches the responder's socket.
 @MainActor
 private final class LoopbackUDPPeer {
-    private let connection: NWConnection
+    private let listener: NWListener
+    private var flow: NWConnection?
+    private var pendingSends: [Data] = []
     private(set) var isReady = false
     private(set) var datagrams: [Data] = []
 
-    init(localPort: UInt16, remotePort: UInt16) throws {
-        guard let local = NWEndpoint.Port(rawValue: localPort),
-              let remote = NWEndpoint.Port(rawValue: remotePort)
-        else { throw URLError(.badURL) }
+    init(localPort: UInt16) throws {
+        guard let local = NWEndpoint.Port(rawValue: localPort) else { throw URLError(.badURL) }
         let parameters = NWParameters.udp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: local)
         parameters.allowLocalEndpointReuse = true
-        connection = NWConnection(host: "127.0.0.1", port: remote, using: parameters)
-        connection.stateUpdateHandler = { [weak self] state in
+        listener = try NWListener(using: parameters)
+        listener.stateUpdateHandler = { [weak self] state in
             MainActor.assumeIsolated {
                 if case .ready = state { self?.isReady = true }
             }
         }
-        connection.start(queue: .main)
-        receiveNext()
+        listener.newConnectionHandler = { [weak self] connection in
+            MainActor.assumeIsolated {
+                guard let self else {
+                    connection.cancel()
+                    return
+                }
+                self.accept(connection)
+            }
+        }
+        listener.start(queue: .main)
     }
 
+    /// Sends on the responder's flow, holding packets until it has opened one.
     func send(_ data: Data) {
-        connection.send(content: data, completion: .contentProcessed { _ in })
+        guard let flow else {
+            pendingSends.append(data)
+            return
+        }
+        flow.send(content: data, completion: .contentProcessed { _ in })
     }
 
     func stop() {
-        connection.cancel()
+        flow?.cancel()
+        flow = nil
+        listener.cancel()
     }
 
-    private func receiveNext() {
+    private func accept(_ connection: NWConnection) {
+        flow?.cancel()
+        flow = connection
+        connection.start(queue: .main)
+        receiveNext(on: connection)
+        let queued = pendingSends
+        pendingSends.removeAll()
+        queued.forEach(send)
+    }
+
+    private func receiveNext(on connection: NWConnection) {
         connection.receiveMessage { [weak self] data, _, _, error in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                guard let self, connection === self.flow else { return }
                 if let data, !data.isEmpty { self.datagrams.append(data) }
-                if error == nil { self.receiveNext() }
+                if error == nil { self.receiveNext(on: connection) }
             }
         }
     }
