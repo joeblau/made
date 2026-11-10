@@ -19,6 +19,7 @@ enum DroneJobProof {
         try await verifyShutdown(in: workspace, root: root)
         try await verifyShutdownTimeout(in: workspace, root: root)
         try await verifyAcceptanceShutdownTimeout(in: workspace, root: root)
+        try await verifyExpiredJobPurge(in: workspace, root: root)
 
         let source = Data("print(\"drone-build-ok\")\n".utf8)
         let write = try engine.createJob(DroneJobCreate(
@@ -195,6 +196,90 @@ enum DroneJobProof {
                "accepted job executed after shutdown began")
     }
 
+    /// Issue #444: finished records expire for every controller, not only for
+    /// one that keeps creating jobs; restart and revocation delete them too.
+    private static func verifyExpiredJobPurge(in workspace: URL, root: URL) async throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        try Data("purge-proof".utf8).write(to: workspace.appendingPathComponent("purge.txt"))
+        let clock = ProofManualClock()
+        let lifetime = DroneJobEngineLimits().idempotencyLifetime
+        func read(_ controller: UUID, _ key: String) -> DroneJobCreate {
+            DroneJobCreate(controllerID: controller, idempotencyKey: key, request: DroneJobRequest(
+                workspaceID: workspaceID,
+                operation: .readFile(DroneReadFileOperation(relativePath: "purge.txt"))
+            ))
+        }
+        func recordExists(_ state: URL, _ controller: UUID, _ key: String) -> Bool {
+            FileManager.default.fileExists(atPath: state
+                .appendingPathComponent("controllers/\(controller.uuidString)/jobs/\(key).json").path)
+        }
+
+        // Restart: an idle controller's expired record is deleted, never reloaded.
+        let restartState = root.appendingPathComponent("purge-restart")
+        let idle = UUID()
+        let fresh = UUID()
+        let store = try DroneJobStore(stateURL: restartState, limits: DroneJobEngineLimits(), now: { clock.now() })
+        let stale = try store.create(read(idle, "purge-restart-stale-01")).snapshot
+        try store.finish(id: stale.id, state: .completed, result: .file(Data("source".utf8)), failure: nil)
+        clock.advance(by: lifetime + 1)
+        // Another controller's create purges only its own records.
+        let kept = try store.create(read(fresh, "purge-restart-fresh-01")).snapshot
+        try store.finish(id: kept.id, state: .completed, result: nil, failure: nil)
+        let restarted = try DroneJobStore(stateURL: restartState, limits: DroneJobEngineLimits(), now: { clock.now() })
+        expect(!recordExists(restartState, idle, "purge-restart-stale-01"), "restart kept an expired record on disk")
+        expect((try? restarted.snapshot(controllerID: idle, idempotencyKey: "purge-restart-stale-01")) == nil,
+               "restart reloaded an expired record into memory")
+        let survivor = try? restarted.snapshot(controllerID: fresh, idempotencyKey: "purge-restart-fresh-01")
+        expect(survivor?.state == .completed, "restart purged an unexpired record")
+
+        let timerState = root.appendingPathComponent("purge-timer")
+        let engine = try DroneJobEngine(
+            stateURL: timerState, workspaces: registry, purgeInterval: 0.05, now: { clock.now() }
+        )
+        let idleJob = try engine.createJob(read(idle, "purge-timer-idle-0001"))
+        _ = try await terminal(idleJob.id, controllerID: idle, engine: engine, expected: .completed)
+
+        // Revocation: finished records go now; in-flight ones once they finish.
+        let revoked = UUID()
+        let revokedDone = try engine.createJob(read(revoked, "purge-revoked-done-01"))
+        _ = try await terminal(revokedDone.id, controllerID: revoked, engine: engine, expected: .completed)
+        let revokedLive = try engine.createJob(DroneJobCreate(
+            controllerID: revoked, idempotencyKey: "purge-revoked-live-01",
+            request: DroneJobRequest(workspaceID: workspaceID, operation: .process(DroneProcessOperation(
+                executablePath: "/bin/sleep", arguments: ["30"], timeoutMilliseconds: 60_000
+            )))
+        ))
+        try await Task.sleep(for: .milliseconds(100))
+        let removed = try engine.removeFinishedJobs(controllerID: revoked)
+        expect(removed == 1 && !recordExists(timerState, revoked, "purge-revoked-done-01"),
+               "revocation kept a finished record")
+        expect((try? engine.snapshot(id: revokedLive.id, controllerID: revoked)) != nil,
+               "revocation dropped a running job's record before it finished")
+        _ = try engine.cancelJob(id: revokedLive.id, controllerID: revoked)
+        try await waitUntil("revoked controller's finished record was never purged") {
+            !recordExists(timerState, revoked, "purge-revoked-live-01")
+        }
+        expect(recordExists(timerState, idle, "purge-timer-idle-0001"), "purge removed an unexpired record")
+
+        // Timer: an idle controller's expired record is purged with no further creates.
+        clock.advance(by: lifetime + 1)
+        try await waitUntil("idle controller's expired record was never purged") {
+            !recordExists(timerState, idle, "purge-timer-idle-0001")
+                && (try? engine.snapshot(id: idleJob.id, controllerID: idle)) == nil
+        }
+        let joined = await engine.shutdown()
+        expect(joined, "purge proof engine did not shut down")
+    }
+
+    private static func waitUntil(_ message: String, _ condition: () -> Bool) async throws {
+        for _ in 0..<200 {
+            if condition() { return }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        throw ProofError.failed(message)
+    }
+
     private static func verifyShutdownTimeout(in workspace: URL, root: URL) async throws {
         let workspaceID = UUID()
         let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
@@ -347,6 +432,23 @@ enum DroneJobProof {
 
 private enum ProofError: Error {
     case failed(String)
+}
+
+private final class ProofManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var offset: TimeInterval = 0
+
+    func advance(by seconds: TimeInterval) {
+        lock.lock()
+        offset += seconds
+        lock.unlock()
+    }
+
+    func now() -> TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return Date().timeIntervalSince1970 + offset
+    }
 }
 
 private final class ProofBlockingClock: @unchecked Sendable {

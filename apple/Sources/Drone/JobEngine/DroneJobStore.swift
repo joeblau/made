@@ -47,6 +47,10 @@ final class DroneJobStore: @unchecked Sendable {
     private let now: @Sendable () -> TimeInterval
     private var jobs: [DroneJobID: DroneStoredJob] = [:]
     private var keys: [JobKey: DroneJobID] = [:]
+    /// Revoked controllers whose finished records are removed without
+    /// waiting for the idempotency lifetime. In memory only: after a restart,
+    /// any record left behind still expires through `purgeExpired()`.
+    private var retiredControllers: Set<UUID> = []
 
     init(
         stateURL: URL,
@@ -272,6 +276,49 @@ final class DroneJobStore: @unchecked Sendable {
         return job
     }
 
+    /// Removes every finished record past the idempotency lifetime, for all
+    /// controllers, plus finished records of retired controllers. Running jobs
+    /// are never removed; they become eligible once they reach a final state.
+    @discardableResult
+    func purgeExpired() throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        let current = now()
+        let expired = jobs.values.filter {
+            $0.state.isTerminal
+                && (current - $0.createdAt >= limits.idempotencyLifetime
+                    || retiredControllers.contains($0.controllerID))
+        }
+        try removeEach(expired)
+        return expired.count
+    }
+
+    /// Deletes a revoked controller's finished records now and retires the
+    /// controller so its in-flight records are deleted by the next purge after
+    /// they finish.
+    @discardableResult
+    func removeFinishedJobs(controllerID: UUID) throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        retiredControllers.insert(controllerID)
+        let finished = jobs.values.filter { $0.controllerID == controllerID && $0.state.isTerminal }
+        try removeEach(finished)
+        return finished.count
+    }
+
+    /// One unremovable record must not keep every other one alive.
+    private func removeEach(_ records: [DroneStoredJob]) throws {
+        var firstFailure: (any Error)?
+        for job in records {
+            do {
+                try remove(job)
+            } catch {
+                firstFailure = firstFailure ?? error
+            }
+        }
+        if let firstFailure { throw firstFailure }
+    }
+
     private func purgeExpired(controllerID: UUID) throws {
         let expired = jobs.values.filter {
             $0.controllerID == controllerID && $0.state.isTerminal
@@ -319,6 +366,12 @@ final class DroneJobStore: @unchecked Sendable {
                 else { throw DroneJobError.storeCorrupted }
                 let key = JobKey(controllerID: job.controllerID, idempotencyKey: job.idempotencyKey)
                 guard keys[key] == nil else { throw DroneJobError.storeCorrupted }
+                // Never reload a record past the idempotency lifetime: every job is
+                // final after a restart, so it is purged here for every controller.
+                if now() - job.createdAt >= limits.idempotencyLifetime {
+                    try FileManager.default.removeItem(at: recordURL)
+                    continue
+                }
                 if !job.state.isTerminal {
                     append(.notice(.recoveredAfterRestart), to: &job)
                     job.state = job.cancellationRequested ? .cancelled : .failed

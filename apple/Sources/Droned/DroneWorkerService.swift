@@ -198,14 +198,27 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
             onAudit?("revocation.storageFailed")
             // Local denial remains active even when persistent pin removal failed.
             await cancelRevokedOperations(operations)
+            removeRevokedJobRecords(controllerID)
             for connection in connections {
                 await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
             }
             throw error
         }
         await cancelRevokedOperations(operations)
+        removeRevokedJobRecords(controllerID)
         for connection in connections {
             await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
+        }
+    }
+
+    /// A revoked controller's job records (file contents, process output) are
+    /// deleted now; jobs still finishing are deleted by the engine's next purge.
+    private func removeRevokedJobRecords(_ controllerID: UUID) {
+        do {
+            try jobs.removeFinishedJobs(controllerID: controllerID)
+        } catch {
+            storageHealthy = false
+            onAudit?("revocation.jobPurgeFailed")
         }
     }
 
