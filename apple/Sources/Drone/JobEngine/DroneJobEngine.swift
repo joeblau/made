@@ -283,6 +283,9 @@ final class DroneJobEngine: @unchecked Sendable {
             currentDirectory: directory,
             environment: environment,
             control: control,
+            onLaunch: { [store] group in
+                try store.recordProcessGroup(id: id, group: group)
+            },
             onOutput: { [store, limits] stream, data in
                 let chunkSize = min(DroneLimits.maxOutputChunkBytes, limits.maximumHistoryOutputBytes)
                 var remainder = data

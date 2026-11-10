@@ -10,6 +10,100 @@ struct DroneProcessRunOutcome {
     var deadlineExceeded: Bool
 }
 
+/// Identifies a job's process group across a worker restart. The leader's
+/// start time distinguishes the original group from a later reuse of its PID.
+struct DroneProcessGroupRecord: Codable, Equatable, Sendable {
+    var groupID: Int32
+    var leaderStartSeconds: UInt64
+    var leaderStartMicroseconds: UInt64
+
+    static func capture(leader pid: pid_t) -> DroneProcessGroupRecord? {
+        guard let entry = DroneProcessTable.entry(pid), entry.groupID == pid else { return nil }
+        return DroneProcessGroupRecord(
+            groupID: pid,
+            leaderStartSeconds: entry.startSeconds,
+            leaderStartMicroseconds: entry.startMicroseconds
+        )
+    }
+
+    fileprivate func startedNoLaterThan(_ entry: DroneProcessTable.Entry) -> Bool {
+        (leaderStartSeconds, leaderStartMicroseconds) <= (entry.startSeconds, entry.startMicroseconds)
+    }
+
+    fileprivate func isLeader(_ entry: DroneProcessTable.Entry) -> Bool {
+        leaderStartSeconds == entry.startSeconds && leaderStartMicroseconds == entry.startMicroseconds
+    }
+}
+
+enum DroneProcessTable {
+    struct Entry {
+        var groupID: pid_t
+        var userID: uid_t
+        var startSeconds: UInt64
+        var startMicroseconds: UInt64
+    }
+
+    static func entry(_ pid: pid_t) -> Entry? {
+        guard pid > 0 else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              pid_t(bitPattern: info.pbi_pid) == pid
+        else { return nil }
+        return Entry(
+            groupID: pid_t(bitPattern: info.pbi_pgid),
+            userID: info.pbi_uid,
+            startSeconds: info.pbi_start_tvsec,
+            startMicroseconds: info.pbi_start_tvusec
+        )
+    }
+
+    /// Bounded: a group larger than `limit` is reported only partially.
+    static func members(ofGroup groupID: pid_t, limit: Int = 4_096) -> [pid_t] {
+        guard groupID > 0 else { return [] }
+        var pids = [pid_t](repeating: 0, count: limit)
+        let bytes = pids.withUnsafeMutableBytes { buffer in
+            proc_listpids(
+                UInt32(PROC_PGRP_ONLY),
+                UInt32(bitPattern: groupID),
+                buffer.baseAddress,
+                Int32(clamping: buffer.count)
+            )
+        }
+        guard bytes > 0 else { return [] }
+        let count = min(limit, Int(bytes) / MemoryLayout<pid_t>.stride)
+        return pids.prefix(count).filter { $0 > 0 }
+    }
+
+    /// Kills a group that a crashed worker left behind, then waits a bounded
+    /// time for it to disappear. Signals nothing unless the record still
+    /// matches: a live PID with another start time means the group is gone
+    /// (a PID is never reused while its process group exists), and with the
+    /// leader already reaped every surviving member must belong to this user
+    /// and have started no earlier than the recorded leader.
+    @discardableResult
+    static func killOrphanedGroup(_ record: DroneProcessGroupRecord, timeout: TimeInterval = 1) -> Bool {
+        let groupID = pid_t(record.groupID)
+        guard groupID > 1, groupID != getpid(), groupID != getpgrp() else { return false }
+        if let leader = Self.entry(groupID) {
+            guard record.isLeader(leader) else { return false }
+        } else {
+            let survivors = Self.members(ofGroup: groupID).compactMap { Self.entry($0) }
+            guard !survivors.isEmpty,
+                  survivors.allSatisfy({
+                      $0.groupID == groupID && $0.userID == getuid() && record.startedNoLaterThan($0)
+                  })
+            else { return false }
+        }
+        guard Darwin.kill(-groupID, SIGKILL) == 0 else { return false }
+        let deadline = Date().addingTimeInterval(max(0, min(timeout, 5)))
+        while Darwin.kill(-groupID, 0) == 0, Date() < deadline {
+            usleep(10_000)
+        }
+        return true
+    }
+}
+
 final class DroneProcessGroupControl: @unchecked Sendable {
     enum StopReason {
         case cancelled
@@ -64,8 +158,11 @@ final class DroneProcessGroupControl: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         // The runner retains the unreaped group leader until this point, so
-        // its PID cannot be recycled while we finish cancellation escalation.
-        if stopReason != nil, let groupID { _ = Darwin.kill(-groupID, SIGKILL) }
+        // its PID (and therefore the group ID) cannot be recycled. Kill the
+        // group on every exit path, not only after a stop request: a leader
+        // that exits normally can leave descendants that redirected their
+        // output, and nothing else would ever signal them (#441).
+        if let groupID { _ = Darwin.kill(-groupID, SIGKILL) }
         finished = true
         groupID = nil
     }
@@ -89,6 +186,7 @@ enum DroneProcessRunner {
         currentDirectory: URL,
         environment: [String: String],
         control: DroneProcessGroupControl,
+        onLaunch: (DroneProcessGroupRecord) throws -> Void = { _ in },
         onOutput: @escaping (DroneJobStream, Data) throws -> Void,
         onTruncated: @escaping (DroneJobStream) throws -> Void
     ) throws -> DroneProcessRunOutcome {
@@ -120,6 +218,17 @@ enum DroneProcessRunner {
         defer {
             control.finish()
             reap(pid)
+        }
+        // The leader starts suspended. Persist its group identity before it
+        // runs a single instruction, so a worker crash at any later point
+        // leaves a record that recovery can match and kill (#441). A failure
+        // here kills the still-suspended group through the deferred finish.
+        guard let group = DroneProcessGroupRecord.capture(leader: pid) else {
+            throw POSIXError(.ESRCH)
+        }
+        try onLaunch(group)
+        guard Darwin.kill(pid, SIGCONT) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ESRCH)
         }
         control.setWakeHandler { waker.signal() }
         defer { control.setWakeHandler {} }
@@ -246,7 +355,8 @@ enum DroneProcessRunner {
               posix_spawnattr_setflags(
                   &attributes,
                   Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
-                      | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)
+                      | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF
+                      | POSIX_SPAWN_START_SUSPENDED)
               ) == 0
         else { throw POSIXError(.EIO) }
 

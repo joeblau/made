@@ -15,6 +15,9 @@ struct DroneStoredJob: Codable, Equatable {
     var droppedEventCount: UInt64
     var cancellationRequested: Bool
     var events: [DroneJobEvent]
+    /// Persisted before the leader runs so recovery can kill a group that a
+    /// crashed worker left behind. Absent in records written before #441.
+    var processGroup: DroneProcessGroupRecord?
 
     var snapshot: DroneJobSnapshot {
         DroneJobSnapshot(
@@ -176,6 +179,12 @@ final class DroneJobStore: @unchecked Sendable {
         }
     }
 
+    func recordProcessGroup(id: DroneJobID, group: DroneProcessGroupRecord) throws {
+        try update(id: id) { job in
+            job.processGroup = group
+        }
+    }
+
     func appendOutput(id: DroneJobID, stream: DroneJobStream, data: Data) throws {
         guard !data.isEmpty else { return }
         try update(id: id) { job in
@@ -320,6 +329,11 @@ final class DroneJobStore: @unchecked Sendable {
                 let key = JobKey(controllerID: job.controllerID, idempotencyKey: job.idempotencyKey)
                 guard keys[key] == nil else { throw DroneJobError.storeCorrupted }
                 if !job.state.isTerminal {
+                    // Kill before recording a final state: a finished job
+                    // must never leave its process group running (#441).
+                    if let group = job.processGroup {
+                        DroneProcessTable.killOrphanedGroup(group)
+                    }
                     append(.notice(.recoveredAfterRestart), to: &job)
                     job.state = job.cancellationRequested ? .cancelled : .failed
                     if !job.cancellationRequested {

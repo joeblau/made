@@ -3,7 +3,13 @@ import Foundation
 
 @main
 enum DroneJobProof {
+    private static let crashChildFlag = "--crash-during-process-job"
+
     static func main() async throws {
+        let launchArguments = CommandLine.arguments
+        if launchArguments.count == 6, launchArguments[1] == crashChildFlag {
+            try await crashDuringProcessJob(launchArguments)
+        }
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("drone-job-proof-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -19,6 +25,9 @@ enum DroneJobProof {
         try await verifyShutdown(in: workspace, root: root)
         try await verifyShutdownTimeout(in: workspace, root: root)
         try await verifyAcceptanceShutdownTimeout(in: workspace, root: root)
+        try await verifyFinishedJobKillsBackgroundChild(in: workspace, root: root)
+        try await verifyCrashRecoveryKillsProcessGroup(in: workspace, root: root, leaderExitsFirst: false)
+        try await verifyCrashRecoveryKillsProcessGroup(in: workspace, root: root, leaderExitsFirst: true)
 
         let source = Data("print(\"drone-build-ok\")\n".utf8)
         let write = try engine.createJob(DroneJobCreate(
@@ -136,6 +145,134 @@ enum DroneJobProof {
         expect(recoveredSnapshot.state == .failed, "interrupted job was rerun or left ambiguous")
         expect(recoveredSnapshot.failure?.code == .workerRestarted, "restart failure was not explicit")
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
+    }
+
+    /// A leader that exits normally must not leave a descendant running after
+    /// the job is recorded finished, even one that redirected its output.
+    private static func verifyFinishedJobKillsBackgroundChild(in workspace: URL, root: URL) async throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let engine = try DroneJobEngine(
+            stateURL: root.appendingPathComponent("background-child"),
+            workspaces: registry
+        )
+        let controllerID = UUID()
+        let job = try engine.createJob(DroneJobCreate(
+            controllerID: controllerID,
+            idempotencyKey: "background-child-job-0001",
+            request: DroneJobRequest(workspaceID: workspaceID, operation: .process(DroneProcessOperation(
+                executablePath: "/bin/sh",
+                arguments: ["-c", """
+                /bin/sh -c 'echo $$ > background.tmp && /bin/mv background.tmp background.pid
+                exec /bin/sleep 30' >/dev/null 2>&1 &
+                while [ ! -s background.pid ]; do /bin/sleep 0.05; done
+                exit 0
+                """],
+                timeoutMilliseconds: 30_000
+            )))
+        ))
+        _ = try await terminal(job.id, controllerID: controllerID, engine: engine, expected: .completed)
+        let pidFile = workspace.appendingPathComponent("background.pid")
+        guard let text = try? String(contentsOf: pidFile, encoding: .utf8),
+              let child = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { throw ProofError.failed("background child never started") }
+        defer { _ = Darwin.kill(child, SIGKILL) }
+        try await waitUntilGone(child)
+        expect(Darwin.kill(child, 0) != 0, "a completed job left its background child running")
+        let stopped = await engine.shutdown()
+        expect(stopped, "background-child engine did not shut down")
+    }
+
+    /// Crash a real worker process mid-job, then prove recovery kills the
+    /// process group it left behind before reporting `workerRestarted`.
+    private static func verifyCrashRecoveryKillsProcessGroup(
+        in workspace: URL, root: URL, leaderExitsFirst: Bool
+    ) async throws {
+        let workspaceID = UUID()
+        let controllerID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let state = root.appendingPathComponent(leaderExitsFirst ? "crash-orphaned" : "crash-live-leader")
+        let pidFile = workspace.appendingPathComponent("crash-orphan.pid")
+        try? FileManager.default.removeItem(at: pidFile)
+        let worker = Process()
+        worker.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
+        worker.arguments = [
+            crashChildFlag, state.path, workspace.path,
+            workspaceID.uuidString, controllerID.uuidString,
+        ]
+        try worker.run()
+        worker.waitUntilExit()
+        expect(worker.terminationReason == .uncaughtSignal, "crash worker did not crash")
+        guard let text = try? String(contentsOf: pidFile, encoding: .utf8) else {
+            throw ProofError.failed("crash worker never started its job")
+        }
+        let pids = text.split(whereSeparator: \.isWhitespace).compactMap { pid_t($0) }
+        guard pids.count == 2 else { throw ProofError.failed("crash worker wrote malformed pids") }
+        let orphan = pids[0]
+        let leader = pids[1]
+        defer {
+            _ = Darwin.kill(orphan, SIGKILL)
+            _ = Darwin.kill(leader, SIGKILL)
+        }
+        expect(Darwin.kill(orphan, 0) == 0, "orphan did not outlive the crashed worker")
+        if leaderExitsFirst {
+            // The common crash shape: the leader dies (SIGPIPE, exit) and is
+            // reaped by launchd while its descendants keep the group alive.
+            _ = Darwin.kill(leader, SIGKILL)
+            try await waitUntilGone(leader)
+        }
+        let recovered = try DroneJobEngine(stateURL: state, workspaces: registry)
+        let snapshot = try recovered.snapshot(
+            controllerID: controllerID,
+            idempotencyKey: "crash-recovery-job-0001"
+        )
+        expect(snapshot.state == .failed && snapshot.failure?.code == .workerRestarted,
+               "crashed job was not recovered as workerRestarted")
+        try await waitUntilGone(orphan)
+        expect(Darwin.kill(orphan, 0) != 0, "recovery left the crashed job's process group running")
+        expect(Darwin.kill(leader, 0) != 0, "recovery left the crashed job's leader running")
+    }
+
+    /// Child-process mode: start a job whose TERM-immune descendant records
+    /// its own pid and its leader's pid, then die without any cleanup.
+    private static func crashDuringProcessJob(_ arguments: [String]) async throws -> Never {
+        guard let workspaceID = UUID(uuidString: arguments[4]),
+              let controllerID = UUID(uuidString: arguments[5])
+        else { fatalError("crash worker received malformed identifiers") }
+        let workspace = URL(fileURLWithPath: arguments[3], isDirectory: true)
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let engine = try DroneJobEngine(
+            stateURL: URL(fileURLWithPath: arguments[2], isDirectory: true),
+            workspaces: registry
+        )
+        _ = try engine.createJob(DroneJobCreate(
+            controllerID: controllerID,
+            idempotencyKey: "crash-recovery-job-0001",
+            request: DroneJobRequest(workspaceID: workspaceID, operation: .process(DroneProcessOperation(
+                executablePath: "/bin/sh",
+                arguments: ["-c", """
+                /bin/sh -c 'trap "" TERM HUP
+                echo $$ $PPID > crash-orphan.tmp && /bin/mv crash-orphan.tmp crash-orphan.pid
+                while :; do /bin/sleep 1; done' >/dev/null 2>&1 &
+                exec /bin/sleep 30
+                """],
+                timeoutMilliseconds: 60_000
+            )))
+        ))
+        let pidFile = workspace.appendingPathComponent("crash-orphan.pid")
+        for _ in 0..<500 {
+            if FileManager.default.fileExists(atPath: pidFile.path) { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        _ = Darwin.kill(getpid(), SIGKILL)
+        Darwin._exit(70)
+    }
+
+    private static func waitUntilGone(_ pid: pid_t) async throws {
+        for _ in 0..<200 {
+            if Darwin.kill(pid, 0) != 0 { return }
+            try await Task.sleep(for: .milliseconds(10))
+        }
     }
 
     private static func verifyAcceptanceShutdownTimeout(in workspace: URL, root: URL) async throws {
