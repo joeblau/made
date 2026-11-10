@@ -57,10 +57,15 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
         hideButton.perform = { [weak self] in self?.onHide?() }
         hideButton.toolTip = "Hide or show pane"
         hideButton.setAccessibilityLabel("Hide or show pane")
+        // Liquid Glass capsules, wider than tall, sized to the header row.
         for button in [closeButton, hideButton] {
-            button.isBordered = false
+            button.title = ""
             button.imagePosition = .imageOnly
-            button.widthAnchor.constraint(equalToConstant: 22).isActive = true
+            button.bezelStyle = .glass
+            button.borderShape = .capsule
+            button.controlSize = .small
+            button.symbolConfiguration = .init(pointSize: 11, weight: .medium)
+            button.widthAnchor.constraint(equalToConstant: 32).isActive = true
             button.heightAnchor.constraint(equalToConstant: 20).isActive = true
         }
         if let state = pane.browserState, pane.kind == .browser { icon = BrowserFaviconView(state: state) } else { icon = NSImageView(image: NSImage(systemSymbolName: pane.kind.systemImageName, accessibilityDescription: nil) ?? NSImage()) }
