@@ -212,17 +212,25 @@ pairing. An unexpired full table rejects new creates; it must not evict entries
 and risk duplicate execution. Later durable job storage (#322) must persist
 this decision atomically with job creation.
 
-Every other terminal-catalog limit is per pairing too, so one pairing can
-never make another pairing's create, close, or same-key retry fail. A
-pairing's terminal and create records may take at most 2 MiB of the persisted
-catalog, measured as an upper bound on their encoded size; the catalog holds
-32 pairings at that budget. The requested environment is stored once, on the
-terminal record, and a create that would pass the pairing's budget returns
-`resourceLimit` before tmux runs. Each pairing keeps up to 1,024 finished
-(closed or exited) terminals, and never drops one that an unexpired create
-record references. Only when more pairings hold state than the worker can pair
-at once (state left by revoked controllers) are the oldest unreferenced
-finished terminals of any pairing dropped to stay under the catalog cap.
+The catalog byte budget and finished-terminal retention are per pairing too, so
+while at most 32 pairings hold terminal state, one pairing exhausting its
+idempotency allowance, byte budget or retention cannot make another pairing's
+create, close, or same-key retry fail. A pairing's terminal and create records
+may take at most 2 MiB of the persisted catalog, measured as an upper bound on
+their encoded size; the catalog holds 32 pairings at that budget. The requested
+environment is stored once, on the terminal record, and a create that would
+pass the pairing's budget returns `resourceLimit` before tmux runs. Each
+pairing keeps up to 1,024 finished (closed or exited) terminals, and never
+drops one that an unexpired create record references.
+
+Two limits are deliberately shared across pairings and are not covered by that
+guarantee. The 64 live sessions are a worker-wide cap: a pairing holding all
+of them makes every other pairing's create return `resourceLimit` until one
+closes or exits. And when more than 32 pairings hold state (state left by
+revoked controllers), keeping the catalog under its cap takes precedence: the
+oldest finished terminals of any pairing that no unexpired create record
+references are dropped, and a create that still cannot fit returns
+`resourceLimit`.
 
 TCP retransmission and replay-window rejection are not execution idempotency:
 both layers are required. Requests other than create either are naturally
