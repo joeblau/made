@@ -262,9 +262,11 @@ private struct ConnectionStatusBadge: View {
     }
 }
 
-/// Shown while the drawing is too large for Cockpit to mirror (issue #431):
-/// Cockpit then shows no ink instead of ink that no longer matches, until an
-/// undo or erase brings the drawing back within the protocol limits.
+/// Shown while the drawing cannot be mirrored to Cockpit (issue #431): it is
+/// over Pilot's total stroke/point ceilings, or one stroke is too large to
+/// send on its own. A drawing that is merely too large for one replacement is
+/// still mirrored, one stroke per message. Cockpit then shows no ink instead
+/// of ink that no longer matches, until an undo or erase removes the excess.
 private struct AnnotationMirrorWarning: View {
     var mirror: MirrorModel
 
@@ -278,7 +280,7 @@ private struct AnnotationMirrorWarning: View {
                     .padding(.vertical, 8)
                     .glassEffect(.regular, in: Capsule())
                     .environment(\.colorScheme, .dark)
-                    .accessibilityHint("Undo or erase strokes to resume mirroring.")
+                    .accessibilityHint("Undo or erase strokes, or one very long stroke, to resume mirroring.")
                     .transition(.opacity)
             }
             Spacer()

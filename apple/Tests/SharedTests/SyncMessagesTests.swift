@@ -553,16 +553,30 @@ struct AnnotationMirrorSyncTests {
         #expect(receiver.sendAnnotation(.clear, seq: 3))
     }
 
-    @Test("A replace too large to encode marks the mirror out of sync instead of advancing it")
+    @Test("A drawing too large for one replace is rebuilt stroke by stroke; only an unencodable stroke fails closed")
     func undeliverableReplaceFailsClosed() {
+        // Every send goes through FrameReceiver's encode check and then the
+        // real wire format: Pilot applies what `FrameProtocol` decodes.
         let receiver = FrameReceiver()
+        var seq: UInt32 = 0
+        var pilot: [AnnotationStroke] = []
         var attempted: [AnnotationMessage] = []
         var delivered: [AnnotationMessage] = []
         let send: (AnnotationMessage) -> Bool = { message in
+            seq &+= 1
             attempted.append(message)
-            let sent = receiver.sendAnnotation(message, seq: 1)
-            if sent { delivered.append(message) }
-            return sent
+            guard receiver.sendAnnotation(message, seq: seq) else { return false }
+            let payload = FrameProtocol.encode(.annotation(seq: seq, message: message))
+            guard case .annotation(_, let decoded)? = FrameProtocol.decode(payload) else {
+                Issue.record("an annotation the link accepted must decode")
+                return false
+            }
+            delivered.append(decoded)
+            pilot = applyOnPilot(decoded, to: pilot)
+            return true
+        }
+        func tooLargeForOneMessage(_ message: AnnotationMessage) -> Bool {
+            FrameProtocol.encode(.annotation(seq: 0, message: message)).isEmpty
         }
 
         var sync = AnnotationMirrorSync()
@@ -573,32 +587,82 @@ struct AnnotationMirrorSyncTests {
         }
         #expect(!sync.isOutOfSync)
         #expect(sync.mirrored == canvas)
+        #expect(pilot == canvas)
         #expect(delivered.count == 40)
 
-        // The eraser removes a middle stroke: the needed replacement does not
-        // fit in one annotation, so Pilot is cleared and the mirror goes out
-        // of sync without recording the undelivered drawing.
+        // The eraser removes a middle stroke. The replacement is over
+        // `maxAnnotationBytes` although the drawing is far within Pilot's
+        // ceilings, so Pilot is rebuilt with a clear and one stroke at a time.
         canvas.remove(at: 3)
-        sync.sync(to: canvas, send: send)
-        #expect(sync.isOutOfSync)
-        #expect(sync.mirrored.isEmpty)
-        #expect(delivered.last == .clear)
-
-        // While out of sync nothing incremental is attempted, even for a
-        // provable append or for the resync after re-authentication.
-        attempted.removeAll()
-        canvas.append(denseStroke(99, points: 10))
-        sync.sync(to: canvas, send: send)
-        sync.resync(to: canvas, send: send)
-        #expect(sync.isOutOfSync)
-        #expect(!attempted.contains(where: isIncremental))
-        #expect(delivered.last == .clear)
-
-        // Once the drawing fits again, a full replacement restores sync.
-        canvas = Array(canvas.prefix(10))
+        #expect(AnnotationMirrorSync.fitsPilotLimits(canvas))
+        #expect(tooLargeForOneMessage(.replaceDrawing(AnnotationDrawing(strokes: canvas))))
+        delivered.removeAll()
         sync.sync(to: canvas, send: send)
         #expect(!sync.isOutOfSync)
         #expect(sync.mirrored == canvas)
+        #expect(pilot == canvas)
+        #expect(delivered == [AnnotationMessage.clear] + canvas.map(AnnotationMessage.addStroke))
+
+        // Undoing the erase restores the stroke at its old index the same way.
+        canvas.insert(denseStroke(3, points: 1_000), at: 3)
+        sync.sync(to: canvas, send: send)
+        #expect(!sync.isOutOfSync)
+        #expect(pilot == canvas)
+
+        // A resync (Pilot reconnect, Pilot-originated undo or clear, rotation)
+        // also rebuilds, and incremental ops resume after it.
+        sync.resync(to: canvas, send: send)
+        #expect(!sync.isOutOfSync)
+        #expect(pilot == canvas)
+        canvas.append(denseStroke(40, points: 10))
+        sync.sync(to: canvas, send: send)
+        #expect(delivered.last == .addStroke(canvas[canvas.count - 1]))
+        #expect(pilot == canvas)
+        canvas.removeLast()
+        sync.sync(to: canvas, send: send)
+        #expect(delivered.last == .undo)
+        #expect(pilot == canvas)
+
+        // A single stroke too large to encode on its own cannot be mirrored:
+        // Pilot is cleared and the mirror goes out of sync without recording
+        // the undelivered stroke.
+        let unencodable = denseStroke(98, points: 30_000)
+        #expect(tooLargeForOneMessage(.addStroke(unencodable)))
+        canvas.append(unencodable)
+        #expect(AnnotationMirrorSync.fitsPilotLimits(canvas))
+        sync.sync(to: canvas, send: send)
+        #expect(sync.isOutOfSync)
+        #expect(sync.mirrored.isEmpty)
+        #expect(pilot.isEmpty)
+        #expect(delivered.last == .clear)
+
+        // While out of sync even a provable append is a full rebuild, never an
+        // incremental op against whatever Pilot holds; the rebuild reaches the
+        // unencodable stroke, so Pilot ends cleared again.
+        attempted.removeAll()
+        canvas.append(denseStroke(99, points: 10))
+        sync.sync(to: canvas, send: send)
+        #expect(sync.isOutOfSync)
+        #expect(pilot.isEmpty)
+        #expect(delivered.last == .clear)
+        #expect(attempted.first == .replaceDrawing(AnnotationDrawing(strokes: canvas)))
+        #expect(!attempted.contains(.undo))
+        let firstClear = attempted.firstIndex(of: .clear) ?? attempted.endIndex
+        #expect(!attempted[..<firstClear].contains(where: isIncremental))
+
+        // Erasing the unencodable stroke (now a middle stroke) restores sync
+        // with a stroke-by-stroke rebuild.
+        canvas.removeAll { $0 == unencodable }
+        sync.sync(to: canvas, send: send)
+        #expect(!sync.isOutOfSync)
+        #expect(sync.mirrored == canvas)
+        #expect(pilot == canvas)
+
+        // A drawing that fits in one annotation is still a single replace.
+        canvas = Array(canvas.prefix(10))
+        sync.sync(to: canvas, send: send)
+        #expect(!sync.isOutOfSync)
+        #expect(pilot == canvas)
         #expect(delivered.last == .replaceDrawing(AnnotationDrawing(strokes: canvas)))
     }
 

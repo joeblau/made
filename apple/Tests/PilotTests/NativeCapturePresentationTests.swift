@@ -433,8 +433,10 @@ final class NativeCapturePresentationTests: XCTestCase {
     /// `FrameProtocol`-encoded (a refused encode is an undelivered send, as in
     /// `FrameReceiver.sendAnnotation`) and Pilot applies what it decodes.
     /// Plotter enforces Pilot's ceilings before sending, so Pilot never
-    /// rejects; past the ceilings or `maxAnnotationBytes` Pilot shows no ink
-    /// and Plotter reports out of sync until a full replacement fits again.
+    /// rejects. A drawing within the ceilings but over `maxAnnotationBytes`
+    /// as one replacement is rebuilt as a clear plus one stroke per message;
+    /// only past the ceilings, or for a single stroke too large to encode,
+    /// does Pilot show no ink while Plotter reports out of sync.
     func testPlotterMirrorNeverSendsInkPilotRejects() {
         let color = AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1)
         // The width Plotter's normalization produces for a 4 pt pen on an
@@ -460,6 +462,9 @@ final class NativeCapturePresentationTests: XCTestCase {
             }
             if !pilot.handle(decoded) { rejections += 1 }
             return true
+        }
+        func tooLargeForOneMessage(_ message: AnnotationMessage) -> Bool {
+            FrameProtocol.encode(.annotation(seq: 0, message: message)).isEmpty
         }
         func assertMirrors(_ canvas: [AnnotationStroke], line: UInt = #line) {
             if plotter.isOutOfSync {
@@ -529,19 +534,48 @@ final class NativeCapturePresentationTests: XCTestCase {
         XCTAssertTrue(plotter.isOutOfSync)
         assertMirrors(canvas)
 
-        // Undoing it needs a replacement over `maxAnnotationBytes`, so Pilot
-        // stays cleared rather than receiving `.undo`.
+        // Undoing it needs a 100k-point replacement over `maxAnnotationBytes`;
+        // Pilot is rebuilt stroke by stroke rather than sent `.undo`.
         canvas.removeLast()
+        XCTAssertTrue(tooLargeForOneMessage(.replaceDrawing(AnnotationDrawing(strokes: canvas))))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // The eraser removes a middle stroke: a 75k-point replacement, still
+        // over `maxAnnotationBytes`, rebuilt the same way.
+        canvas.remove(at: 1)
+        XCTAssertTrue(tooLargeForOneMessage(.replaceDrawing(AnnotationDrawing(strokes: canvas))))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // A Pilot-originated undo is applied on the iPad, which then resyncs
+        // (as it does after a rotation or a Pilot reconnect).
+        pilot.undo()
+        canvas.removeLast()
+        plotter.resync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Incremental ops resume after a rebuild.
+        canvas.append(stroke(5, points: 3))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // A single stroke too large to encode on its own fails closed.
+        canvas = []
+        plotter.sync(to: canvas, send: send)
+        let unencodable = stroke(7, points: FrameProtocol.maxAnnotationPoints)
+        XCTAssertTrue(tooLargeForOneMessage(.addStroke(unencodable)))
+        canvas = [unencodable]
         plotter.sync(to: canvas, send: send)
         XCTAssertTrue(plotter.isOutOfSync)
         assertMirrors(canvas)
 
-        // Once the drawing fits in one message again, sync is restored.
-        canvas = [canvas[0]]
-        plotter.sync(to: canvas, send: send)
-        XCTAssertFalse(plotter.isOutOfSync)
-        assertMirrors(canvas)
-        canvas.append(stroke(5, points: 3))
+        // Once it is gone, a full replacement restores sync.
+        canvas = [stroke(8, points: 3)]
         plotter.sync(to: canvas, send: send)
         XCTAssertFalse(plotter.isOutOfSync)
         assertMirrors(canvas)
