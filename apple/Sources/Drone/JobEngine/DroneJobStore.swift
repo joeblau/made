@@ -5,6 +5,10 @@ struct DroneStoredJob: Codable, Equatable {
     /// The record layout this build reads and writes. A record without a version
     /// predates versioning and uses layout 1. Any other version is quarantined.
     static let currentSchemaVersion = 1
+    /// Ceiling for the event sequence and dropped-event counters. Records keep
+    /// these at or below it, so `+ 1` on either never traps; a decoded record
+    /// above it is quarantined rather than trusted (#440).
+    static let maximumCounter = UInt64(Int64.max)
 
     var id: DroneJobID
     var controllerID: UUID
@@ -40,6 +44,22 @@ struct DroneStoredJob: Codable, Equatable {
             droppedEventCount: droppedEventCount,
             cancellationRequested: cancellationRequested
         )
+    }
+
+    /// Decoded counters and history are untrusted. A record whose counters
+    /// exceed `maximumCounter`, whose timestamps are not finite, or whose
+    /// events are out of order or ahead of `latestSequence` is not loaded.
+    var hasConsistentHistory: Bool {
+        guard latestSequence <= Self.maximumCounter,
+              droppedEventCount <= Self.maximumCounter,
+              createdAt.isFinite, updatedAt.isFinite
+        else { return false }
+        var previous: UInt64 = 0
+        for event in events {
+            guard event.sequence > previous, event.sequence <= latestSequence else { return false }
+            previous = event.sequence
+        }
+        return true
     }
 }
 
@@ -198,7 +218,7 @@ final class DroneJobStore: @unchecked Sendable {
         try update(id: id) { job in
             guard job.state == .accepted else { return }
             job.state = .running
-            append(.state(.running), to: &job)
+            try append(.state(.running), to: &job)
         }
     }
 
@@ -212,14 +232,14 @@ final class DroneJobStore: @unchecked Sendable {
         guard !data.isEmpty else { return }
         try update(id: id) { job in
             guard !job.state.isTerminal else { return }
-            append(.output(DroneJobOutput(stream: stream, data: data)), to: &job)
+            try append(.output(DroneJobOutput(stream: stream, data: data)), to: &job)
         }
     }
 
     func appendTruncation(id: DroneJobID, stream: DroneJobStream) throws {
         try update(id: id) { job in
             guard !job.state.isTerminal else { return }
-            append(.truncated(stream), to: &job)
+            try append(.truncated(stream), to: &job)
         }
     }
 
@@ -253,16 +273,16 @@ final class DroneJobStore: @unchecked Sendable {
             job.state = finalState
             job.result = result
             job.failure = finalState == .failed ? failure : nil
-            append(.state(finalState), to: &job)
+            try append(.state(finalState), to: &job)
         }
     }
 
-    private func update(id: DroneJobID, mutation: (inout DroneStoredJob) -> Void) throws {
+    private func update(id: DroneJobID, mutation: (inout DroneStoredJob) throws -> Void) throws {
         lock.lock()
         defer { lock.unlock() }
         guard var job = jobs[id] else { throw DroneJobError.jobNotFound }
         let original = job
-        mutation(&job)
+        try mutation(&job)
         guard job != original else { return }
         job.updatedAt = now()
         do {
@@ -274,7 +294,12 @@ final class DroneJobStore: @unchecked Sendable {
         jobs[id] = job
     }
 
-    private func append(_ payload: DroneJobEventPayload, to job: inout DroneStoredJob) {
+    /// Sequence numbers must stay unique, so an exhausted counter is refused
+    /// rather than wrapped or saturated.
+    private func append(_ payload: DroneJobEventPayload, to job: inout DroneStoredJob) throws {
+        guard job.latestSequence < DroneStoredJob.maximumCounter else {
+            throw DroneJobError.resourceLimit
+        }
         job.latestSequence += 1
         job.events.append(DroneJobEvent(
             sequence: job.latestSequence,
@@ -294,7 +319,8 @@ final class DroneJobStore: @unchecked Sendable {
                 || outputBytes > limits.maximumHistoryOutputBytes {
             let removed = job.events.removeFirst()
             if case .output(let output) = removed.payload { outputBytes -= output.data.count }
-            job.droppedEventCount += 1
+            // A count, not an identifier: saturating at the ceiling is harmless.
+            if job.droppedEventCount < DroneStoredJob.maximumCounter { job.droppedEventCount += 1 }
         }
     }
 
@@ -364,10 +390,14 @@ final class DroneJobStore: @unchecked Sendable {
         retiredJobs.remove(job.id)
     }
 
-    /// Loads every record this build can decode and trust. A record that cannot
-    /// be read, has an unknown schema version, or conflicts with another record
-    /// is moved into `quarantine/` instead of aborting startup, so one bad or
-    /// newer-version record never keeps the daemon down.
+    /// Loads every record this build can decode and trust. Any per-record
+    /// failure (unreadable, unknown schema version, inconsistent counters,
+    /// conflicting with another record, or a recovery append, persist or delete
+    /// that fails) moves that record into `quarantine/` and recovery continues,
+    /// so one bad or newer-version record never keeps the daemon down. The
+    /// quarantine entry reports storage as unhealthy. Only a failed move into
+    /// quarantine stops startup, because the daemon would later overwrite the
+    /// only copy.
     private func recover() throws {
         let controllersURL = stateURL.appendingPathComponent("controllers", isDirectory: true)
         try Self.createPrivateDirectory(at: controllersURL)
@@ -392,13 +422,13 @@ final class DroneJobStore: @unchecked Sendable {
             var controllerCount = 0
             for recordURL in records.allObjects.compactMap({ $0 as? URL }) {
                 guard controllerCount < limits.maximumJobsPerController,
-                      var job = loadRecord(at: recordURL, controllerID: controllerID)
+                      let stored = loadRecord(at: recordURL, controllerID: controllerID)
                 else {
                     try quarantine(recordURL)
                     continue
                 }
-                let key = JobKey(controllerID: job.controllerID, idempotencyKey: job.idempotencyKey)
-                guard jobs[job.id] == nil, keys[key] == nil else {
+                let key = JobKey(controllerID: stored.controllerID, idempotencyKey: stored.idempotencyKey)
+                guard jobs[stored.id] == nil, keys[key] == nil else {
                     try quarantine(recordURL)
                     continue
                 }
@@ -406,37 +436,56 @@ final class DroneJobStore: @unchecked Sendable {
                 // final after a restart, so it is purged here for every controller
                 // (#444). A record that was still running when the worker died is
                 // killed first so purging it never strands its process group (#441).
-                if now() - job.createdAt >= limits.idempotencyLifetime {
-                    if !job.state.isTerminal, let group = job.processGroup {
+                if now() - stored.createdAt >= limits.idempotencyLifetime {
+                    if !stored.state.isTerminal, let group = stored.processGroup {
                         DroneProcessTable.killOrphanedGroup(group)
                     }
-                    try FileManager.default.removeItem(at: recordURL)
+                    do {
+                        try FileManager.default.removeItem(at: recordURL)
+                    } catch {
+                        try quarantine(recordURL)
+                    }
+                    continue
+                }
+                let job: DroneStoredJob
+                do {
+                    job = try recovered(stored)
+                } catch {
+                    // The record on disk is unchanged (persist renames
+                    // atomically), so it is set aside intact.
+                    try quarantine(recordURL)
                     continue
                 }
                 controllerCount += 1
-                job.schemaVersion = DroneStoredJob.currentSchemaVersion
-                if !job.state.isTerminal {
-                    // Kill before recording a final state: a finished job
-                    // must never leave its process group running (#441).
-                    if let group = job.processGroup {
-                        DroneProcessTable.killOrphanedGroup(group)
-                    }
-                    append(.notice(.recoveredAfterRestart), to: &job)
-                    job.state = job.cancellationRequested ? .cancelled : .failed
-                    if !job.cancellationRequested {
-                        job.failure = DroneJobFailure(
-                            code: .workerRestarted,
-                            message: "The worker restarted before this job reached a final state."
-                        )
-                    }
-                    job.updatedAt = now()
-                    try persist(job)
-                }
                 jobs[job.id] = job
                 keys[key] = job.id
             }
         }
         quarantinedEntries = Self.entryCount(in: quarantineURL)
+    }
+
+    /// Finalizes a record that was not final when the worker stopped. Throws
+    /// when the recovery notice cannot be appended or the result cannot be
+    /// persisted; the caller quarantines the record. The process group is
+    /// killed first, so it is stopped whether or not recovery succeeds (#441).
+    private func recovered(_ stored: DroneStoredJob) throws -> DroneStoredJob {
+        var job = stored
+        job.schemaVersion = DroneStoredJob.currentSchemaVersion
+        guard !job.state.isTerminal else { return job }
+        if let group = job.processGroup {
+            DroneProcessTable.killOrphanedGroup(group)
+        }
+        try append(.notice(.recoveredAfterRestart), to: &job)
+        job.state = job.cancellationRequested ? .cancelled : .failed
+        if !job.cancellationRequested {
+            job.failure = DroneJobFailure(
+                code: .workerRestarted,
+                message: "The worker restarted before this job reached a final state."
+            )
+        }
+        job.updatedAt = now()
+        try persist(job)
+        return job
     }
 
     /// Size is checked before any read so an oversized record is never allocated.
@@ -448,6 +497,7 @@ final class DroneJobStore: @unchecked Sendable {
               let data = try? Data(contentsOf: recordURL, options: []),
               let job = try? decoder().decode(DroneStoredJob.self, from: data),
               (job.schemaVersion ?? 1) == DroneStoredJob.currentSchemaVersion,
+              job.hasConsistentHistory,
               job.controllerID == controllerID,
               recordURL.lastPathComponent == "\(job.idempotencyKey).json"
         else { return nil }

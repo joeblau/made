@@ -146,6 +146,7 @@ enum DroneJobProof {
         expect(recoveredSnapshot.state == .failed, "interrupted job was rerun or left ambiguous")
         expect(recoveredSnapshot.failure?.code == .workerRestarted, "restart failure was not explicit")
         try verifyQuarantinedRecovery(in: workspace, root: root)
+        try verifyUnrecoverableRecordQuarantine(in: workspace, root: root)
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
     }
 
@@ -620,6 +621,90 @@ enum DroneJobProof {
         ) as? [String: Any]
         expect((migrated?["schemaVersion"] as? Int) == DroneStoredJob.currentSchemaVersion,
                "recovered legacy record was not rewritten with the current schema version")
+    }
+
+    /// #440: a record that decodes and passes the schema, owner and name checks
+    /// but cannot be recovered (overflow-prone counters, out-of-order history,
+    /// or a recovery persist that throws) is quarantined, and the rest of the
+    /// store still loads instead of trapping or failing startup.
+    private static func verifyUnrecoverableRecordQuarantine(in workspace: URL, root: URL) throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let controllerID = UUID()
+        let files = FileManager.default
+        func create(_ key: String) -> DroneJobCreate {
+            DroneJobCreate(controllerID: controllerID, idempotencyKey: key, request: DroneJobRequest(
+                workspaceID: workspaceID,
+                operation: .readFile(DroneReadFileOperation(relativePath: "main.swift"))
+            ))
+        }
+        func recordURL(_ state: URL, _ key: String) -> URL {
+            state.appendingPathComponent("controllers/\(controllerID.uuidString)/jobs/\(key).json")
+        }
+        // Records are written with sorted keys, so each field is followed by another.
+        func replace(_ url: URL, _ old: String, _ new: String) throws {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            guard text.contains(old) else { throw ProofError.failed("record fixture lacked \(old)") }
+            try Data(text.replacingOccurrences(of: old, with: new).utf8).write(to: url)
+        }
+
+        let counterState = root.appendingPathComponent("unrecoverable-counters", isDirectory: true)
+        let seeded = try DroneJobStore(stateURL: counterState, limits: DroneJobEngineLimits())
+        let kept = try seeded.create(create("unrecoverable-kept-01")).snapshot
+        // Non-final records: recovery appends a notice, so these exercise the
+        // sequence arithmetic. Without the bound, UInt64.max traps the daemon.
+        _ = try seeded.create(create("unrecoverable-maxseq-1"))
+        _ = try seeded.create(create("unrecoverable-ceiling1"))
+        _ = try seeded.create(create("unrecoverable-order-01"))
+        let dropped = try seeded.create(create("unrecoverable-dropped")).snapshot
+        try seeded.finish(id: dropped.id, state: .completed, result: nil, failure: nil)
+        try replace(recordURL(counterState, "unrecoverable-maxseq-1"),
+                    "\"latestSequence\":1,", "\"latestSequence\":\(UInt64.max),")
+        try replace(recordURL(counterState, "unrecoverable-ceiling1"),
+                    "\"latestSequence\":1,", "\"latestSequence\":\(DroneStoredJob.maximumCounter),")
+        try replace(recordURL(counterState, "unrecoverable-order-01"), "\"sequence\":1,", "\"sequence\":5,")
+        try replace(recordURL(counterState, "unrecoverable-dropped"),
+                    "\"droppedEventCount\":0,", "\"droppedEventCount\":\(UInt64.max),")
+
+        let engine = try DroneJobEngine(stateURL: counterState, workspaces: registry)
+        expect(engine.quarantinedRecordCount == 4,
+               "recovery quarantined \(engine.quarantinedRecordCount) unrecoverable records, expected 4")
+        let recovered = try engine.snapshot(id: kept.id, controllerID: controllerID)
+        expect(recovered.state == .failed && recovered.failure?.code == .workerRestarted,
+               "a valid record beside unrecoverable ones was not recovered")
+        for key in ["unrecoverable-maxseq-1", "unrecoverable-ceiling1", "unrecoverable-order-01", "unrecoverable-dropped"] {
+            expect(!files.fileExists(atPath: recordURL(counterState, key).path), "\(key) was left in place")
+            expect((try? engine.snapshot(controllerID: controllerID, idempotencyKey: key)) == nil,
+                   "\(key) was loaded despite untrusted counters")
+        }
+
+        // Persist: both records decode within the size bound, but the recovery
+        // notice and failure push the non-final record past it, so re-persisting
+        // it throws resourceLimit. That record is quarantined intact; startup continues.
+        let persistState = root.appendingPathComponent("unrecoverable-persist", isDirectory: true)
+        let writer = try DroneJobStore(stateURL: persistState, limits: DroneJobEngineLimits())
+        _ = try writer.create(create("unpersistable-job-01"))
+        let finished = try writer.create(create("persistable-finished")).snapshot
+        try writer.finish(id: finished.id, state: .completed, result: nil, failure: nil)
+        let pending = try Data(contentsOf: recordURL(persistState, "unpersistable-job-01"))
+        let finishedBytes = try Data(contentsOf: recordURL(persistState, "persistable-finished")).count
+        var tight = DroneJobEngineLimits()
+        tight.maximumStoredRecordBytes = max(pending.count, finishedBytes)
+        let reopened = try DroneJobStore(stateURL: persistState, limits: tight)
+        expect(reopened.quarantinedEntryCount == 1, "a record whose recovery persist failed was not quarantined")
+        let survivor = try? reopened.snapshot(controllerID: controllerID, idempotencyKey: "persistable-finished")
+        expect(survivor?.state == .completed, "a persistable record was lost when another record's persist failed")
+        expect((try? reopened.snapshot(controllerID: controllerID, idempotencyKey: "unpersistable-job-01")) == nil,
+               "a record whose recovery could not be persisted was served")
+        expect(!files.fileExists(atPath: recordURL(persistState, "unpersistable-job-01").path),
+               "an unpersistable record was left where it would be retried on every start")
+        let entries = (try? files.contentsOfDirectory(
+            at: persistState.appendingPathComponent("quarantine", isDirectory: true),
+            includingPropertiesForKeys: nil
+        )) ?? []
+        expect(entries.count == 1 && entries.first.flatMap {
+            try? Data(contentsOf: $0.appendingPathComponent("unpersistable-job-01.json"))
+        } == pending, "the unpersistable record was not quarantined unchanged")
     }
 
     private static func terminal(

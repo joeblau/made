@@ -116,14 +116,18 @@ restart and confirm `drone doctor` succeeds before enabling further rollout.
 
 Job records and the terminal catalog carry a `schemaVersion`. At startup, a
 record or catalog that the running build cannot read, that has an unknown
-version, or that conflicts with another record is moved into a `quarantine/`
-directory beside it (`jobs/quarantine/` or `terminals/quarantine/` under the
-worker state directory). The worker keeps serving the remaining records and
+version, that conflicts with another record, or whose recovery fails is moved
+into a `quarantine/` directory beside it (`jobs/quarantine/` or
+`terminals/quarantine/` under the worker state directory). The worker keeps serving the remaining records and
 reports unhealthy storage while either quarantine directory has entries. This
 happens after rolling back past a build that wrote newer records. Reinstall a
 build that understands those records and move them back, or remove them
-deliberately. Startup fails only if the worker cannot move an entry aside,
-because then it would later overwrite the only copy.
+deliberately. A job record's recovery fails when its event sequence or
+dropped-event counter is out of range or its history is out of order, when the
+recovery notice cannot be written back within the record size limit or the
+disk write fails, or when an expired record cannot be deleted. Startup fails
+only if the worker cannot move an entry aside, because then it would later
+overwrite the only copy.
 
 ## Execution and recovery semantics
 
