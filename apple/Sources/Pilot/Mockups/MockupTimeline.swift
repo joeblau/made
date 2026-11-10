@@ -52,6 +52,9 @@ struct MockupKeyframe: Codable, Equatable, Identifiable {
 /// Ordered keyframes use cumulative durations, matching Rotato's preset files.
 struct MockupTimeline: Codable, Equatable {
     static let minimumDuration = 0.1
+    static let maximumKeyframeDuration = 30.0
+    /// Total-length cap enforced by every editing operation, so a saved timeline always reloads (#435).
+    static let maximumTotalDuration = 120.0
     static let maximumKeyframes = 256
 
     var keyframes: [MockupKeyframe]
@@ -59,9 +62,11 @@ struct MockupTimeline: Codable, Equatable {
     var duration: Double { keyframes.reduce(0) { $0 + $1.duration } }
 
     var isValid: Bool {
-        guard !keyframes.isEmpty, keyframes.count <= Self.maximumKeyframes, duration <= 120 else { return false }
+        guard !keyframes.isEmpty, keyframes.count <= Self.maximumKeyframes,
+              duration <= Self.maximumTotalDuration else { return false }
         return keyframes.allSatisfy {
-            $0.duration.isFinite && $0.duration >= Self.minimumDuration && $0.duration <= 30 && $0.pose.isFinite
+            $0.duration.isFinite && $0.duration >= Self.minimumDuration
+                && $0.duration <= Self.maximumKeyframeDuration && $0.pose.isFinite
         }
     }
 
@@ -98,7 +103,10 @@ struct MockupTimeline: Codable, Equatable {
         }
         guard keyframes.count < Self.maximumKeyframes else { return nil }
         if time >= duration {
-            let keyframe = MockupKeyframe(pose: pose, duration: 2)
+            // Appending lengthens the timeline, so it may only use what is left of the total cap.
+            let remaining = Self.maximumTotalDuration - duration
+            guard remaining >= Self.minimumDuration else { return nil }
+            let keyframe = MockupKeyframe(pose: pose, duration: min(2, remaining))
             keyframes.append(keyframe)
             return keyframe.id
         }
@@ -106,6 +114,8 @@ struct MockupTimeline: Codable, Equatable {
         for index in keyframes.indices {
             let end = start + keyframes[index].duration
             if time > start, time < end {
+                // Splitting keeps the total but must not leave a segment shorter than the minimum.
+                guard time - start >= Self.minimumDuration, end - time >= Self.minimumDuration else { return nil }
                 let oldDuration = keyframes[index].duration
                 let oldEasing = keyframes[index].easing
                 keyframes[index].duration = time - start
@@ -124,8 +134,10 @@ struct MockupTimeline: Codable, Equatable {
     }
 
     mutating func setDuration(_ duration: Double, for id: MockupKeyframe.ID) {
-        guard let index = keyframes.firstIndex(where: { $0.id == id }) else { return }
-        keyframes[index].duration = min(max(duration, Self.minimumDuration), 30)
+        guard let index = keyframes.firstIndex(where: { $0.id == id }), duration.isFinite else { return }
+        let others = self.duration - keyframes[index].duration
+        let ceiling = min(Self.maximumKeyframeDuration, Self.maximumTotalDuration - others)
+        keyframes[index].duration = max(min(duration, ceiling), Self.minimumDuration)
     }
 
     mutating func setEasing(_ easing: MockupEasing, for id: MockupKeyframe.ID) {
@@ -138,15 +150,23 @@ struct MockupTimeline: Codable, Equatable {
         guard let index = keyframes.firstIndex(where: { $0.id == id }), index > 0 else { return }
         let previousStart = startTime(at: index - 1)
         let nextStart = index + 1 < keyframes.count ? startTime(at: index + 1) : duration
-        guard nextStart - previousStart >= 2 * Self.minimumDuration else { return }
-        let destination = min(max(time, previousStart + Self.minimumDuration), nextStart - Self.minimumDuration)
+        // Both neighbouring segments must stay within the per-keyframe bounds.
+        let earliest = max(previousStart + Self.minimumDuration, nextStart - Self.maximumKeyframeDuration)
+        let latest = min(nextStart - Self.minimumDuration, previousStart + Self.maximumKeyframeDuration)
+        guard earliest <= latest, time.isFinite else { return }
+        let destination = min(max(time, earliest), latest)
         keyframes[index - 1].duration = destination - previousStart
         keyframes[index].duration = nextStart - destination
     }
 
     mutating func removeKeyframe(_ id: MockupKeyframe.ID) {
         guard keyframes.count > 1, let index = keyframes.firstIndex(where: { $0.id == id }) else { return }
-        if index > 0 { keyframes[index - 1].duration += keyframes[index].duration }
+        if index > 0 {
+            // The merged segment keeps the removed span up to the per-keyframe cap; any excess is dropped.
+            keyframes[index - 1].duration = min(
+                keyframes[index - 1].duration + keyframes[index].duration, Self.maximumKeyframeDuration
+            )
+        }
         keyframes.remove(at: index)
     }
 
