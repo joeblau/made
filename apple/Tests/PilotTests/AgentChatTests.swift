@@ -445,7 +445,46 @@ struct AgentChatTests {
         await #expect(throws: ACPConnectionError.lineTooLong(limit: 64)) {
             _ = try await connection.request("initialize", params: [:], timeout: .seconds(10))
         }
-        await connection.terminate()
+    }
+
+    /// #447: an agent that overflows a line while ignoring SIGTERM, and the
+    /// subprocess it spawned, are both gone without the client terminating.
+    @Test
+    func oversizedAgentOutputKillsTheAgentProcessGroup() async throws {
+        let childFile = FileManager.default.temporaryDirectory.appendingPathComponent("acp-child-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: childFile) }
+        let connection = ACPConnection(maxLineBytes: 64)
+        try await connection.start(shellAgent(#"""
+        trap '' TERM HUP
+        /bin/sleep 30 &
+        echo $! > '\#(childFile.path)'
+        read -r _
+        printf '%0200d' 0
+        exec /bin/sleep 30
+        """#))
+        let agent = try #require(await connection.processIdentifier)
+        await #expect(throws: ACPConnectionError.lineTooLong(limit: 64)) {
+            _ = try await connection.request("initialize", params: [:], timeout: .seconds(10))
+        }
+        let childText = try String(contentsOf: childFile, encoding: .utf8)
+        let child = try #require(pid_t(childText.trimmingCharacters(in: .whitespacesAndNewlines)))
+        try await waitUntilExited([agent, child])
+    }
+
+    /// #447: an agent that closes stdout but keeps running (ignoring SIGTERM)
+    /// is killed once the connection reports it exited.
+    @Test
+    func agentThatClosesStdoutIsKilled() async throws {
+        let connection = ACPConnection()
+        try await connection.start(shellAgent("trap '' TERM HUP; exec 1>&-; exec /bin/sleep 30"))
+        let agent = try #require(await connection.processIdentifier)
+        await #expect {
+            _ = try await connection.request("initialize", params: [:], timeout: .seconds(10))
+        } throws: { error in
+            guard case .exited = error as? ACPConnectionError else { return false }
+            return true
+        }
+        try await waitUntilExited([agent])
     }
 
     @MainActor
@@ -618,6 +657,18 @@ struct AgentChatTests {
                                            attributes: [.posixPermissions: 0o755])
         }
         return bin
+    }
+
+    /// Waits for every pid to be gone, without signalling any of them.
+    private func waitUntilExited(_ pids: [pid_t], timeout: Duration = .seconds(10)) async throws {
+        let deadline = ContinuousClock.now + timeout
+        while let alive = pids.first(where: { kill($0, 0) == 0 }) {
+            guard ContinuousClock.now < deadline else {
+                Issue.record("process \(alive) still running \(timeout) after the connection closed")
+                throw CancellationError()
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     @MainActor
