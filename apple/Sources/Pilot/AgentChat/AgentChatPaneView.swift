@@ -662,6 +662,9 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
             approvalHeight?.constant = 0
             return
         }
+        // Only an arriving card fades in; a queued successor or a re-layout
+        // (`force`) swaps in place, and leaving stays instant (keyboard answers).
+        let arriving = approvalCard.isHidden
         let model = AgentChatPaneContent.approval(for: request, session: session)
         approvalCard.configure(
             approval: model.approval, verb: model.verb, moreCount: max(0, queued - 1),
@@ -675,6 +678,7 @@ final class AgentChatPaneViewController: NSViewController, CockpitPanePresenting
                                                            moreCount: max(0, queued - 1), unredactedInput: model.unredactedInput,
                                                            maskedInput: model.maskedInput)
         approvalCard.isHidden = false
+        if arriving { CockpitMotion.reveal(approvalCard) }
     }
 
     // MARK: Inspector and keyboard

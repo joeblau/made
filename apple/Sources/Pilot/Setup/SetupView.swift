@@ -132,7 +132,9 @@ final class SetupViewController: NSViewController {
         }
         let step = progress.step
         let focusedAction = step == renderedStep ? focusedActionIdentifier() : nil
-        if step != renderedStep {
+        // Permission polling also rebuilds the page; only a step change fades.
+        let stepChanged = step != renderedStep
+        if stepChanged {
             renderedStep = step
             if visible, runsChecks, step == .tools || step == .ready {
                 checkTask?.cancel()
@@ -155,6 +157,7 @@ final class SetupViewController: NSViewController {
         }
         renderNavigation()
         restoreFocusedAction(focusedAction)
+        if stepChanged { CockpitMotion.reveal(pages) }
     }
 
     @discardableResult
