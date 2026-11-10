@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Network
 import XCTest
 
 @testable import Copilot
@@ -134,33 +135,108 @@ final class FrameLinkSecurityTests: XCTestCase {
         XCTAssertEqual(pilot.receive(plotterApproval.proof), .authenticated)
     }
 
-    func testFrameLinkEndpointsProveTheStoredKeyAfterAnIdentityRotation() async {
-        // A private center and loader stand in for the Keychain identity, so
-        // this drives the production path: rotation notification ->
-        // observer -> reload through the loader -> rebuilt FrameLink identity.
-        let center = NotificationCenter()
-        let stored = Curve25519.KeyAgreement.PrivateKey()
-        let storedRaw = stored.rawRepresentation
-        let storedPublic = stored.publicKey.rawRepresentation.base64EncodedString()
-        let changes = DeviceIdentity.ChangeSource(
-            center: center,
-            load: { try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: storedRaw) }
-        )
-        let sender = FrameSender(usesEphemeralIdentity: true, identityChanges: changes)
-        let receiver = FrameReceiver(identityChanges: changes)
-        let originalSender = await sender.localIdentityPublicKeyBase64()
-        let originalReceiver = await receiver.localIdentityPublicKeyBase64()
-        XCTAssertNotEqual(originalSender, storedPublic)
-        XCTAssertNotEqual(originalReceiver, storedPublic)
+    func testFrameLinkEndpointsProveTheStoredKeyAfterAnIdentityRotation() async throws {
+        // An in-memory vault stands in for the Keychain identity, so this
+        // drives the production path: regenerate -> notification ->
+        // observer -> reload through the vault -> rebuilt FrameLink identity.
+        let vault = DeviceIdentity.Vault.inMemory()
+        let stored = try base64(vault.loadOrCreate())
+        let sender = FrameSender(usesEphemeralIdentity: true, identityChanges: vault.changeSource)
+        let receiver = FrameReceiver(identityChanges: vault.changeSource)
+        // Both endpoints began from an ephemeral key; each reloads once after
+        // subscribing, so a rotation before the observer existed is not missed.
+        let senderAtStart = await sender.localIdentityPublicKeyBase64()
+        let receiverAtStart = await receiver.localIdentityPublicKeyBase64()
+        XCTAssertEqual(senderAtStart, stored)
+        XCTAssertEqual(receiverAtStart, stored)
 
         // `post` runs both observers synchronously and each reload is queued
         // on its endpoint's queue ahead of the getter, so these reads are ordered.
-        center.post(name: DeviceIdentity.didChangeNotification, object: nil)
+        let rotated = try base64(vault.regenerate())
+        XCTAssertNotEqual(rotated, stored)
 
         let senderKey = await sender.localIdentityPublicKeyBase64()
         let receiverKey = await receiver.localIdentityPublicKeyBase64()
-        XCTAssertEqual(senderKey, storedPublic, "Pilot's FrameLink must prove the stored key")
-        XCTAssertEqual(receiverKey, storedPublic, "Plotter's FrameLink must prove the stored key")
+        XCTAssertEqual(senderKey, rotated, "Pilot's FrameLink must prove the stored key")
+        XCTAssertEqual(receiverKey, rotated, "Plotter's FrameLink must prove the stored key")
+    }
+
+    /// #429 with a handshake in flight: Kneeboard is waiting on Cockpit's
+    /// pairing approval when the identity rotates. The approval request and
+    /// the connection handshaking with the old key must both be dropped.
+    func testIdentityRotationDropsTheSenderConnectionAndPendingPairing() async throws {
+        let vault = DeviceIdentity.Vault.inMemory()
+        let sender = FrameSender(usesEphemeralIdentity: true, identityChanges: vault.changeSource)
+        let pairing = PairingEvents()
+        sender.onPairingRequestChanged = { pairing.record($0 != nil) }
+        let kneeboardSocket = try LoopbackTCPPeer()
+        defer { kneeboardSocket.stop() }
+        let endpoint = try await kneeboardSocket.endpoint()
+        sender.adoptForTesting(NWConnection(to: endpoint, using: FrameLink.tcpParameters()))
+
+        // Cockpit's hello arrives first; Kneeboard answers with an identity
+        // Cockpit has not pinned, so Cockpit asks the user to pair.
+        try await waitUntil("Cockpit hello") { kneeboardSocket.receivedByteCount > 0 }
+        var kneeboard = FrameLinkSecureSession(localKey: Curve25519.KeyAgreement.PrivateKey())
+        let kneeboardHello = try XCTUnwrap(kneeboard.begin())
+        kneeboardSocket.send(FrameLink.frame(kneeboardHello))
+        try await waitUntil("pairing approval requested") { pairing.events == [true] }
+
+        try vault.regenerate()
+
+        try await waitUntil("pending pairing dropped") { pairing.events == [true, false] }
+        try await waitUntil("old-key connection closed") { kneeboardSocket.isClosedByPeer }
+        let senderKey = await sender.localIdentityPublicKeyBase64()
+        XCTAssertEqual(senderKey, try base64(vault.loadOrCreate()))
+    }
+
+    /// #429 with Plotter's stream connected and awaiting pairing approval:
+    /// the rotation tears that connection down instead of letting it keep
+    /// proving the old key.
+    func testIdentityRotationTearsDownTheReceiverConnection() async throws {
+        let vault = DeviceIdentity.Vault.inMemory()
+        let receiver = FrameReceiver(identityChanges: vault.changeSource)
+        let pairing = PairingEvents()
+        receiver.onPairingRequestChanged = { pairing.record($0 != nil) }
+        let cockpitSocket = try LoopbackTCPPeer()
+        defer { cockpitSocket.stop() }
+        let endpoint = try await cockpitSocket.endpoint()
+        receiver.connectForTesting(to: endpoint)
+
+        try await waitUntil("Kneeboard hello") { cockpitSocket.receivedByteCount > 0 }
+        var cockpit = FrameLinkSecureSession(localKey: Curve25519.KeyAgreement.PrivateKey())
+        let cockpitHello = try XCTUnwrap(cockpit.begin())
+        cockpitSocket.send(FrameLink.frame(cockpitHello))
+        try await waitUntil("pairing approval requested") { pairing.events == [true] }
+
+        try vault.regenerate()
+
+        try await waitUntil("old-key connection closed") { cockpitSocket.isClosedByPeer }
+        XCTAssertEqual(pairing.events, [true, false], "the pending approval must be dropped")
+        let receiverKey = await receiver.localIdentityPublicKeyBase64()
+        XCTAssertEqual(receiverKey, try base64(vault.loadOrCreate()))
+    }
+
+    private func base64(_ key: Curve25519.KeyAgreement.PrivateKey) -> String {
+        key.publicKey.rawRepresentation.base64EncodedString()
+    }
+
+    private func waitUntil(
+        _ condition: String,
+        timeout: TimeInterval = 5,
+        _ predicate: () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !predicate() {
+            guard Date() < deadline else {
+                throw NSError(
+                    domain: "FrameLinkSecurityTests",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "timed out waiting for \(condition)"]
+                )
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 
     private func authenticateTrusted(
@@ -190,5 +266,95 @@ final class FrameLinkSecurityTests: XCTestCase {
             throw NSError(domain: "FrameLinkSecurityTests", code: 1)
         }
         return request
+    }
+}
+
+/// Records pairing-request callbacks (`true` raised, `false` cleared); the
+/// endpoints invoke them on their own queues.
+private final class PairingEvents: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [Bool] = []
+
+    var events: [Bool] { lock.withLock { recorded } }
+
+    func record(_ raised: Bool) {
+        lock.withLock { recorded.append(raised) }
+    }
+}
+
+/// A loopback TCP socket standing in for the other FrameLink device: it
+/// records how many bytes arrive and whether the endpoint under test closed
+/// the connection (#429).
+private final class LoopbackTCPPeer: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "app.blau.tests.framelink.loopback")
+    private let listener: NWListener
+    private let lock = NSLock()
+    private var port: NWEndpoint.Port?
+    private var accepted: NWConnection?
+    private var received = 0
+    private var closed = false
+
+    init() throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        listener = try NWListener(using: parameters)
+        listener.stateUpdateHandler = { [weak self] state in
+            guard let self, case .ready = state else { return }
+            let port = self.listener.port
+            self.lock.withLock { self.port = port }
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            guard let self else {
+                connection.cancel()
+                return
+            }
+            self.accept(connection)
+        }
+        listener.start(queue: queue)
+    }
+
+    var receivedByteCount: Int { lock.withLock { received } }
+    var isClosedByPeer: Bool { lock.withLock { closed } }
+
+    /// The loopback address, once the listener is ready.
+    func endpoint() async throws -> NWEndpoint {
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if let port = lock.withLock({ port }) {
+                return .hostPort(host: "127.0.0.1", port: port)
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        throw NSError(domain: "FrameLinkSecurityTests", code: 3)
+    }
+
+    func send(_ data: Data) {
+        lock.withLock { accepted }?.send(content: data, completion: .contentProcessed { _ in })
+    }
+
+    func stop() {
+        lock.withLock { accepted }?.cancel()
+        listener.cancel()
+    }
+
+    private func accept(_ connection: NWConnection) {
+        lock.withLock { accepted = connection }
+        connection.start(queue: queue)
+        receiveNext(on: connection)
+    }
+
+    private func receiveNext(on connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) {
+            [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if let data, !data.isEmpty {
+                self.lock.withLock { self.received += data.count }
+            }
+            if isComplete || error != nil {
+                self.lock.withLock { self.closed = true }
+                return
+            }
+            self.receiveNext(on: connection)
+        }
     }
 }

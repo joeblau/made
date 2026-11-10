@@ -196,6 +196,9 @@ public final class FrameSender: @unchecked Sendable {
             identityObserver = DeviceIdentity.observeChanges(center: center) { [weak self] in
                 self?.reloadLocalIdentity()
             }
+            // The key above was loaded before this observer existed; reload
+            // once so a rotation in between is not missed (issue #429).
+            reloadLocalIdentity()
         }
     }
 
@@ -257,6 +260,15 @@ public final class FrameSender: @unchecked Sendable {
                     returning: self?.localKey.publicKey.rawRepresentation.base64EncodedString() ?? ""
                 )
             }
+        }
+    }
+
+    /// Test seam (#429): authenticates `connection` exactly as a client the
+    /// listener accepted, so a test can hold a live handshake or pending
+    /// pairing without Bonjour.
+    func adoptForTesting(_ connection: NWConnection) {
+        queue.async { [weak self] in
+            self?.adopt(connection)
         }
     }
 
@@ -829,6 +841,9 @@ public final class FrameReceiver: @unchecked Sendable {
             identityObserver = DeviceIdentity.observeChanges(center: center) { [weak self] in
                 self?.reloadLocalIdentity()
             }
+            // The key above was loaded before this observer existed; reload
+            // once so a rotation in between is not missed (issue #429).
+            reloadLocalIdentity()
         }
     }
 
@@ -893,6 +908,15 @@ public final class FrameReceiver: @unchecked Sendable {
             queue.async { [weak self] in
                 continuation.resume(returning: self?.security.localPublicKeyBase64 ?? "")
             }
+        }
+    }
+
+    /// Test seam (#429): dials `endpoint` directly instead of discovering
+    /// Pilot over Bonjour, then authenticates exactly as a discovered stream.
+    func connectForTesting(to endpoint: NWEndpoint) {
+        queue.async { [weak self] in
+            guard let self, self.connection == nil else { return }
+            self.connect(to: endpoint)
         }
     }
 

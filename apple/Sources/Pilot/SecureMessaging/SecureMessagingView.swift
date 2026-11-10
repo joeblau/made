@@ -142,6 +142,11 @@ final class PilotSecureMessagingViewController: NSViewController, NSTextFieldDel
 
     private func refresh() {
         guard isViewLoaded else { return }
+        // Show the key a new channel would prove, not one captured before a
+        // rotation (#429).
+        if suppliedPublicKey == nil, loadsPairingSecrets {
+            publicKey.stringValue = DeviceIdentity.publicKeyBase64() ?? "—"
+        }
         let connected = transport?.state.isConnected == true
         sendSection.isHidden = !connected
         keyError.stringValue = SecurePairingStore.peerKeyUpdate(for: peerKey.stringValue) == .rejectInvalid
@@ -197,8 +202,10 @@ final class PilotSecureMessagingViewController: NSViewController, NSTextFieldDel
             let signaling = try SignalingClient(
                 baseURLString: rendezvous.stringValue, allowInsecureLocalhost: allowLocalhost.state == .on
             )
+            // A rotation closes this channel; Connect then loads the new key (#429).
             let connection = SecureChannelResponder(
-                role: .responder, signaling: signaling, token: pairingToken, staticKey: identity, peerStatic: peerStatic
+                role: .responder, signaling: signaling, token: pairingToken, staticKey: identity,
+                peerStatic: peerStatic, identityChanges: .stored
             )
             replaceActiveConnection(&transport, with: connection) { $0.disconnect() }
             connection.connect()

@@ -58,6 +58,18 @@ final class SecureChannelCore {
     private let localPort: UInt16
     private let socketReadinessTimeout: Duration
     private let handshakeSchedule: HandshakeRetrySchedule
+    /// Where identity rotations come from (issue #429): `.stored` in the
+    /// apps, a private source in tests, `nil` for a key that is not the
+    /// device identity.
+    private let identityChanges: DeviceIdentity.ChangeSource?
+    @ObservationIgnored private var identitySubscription: IdentityChangeSubscription?
+    /// Set once `staticKey` stopped being the stored identity. Absorbing: the
+    /// channel never connects again, and the UI builds a new one that loads
+    /// the current key.
+    @ObservationIgnored private var identityRetired = false
+
+    nonisolated static let identityRotatedReason =
+        "This device's identity key changed. Connect again to prove the new key."
 
     private var connection: NWConnection?
     private var socketReady: CheckedContinuation<Void, Error>?
@@ -89,6 +101,7 @@ final class SecureChannelCore {
         token: String,
         staticKey: Curve25519.KeyAgreement.PrivateKey,
         peerStatic: Curve25519.KeyAgreement.PublicKey,
+        identityChanges: DeviceIdentity.ChangeSource?,
         localPort: UInt16 = SecureChannelCore.randomEphemeralPort(),
         socketReadinessTimeout: Duration = .seconds(8),
         handshakeSchedule: HandshakeRetrySchedule = HandshakeRetrySchedule()
@@ -101,6 +114,18 @@ final class SecureChannelCore {
         self.localPort = localPort
         self.socketReadinessTimeout = socketReadinessTimeout
         self.handshakeSchedule = handshakeSchedule
+        self.identityChanges = identityChanges
+        if let center = identityChanges?.center {
+            identitySubscription = IdentityChangeSubscription(center: center) { [weak self] in
+                // `SecureIdentity.regenerate()` posts on the main thread, so
+                // the channel closes before the rotation call returns.
+                if Thread.isMainThread {
+                    MainActor.assumeIsolated { self?.identityDidChange() }
+                } else {
+                    Task { @MainActor in self?.identityDidChange() }
+                }
+            }
+        }
     }
 
     static func randomEphemeralPort() -> UInt16 {
@@ -109,6 +134,12 @@ final class SecureChannelCore {
 
     func connect() {
         guard lifecycleTask == nil else { return }
+        // Closes the window between the caller loading `staticKey` and this
+        // channel subscribing to rotations: a stale key never starts.
+        guard identityIsCurrent() else {
+            retireIdentity()
+            return
+        }
         appendLog("Connecting (local UDP port \(localPort))…")
         lifecycleTask = Task { @MainActor [weak self] in
             await self?.runLifecycle()
@@ -161,6 +192,32 @@ final class SecureChannelCore {
         let blob = Data((0..<256).map { UInt8($0 & 0xFF) })
         appendLog("→ best-effort blob (\(blob.count) bytes)")
         transmit(type: .bestEffortBlob, plaintext: blob, keys: keys)
+    }
+
+    /// The device identity rotated (issue #429). The handshake proves
+    /// `staticKey`, so once that is no longer the stored key the channel
+    /// (connected, mid-handshake with retries pending, or idle) is closed for
+    /// good instead of continuing to prove the rotated-out key.
+    private func identityDidChange() {
+        guard !identityIsCurrent() else { return }
+        retireIdentity()
+    }
+
+    /// Fails closed: an unreadable stored identity counts as rotated.
+    private func identityIsCurrent() -> Bool {
+        guard !identityRetired else { return false }
+        guard let identityChanges else { return true }
+        guard let stored = try? identityChanges.load() else { return false }
+        return stored.publicKey.rawRepresentation == staticKey.publicKey.rawRepresentation
+    }
+
+    private func retireIdentity() {
+        identityRetired = true
+        // Cancels the lifecycle, handshake retries and deadline, retransmits,
+        // the socket, and drops the transport keys.
+        disconnect()
+        state = .failed(reason: Self.identityRotatedReason)
+        appendLog("Failed: \(Self.identityRotatedReason)")
     }
 
     private func runLifecycle() async {
@@ -558,6 +615,22 @@ final class SecureChannelCore {
         if received.count > Self.receivedHistoryLimit {
             received.removeFirst(received.count - Self.receivedHistoryLimit)
         }
+    }
+}
+
+/// Owns one identity-rotation observer and removes it when the channel that
+/// holds it is released (issue #429).
+private final class IdentityChangeSubscription: @unchecked Sendable {
+    private let center: NotificationCenter
+    private let token: any NSObjectProtocol
+
+    init(center: NotificationCenter, _ handler: @escaping @Sendable () -> Void) {
+        self.center = center
+        token = DeviceIdentity.observeChanges(center: center, handler)
+    }
+
+    deinit {
+        center.removeObserver(token)
     }
 }
 
