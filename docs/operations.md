@@ -22,6 +22,11 @@ jobs still deploy before deleting the old token.
 All Actions and build tools are pinned. Dependabot proposes weekly Bun-workspace
 and GitHub Actions updates, which must pass the same CI gates before merge.
 
+The tmux the terminal tests drive is built from SHA-256 pinned tmux and libevent
+sources by `apple/bin/install-tmux.sh`; CI then requires that the tmux the apps
+select reports exactly the pinned version. Bump the version and both digests
+together.
+
 ## Deploy and rollback
 
 Pushes to `main` run all Worker quality gates, then deploy only the changed
