@@ -75,6 +75,14 @@ cat > "$work/apple/bin/benchmark-annexb.sh" <<'TOOL'
 #!/bin/bash
 printf 'benchmark-annexb %s\n' "$*" >> "$CI_TEST_LOG"
 TOOL
+cat > "$work/apple/bin/check-annexb-parity.sh" <<'TOOL'
+#!/bin/bash
+printf 'annexb-parity %s\n' "$*" >> "$CI_TEST_LOG"
+TOOL
+cat > "$work/apple/bin/check-android-stream-live.sh" <<'TOOL'
+#!/bin/bash
+printf 'android-stream-live %s\n' "$*" >> "$CI_TEST_LOG"
+TOOL
 cat > "$work/apple/bin/check-cockpit-ui-boundary.py" <<'TOOL'
 import os
 from pathlib import Path
@@ -123,6 +131,8 @@ reset_log
 "$work/apple/bin/test.sh" all
 expect_calls 1 '^icons validate$'
 expect_calls 1 '^benchmark-annexb --typecheck$'
+expect_calls 1 '^annexb-parity --typecheck$'
+expect_calls 1 '^android-stream-live --typecheck$'
 expect_calls 1 '^runner-model verify$'
 expect_calls 1 '^mockup-models verify$'
 expect_calls 2 '^cockpit-ui-boundary$'

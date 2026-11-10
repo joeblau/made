@@ -48,6 +48,9 @@ input.append(Data(repeating: 0x55, count: payloadBytes))
 
 struct Measurement {
     var seconds: Double
+    /// Thread CPU time: excludes time spent descheduled, so it stays
+    /// comparable on a contended host where wall time does not.
+    var cpuSeconds: Double
     var events: Int
     var allocations: Int
     var allocatedBytes: Int
@@ -62,6 +65,7 @@ struct Measurement {
     allocatedBytes = 0
     loggerSlot?.pointee = countingLogger
     let start = DispatchTime.now().uptimeNanoseconds
+    let cpuStart = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
     for _ in 0..<parserInstances {
         var assembler = H264AnnexBAssembler()
         for chunk in chunks {
@@ -69,10 +73,12 @@ struct Measurement {
         }
         events += try assembler.flushTrailing().count
     }
+    let cpuElapsed = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpuStart
     let elapsed = DispatchTime.now().uptimeNanoseconds - start
     loggerSlot?.pointee = nil
     return Measurement(
         seconds: Double(elapsed) / 1e9,
+        cpuSeconds: Double(cpuElapsed) / 1e9,
         events: events,
         allocations: allocationCount,
         allocatedBytes: allocatedBytes
@@ -82,7 +88,7 @@ struct Measurement {
 let repetitions = Int(ProcessInfo.processInfo.environment["ANNEXB_BENCH_REPETITIONS"] ?? "") ?? 5
 print("H264AnnexBAssembler: \(parserInstances) instances x \(input.count) bytes, median of \(repetitions) runs")
 if loggerSlot == nil { print("(allocation counting unavailable: malloc_logger not found)") }
-print("chunk_bytes\tseconds\tevents\tallocations\tallocated_bytes")
+print("chunk_bytes\tseconds\tcpu_seconds\tevents\tallocations\tallocated_bytes")
 for chunkSize in [1_024, 4_096, 65_536] {
     var samples: [Measurement] = []
     for _ in 0..<repetitions {
@@ -91,7 +97,7 @@ for chunkSize in [1_024, 4_096, 65_536] {
     samples.sort { $0.seconds < $1.seconds }
     let median = samples[samples.count / 2]
     print(String(
-        format: "%d\t%.5f\t%d\t%d\t%d",
-        chunkSize, median.seconds, median.events, median.allocations, median.allocatedBytes
+        format: "%d\t%.5f\t%.5f\t%d\t%d\t%d",
+        chunkSize, median.seconds, median.cpuSeconds, median.events, median.allocations, median.allocatedBytes
     ))
 }
