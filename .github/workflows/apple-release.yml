@@ -101,6 +101,72 @@ jobs:
           printf 'build-number=%s.%s\n' \
             "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
 
+      # Pull-request CI tests a merge preview, not the commit a tag points at.
+      # Require ci.yml's own push or manual run of the release commit to have
+      # passed Swift lint and the unit tests before anything is signed.
+      - name: Require passing Apple CI for the release commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Unexpected release commit: %s\n' "$release_commit" >&2
+            exit 1
+          }
+          # CI for main can still be running when the tag is pushed. A commit
+          # with no CI run at all fails after a short grace period instead.
+          deadline=$((SECONDS + ${RELEASE_CI_WAIT_SECONDS:-14400}))
+          grace=$((SECONDS + ${RELEASE_CI_GRACE_SECONDS:-600}))
+          while :; do
+            runs="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$release_commit&per_page=100")"
+            candidates="$(jq -c \
+              --arg commit "$release_commit" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              '[.workflow_runs[] |
+                select(.head_sha == $commit and
+                  .head_repository.full_name == $repo and
+                  (.event == "push" or .event == "workflow_dispatch"))]' \
+              <<< "$runs")"
+            for run_id in $(jq -r \
+              '.[] | select(.status == "completed" and .conclusion == "success") | .id' \
+              <<< "$candidates"); do
+              [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              jobs="$(gh api \
+                "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100")"
+              if jq -e \
+                '[.jobs[] |
+                  select((.name == "apple-lint" or .name == "apple-build-test") and
+                    .conclusion == "success") | .name] | unique | length == 2' \
+                <<< "$jobs" >/dev/null; then
+                printf 'CI run %s passed Apple lint and unit tests for %s.\n' \
+                  "$run_id" "$release_commit"
+                exit 0
+              fi
+            done
+            if jq -e 'length > 0 and all(.[]; .status == "completed")' \
+              <<< "$candidates" >/dev/null; then
+              printf 'No passing Apple lint and unit-test CI run for %s at %s.\n' \
+                "$RELEASE_TAG" "$release_commit" >&2
+              exit 1
+            fi
+            if [[ "$(jq 'length' <<< "$candidates")" == 0 ]] &&
+              (( SECONDS >= grace )); then
+              printf 'No CI run exists for %s at %s; run ci.yml on the tag.\n' \
+                "$RELEASE_TAG" "$release_commit" >&2
+              exit 1
+            fi
+            if (( SECONDS >= deadline )); then
+              printf 'Timed out waiting for CI on %s at %s.\n' \
+                "$RELEASE_TAG" "$release_commit" >&2
+              exit 1
+            fi
+            sleep "${RELEASE_CI_POLL_SECONDS:-60}"
+          done
+
   chromium-runtime:
     name: Reproduce the pinned Chromium runtime
     needs: release-metadata

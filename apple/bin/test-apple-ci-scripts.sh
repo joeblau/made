@@ -310,4 +310,105 @@ awk -F '\t' '
 awk -F '\t' '$1 == "build" { exit $7 == 1 ? 0 : 1 }' "$failed_evidence/totals.tsv" ||
   fail "failed benchmark phase total was not recorded"
 
+# Every released Apple commit has passed lint and unit tests on its own CI run:
+# ci.yml runs every gate for each main commit, and apple-release.yml refuses a
+# tag until such a run of that exact commit has passed both Apple gates.
+workflows="$APPLE_ROOT/../.github/workflows"
+command -v jq >/dev/null || fail "jq is required to exercise the release CI gate"
+python3 - "$workflows/ci.yml" <<'PY' || fail "ci.yml does not run every gate for each main commit"
+import re, sys
+text = open(sys.argv[1]).read()
+on = re.search(r"^on:\n((?:[ \t]+.*\n|\n)*)", text, re.M).group(1)
+assert re.search(r"^  push:\n    branches:\n      - main\n", on, re.M), "push to main"
+assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text, "main runs cancelled"
+assert "group: ci-${{ github.event.pull_request.number || github.sha }}" in text, "per-commit group"
+assert re.search(r"id: filter-all\n\s+if: \$\{\{ github.event_name != 'pull_request' \}\}", text), "filter-all"
+assert re.search(r"id: filter\n\s+if: \$\{\{ github.event_name == 'pull_request' \}\}", text), "paths filter"
+PY
+gate="$work/release-ci-gate.sh"
+python3 - "$workflows/apple-release.yml" 'Require passing Apple CI for the release commit' > "$gate" <<'PY' ||
+import sys
+lines = open(sys.argv[1]).read().split("\n")
+start = next(i for i, line in enumerate(lines) if line.strip() == "- name: " + sys.argv[2])
+run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "run: |")
+indent = len(lines[run]) - len(lines[run].lstrip())
+body = []
+for line in lines[run + 1:]:
+    if line.strip() and len(line) - len(line.lstrip()) <= indent:
+        break
+    body.append(line)
+width = min(len(l) - len(l.lstrip()) for l in body if l.strip())
+print("\n".join(l[width:] for l in body))
+PY
+  fail "apple-release.yml has no release-commit CI gate"
+release_repo="$work/release-repo"
+git init -q "$release_repo"
+git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
+  commit -q --allow-empty -m release
+git -C "$release_repo" -c tag.gpgsign=false tag v1.2.3
+release_sha="$(git -C "$release_repo" rev-parse HEAD)"
+cat > "$work/tools/gh" <<'TOOL'
+#!/bin/bash
+count="$(cat "$GATE_DIR/calls" 2>/dev/null || echo 0)"
+echo $((count + 1)) > "$GATE_DIR/calls"
+case "$2" in
+  */actions/workflows/ci.yml/runs\?head_sha=*)
+    if [[ -f "$GATE_DIR/runs.pending" && ! -f "$GATE_DIR/seen" ]]; then
+      touch "$GATE_DIR/seen"
+      cat "$GATE_DIR/runs.pending"
+    else
+      cat "$GATE_DIR/runs"
+    fi ;;
+  */actions/runs/*/jobs\?filter=latest*) cat "$GATE_DIR/jobs" ;;
+  *) exit 1 ;;
+esac
+TOOL
+chmod +x "$work/tools/gh"
+run_json() { # event status conclusion [head_sha]
+  printf '{"id":4242,"event":"%s","status":"%s","conclusion":%s,"head_sha":"%s","head_repository":{"full_name":"example/repo"}}' \
+    "$1" "$2" "$3" "${4:-$release_sha}"
+}
+jobs_json() { # apple-lint conclusion, apple-build-test conclusion
+  printf '{"jobs":[{"name":"apple-lint","conclusion":"%s"},{"name":"apple-build-test","conclusion":"%s"},{"name":"complete","conclusion":"success"}]}' "$1" "$2"
+}
+run_gate() { # runs-json jobs-json [pending-runs-json]
+  local dir
+  dir="$(mktemp -d "$work/gate.XXXXXX")"
+  printf '{"workflow_runs":[%s]}' "$1" > "$dir/runs"
+  printf '%s' "$2" > "$dir/jobs"
+  [[ -z "${3:-}" ]] || printf '{"workflow_runs":[%s]}' "$3" > "$dir/runs.pending"
+  (
+    cd "$release_repo"
+    GATE_DIR="$dir" GITHUB_REPOSITORY=example/repo RELEASE_TAG=v1.2.3 \
+      RELEASE_CI_WAIT_SECONDS="${GATE_WAIT:-0}" RELEASE_CI_GRACE_SECONDS=0 RELEASE_CI_POLL_SECONDS=0 \
+      bash -eo pipefail "$gate"
+  ) >/dev/null 2>&1
+}
+run_gate "$(run_json push completed '"success"')" "$(jobs_json success success)" ||
+  fail "a passing main CI run of the release commit must satisfy the gate"
+run_gate "$(run_json workflow_dispatch completed '"success"')" "$(jobs_json success success)" ||
+  fail "a passing manual CI run of the release commit must satisfy the gate"
+if run_gate "$(run_json pull_request completed '"success"')" "$(jobs_json success success)"; then
+  fail "a pull-request merge preview must not stand in for the release commit"
+fi
+if run_gate "$(run_json push completed '"success"' 0000000000000000000000000000000000000000)" "$(jobs_json success success)"; then
+  fail "a CI run of another commit must not satisfy the gate"
+fi
+if run_gate "" "$(jobs_json success success)"; then
+  fail "a release commit with no CI run must be refused"
+fi
+if run_gate "$(run_json push completed '"failure"')" "$(jobs_json success failure)"; then
+  fail "a failed CI run of the release commit must be refused"
+fi
+if run_gate "$(run_json push completed '"success"')" "$(jobs_json success skipped)"; then
+  fail "a CI run that skipped the unit tests must be refused"
+fi
+if run_gate "$(run_json push completed '"success"')" "$(jobs_json skipped success)"; then
+  fail "a CI run that skipped Swift lint must be refused"
+fi
+GATE_WAIT=30 run_gate "$(run_json push completed '"success"')" "$(jobs_json success success)" \
+  "$(run_json push in_progress null)" ||
+  fail "the gate must wait for an in-progress CI run of the release commit"
+rm -f "$work/tools/gh"
+
 printf 'Apple CI script orchestration checks passed.\n'
