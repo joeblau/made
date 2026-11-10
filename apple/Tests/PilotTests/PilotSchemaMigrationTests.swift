@@ -92,6 +92,67 @@ struct PilotSchemaMigrationTests {
         #expect(hashes == Self.releasedV3Hashes, "\(hashes.sorted { $0.key < $1.key })")
     }
 
+    /// Entity hashes stamped into users' stores by each shipped schema version
+    /// (#436). V4's values come from a real V4 store's `NSStoreModelVersionHashes`;
+    /// V3's Pane hash is the shipped Drone-store checksum, and its other entities
+    /// are unchanged from V3Released and V4. Never regenerate these from the
+    /// current Swift types: a shipped version's expectation must not move.
+    private static let shippedSchemaHashes: [String: [String: String]] = [
+        "PilotSchemaV3Released": releasedV3Hashes,
+        "PilotSchemaV3": [
+            "BrowserState": "QJR3MWb9z6uJLip/CpBPMNTxY+M/ddwS61m4UWTTqWA=",
+            "EditorState": "3m6c1htkwSdxOUpQllVIPquDfTCbvNRakSqcQwLeQyE=",
+            "ExtensionWorkspaceLink": "7fscOj59gFRdGYrE71HfDMaamc4pI/QlxeD5WSokDS8=",
+            "Note": "vjT47X8WCzkRjqlid7dP1EKudAJaB7gCRUR4F1x173U=",
+            "Pane": "9vQS+3p1vzu9qk2+pR2IauX8zJsMsmGHfplYMknJbK4=",
+            "RemoteDesktopConnection": "5el2iVgh/VdzoGoxoOODs3BCn7ml1NtiZHfHNR9vOIc=",
+            "Workspace": "sKES3UtuQCUIj72lln9dM59CoTrBHh0Issvh83QYTL0=",
+        ],
+        "PilotSchemaV4": [
+            "BrowserState": "QJR3MWb9z6uJLip/CpBPMNTxY+M/ddwS61m4UWTTqWA=",
+            "EditorState": "3m6c1htkwSdxOUpQllVIPquDfTCbvNRakSqcQwLeQyE=",
+            "ExtensionWorkspaceLink": "7fscOj59gFRdGYrE71HfDMaamc4pI/QlxeD5WSokDS8=",
+            "Note": "vjT47X8WCzkRjqlid7dP1EKudAJaB7gCRUR4F1x173U=",
+            "Pane": "JtOXZpbEEuSSjjwtz0yrwBJ9m8oC2hXoWpUXc2dbs6g=",
+            "RemoteDesktopConnection": "5el2iVgh/VdzoGoxoOODs3BCn7ml1NtiZHfHNR9vOIc=",
+            "Workspace": "sKES3UtuQCUIj72lln9dM59CoTrBHh0Issvh83QYTL0=",
+        ],
+    ]
+
+    /// V1 and V2 hashes are not pinned yet: no real V1/V2 store was available to
+    /// record their shipped hashes against. An in-place edit to the V1 or V2
+    /// snapshot is therefore NOT caught. The V1/V2 store-migration fixtures below
+    /// build their stores from the current snapshot classes, so an edited snapshot
+    /// stamps the edited hash and still migrates. Pin these once their hashes are
+    /// confirmed against the frozen snapshots.
+    private static let unpinnedLegacySchemas: Set<String> = ["PilotSchemaV1", "PilotSchemaV2"]
+
+    @Test("Every shipped schema version keeps the entity hashes stamped into user stores")
+    func shippedSchemaVersionsNeverChangeTheirHashes() throws {
+        let plans: [any SchemaMigrationPlan.Type] = [PilotMigrationPlan.self, PilotReleasedV3MigrationPlan.self]
+        var checked: Set<String> = []
+        for plan in plans {
+            for schema in plan.schemas {
+                let name = String(describing: schema)
+                guard !Self.unpinnedLegacySchemas.contains(name), checked.insert(name).inserted else { continue }
+                // A new version appended to a plan must record its hashes here.
+                let recorded = try #require(
+                    Self.shippedSchemaHashes[name],
+                    "\(name) is in a migration plan but its shipped entity hashes are not recorded")
+                let model = try #require(NSManagedObjectModel.makeManagedObjectModel(for: schema.models))
+                let hashes = model.entityVersionHashesByName.mapValues { $0.base64EncodedString() }
+                #expect(
+                    hashes == recorded,
+                    """
+                    \(name) changed its entity hashes, so existing stores would match no schema version. \
+                    Freeze it as nested snapshot classes and add a new version instead: \
+                    \(hashes.sorted { $0.key < $1.key })
+                    """)
+            }
+        }
+        #expect(checked == Set(Self.shippedSchemaHashes.keys))
+    }
+
     @Test("Released pre-Drone V3 stores migrate with local terminals and preserve workspaces")
     func releasedV3StoreMigratesWithLocalTerminals() throws {
         let directory = FileManager.default.temporaryDirectory
