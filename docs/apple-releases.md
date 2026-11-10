@@ -134,12 +134,22 @@ read back after creation.
 
 Use a GitHub ruleset to restrict creation and deletion of tags matching `v*`
 to release maintainers. The workflow also refuses tags whose target commit is
-not reachable from `main`.
+not reachable from `main`. Every release job checks out and asserts the exact
+commit that validation resolved, and publishing re-checks that the tag still
+names it, so a tag moved mid-run fails the release instead of mixing binaries
+from two commits.
 
 ## Cut a release
 
 Run the normal pull-request CI on the intended commit, merge it to `main`, and
-then push the version tag:
+then push the version tag. Pull-request CI only tests a merge preview, so every
+push to `main` also runs CI with all gates selected. Before it builds or signs
+anything, the release workflow requires a successful `push` or
+`workflow_dispatch` CI run of the exact tagged commit in which `apple-lint` and
+`apple-build-test` (`apple/bin/test.sh all`) both succeeded. It waits for a run
+still in progress and refuses the tag when that run fails or skips either job.
+For a commit that has no CI run, dispatch `ci.yml` on the tag
+(`gh workflow run ci.yml --ref v1.2.3`) and re-run the release once it passes.
 
 ```bash
 git switch main
@@ -170,6 +180,17 @@ feed with `SPARKLE_PRIVATE_KEY`; Cockpit verifies them with its embedded public
 key and verifies the Developer ID signature before installation. ChromiumKit
 support releases are explicitly prevented from replacing the semantic app
 release as GitHub's latest release.
+
+Because the website and Cockpit's feed both follow GitHub's latest release, a
+release must be the highest published semantic version. Before any build and
+again immediately before publication, the workflow refuses a tag that is not
+above every published (non-draft) `vMAJOR.MINOR.PATCH` release, and refuses a
+build number that is not above the `sparkle:version` in that release's
+appcast. Publication is serialized across tags so the check and
+`gh release create --latest` cannot interleave. An older-line hotfix, or a
+recovery run for a tag that a newer release has overtaken, therefore fails;
+tag a new higher version instead. `apple/bin/test-apple-ci-scripts.sh` runs the
+workflow's own check against stubbed release listings.
 
 The disk image is created after appcast generation so the signed feed continues
 to select only the versioned ZIP. Checksums are generated after stapling, and
