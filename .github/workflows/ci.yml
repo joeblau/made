@@ -2,14 +2,22 @@ name: CI
 
 on:
   pull_request:
+  # Pull requests test a merge preview, never the commit that lands. Every
+  # commit on main gets its own full run, which apple-release.yml requires
+  # before it builds a release tag.
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # A newer main commit must not cancel the run that proves an older one, so
+  # pushes and manual runs are grouped per commit and never cancelled.
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -20,13 +28,14 @@ jobs:
       workers: ${{ steps.filter.outputs.workers || steps.filter-all.outputs.workers }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Manual runs have no PR base to diff against; select every gate.
+      # Only pull requests are path-filtered. Main pushes and manual runs
+      # select every gate so each commit a release can tag is fully proven.
       - id: filter-all
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name != 'pull_request' }}
         run: printf 'apple=true\ndocs=true\nworkers=true\n' >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
-        if: ${{ github.event_name != 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'pull_request' }}
         with:
           filters: |
             apple:
@@ -126,9 +135,7 @@ jobs:
       - name: Validate application icons
         run: apple/bin/app-icon-tool.swift validate
       - name: Verify generated Xcode project
-        run: |
-          apple/bin/install-xcodegen.sh generate --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/made.xcodeproj
+        run: apple/bin/install-xcodegen.sh check-committed
       - name: Validate Apple CI script orchestration
         run: bash apple/bin/test-apple-ci-scripts.sh
       # build-ci.sh and test.sh share per-platform derived data so the test
@@ -136,14 +143,15 @@ jobs:
       - name: Compile every application
         run: apple/bin/build-ci.sh
       # The Drone terminal proof drives real tmux sessions; the runner image
-      # does not ship tmux.
-      - name: Install tmux
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      # does not ship tmux. Build it from SHA-256 pinned sources rather than a
+      # runner-dependent Homebrew bottle, and fail unless the tmux the apps
+      # select is exactly that pinned version.
+      - name: Install pinned tmux
         run: |
-          brew install tmux
-          tmux -V
+          tmux_binary="$(apple/bin/install-tmux.sh path)"
+          sudo install -d /usr/local/bin
+          sudo install -m 0755 "$tmux_binary" /usr/local/bin/tmux
+          apple/bin/install-tmux.sh verify
       - name: Run unit tests
         run: apple/bin/test.sh all
 

@@ -28,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       build-number: ${{ steps.release.outputs.build-number }}
+      commit: ${{ steps.release.outputs.commit }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
@@ -57,6 +58,21 @@ jobs:
             "refs/tags/$release_tag:refs/tags/$release_tag" \
             main:refs/remotes/origin/main
           release_commit="$(git rev-parse "refs/tags/$release_tag^{commit}")"
+          [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Release tag did not resolve to a commit: %s\n' \
+              "$release_tag" >&2
+            exit 1
+          }
+          # A tag push names the commit that triggered this run; refuse a tag
+          # that was moved before validation instead of releasing its new
+          # target. Peel GITHUB_SHA in case it names an annotated tag object.
+          if [[ "$GITHUB_EVENT_NAME" == "push" &&
+            "$release_commit" != "$(git rev-parse --verify --quiet \
+              "$GITHUB_SHA^{commit}")" ]]; then
+            printf 'Release tag moved after it was pushed: %s\n' \
+              "$release_tag" >&2
+            exit 1
+          fi
           git merge-base --is-ancestor \
             "$release_commit" refs/remotes/origin/main || {
             printf 'Release tag is not on origin/main: %s\n' \
@@ -96,10 +112,196 @@ jobs:
             done
           fi
 
+          printf 'commit=%s\n' "$release_commit" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$release_tag" >> "$GITHUB_OUTPUT"
           printf 'version=%s\n' "${release_tag#v}" >> "$GITHUB_OUTPUT"
           printf 'build-number=%s.%s\n' \
             "$GITHUB_RUN_NUMBER" "$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      # The release becomes GitHub's latest release, which the website's
+      # download link and Cockpit's Sparkle feed (releases/latest) follow.
+      - name: Require a release above every published version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BUILD_NUMBER: ${{ steps.release.outputs.build-number }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          build_pattern='^[0-9]{1,9}(\.[0-9]{1,9}){0,3}$'
+          # Succeeds only when dotted number $1 is strictly greater than $2,
+          # comparing components numerically as Sparkle compares bundle versions.
+          dotted_gt() {
+            local -a left right
+            local index count l r
+            IFS=. read -r -a left <<< "$1"
+            IFS=. read -r -a right <<< "$2"
+            count=$(( ${#left[@]} > ${#right[@]} ? ${#left[@]} : ${#right[@]} ))
+            for (( index = 0; index < count; index++ )); do
+              l=$(( 10#${left[index]:-0} ))
+              r=$(( 10#${right[index]:-0} ))
+              (( l > r )) && return 0
+              (( l < r )) && return 1
+            done
+            return 1
+          }
+          [[ "$RELEASE_TAG" =~ $semver ]] || {
+            printf 'Release tags must use vMAJOR.MINOR.PATCH: %s\n' \
+              "$RELEASE_TAG" >&2
+            exit 1
+          }
+          [[ "$RELEASE_BUILD_NUMBER" =~ $build_pattern ]] || {
+            printf 'Invalid release build number: %s\n' \
+              "$RELEASE_BUILD_NUMBER" >&2
+            exit 1
+          }
+
+          # Every published (non-draft) semantic release, not only the one
+          # GitHub currently marks latest, so an earlier mis-marked release
+          # cannot hide a higher version.
+          releases="$RUNNER_TEMP/published-releases.json"
+          listing="$RUNNER_TEMP/published-releases.tsv"
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$releases"
+          (( $(wc -c < "$releases") <= 67108864 )) || {
+            printf '%s\n' 'Release listing exceeds 64 MiB.' >&2
+            exit 1
+          }
+          jq -r '.[] | select(.draft | not) |
+            [.tag_name, (any(.assets[]?; .name == "appcast.xml") | tostring)] |
+            @tsv' "$releases" > "$listing"
+          highest=''
+          highest_has_appcast=false
+          while IFS=$'\t' read -r tag has_appcast; do
+            [[ "$tag" =~ $semver ]] || continue
+            if [[ -z "$highest" ]] || dotted_gt "${tag#v}" "${highest#v}"; then
+              highest="$tag"
+              highest_has_appcast="$has_appcast"
+            fi
+          done < "$listing"
+          if [[ -z "$highest" ]]; then
+            printf 'No published semantic release precedes %s.\n' "$RELEASE_TAG"
+            exit 0
+          fi
+          dotted_gt "${RELEASE_TAG#v}" "${highest#v}" || {
+            printf '%s is not above the highest published release %s.\n' \
+              "$RELEASE_TAG" "$highest" >&2
+            printf '%s\n' \
+              'Publishing it as latest would roll back the download link and Sparkle feed; tag a higher version.' >&2
+            exit 1
+          }
+
+          # Sparkle orders updates by CFBundleVersion, so the new build must
+          # also exceed the build the current highest release's feed offers.
+          if [[ "$highest_has_appcast" != true ]]; then
+            printf '%s has no Sparkle appcast; compared versions only.\n' \
+              "$highest"
+            exit 0
+          fi
+          feed_directory="$RUNNER_TEMP/highest-release-appcast"
+          rm -rf "$feed_directory"
+          mkdir -p "$feed_directory"
+          gh release download "$highest" --repo "$GITHUB_REPOSITORY" \
+            --pattern appcast.xml --dir "$feed_directory"
+          feed="$feed_directory/appcast.xml"
+          if [[ ! -f "$feed" ]] || (( $(wc -c < "$feed") > 1048576 )); then
+            printf 'Missing or oversized appcast for %s.\n' "$highest" >&2
+            exit 1
+          fi
+          { grep -oE \
+              '<sparkle:version>[^<]*</sparkle:version>|sparkle:version="[^"]*"' \
+              "$feed" || true; } |
+            sed -E 's#^<sparkle:version>##; s#</sparkle:version>$##;
+              s#^sparkle:version="##; s#"$##' > "$feed_directory/builds"
+          previous_build=''
+          while IFS= read -r build; do
+            [[ "$build" =~ $build_pattern ]] || {
+              printf 'Unreadable Sparkle build in %s appcast: %s\n' \
+                "$highest" "$build" >&2
+              exit 1
+            }
+            if [[ -z "$previous_build" ]] ||
+              dotted_gt "$build" "$previous_build"; then
+              previous_build="$build"
+            fi
+          done < "$feed_directory/builds"
+          [[ -n "$previous_build" ]] || {
+            printf 'No Sparkle build number in %s appcast.\n' "$highest" >&2
+            exit 1
+          }
+          dotted_gt "$RELEASE_BUILD_NUMBER" "$previous_build" || {
+            printf 'Build %s is not above build %s published by %s.\n' \
+              "$RELEASE_BUILD_NUMBER" "$previous_build" "$highest" >&2
+            exit 1
+          }
+          printf '%s (build %s) is above %s (build %s).\n' \
+            "$RELEASE_TAG" "$RELEASE_BUILD_NUMBER" "$highest" "$previous_build"
+
+      # Pull-request CI tests a merge preview, not the commit a tag points at.
+      # Require ci.yml's own push or manual run of the release commit to have
+      # passed Swift lint and the unit tests before anything is signed.
+      - name: Require passing Apple CI for the release commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          [[ "$release_commit" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Unexpected release commit: %s\n' "$release_commit" >&2
+            exit 1
+          }
+          # CI for main can still be running when the tag is pushed. A commit
+          # with no CI run at all fails after a short grace period instead.
+          deadline=$((SECONDS + ${RELEASE_CI_WAIT_SECONDS:-14400}))
+          grace=$((SECONDS + ${RELEASE_CI_GRACE_SECONDS:-600}))
+          while :; do
+            runs="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$release_commit&per_page=100")"
+            candidates="$(jq -c \
+              --arg commit "$release_commit" \
+              --arg repo "$GITHUB_REPOSITORY" \
+              '[.workflow_runs[] |
+                select(.head_sha == $commit and
+                  .head_repository.full_name == $repo and
+                  (.event == "push" or .event == "workflow_dispatch"))]' \
+              <<< "$runs")"
+            for run_id in $(jq -r \
+              '.[] | select(.status == "completed" and .conclusion == "success") | .id' \
+              <<< "$candidates"); do
+              [[ "$run_id" =~ ^[1-9][0-9]*$ ]] || continue
+              jobs="$(gh api \
+                "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=latest&per_page=100")"
+              if jq -e \
+                '[.jobs[] |
+                  select((.name == "apple-lint" or .name == "apple-build-test") and
+                    .conclusion == "success") | .name] | unique | length == 2' \
+                <<< "$jobs" >/dev/null; then
+                printf 'CI run %s passed Apple lint and unit tests for %s.\n' \
+                  "$run_id" "$release_commit"
+                exit 0
+              fi
+            done
+            if jq -e 'length > 0 and all(.[]; .status == "completed")' \
+              <<< "$candidates" >/dev/null; then
+              printf 'No passing Apple lint and unit-test CI run for %s at %s.\n' \
+                "$RELEASE_TAG" "$release_commit" >&2
+              exit 1
+            fi
+            if [[ "$(jq 'length' <<< "$candidates")" == 0 ]] &&
+              (( SECONDS >= grace )); then
+              printf 'No CI run exists for %s at %s; run ci.yml on the tag.\n' \
+                "$RELEASE_TAG" "$release_commit" >&2
+              exit 1
+            fi
+            if (( SECONDS >= deadline )); then
+              printf 'Timed out waiting for CI on %s at %s.\n' \
+                "$RELEASE_TAG" "$release_commit" >&2
+              exit 1
+            fi
+            sleep "${RELEASE_CI_POLL_SECONDS:-60}"
+          done
 
   chromium-runtime:
     name: Reproduce the pinned Chromium runtime
@@ -119,7 +321,25 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-          ref: ${{ needs.release-metadata.outputs.tag }}
+          ref: ${{ needs.release-metadata.outputs.commit }}
+      # Build the commit release-metadata validated, never whatever the tag
+      # names now: the tag can move while the apple-release approval waits.
+      - name: Verify the validated release commit
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          head="$(git rev-parse HEAD)"
+          [[ "$head" == "$RELEASE_COMMIT" ]] || {
+            printf 'Checked out %s instead of validated release commit %s\n' \
+              "$head" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Verify artifact toolchain
         run: |
           xcodebuild -version
@@ -195,7 +415,25 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-          ref: ${{ needs.release-metadata.outputs.tag }}
+          ref: ${{ needs.release-metadata.outputs.commit }}
+      # Build the commit release-metadata validated, never whatever the tag
+      # names now: the tag can move while the apple-release approval waits.
+      - name: Verify the validated release commit
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          head="$(git rev-parse HEAD)"
+          [[ "$head" == "$RELEASE_COMMIT" ]] || {
+            printf 'Checked out %s instead of validated release commit %s\n' \
+              "$head" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Install the recovered release test harness
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
@@ -283,9 +521,7 @@ jobs:
           apple/bin/verify-installed-chromiumkit.sh
       - name: Generate and verify the Xcode project
         run: |
-          apple/bin/install-xcodegen.sh generate \
-            --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/made.xcodeproj
+          apple/bin/install-xcodegen.sh check-committed
           apple/bin/app-icon-tool.swift validate
       - name: Run the signed Chromium release gates
         env:
@@ -487,6 +723,25 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
+          ref: ${{ needs.release-metadata.outputs.commit }}
+      # Build the commit release-metadata validated, never whatever the tag
+      # names now: the tag can move while the apple-release approval waits.
+      - name: Verify the validated release commit
+        shell: bash
+        env:
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          head="$(git rev-parse HEAD)"
+          [[ "$head" == "$RELEASE_COMMIT" ]] || {
+            printf 'Checked out %s instead of validated release commit %s\n' \
+              "$head" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Require release credentials
         shell: bash
         run: |
@@ -522,9 +777,7 @@ jobs:
             >> "$GITHUB_ENV"
       - name: Generate and verify the Xcode project
         run: |
-          apple/bin/install-xcodegen.sh generate \
-            --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/made.xcodeproj
+          apple/bin/install-xcodegen.sh check-committed
           apple/bin/app-icon-tool.swift validate
       - name: Archive ${{ matrix.scheme }}
         shell: bash
@@ -600,6 +853,11 @@ jobs:
           needs.testflight.result == 'skipped')
       }}
     runs-on: ubuntu-latest
+    # Serialize publication across tags so the ordering check and
+    # `gh release create --latest` cannot interleave with another release.
+    concurrency:
+      group: apple-release-publish
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -620,6 +878,155 @@ jobs:
           shasum -a 256 -c "$asset.sha256"
           shasum -a 256 -c Cockpit.dmg.sha256
           grep -Fq 'sparkle:edSignature=' appcast.xml
+      # Repeat the ordering check at publication: another tag's release may
+      # have published since release-metadata ran. Keep this step identical
+      # to the release-metadata one; test-apple-ci-scripts.sh enforces it.
+      - name: Require a release above every published version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          build_pattern='^[0-9]{1,9}(\.[0-9]{1,9}){0,3}$'
+          # Succeeds only when dotted number $1 is strictly greater than $2,
+          # comparing components numerically as Sparkle compares bundle versions.
+          dotted_gt() {
+            local -a left right
+            local index count l r
+            IFS=. read -r -a left <<< "$1"
+            IFS=. read -r -a right <<< "$2"
+            count=$(( ${#left[@]} > ${#right[@]} ? ${#left[@]} : ${#right[@]} ))
+            for (( index = 0; index < count; index++ )); do
+              l=$(( 10#${left[index]:-0} ))
+              r=$(( 10#${right[index]:-0} ))
+              (( l > r )) && return 0
+              (( l < r )) && return 1
+            done
+            return 1
+          }
+          [[ "$RELEASE_TAG" =~ $semver ]] || {
+            printf 'Release tags must use vMAJOR.MINOR.PATCH: %s\n' \
+              "$RELEASE_TAG" >&2
+            exit 1
+          }
+          [[ "$RELEASE_BUILD_NUMBER" =~ $build_pattern ]] || {
+            printf 'Invalid release build number: %s\n' \
+              "$RELEASE_BUILD_NUMBER" >&2
+            exit 1
+          }
+
+          # Every published (non-draft) semantic release, not only the one
+          # GitHub currently marks latest, so an earlier mis-marked release
+          # cannot hide a higher version.
+          releases="$RUNNER_TEMP/published-releases.json"
+          listing="$RUNNER_TEMP/published-releases.tsv"
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$releases"
+          (( $(wc -c < "$releases") <= 67108864 )) || {
+            printf '%s\n' 'Release listing exceeds 64 MiB.' >&2
+            exit 1
+          }
+          jq -r '.[] | select(.draft | not) |
+            [.tag_name, (any(.assets[]?; .name == "appcast.xml") | tostring)] |
+            @tsv' "$releases" > "$listing"
+          highest=''
+          highest_has_appcast=false
+          while IFS=$'\t' read -r tag has_appcast; do
+            [[ "$tag" =~ $semver ]] || continue
+            if [[ -z "$highest" ]] || dotted_gt "${tag#v}" "${highest#v}"; then
+              highest="$tag"
+              highest_has_appcast="$has_appcast"
+            fi
+          done < "$listing"
+          if [[ -z "$highest" ]]; then
+            printf 'No published semantic release precedes %s.\n' "$RELEASE_TAG"
+            exit 0
+          fi
+          dotted_gt "${RELEASE_TAG#v}" "${highest#v}" || {
+            printf '%s is not above the highest published release %s.\n' \
+              "$RELEASE_TAG" "$highest" >&2
+            printf '%s\n' \
+              'Publishing it as latest would roll back the download link and Sparkle feed; tag a higher version.' >&2
+            exit 1
+          }
+
+          # Sparkle orders updates by CFBundleVersion, so the new build must
+          # also exceed the build the current highest release's feed offers.
+          if [[ "$highest_has_appcast" != true ]]; then
+            printf '%s has no Sparkle appcast; compared versions only.\n' \
+              "$highest"
+            exit 0
+          fi
+          feed_directory="$RUNNER_TEMP/highest-release-appcast"
+          rm -rf "$feed_directory"
+          mkdir -p "$feed_directory"
+          gh release download "$highest" --repo "$GITHUB_REPOSITORY" \
+            --pattern appcast.xml --dir "$feed_directory"
+          feed="$feed_directory/appcast.xml"
+          if [[ ! -f "$feed" ]] || (( $(wc -c < "$feed") > 1048576 )); then
+            printf 'Missing or oversized appcast for %s.\n' "$highest" >&2
+            exit 1
+          fi
+          { grep -oE \
+              '<sparkle:version>[^<]*</sparkle:version>|sparkle:version="[^"]*"' \
+              "$feed" || true; } |
+            sed -E 's#^<sparkle:version>##; s#</sparkle:version>$##;
+              s#^sparkle:version="##; s#"$##' > "$feed_directory/builds"
+          previous_build=''
+          while IFS= read -r build; do
+            [[ "$build" =~ $build_pattern ]] || {
+              printf 'Unreadable Sparkle build in %s appcast: %s\n' \
+                "$highest" "$build" >&2
+              exit 1
+            }
+            if [[ -z "$previous_build" ]] ||
+              dotted_gt "$build" "$previous_build"; then
+              previous_build="$build"
+            fi
+          done < "$feed_directory/builds"
+          [[ -n "$previous_build" ]] || {
+            printf 'No Sparkle build number in %s appcast.\n' "$highest" >&2
+            exit 1
+          }
+          dotted_gt "$RELEASE_BUILD_NUMBER" "$previous_build" || {
+            printf 'Build %s is not above build %s published by %s.\n' \
+              "$RELEASE_BUILD_NUMBER" "$previous_build" "$highest" >&2
+            exit 1
+          }
+          printf '%s (build %s) is above %s (build %s).\n' \
+            "$RELEASE_TAG" "$RELEASE_BUILD_NUMBER" "$highest" "$previous_build"
+      # gh release create --verify-tag attaches the release to whatever the
+      # tag names now; refuse to publish if that is not the built commit.
+      - name: Verify the release tag still names the validated commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.release-metadata.outputs.commit }}
+          RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
+        run: |
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            printf 'Invalid validated release commit: %s\n' \
+              "$RELEASE_COMMIT" >&2
+            exit 1
+          }
+          object="$(gh api \
+            "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG" \
+            --jq '.object.type + " " + .object.sha')"
+          # Peel annotated tags (bounded) down to the commit they name.
+          for _ in 1 2 3 4; do
+            [[ "${object%% *}" == tag ]] || break
+            object="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/tags/${object#* }" \
+              --jq '.object.type + " " + .object.sha')"
+          done
+          [[ "$object" == "commit $RELEASE_COMMIT" ]] || {
+            printf 'Release tag %s now names %s, not validated commit %s\n' \
+              "$RELEASE_TAG" "$object" "$RELEASE_COMMIT" >&2
+            exit 1
+          }
       - name: Publish the tagged release
         shell: bash
         env:
