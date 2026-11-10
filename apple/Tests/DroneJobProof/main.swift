@@ -29,6 +29,9 @@ enum DroneJobProof {
         try await verifyCrashRecoveryKillsProcessGroup(in: workspace, root: root, leaderExitsFirst: false)
         try await verifyCrashRecoveryKillsProcessGroup(in: workspace, root: root, leaderExitsFirst: true)
         try await verifyExpiredJobPurge(in: workspace, root: root)
+        try verifyLaunchMarkerPrecedesSpawn(in: workspace)
+        try await verifyFinishRecordsSurvivingGroup(in: workspace, root: root)
+        try verifyUnverifiedGroupRecovery(in: workspace, root: root)
 
         let source = Data("print(\"drone-build-ok\")\n".utf8)
         let write = try engine.createJob(DroneJobCreate(
@@ -179,6 +182,12 @@ enum DroneJobProof {
               let child = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
         else { throw ProofError.failed("background child never started") }
         defer { _ = Darwin.kill(child, SIGKILL) }
+        // finish() waits for the killed group before the job is recorded, so
+        // the child is no longer running the moment the record is terminal
+        // (it may still be a zombie until launchd reaps it).
+        expect(DroneProcessTable.entry(child).map(\.isZombie) ?? true,
+               "a job was recorded finished while its background child was still running")
+        expect(engine.unverifiedProcessGroupCount == 0, "a group that exited was reported unverified")
         try await waitUntilGone(child)
         expect(Darwin.kill(child, 0) != 0, "a completed job left its background child running")
         let stopped = await engine.shutdown()
@@ -230,9 +239,199 @@ enum DroneJobProof {
         )
         expect(snapshot.state == .failed && snapshot.failure?.code == .workerRestarted,
                "crashed job was not recovered as workerRestarted")
+        expect(recovered.unverifiedProcessGroupCount == 0,
+               "recovery reported a group it killed and confirmed gone as unverified")
         try await waitUntilGone(orphan)
         expect(Darwin.kill(orphan, 0) != 0, "recovery left the crashed job's process group running")
         expect(Darwin.kill(leader, 0) != 0, "recovery left the crashed job's leader running")
+    }
+
+    /// #441: the launching marker is written before any process exists, and a
+    /// marker that cannot be written means nothing is spawned at all.
+    private static func verifyLaunchMarkerPrecedesSpawn(in workspace: URL) throws {
+        let marker = workspace.appendingPathComponent("launch-marker.txt")
+        try? FileManager.default.removeItem(at: marker)
+        let operation = DroneProcessOperation(
+            executablePath: "/usr/bin/touch", arguments: ["launch-marker.txt"], timeoutMilliseconds: 10_000
+        )
+        do {
+            _ = try DroneProcessRunner.run(
+                operation: operation,
+                currentDirectory: workspace,
+                environment: [:],
+                control: DroneProcessGroupControl(gracePeriod: 0.1),
+                beforeLaunch: { throw ProofError.failed("marker write failed") },
+                onLaunch: { _ in fatalError("a process was spawned without its launching marker") },
+                onOutput: { _, _ in },
+                onTruncated: { _ in }
+            )
+            throw ProofError.failed("run continued after the launching marker failed")
+        } catch ProofError.failed(let message) where message == "marker write failed" {}
+        expect(!FileManager.default.fileExists(atPath: marker.path),
+               "a process ran although its launching marker was never written")
+
+        var markerWritten = false
+        let outcome = try DroneProcessRunner.run(
+            operation: operation,
+            currentDirectory: workspace,
+            environment: [:],
+            control: DroneProcessGroupControl(gracePeriod: 0.1),
+            beforeLaunch: {
+                expect(!FileManager.default.fileExists(atPath: marker.path), "spawned before the marker")
+                markerWritten = true
+            },
+            onLaunch: { _ in expect(markerWritten, "group recorded before the launching marker") },
+            onOutput: { _, _ in },
+            onTruncated: { _ in }
+        )
+        expect(outcome.exitCode == 0 && FileManager.default.fileExists(atPath: marker.path),
+               "launch-marker proof process did not run")
+    }
+
+    /// #441: SIGKILL is asynchronous, so a finished job waits (bounded) for its
+    /// group to disappear. A member that outlives the wait is recorded on the
+    /// job, keeps storage unhealthy, and keeps the record from being purged.
+    private static func verifyFinishRecordsSurvivingGroup(in workspace: URL, root: URL) async throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        var limits = DroneJobEngineLimits()
+        limits.processGroupExitTimeout = 0.2
+        // Model a member this user cannot kill (a setuid descendant) as a
+        // live process that never leaves the group.
+        let survivor = getpid()
+        let engine = try DroneJobEngine(
+            stateURL: root.appendingPathComponent("finish-survivor"),
+            workspaces: registry,
+            limits: limits,
+            processGroupMembers: { _ in [survivor] }
+        )
+        let controllerID = UUID()
+        let job = try engine.createJob(DroneJobCreate(
+            controllerID: controllerID,
+            idempotencyKey: "finish-survivor-job-01",
+            request: DroneJobRequest(workspaceID: workspaceID, operation: .process(DroneProcessOperation(
+                executablePath: "/usr/bin/true", timeoutMilliseconds: 10_000
+            )))
+        ))
+        _ = try await terminal(job.id, controllerID: controllerID, engine: engine, expected: .completed)
+        expect(engine.unverifiedProcessGroupCount == 1,
+               "a job whose group outlived SIGKILL was recorded finished silently")
+        let page = try engine.events(id: job.id, controllerID: controllerID, afterSequence: 0)
+        expect(page.events.contains { $0.payload == .notice(.processGroupUnverified) },
+               "the surviving group was not recorded on the job")
+        _ = try engine.removeFinishedJobs(controllerID: controllerID)
+        _ = try engine.purgeExpiredJobs()
+        expect((try? engine.snapshot(id: job.id, controllerID: controllerID)) != nil,
+               "a record with an unverified group was purged")
+        let stopped = await engine.shutdown()
+        expect(stopped, "finish-survivor engine did not shut down")
+    }
+
+    /// #441: recovery never silently finalizes a job whose process group it
+    /// cannot confirm gone: a refused or partial kill, or a launch that never
+    /// recorded its group, is recorded on the job and keeps storage unhealthy
+    /// across restarts until a later recovery confirms the group gone.
+    private static func verifyUnverifiedGroupRecovery(in workspace: URL, root: URL) throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let controllerID = UUID()
+        let limits = DroneJobEngineLimits()
+        let clock = ProofManualClock()
+        func process(_ key: String) -> DroneJobCreate {
+            DroneJobCreate(controllerID: controllerID, idempotencyKey: key, request: DroneJobRequest(
+                workspaceID: workspaceID,
+                operation: .process(DroneProcessOperation(
+                    executablePath: "/bin/sleep", arguments: ["30"], timeoutMilliseconds: 60_000
+                ))
+            ))
+        }
+        func storedFlag(_ state: URL, _ key: String) -> Bool? {
+            let url = state.appendingPathComponent("controllers/\(controllerID.uuidString)/jobs/\(key).json")
+            guard let data = try? Data(contentsOf: url),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return nil }
+            return (object["processGroupUnverified"] as? Bool) ?? false
+        }
+        func unverifiedNotices(_ store: DroneJobStore, _ id: DroneJobID) throws -> Int {
+            try store.events(id: id, controllerID: controllerID, afterSequence: 0).events.filter {
+                $0.payload == .notice(.processGroupUnverified)
+            }.count
+        }
+
+        let state = root.appendingPathComponent("unverified-recovery")
+        let seeded = try DroneJobStore(stateURL: state, limits: limits, now: { clock.now() })
+        // A record naming the worker's own process group is never signalled,
+        // so its group cannot be confirmed gone.
+        let refused = try seeded.create(process("unverified-own-group-01")).snapshot
+        try seeded.markRunning(id: refused.id)
+        try seeded.markLaunching(id: refused.id)
+        try seeded.recordProcessGroup(id: refused.id, group: DroneProcessGroupRecord(
+            groupID: getpgrp(), leaderStartSeconds: 0, leaderStartMicroseconds: 0
+        ))
+        // The worker died between the spawn and recording the group.
+        let unrecorded = try seeded.create(process("unverified-no-group-001")).snapshot
+        try seeded.markRunning(id: unrecorded.id)
+        try seeded.markLaunching(id: unrecorded.id)
+        // Control: a group that has already exited is confirmed gone.
+        let exited = Process()
+        exited.executableURL = URL(fileURLWithPath: "/usr/bin/true")
+        try exited.run()
+        exited.waitUntilExit()
+        let clean = try seeded.create(process("unverified-clean-00001")).snapshot
+        try seeded.markRunning(id: clean.id)
+        try seeded.markLaunching(id: clean.id)
+        try seeded.recordProcessGroup(id: clean.id, group: DroneProcessGroupRecord(
+            groupID: exited.processIdentifier, leaderStartSeconds: 0, leaderStartMicroseconds: 0
+        ))
+
+        let recovered = try DroneJobStore(stateURL: state, limits: limits, now: { clock.now() })
+        expect(recovered.unverifiedProcessGroupCount == 2,
+               "recovery finalized \(2 - recovered.unverifiedProcessGroupCount) unverified groups silently")
+        for (id, key) in [(refused.id, "unverified-own-group-01"), (unrecorded.id, "unverified-no-group-001")] {
+            let snapshot = try recovered.snapshot(id: id, controllerID: controllerID)
+            expect(snapshot.state == .failed && snapshot.failure?.code == .workerRestarted,
+                   "an unverified job was not recovered as workerRestarted")
+            let notices = try unverifiedNotices(recovered, id)
+            expect(notices == 1, "the unverified group was not recorded on the job")
+            expect(storedFlag(state, key) == true, "the unverified group was not persisted on the record")
+        }
+        let cleanNotices = try unverifiedNotices(recovered, clean.id)
+        expect(cleanNotices == 0 && storedFlag(state, "unverified-clean-00001") == false,
+               "a group that had exited was reported unverified")
+        let engine = try DroneJobEngine(stateURL: state, workspaces: registry, now: { clock.now() })
+        expect(engine.unverifiedProcessGroupCount == 2, "a restart forgot the unverified groups")
+
+        // Past the idempotency lifetime, unverified records are kept as
+        // evidence while finished, verified ones are purged as usual.
+        clock.advance(by: limits.idempotencyLifetime + 1)
+        let expired = try DroneJobStore(stateURL: state, limits: limits, now: { clock.now() })
+        _ = try expired.purgeExpired()
+        _ = try expired.removeFinishedJobs(controllerID: controllerID)
+        expect(expired.unverifiedProcessGroupCount == 2 && storedFlag(state, "unverified-own-group-01") == true
+                && storedFlag(state, "unverified-no-group-001") == true,
+               "a record with an unverified group was purged")
+        expect(storedFlag(state, "unverified-clean-00001") == nil, "an expired verified record was kept")
+        let retriedNotices = try unverifiedNotices(expired, refused.id)
+        expect(retriedNotices == 1, "a retried check duplicated the notice")
+
+        // A kill that does not finish within its bound is unverified too; a
+        // later recovery that confirms the group gone clears the flag.
+        let partialState = root.appendingPathComponent("unverified-partial-kill")
+        let partialSeed = try DroneJobStore(stateURL: partialState, limits: limits)
+        let partial = try partialSeed.create(process("unverified-partial-0001")).snapshot
+        try partialSeed.markRunning(id: partial.id)
+        try partialSeed.recordProcessGroup(id: partial.id, group: DroneProcessGroupRecord(
+            groupID: 424_242, leaderStartSeconds: 1, leaderStartMicroseconds: 0
+        ))
+        let survived = try DroneJobStore(stateURL: partialState, limits: limits, reapOrphanedGroup: { _ in false })
+        expect(survived.unverifiedProcessGroupCount == 1, "a partial kill was finalized silently")
+        let partialSnapshot = try survived.snapshot(id: partial.id, controllerID: controllerID)
+        expect(partialSnapshot.state == .failed, "a partially killed job was not finalized")
+        let confirmed = try DroneJobStore(stateURL: partialState, limits: limits, reapOrphanedGroup: { _ in true })
+        expect(confirmed.unverifiedProcessGroupCount == 0 && storedFlag(partialState, "unverified-partial-0001") == false,
+               "a group confirmed gone on a later recovery stayed unverified")
+        let confirmedNotices = try unverifiedNotices(confirmed, partial.id)
+        expect(confirmedNotices == 1, "clearing the flag lost the job's history")
     }
 
     /// Child-process mode: start a job whose TERM-immune descendant records

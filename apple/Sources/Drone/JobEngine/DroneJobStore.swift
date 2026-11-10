@@ -23,6 +23,17 @@ struct DroneStoredJob: Codable, Equatable {
     /// Persisted before the leader runs so recovery can kill a group that a
     /// crashed worker left behind. Absent in records written before #441.
     var processGroup: DroneProcessGroupRecord?
+    /// Persisted before the leader is spawned. With no `processGroup`, it
+    /// means the worker died between the spawn and recording the group, so
+    /// nothing identifies a leader that may still exist.
+    var launching: Bool?
+    /// Set when this job was recorded finished while its process group could
+    /// not be confirmed gone. Such a record keeps storage unhealthy and is
+    /// never deleted automatically; recovery retries the kill on each start.
+    var processGroupUnverified: Bool?
+
+    /// Finished, and nothing suggests its process group may still run.
+    var isDeletable: Bool { state.isTerminal && processGroupUnverified != true }
 
     var snapshot: DroneJobSnapshot {
         DroneJobSnapshot(
@@ -53,6 +64,7 @@ final class DroneJobStore: @unchecked Sendable {
     private let stateURL: URL
     private let limits: DroneJobEngineLimits
     private let now: @Sendable () -> TimeInterval
+    private let reapOrphanedGroup: @Sendable (DroneProcessGroupRecord) -> Bool
     private var jobs: [DroneJobID: DroneStoredJob] = [:]
     private var keys: [JobKey: DroneJobID] = [:]
     private var quarantinedEntries = 0
@@ -69,11 +81,15 @@ final class DroneJobStore: @unchecked Sendable {
     init(
         stateURL: URL,
         limits: DroneJobEngineLimits,
-        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 }
+        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSince1970 },
+        reapOrphanedGroup: @escaping @Sendable (DroneProcessGroupRecord) -> Bool = {
+            DroneProcessTable.killOrphanedGroup($0)
+        }
     ) throws {
         self.stateURL = stateURL.standardizedFileURL
         self.limits = limits
         self.now = now
+        self.reapOrphanedGroup = reapOrphanedGroup
         try Self.createPrivateDirectory(at: self.stateURL)
         try recover()
     }
@@ -86,13 +102,21 @@ final class DroneJobStore: @unchecked Sendable {
         return quarantinedEntries
     }
 
+    /// Records whose process group could not be confirmed gone when the job
+    /// was recorded finished. Nonzero means storage is unhealthy (#441).
+    var unverifiedProcessGroupCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return jobs.values.filter { $0.processGroupUnverified == true }.count
+    }
+
     func create(_ create: DroneJobCreate) throws -> (snapshot: DroneJobSnapshot, isNew: Bool) {
         lock.lock()
         defer { lock.unlock() }
         let key = JobKey(controllerID: create.controllerID, idempotencyKey: create.idempotencyKey)
         if let existingID = keys[key], let existing = jobs[existingID] {
             if now() - existing.createdAt >= limits.idempotencyLifetime,
-               existing.state.isTerminal {
+               existing.isDeletable {
                 try remove(existing)
             } else {
                 guard existing.request == create.request else {
@@ -202,6 +226,12 @@ final class DroneJobStore: @unchecked Sendable {
         }
     }
 
+    func markLaunching(id: DroneJobID) throws {
+        try update(id: id) { job in
+            job.launching = true
+        }
+    }
+
     func recordProcessGroup(id: DroneJobID, group: DroneProcessGroupRecord) throws {
         try update(id: id) { job in
             job.processGroup = group
@@ -245,16 +275,32 @@ final class DroneJobStore: @unchecked Sendable {
         id: DroneJobID,
         state: DroneJobState,
         result: DroneJobResult?,
-        failure: DroneJobFailure?
+        failure: DroneJobFailure?,
+        processGroupSurvived: Bool = false
     ) throws {
         try update(id: id) { job in
             guard !job.state.isTerminal else { return }
+            if processGroupSurvived { markProcessGroupUnverified(&job) }
             let finalState = job.cancellationRequested ? DroneJobState.cancelled : state
             job.state = finalState
             job.result = result
             job.failure = finalState == .failed ? failure : nil
             append(.state(finalState), to: &job)
         }
+    }
+
+    private func markProcessGroupUnverified(_ job: inout DroneStoredJob) {
+        guard job.processGroupUnverified != true else { return }
+        job.processGroupUnverified = true
+        append(.notice(.processGroupUnverified), to: &job)
+    }
+
+    /// Kills what a dead worker may have left of this job's process group.
+    /// True only when nothing of the group can still be running.
+    private func reapLeftoverGroup(of job: DroneStoredJob) -> Bool {
+        if let group = job.processGroup { return reapOrphanedGroup(group) }
+        // Spawned (or about to be) but never recorded: nothing identifies it.
+        return job.launching != true
     }
 
     private func update(id: DroneJobID, mutation: (inout DroneStoredJob) -> Void) throws {
@@ -313,7 +359,7 @@ final class DroneJobStore: @unchecked Sendable {
         defer { lock.unlock() }
         let current = now()
         let expired = jobs.values.filter {
-            $0.state.isTerminal
+            $0.isDeletable
                 && (current - $0.createdAt >= limits.idempotencyLifetime
                     || retiredJobs.contains($0.id))
         }
@@ -330,7 +376,7 @@ final class DroneJobStore: @unchecked Sendable {
         defer { lock.unlock() }
         let owned = jobs.values.filter { $0.controllerID == controllerID }
         retiredJobs.formUnion(owned.map(\.id))
-        let finished = owned.filter(\.state.isTerminal)
+        let finished = owned.filter(\.isDeletable)
         try removeEach(finished)
         return finished.count
     }
@@ -350,7 +396,7 @@ final class DroneJobStore: @unchecked Sendable {
 
     private func purgeExpired(controllerID: UUID) throws {
         let expired = jobs.values.filter {
-            $0.controllerID == controllerID && $0.state.isTerminal
+            $0.controllerID == controllerID && $0.isDeletable
                 && now() - $0.createdAt >= limits.idempotencyLifetime
         }
         for job in expired { try remove(job) }
@@ -402,25 +448,25 @@ final class DroneJobStore: @unchecked Sendable {
                     try quarantine(recordURL)
                     continue
                 }
+                // A job still running when the worker died, or one recorded
+                // finished while its group survived, may have left processes
+                // behind: kill them before anything else (#441). A group that
+                // cannot be confirmed gone is recorded on the job and keeps
+                // storage unhealthy instead of being finalized silently.
+                let needsReap = !job.state.isTerminal || job.processGroupUnverified == true
+                let groupGone = !needsReap || reapLeftoverGroup(of: job)
                 // Never reload a record past the idempotency lifetime: every job is
                 // final after a restart, so it is purged here for every controller
-                // (#444). A record that was still running when the worker died is
-                // killed first so purging it never strands its process group (#441).
-                if now() - job.createdAt >= limits.idempotencyLifetime {
-                    if !job.state.isTerminal, let group = job.processGroup {
-                        DroneProcessTable.killOrphanedGroup(group)
-                    }
+                // (#444), unless its process group is still unverified.
+                if now() - job.createdAt >= limits.idempotencyLifetime, groupGone {
                     try FileManager.default.removeItem(at: recordURL)
                     continue
                 }
                 controllerCount += 1
                 job.schemaVersion = DroneStoredJob.currentSchemaVersion
+                let loaded = job
                 if !job.state.isTerminal {
-                    // Kill before recording a final state: a finished job
-                    // must never leave its process group running (#441).
-                    if let group = job.processGroup {
-                        DroneProcessTable.killOrphanedGroup(group)
-                    }
+                    if !groupGone { markProcessGroupUnverified(&job) }
                     append(.notice(.recoveredAfterRestart), to: &job)
                     job.state = job.cancellationRequested ? .cancelled : .failed
                     if !job.cancellationRequested {
@@ -429,6 +475,10 @@ final class DroneJobStore: @unchecked Sendable {
                             message: "The worker restarted before this job reached a final state."
                         )
                     }
+                } else if groupGone {
+                    job.processGroupUnverified = nil
+                }
+                if job != loaded {
                     job.updatedAt = now()
                     try persist(job)
                 }

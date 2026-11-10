@@ -349,6 +349,18 @@ records at once; its in-flight records are deleted by the next purge after
 they finish. Only records that exist at revocation are affected: a controller
 approved again under the same peer ID keeps its new records for the full
 idempotency lifetime.
+A process job runs as its own process group (#441). The record is marked
+`launching` before the leader is spawned, and the leader starts suspended until
+its group ID and start time are persisted. Every exit path kills the group and
+waits, bounded, for it to disappear before the job is recorded finished. On
+restart, recovery kills a matching leftover group before finalizing the job.
+When a group cannot be confirmed gone (a member owned by another user, a
+member still running after SIGKILL, a record that does not match the live
+process table, or a `launching` record whose group was never persisted), the
+job is still finalized but carries a `processGroupUnverified` notice, worker
+storage health reports unhealthy, and the record is exempt from automatic
+deletion until a later recovery confirms the group gone. Descendants that call
+`setsid`/`setpgid` to leave the job's group are outside this guarantee.
 
 Authorization, resource-governance and recovery acceptance remains tracked in
 #326/#327. Keep detailed security findings and remediation evidence in private
