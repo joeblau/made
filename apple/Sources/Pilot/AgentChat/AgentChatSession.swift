@@ -790,6 +790,9 @@ final class AgentChatSession {
     }
 
     private func connectionEnded(_ connection: ACPConnection, generation: Int) async {
+        // However it closed, the agent and its subprocesses must not outlive
+        // the connection; terminate() is idempotent and escalates to SIGKILL.
+        Task { await connection.terminate() }
         let reason = await connection.closeReason
         guard generation == self.generation else { return }
         resetAutoApprove()
