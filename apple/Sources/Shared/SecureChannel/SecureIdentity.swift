@@ -76,10 +76,17 @@ final class SecureIdentity {
     }
 
     /// Generate a fresh identity key and push it to the peer.
+    ///
+    /// `DeviceIdentity.regenerate()` notifies the Multipeer and FrameLink
+    /// transports, which drop every session proven with the old key and
+    /// reconnect with the new one (issue #429). The peer must approve that key
+    /// change first, so this side stops reporting "Synced" until an
+    /// authenticated reconnect reloads the pin via `refreshPeer()`.
     func regenerate() {
         guard !isIsolated else { return }
-        _ = try? DeviceIdentity.regenerate()
+        let rotated = (try? DeviceIdentity.regenerate()) != nil
         localPublicKey = DeviceIdentity.publicKeyBase64()
+        if rotated { peerPublicKey = nil }
         announce()
     }
 }

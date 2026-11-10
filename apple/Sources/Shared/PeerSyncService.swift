@@ -34,6 +34,8 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     private var running = false
     private var authenticator: PeerSyncAuthenticator
     private var pendingPairing: PendingPairing?
+    private let usesEphemeralIdentity: Bool
+    @ObservationIgnored private var identityObserver: (any NSObjectProtocol)?
     private var activePeer: MCPeerID?
 
     private static let serviceType = "blau-sync"
@@ -71,6 +73,7 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())
         self.role = role
+        self.usesEphemeralIdentity = isTesting
         self.peerID = MCPeerID(displayName: displayName)
         self.session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
         self.authenticator = PeerSyncAuthenticator(
@@ -79,6 +82,15 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         )
         super.init()
         session.delegate = self
+        if !isTesting {
+            identityObserver = DeviceIdentity.observeChanges { [weak self] in
+                self?.reloadLocalIdentity()
+            }
+        }
+    }
+
+    deinit {
+        if let identityObserver { NotificationCenter.default.removeObserver(identityObserver) }
     }
 
     func start() {
@@ -130,6 +142,42 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             return .approvalRequired(isKeyChange: false)
         }
         return candidate == trusted ? .trusted : .approvalRequired(isKeyChange: true)
+    }
+
+    /// Rebuild the authenticator around `key`, keeping the pinned peer, and
+    /// restart the transport so every advertisement, invitation, pending
+    /// approval and live session proves the current identity (issue #429).
+    /// The peer still pins the old key, so it sees the key-change approval.
+    func adoptLocalIdentity(_ key: Curve25519.KeyAgreement.PrivateKey) {
+        transportQueue.async { [weak self] in
+            self?.adoptLocalIdentityOnQueue(key)
+        }
+    }
+
+    /// The identity key the transport currently advertises and proves.
+    func localIdentityPublicKeyBase64() async -> String {
+        await withCheckedContinuation { continuation in
+            transportQueue.async { [weak self] in
+                continuation.resume(returning: self?.authenticator.localPublicKeyBase64 ?? "")
+            }
+        }
+    }
+
+    private func reloadLocalIdentity() {
+        transportQueue.async { [weak self] in
+            guard let self, !self.usesEphemeralIdentity,
+                  let key = try? DeviceIdentity.loadOrCreate() else { return }
+            self.adoptLocalIdentityOnQueue(key)
+        }
+    }
+
+    private func adoptLocalIdentityOnQueue(_ key: Curve25519.KeyAgreement.PrivateKey) {
+        guard key.publicKey.rawRepresentation.base64EncodedString()
+            != authenticator.localPublicKeyBase64 else { return }
+        authenticator = authenticator.replacingLocalKey(key)
+        // `startTransport()` first tears down the session, any pending
+        // approval and the advertisement that carried the old key.
+        if running { startTransport() }
     }
 
     private func startTransport() {

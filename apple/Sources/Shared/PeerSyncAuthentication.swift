@@ -70,6 +70,13 @@ struct PeerSyncAuthenticator {
         }
     }
 
+    /// The same pinned peer, authenticated under a rotated local identity.
+    /// No session state carries over: a handshake proven with the old key can
+    /// never authorize traffic sealed by the new one (issue #429).
+    func replacingLocalKey(_ key: Curve25519.KeyAgreement.PrivateKey) -> PeerSyncAuthenticator {
+        PeerSyncAuthenticator(localKey: key, peerPublicKeyBase64: peerPublicKeyBase64)
+    }
+
     mutating func trust(peerPublicKeyBase64: String) -> Bool {
         guard let peer = DeviceIdentity.parsePeerPublicKey(peerPublicKeyBase64),
               peer.rawRepresentation != localKey.publicKey.rawRepresentation else { return false }

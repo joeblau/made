@@ -51,16 +51,36 @@ enum DeviceIdentity {
         return key.publicKey.rawRepresentation.base64EncodedString()
     }
 
+    /// Posted (on the regenerating thread, after the new key is stored and
+    /// cached) whenever `regenerate()` replaces the identity. Every live
+    /// authenticator observes it so no session keeps proving the rotated-out
+    /// key until relaunch (issue #429).
+    static let didChangeNotification = Notification.Name("app.blau.securechannel.identityDidChange")
+
+    /// Run `handler` after every identity rotation. The handler runs on the
+    /// posting thread, so it should only hop to its owner's queue. Remove the
+    /// returned token with `NotificationCenter.default.removeObserver(_:)`.
+    static func observeChanges(_ handler: @escaping @Sendable () -> Void) -> any NSObjectProtocol {
+        NotificationCenter.default.addObserver(
+            forName: didChangeNotification,
+            object: nil,
+            queue: nil
+        ) { _ in handler() }
+    }
+
     /// Discard the current identity and generate a fresh key pair (e.g. the
     /// user tapped "Regenerate & re-sync"). The new public key must then be
     /// re-announced to the peer.
     @discardableResult
     static func regenerate() throws -> Curve25519.KeyAgreement.PrivateKey {
-        lock.lock()
-        defer { lock.unlock() }
-        let key = Curve25519.KeyAgreement.PrivateKey()
-        try writeKeychain(key.rawRepresentation, account: account)
-        cached = key
+        let key = try lock.withLock { () throws -> Curve25519.KeyAgreement.PrivateKey in
+            let key = Curve25519.KeyAgreement.PrivateKey()
+            try writeKeychain(key.rawRepresentation, account: account)
+            cached = key
+            return key
+        }
+        // Outside the lock: observers reload through `loadOrCreate()`.
+        NotificationCenter.default.post(name: didChangeNotification, object: nil)
         return key
     }
 

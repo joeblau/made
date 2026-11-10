@@ -96,8 +96,11 @@ counters, never payload contents.
   and administrative flows; it removes the Keychain pin and disconnects the
   authenticated client.
 - Regenerating a device identity is a rotation, not an automatic replacement.
-  The other device sees a key-change warning and must explicitly approve the
-  new verification code. Rejecting it preserves the old pin.
+  The control-sync and FrameLink transports drop every session proven with the
+  old key at once and reconnect with the new one, so the other device sees a
+  key-change warning and must explicitly approve the new verification code.
+  Rejecting it preserves the old pin. Settings shows "Waiting" rather than
+  "Synced" until the approved peer reconnects.
 - Uninstalling an app or clearing its Keychain removes its local identity and
   therefore requires a new pairing ceremony.
 

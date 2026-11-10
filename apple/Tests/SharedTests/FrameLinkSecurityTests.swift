@@ -97,6 +97,25 @@ final class FrameLinkSecurityTests: XCTestCase {
         XCTAssertEqual(pilot.receive(plotterApproval.proof), .authenticated)
     }
 
+    func testFrameLinkEndpointsProveARotatedIdentity() async {
+        let sender = FrameSender(usesEphemeralIdentity: true)
+        let receiver = FrameReceiver()
+        let originalSender = await sender.localIdentityPublicKeyBase64()
+        let originalReceiver = await receiver.localIdentityPublicKeyBase64()
+        let rotated = Curve25519.KeyAgreement.PrivateKey()
+        let rotatedPublic = rotated.publicKey.rawRepresentation.base64EncodedString()
+
+        sender.adoptLocalIdentity(rotated)
+        receiver.adoptLocalIdentity(rotated)
+
+        let senderKey = await sender.localIdentityPublicKeyBase64()
+        let receiverKey = await receiver.localIdentityPublicKeyBase64()
+        XCTAssertNotEqual(senderKey, originalSender)
+        XCTAssertNotEqual(receiverKey, originalReceiver)
+        XCTAssertEqual(senderKey, rotatedPublic, "Pilot's FrameLink must prove the stored key")
+        XCTAssertEqual(receiverKey, rotatedPublic, "Plotter's FrameLink must prove the stored key")
+    }
+
     private func authenticateTrusted(
         _ pilot: inout FrameLinkSecureSession,
         _ plotter: inout FrameLinkSecureSession,
