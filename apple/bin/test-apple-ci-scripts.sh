@@ -2,7 +2,10 @@
 # Exercise build-ci.sh/test.sh orchestration without invoking a compiler:
 # shared per-platform derived data, pinned policy flags, and the guarantee that
 # test-without-building only follows a successful build-for-testing of the same
-# products in the same invocation.
+# products in the same invocation. Also exercises the Apple Release ordering
+# guard that keeps GitHub's latest release on the highest version and build,
+# and proves the committed-project check rejects every kind of XcodeGen drift,
+# including never-committed new files.
 set -euo pipefail
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/apple-ci-scripts-test.XXXXXX")"
@@ -90,6 +93,14 @@ with Path(os.environ["CI_TEST_LOG"]).open("a") as log:
     log.write("cockpit-ui-boundary\n")
 raise SystemExit(int(os.environ.get("CI_TEST_BOUNDARY_FAILURE", "0")))
 TOOL
+cat > "$work/apple/bin/make-brand-symbols.py" <<'TOOL'
+import os
+import sys
+from pathlib import Path
+with Path(os.environ["CI_TEST_LOG"]).open("a") as log:
+    log.write("brand-symbols " + " ".join(sys.argv[1:]) + "\n")
+raise SystemExit(int(os.environ.get("CI_TEST_BRAND_SYMBOLS_FAILURE", "0")))
+TOOL
 cat > "$work/apple/bin/test-drone-protocol.sh" <<'TOOL'
 #!/bin/bash
 printf 'drone-protocol\n' >> "$CI_TEST_LOG"
@@ -120,6 +131,153 @@ reset_log() {
   : > "$CI_TEST_ACTIONS"
 }
 
+# Every Apple release job builds exactly the commit release-metadata validated
+# (#423): release-metadata exports that SHA, every other checkout pins it and
+# is immediately followed by a HEAD check, and publish re-checks the tag.
+release_workflow="$APPLE_ROOT/../.github/workflows/apple-release.yml"
+# shellcheck disable=SC2016 # a literal GitHub Actions expression
+validated_ref='${{ needs.release-metadata.outputs.commit }}'
+verify_step='Verify the validated release commit'
+awk -v ref="$validated_ref" -v verify="$verify_step" '
+  function bad(message) { printf "%s\n", message; failed = 1 }
+  function close_job() {
+    if (job == "release-metadata") {
+      if (!exports_commit) bad("release-metadata does not output the validated commit")
+    } else if (job != "" && checkouts > 0 && verified < checkouts) {
+      bad(job ": checkout is not immediately followed by \"" verify "\"")
+    }
+  }
+  /^jobs:$/ { in_jobs = 1; next }
+  in_jobs && /^  [A-Za-z0-9_-]+:$/ {
+    close_job()
+    job = $1; sub(/:$/, "", job)
+    checkouts = 0; verified = 0; exports_commit = 0; in_checkout = 0
+    next
+  }
+  job == "release-metadata" && $0 == "      commit: ${{ steps.release.outputs.commit }}" { exports_commit = 1 }
+  /^      - / {
+    if (in_checkout && job != "release-metadata" && checkout_ref != ref)
+      bad(job ": checkout ref is \"" checkout_ref "\", not the validated commit")
+    if (in_checkout && job != "release-metadata" && $0 == "      - name: " verify) verified++
+    in_checkout = ($0 ~ /uses: actions\/checkout@/)
+    if (in_checkout) { checkouts++; checkout_ref = "" }
+    next
+  }
+  in_checkout && /^          ref: / { checkout_ref = $0; sub(/^          ref: /, "", checkout_ref) }
+  END {
+    close_job()
+    if (!in_jobs) bad("no jobs found")
+    exit failed
+  }
+' "$release_workflow" || fail "release jobs do not all build the validated release commit"
+grep -Fq "printf 'commit=%s\\n' \"\$release_commit\" >> \"\$GITHUB_OUTPUT\"" "$release_workflow" ||
+  fail "release-metadata does not export the commit it validated"
+# shellcheck disable=SC2016 # literal workflow shell text
+grep -Fq '"$GITHUB_SHA^{commit}")" ]]; then' "$release_workflow" ||
+  fail "release-metadata accepts a tag moved after the push that triggered it"
+awk '
+  /- name: Verify the release tag still names the validated commit$/ { recheck = NR }
+  /- name: Publish the tagged release$/ { publish = NR }
+  END { exit !(recheck && publish && recheck < publish) }
+' "$release_workflow" || fail "publish does not re-check the release tag before creating the release"
+
+# Extract every run body of the step named $1 into $2.1, $2.2, ... and print
+# how many there were, so each embedded copy is executed exactly as written.
+extract_run_bodies() {
+  awk -v name="      - name: $1" -v prefix="$2" '
+    function finish() { if (out != "") close(out); body = 0; out = "" }
+    $0 == name { finish(); step = 1; next }
+    step && /^        run: \|$/ { step = 0; body = 1; out = prefix "." ++count; printf "" > out; next }
+    body && /^          / { sub(/^          /, ""); print > out; next }
+    body && /^$/ { print "" > out; next }
+    body { finish() }
+    /^      - / { step = 0 }
+    END { finish(); print count + 0 }
+  ' "$release_workflow"
+}
+
+# Execute every copy of the HEAD check exactly as the workflow embeds it: one
+# per checkout outside release-metadata, each rejecting anything but the
+# validated commit.
+checkouts="$(awk '
+  /^jobs:$/ { in_jobs = 1; next }
+  in_jobs && /^  [A-Za-z0-9_-]+:$/ { job = $1; sub(/:$/, "", job); next }
+  job != "release-metadata" && /^      - uses: actions\/checkout@/ { count++ }
+  END { print count + 0 }
+' "$release_workflow")"
+verify_script="$work/verify-release-commit.sh"
+verify_copies="$(extract_run_bodies "$verify_step" "$verify_script")"
+[[ "$checkouts" -gt 0 ]] || fail "found no release checkouts to verify"
+[[ "$verify_copies" == "$checkouts" ]] ||
+  fail "found $verify_copies release commit check(s) for $checkouts release checkout(s)"
+release_repo="$work/release-repo"
+git init -q "$release_repo"
+git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
+  commit -q --allow-empty -m validated
+validated_commit="$(git -C "$release_repo" rev-parse HEAD)"
+git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
+  commit -q --allow-empty -m moved
+moved_commit="$(git -C "$release_repo" rev-parse HEAD)"
+for ((copy = 1; copy <= verify_copies; copy++)); do
+  script="$verify_script.$copy"
+  [[ -s "$script" ]] || fail "release commit check $copy is empty"
+  git -C "$release_repo" checkout -q --detach "$moved_commit"
+  (cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$script") 2>/dev/null &&
+    fail "release commit check $copy accepted a checkout of a different commit"
+  (cd "$release_repo" && RELEASE_COMMIT=v1.2.3 bash "$script") 2>/dev/null &&
+    fail "release commit check $copy accepted a non-SHA release commit"
+  (cd "$release_repo" && RELEASE_COMMIT='' bash "$script") 2>/dev/null &&
+    fail "release commit check $copy accepted an empty release commit"
+  git -C "$release_repo" checkout -q --detach "$validated_commit"
+  (cd "$release_repo" && RELEASE_COMMIT="$validated_commit" bash "$script") ||
+    fail "release commit check $copy rejected the validated commit"
+done
+
+# Execute publish's tag re-check exactly as embedded, against a stub gh whose
+# canned "type sha" answers model lightweight, annotated, and chained tags.
+recheck_script="$work/verify-release-tag.sh"
+recheck_copies="$(extract_run_bodies 'Verify the release tag still names the validated commit' "$recheck_script")"
+[[ "$recheck_copies" == 1 ]] || fail "expected one release tag re-check, found $recheck_copies"
+recheck_script="$recheck_script.1"
+mkdir -p "$work/gh-stub" "$work/gh-tags"
+cat > "$work/gh-stub/gh" <<'TOOL'
+#!/bin/bash
+[[ "$1" == api ]] || exit 2
+case "$2" in
+  "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG") printf '%s\n' "$GH_STUB_REF" ;;
+  "repos/$GITHUB_REPOSITORY/git/tags/"*) cat "$GH_STUB_TAGS/${2##*/}" ;;
+  *) exit 2 ;;
+esac
+TOOL
+chmod +x "$work/gh-stub/gh"
+tag_object() { printf '%040d' "$1"; }
+# Tag objects 1..5 form a chain ending at the validated commit; object 9
+# peels to the moved commit.
+for level in 1 2 3 4; do
+  printf 'tag %s\n' "$(tag_object $((level + 1)))" > "$work/gh-tags/$(tag_object "$level")"
+done
+printf 'commit %s\n' "$validated_commit" > "$work/gh-tags/$(tag_object 5)"
+printf 'commit %s\n' "$moved_commit" > "$work/gh-tags/$(tag_object 9)"
+run_recheck() {
+  PATH="$work/gh-stub:$PATH" GH_STUB_REF="$1" GH_STUB_TAGS="$work/gh-tags" \
+    GITHUB_REPOSITORY=example/release RELEASE_TAG=v1.2.3 \
+    RELEASE_COMMIT="${2:-$validated_commit}" bash "$recheck_script" 2>/dev/null
+}
+run_recheck "commit $validated_commit" ||
+  fail "the release tag re-check rejected a lightweight tag naming the validated commit"
+run_recheck "tag $(tag_object 5)" ||
+  fail "the release tag re-check rejected an annotated tag of the validated commit"
+run_recheck "tag $(tag_object 2)" ||
+  fail "the release tag re-check rejected a four-level tag chain to the validated commit"
+run_recheck "commit $moved_commit" &&
+  fail "the release tag re-check accepted a tag naming another commit"
+run_recheck "tag $(tag_object 9)" &&
+  fail "the release tag re-check accepted an annotated tag of another commit"
+run_recheck "tag $(tag_object 1)" &&
+  fail "the release tag re-check accepted a tag chain still unpeeled after four levels"
+run_recheck "commit $validated_commit" v1.2.3 &&
+  fail "the release tag re-check accepted a non-SHA release commit"
+
 root="$TMPDIR/blau-apple-ci"
 macos="-derivedDataPath $root/macos-debug "
 simulator="-derivedDataPath $root/ios-simulator-debug "
@@ -130,6 +288,7 @@ reset_log
 "$work/apple/bin/build-ci.sh"
 "$work/apple/bin/test.sh" all
 expect_calls 1 '^icons validate$'
+expect_calls 1 '^brand-symbols --check$'
 expect_calls 1 '^benchmark-annexb --typecheck$'
 expect_calls 1 '^annexb-parity --typecheck$'
 expect_calls 1 '^android-stream-live --typecheck$'
@@ -237,6 +396,54 @@ fi
 expect_calls 1 '^cockpit-ui-boundary$'
 expect_calls 0 '^xcodebuild '
 
+# Generated brand SF Symbols that drift from their generator fail build-ci.sh
+# before any application build.
+reset_log
+if CI_TEST_BRAND_SYMBOLS_FAILURE=1 "$work/apple/bin/build-ci.sh"; then
+  fail "a brand SF Symbol drift must fail build-ci.sh"
+fi
+expect_calls 1 '^brand-symbols --check$'
+expect_calls 0 '^xcodebuild '
+
+# The real generator's --check mode: the committed symbolsets match, and a
+# hand edit, a leftover file, a missing file, or an unlisted Brand* symbolset
+# in a scratch copy is reported; regenerating that copy repairs it.
+brand_tool="$APPLE_ROOT/bin/make-brand-symbols.py"
+brand_assets="$work/brand-assets"
+mkdir -p "$brand_assets"
+python3 "$brand_tool" --check >/dev/null 2>&1 ||
+  fail "committed Brand*.symbolset assets differ from make-brand-symbols.py output"
+cp -R "$APPLE_ROOT/Sources/Pilot/Assets.xcassets/"Brand*.symbolset "$brand_assets/"
+expect_brand_drift() {
+  local output
+  if output="$(python3 "$brand_tool" --check --assets "$brand_assets" 2>&1)"; then
+    fail "brand symbol check accepted: $1"
+  fi
+  [[ "$output" == *"$2"* ]] || fail "brand symbol check did not report '$2': $output"
+  python3 "$brand_tool" --assets "$brand_assets" >/dev/null 2>&1
+  python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1 ||
+    fail "regenerating did not repair: $1"
+}
+python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1 ||
+  fail "a pristine copy of the brand symbols failed --check"
+printf ' ' >> "$brand_assets/BrandOpenAI.symbolset/openai.svg"
+expect_brand_drift "a hand-edited glyph" "BrandOpenAI.symbolset/openai.svg: differs"
+moonshot_glyph="$brand_assets/BrandMoonshot.symbolset/moonshot.svg"
+[[ -f "$moonshot_glyph" ]] || fail "missing scratch glyph $moonshot_glyph"
+perl -pi -e 's/\n/\r\n/' "$moonshot_glyph"
+expect_brand_drift "CRLF line endings in a glyph" "BrandMoonshot.symbolset/moonshot.svg: differs"
+touch "$brand_assets/BrandGrok.symbolset/grok-old.svg"
+expect_brand_drift "a leftover file" "BrandGrok.symbolset/grok-old.svg: not produced"
+rm "$brand_assets/BrandCursor.symbolset/Contents.json"
+expect_brand_drift "a missing Contents.json" "BrandCursor.symbolset/Contents.json: missing"
+touch "$brand_assets/BrandAnthropic.symbolset/.DS_Store"
+python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1 ||
+  fail "Finder metadata in a symbolset must not count as drift"
+mkdir "$brand_assets/BrandStray.symbolset"
+if python3 "$brand_tool" --check --assets "$brand_assets" >/dev/null 2>&1; then
+  fail "brand symbol check accepted a Brand* symbolset with no generator entry"
+fi
+
 # An explicit root relocates both scripts together.
 reset_log
 BLAU_DERIVED_DATA="$work/custom" "$work/apple/bin/build-ci.sh"
@@ -309,5 +516,405 @@ awk -F '\t' '
 ' "$failed_evidence/commands.tsv" || fail "failed benchmark command was not recorded"
 awk -F '\t' '$1 == "build" { exit $7 == 1 ? 0 : 1 }' "$failed_evidence/totals.tsv" ||
   fail "failed benchmark phase total was not recorded"
+
+# The Apple Release ordering guard (issue #421): GitHub's latest release, which
+# the website and Cockpit's Sparkle feed follow, must be the highest semantic
+# version with the highest build. Run the workflow's own step body against a
+# stubbed `gh`. release-metadata and publish must carry the identical check.
+release_workflow="$APPLE_ROOT/../.github/workflows/apple-release.yml"
+release_guard="$work/release-guard"
+mkdir -p "$release_guard/tools"
+awk -v name='Require a release above every published version' -v out="$release_guard/step" '
+  in_run && $0 == "" { blanks += 1; next }
+  in_run {
+    if (substr($0, 1, 10) == "          ") {
+      for (; blanks > 0; blanks--) print "" > (out "-" found ".sh")
+      print substr($0, 11) > (out "-" found ".sh")
+      next
+    }
+    in_run = 0
+    in_step = 0
+    blanks = 0
+  }
+  in_env {
+    if (substr($0, 1, 10) == "          ") {
+      print substr($0, 11) > (out "-" found ".env")
+      next
+    }
+    in_env = 0
+  }
+  $0 == "      - name: " name { found += 1; in_step = 1; next }
+  /^      - / || /^  [^ ]/ { in_step = 0 }
+  in_step && $0 == "        env:" { in_env = 1; next }
+  in_step && $0 == "        run: |" { in_run = 1 }
+' "$release_workflow"
+[[ -s "$release_guard/step-1.sh" && -s "$release_guard/step-2.sh" && ! -e "$release_guard/step-3.sh" ]] ||
+  fail "apple-release.yml must run the release ordering check in release-metadata and publish"
+cmp -s "$release_guard/step-1.sh" "$release_guard/step-2.sh" ||
+  fail "release-metadata and publish ordering checks differ"
+# Each guard step's own env block must feed it from its own job's outputs; a
+# whole-file search would also match the macOS/TestFlight job env and the
+# publish step that already read needs.release-metadata.outputs.
+step=0
+for expression in steps.release.outputs needs.release-metadata.outputs; do
+  step=$((step + 1))
+  printf '%s\n' \
+    "GH_TOKEN: \${{ github.token }}" \
+    "RELEASE_BUILD_NUMBER: \${{ $expression.build-number }}" \
+    "RELEASE_TAG: \${{ $expression.tag }}" > "$release_guard/expected-$step.env"
+  cmp -s "$release_guard/expected-$step.env" "$release_guard/step-$step.env" ||
+    fail "ordering check $step must receive GH_TOKEN, RELEASE_BUILD_NUMBER, and RELEASE_TAG from $expression"
+done
+cat > "$release_guard/tools/gh" <<'TOOL'
+#!/bin/bash
+printf 'gh %s\n' "$*" >> "$RELEASE_GUARD_FIXTURES/calls"
+if [[ "$1 $2" == "api --paginate" ]]; then
+  [[ -e "$RELEASE_GUARD_FIXTURES/api-failure" ]] && { printf 'HTTP 502\n' >&2; exit 1; }
+  [[ "$3" == "repos/example/made/releases?per_page=100" ]] || exit 3
+  cat "$RELEASE_GUARD_FIXTURES/releases.json"
+elif [[ "$1 $2" == "release download" ]]; then
+  tag="$3"
+  directory=""
+  while [[ $# -gt 0 ]]; do
+    [[ "$1" == --dir ]] && directory="$2"
+    shift
+  done
+  printf '%s\n' "$tag" > "$RELEASE_GUARD_FIXTURES/downloaded"
+  cp "$RELEASE_GUARD_FIXTURES/appcast-$tag.xml" "$directory/appcast.xml"
+else
+  exit 4
+fi
+TOOL
+chmod +x "$release_guard/tools/gh"
+release_json() { # tag [appcast|none] [draft]
+  local assets='[]'
+  [[ "${2:-none}" == appcast ]] && assets='[{"name":"made-x-macOS.zip"},{"name":"appcast.xml"}]'
+  printf '{"tag_name":"%s","draft":%s,"assets":%s}' "$1" "${3:-false}" "$assets"
+}
+appcast_for() { # tag build
+  printf '<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><title>%s</title><sparkle:version>%s</sparkle:version><sparkle:shortVersionString>%s</sparkle:shortVersionString><enclosure url="https://example.invalid/%s.zip" length="1" type="application/octet-stream" sparkle:edSignature="c2ln"/></item></channel></rss>\n' \
+    "${1#v}" "$2" "${1#v}" "$1" > "$RELEASE_GUARD_FIXTURES/appcast-$1.xml"
+}
+reset_release_guard() { # releases-json
+  export RELEASE_GUARD_FIXTURES="$release_guard/fixtures"
+  rm -rf "$RELEASE_GUARD_FIXTURES" "$release_guard/runner-temp"
+  mkdir -p "$RELEASE_GUARD_FIXTURES" "$release_guard/runner-temp"
+  printf '%s' "$1" > "$RELEASE_GUARD_FIXTURES/releases.json"
+}
+run_release_guard() { # tag build
+  PATH="$release_guard/tools:$PATH" RELEASE_TAG="$1" RELEASE_BUILD_NUMBER="$2" \
+    GITHUB_REPOSITORY=example/made GH_TOKEN=test RUNNER_TEMP="$release_guard/runner-temp" \
+    bash --noprofile --norc -eo pipefail "$release_guard/step-1.sh" > "$release_guard/log" 2>&1
+}
+expect_release_allowed() {
+  run_release_guard "$1" "$2" || fail "release $1 ($2) was refused: $(cat "$release_guard/log")"
+}
+expect_release_refused() { # tag build reason
+  if run_release_guard "$1" "$2"; then
+    fail "release $1 ($2) must be refused: $3"
+  fi
+}
+
+# The first semantic release has nothing to exceed; drafts and ChromiumKit
+# support releases are not semantic app releases.
+reset_release_guard "[$(release_json chromiumkit-123 none),$(release_json v9.0.0 appcast true)]"
+expect_release_allowed v1.0.0 1.1
+[[ ! -e "$RELEASE_GUARD_FIXTURES/downloaded" ]] || fail "no appcast should be read without a semantic release"
+
+# A higher version with a higher build is allowed; versions compare numerically
+# across paginated responses, so v1.10.0 is above v1.9.0.
+reset_release_guard "[$(release_json v1.3.0 appcast),$(release_json v1.9.0 appcast)][$(release_json v1.2.0 appcast)]"
+appcast_for v1.9.0 50.1
+expect_release_allowed v1.10.0 51.1
+[[ "$(cat "$RELEASE_GUARD_FIXTURES/downloaded")" == v1.9.0 ]] ||
+  fail "the build must be compared with the highest release's appcast"
+expect_release_allowed v1.9.1 50.2
+
+# An older-line hotfix, a recovered older tag, or a republished version would
+# move GitHub's latest release, and the Sparkle feed, backwards.
+expect_release_refused v1.2.1 51.1 "lower version than v1.9.0"
+expect_release_refused v1.9.0 51.1 "same version as v1.9.0"
+expect_release_refused v1.8.9 99.1 "lower version than v1.9.0"
+grep -Fq 'is not above the highest published release v1.9.0' "$release_guard/log" ||
+  fail "an ordering refusal must name the highest release: $(cat "$release_guard/log")"
+
+# Sparkle compares CFBundleVersion: a higher version with a lower or equal build
+# than the published feed would never be offered to existing installs.
+expect_release_refused v1.10.0 49.9 "lower build than 50.1"
+expect_release_refused v1.10.0 50.1 "same build as 50.1"
+expect_release_refused v1.10.0 50 "build 50 is not above 50.1"
+
+# A pre-Sparkle highest release has no feed build to exceed.
+reset_release_guard "[$(release_json v0.9.0 none)]"
+expect_release_allowed v0.10.0 3.1
+[[ ! -e "$RELEASE_GUARD_FIXTURES/downloaded" ]] || fail "a release without an appcast must not be downloaded"
+
+# Malformed inputs and unreadable listings or feeds fail closed.
+reset_release_guard "[$(release_json v1.0.0 appcast)]"
+appcast_for v1.0.0 'not-a-build'
+expect_release_refused v1.1.0 9.1 "unreadable published build"
+printf '<rss></rss>\n' > "$RELEASE_GUARD_FIXTURES/appcast-v1.0.0.xml"
+expect_release_refused v1.1.0 9.1 "published appcast without a build"
+appcast_for v1.0.0 8.1
+expect_release_allowed v1.1.0 9.1
+expect_release_refused v1.1.0-beta 9.1 "non-semantic tag"
+expect_release_refused v1.1.0 'nine' "non-numeric build number"
+touch "$RELEASE_GUARD_FIXTURES/api-failure"
+expect_release_refused v1.1.0 9.1 "release listing failed"
+unset RELEASE_GUARD_FIXTURES
+
+# Every released Apple commit has passed lint and unit tests on its own CI run:
+# ci.yml runs every gate for each main commit, and apple-release.yml refuses a
+# tag until such a run of that exact commit has passed both Apple gates.
+workflows="$APPLE_ROOT/../.github/workflows"
+command -v jq >/dev/null || fail "jq is required to exercise the release CI gate"
+python3 - "$workflows/ci.yml" <<'PY' || fail "ci.yml does not run every gate for each main commit"
+import re, sys
+text = open(sys.argv[1]).read()
+on = re.search(r"^on:\n((?:[ \t]+.*\n|\n)*)", text, re.M).group(1)
+assert re.search(r"^  push:\n    branches:\n      - main\n", on, re.M), "push to main"
+assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text, "main runs cancelled"
+assert "group: ci-${{ github.event.pull_request.number || github.sha }}" in text, "per-commit group"
+assert re.search(r"id: filter-all\n\s+if: \$\{\{ github.event_name != 'pull_request' \}\}", text), "filter-all"
+assert re.search(r"id: filter\n\s+if: \$\{\{ github.event_name == 'pull_request' \}\}", text), "paths filter"
+PY
+gate="$work/release-ci-gate.sh"
+python3 - "$workflows/apple-release.yml" 'Require passing Apple CI for the release commit' > "$gate" <<'PY' ||
+import sys
+lines = open(sys.argv[1]).read().split("\n")
+start = next(i for i, line in enumerate(lines) if line.strip() == "- name: " + sys.argv[2])
+run = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "run: |")
+indent = len(lines[run]) - len(lines[run].lstrip())
+body = []
+for line in lines[run + 1:]:
+    if line.strip() and len(line) - len(line.lstrip()) <= indent:
+        break
+    body.append(line)
+width = min(len(l) - len(l.lstrip()) for l in body if l.strip())
+print("\n".join(l[width:] for l in body))
+PY
+  fail "apple-release.yml has no release-commit CI gate"
+release_repo="$work/release-repo"
+git init -q "$release_repo"
+git -C "$release_repo" -c user.name=ci -c user.email=ci@example.invalid -c commit.gpgsign=false \
+  commit -q --allow-empty -m release
+git -C "$release_repo" -c tag.gpgsign=false tag v1.2.3
+release_sha="$(git -C "$release_repo" rev-parse HEAD)"
+cat > "$work/tools/gh" <<'TOOL'
+#!/bin/bash
+count="$(cat "$GATE_DIR/calls" 2>/dev/null || echo 0)"
+echo $((count + 1)) > "$GATE_DIR/calls"
+case "$2" in
+  */actions/workflows/ci.yml/runs\?head_sha=*)
+    if [[ -f "$GATE_DIR/runs.pending" && ! -f "$GATE_DIR/seen" ]]; then
+      touch "$GATE_DIR/seen"
+      cat "$GATE_DIR/runs.pending"
+    else
+      cat "$GATE_DIR/runs"
+    fi ;;
+  */actions/runs/*/jobs\?filter=latest*) cat "$GATE_DIR/jobs" ;;
+  *) exit 1 ;;
+esac
+TOOL
+chmod +x "$work/tools/gh"
+run_json() { # event status conclusion [head_sha]
+  printf '{"id":4242,"event":"%s","status":"%s","conclusion":%s,"head_sha":"%s","head_repository":{"full_name":"example/repo"}}' \
+    "$1" "$2" "$3" "${4:-$release_sha}"
+}
+jobs_json() { # apple-lint conclusion, apple-build-test conclusion
+  printf '{"jobs":[{"name":"apple-lint","conclusion":"%s"},{"name":"apple-build-test","conclusion":"%s"},{"name":"complete","conclusion":"success"}]}' "$1" "$2"
+}
+run_gate() { # runs-json jobs-json [pending-runs-json]
+  local dir
+  dir="$(mktemp -d "$work/gate.XXXXXX")"
+  printf '{"workflow_runs":[%s]}' "$1" > "$dir/runs"
+  printf '%s' "$2" > "$dir/jobs"
+  [[ -z "${3:-}" ]] || printf '{"workflow_runs":[%s]}' "$3" > "$dir/runs.pending"
+  (
+    cd "$release_repo"
+    GATE_DIR="$dir" GITHUB_REPOSITORY=example/repo RELEASE_TAG=v1.2.3 \
+      RELEASE_CI_WAIT_SECONDS="${GATE_WAIT:-0}" RELEASE_CI_GRACE_SECONDS=0 RELEASE_CI_POLL_SECONDS=0 \
+      bash -eo pipefail "$gate"
+  ) >/dev/null 2>&1
+}
+run_gate "$(run_json push completed '"success"')" "$(jobs_json success success)" ||
+  fail "a passing main CI run of the release commit must satisfy the gate"
+run_gate "$(run_json workflow_dispatch completed '"success"')" "$(jobs_json success success)" ||
+  fail "a passing manual CI run of the release commit must satisfy the gate"
+if run_gate "$(run_json pull_request completed '"success"')" "$(jobs_json success success)"; then
+  fail "a pull-request merge preview must not stand in for the release commit"
+fi
+if run_gate "$(run_json push completed '"success"' 0000000000000000000000000000000000000000)" "$(jobs_json success success)"; then
+  fail "a CI run of another commit must not satisfy the gate"
+fi
+if run_gate "" "$(jobs_json success success)"; then
+  fail "a release commit with no CI run must be refused"
+fi
+if run_gate "$(run_json push completed '"failure"')" "$(jobs_json success failure)"; then
+  fail "a failed CI run of the release commit must be refused"
+fi
+if run_gate "$(run_json push completed '"success"')" "$(jobs_json success skipped)"; then
+  fail "a CI run that skipped the unit tests must be refused"
+fi
+if run_gate "$(run_json push completed '"success"')" "$(jobs_json skipped success)"; then
+  fail "a CI run that skipped Swift lint must be refused"
+fi
+GATE_WAIT=30 run_gate "$(run_json push completed '"success"')" "$(jobs_json success success)" \
+  "$(run_json push in_progress null)" ||
+  fail "the gate must wait for an in-progress CI run of the release commit"
+rm -f "$work/tools/gh"
+
+# The committed-project check fails on any drift between apple/made.xcodeproj
+# and what pinned XcodeGen generates, including a generated scheme that was
+# never committed, which `git diff --exit-code` cannot see.
+repo="$work/xcodegen-repo"
+mkdir -p "$repo/apple/bin"
+cp "$APPLE_ROOT/bin/install-xcodegen.sh" "$repo/apple/bin/"
+cp "$APPLE_ROOT/../.gitignore" "$repo/.gitignore"
+xcodegen_version="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$APPLE_ROOT/bin/install-xcodegen.sh")"
+[[ -n "$xcodegen_version" ]] || fail "could not read the pinned XcodeGen version"
+xcodegen_cache="$work/xdg-cache"
+mkdir -p "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin"
+cat > "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin/xcodegen" <<'TOOL'
+#!/bin/bash
+set -euo pipefail
+printf 'xcodegen %s\n' "$*" >> "$CI_TEST_LOG"
+project=apple/made.xcodeproj
+mkdir -p "$project/xcshareddata/xcschemes" "$project/project.xcworkspace" "$project/xcuserdata"
+printf 'objects\n' > "$project/project.pbxproj"
+printf 'workspace\n' > "$project/project.xcworkspace/contents.xcworkspacedata"
+printf 'Pilot\n' > "$project/xcshareddata/xcschemes/Pilot.xcscheme"
+printf 'Copilot\n' > "$project/xcshareddata/xcschemes/Copilot.xcscheme"
+# Per-user state is gitignored and never counts as drift.
+printf 'local\n' > "$project/xcuserdata/state.plist"
+case "${CI_TEST_XCODEGEN_DRIFT:-}" in
+  new-scheme) printf 'Wingman\n' > "$project/xcshareddata/xcschemes/Wingman.xcscheme" ;;
+  modified) printf 'changed\n' >> "$project/project.pbxproj" ;;
+  removed-scheme) rm "$project/xcshareddata/xcschemes/Copilot.xcscheme" ;;
+  '') ;;
+  *) exit 64 ;;
+esac
+TOOL
+chmod +x "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin/xcodegen"
+repo_git() {
+  git -C "$repo" -c user.name=ci-test -c user.email=ci-test@example.invalid \
+    -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
+}
+check_committed() {
+  (
+    cd "$repo/apple"
+    CI_TEST_XCODEGEN_DRIFT="${1:-}" XDG_CACHE_HOME="$xcodegen_cache" \
+      bin/install-xcodegen.sh check-committed
+  ) >/dev/null 2>&1
+}
+repo_git init -q
+(cd "$repo" && CI_TEST_XCODEGEN_DRIFT='' "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin/xcodegen")
+repo_git add -A
+repo_git commit -qm 'generated project'
+[[ -z "$(repo_git ls-files -- apple/made.xcodeproj/xcuserdata)" ]] ||
+  fail "per-user Xcode state was committed; .gitignore no longer excludes it"
+reset_log
+check_committed || fail "a committed project that matches XcodeGen must pass"
+expect_calls 1 '^xcodegen generate --spec apple/project.yml --project apple$'
+for drift in new-scheme modified removed-scheme; do
+  reset_log
+  if check_committed "$drift"; then
+    fail "the committed-project check accepted XcodeGen drift: $drift"
+  fi
+  expect_calls 1 '^xcodegen generate --spec apple/project.yml --project apple$'
+  if [[ "$drift" == new-scheme ]]; then
+    repo_git diff --quiet --exit-code -- apple/made.xcodeproj ||
+      fail "expected the untracked scheme to be invisible to git diff"
+  fi
+  repo_git checkout -q -- apple/made.xcodeproj
+  repo_git clean -qf -- apple/made.xcodeproj
+  [[ -z "$(repo_git status --porcelain -- apple/made.xcodeproj)" ]] ||
+    fail "could not restore the committed project after $drift"
+done
+status=0
+(cd "$repo/apple" && XDG_CACHE_HOME="$xcodegen_cache" bin/install-xcodegen.sh check-committed extra) \
+  >/dev/null 2>&1 || status=$?
+[[ "$status" == 2 ]] || fail "check-committed with extra arguments exited $status, expected 2"
+
+# Every workflow step that regenerates the project to verify it uses the check
+# above, never the tracked-files-only `git diff`.
+workflows="$APPLE_ROOT/../.github/workflows"
+if grep -n 'git diff --exit-code -- apple/made.xcodeproj' "$workflows"/*.yml; then
+  fail "a workflow verifies apple/made.xcodeproj with git diff, which ignores new files"
+fi
+[[ "$(grep -c 'apple/bin/install-xcodegen.sh check-committed$' "$workflows/ci.yml")" == 1 ]] ||
+  fail "ci.yml must verify the committed Xcode project with check-committed"
+[[ "$(grep -c 'apple/bin/install-xcodegen.sh check-committed$' "$workflows/apple-release.yml")" == 2 ]] ||
+  fail "both apple-release.yml project steps must verify with check-committed"
+
+# CI's tmux is the SHA-256 pinned build, never a runner-dependent bottle, and
+# the selected binary's version is asserted before the terminal tests run.
+ci_workflow="$APPLE_ROOT/../.github/workflows/ci.yml"
+! grep -Eq '^[^#]*brew install' "$ci_workflow" || fail "ci.yml installs an unpinned Homebrew tool"
+path_line="$(grep -n 'apple/bin/install-tmux.sh path' "$ci_workflow" | head -1 | cut -d: -f1)"
+verify_line="$(grep -n 'apple/bin/install-tmux.sh verify' "$ci_workflow" | head -1 | cut -d: -f1)"
+tests_line="$(grep -n 'apple/bin/test.sh all' "$ci_workflow" | head -1 | cut -d: -f1)"
+[[ -n "$path_line" && -n "$verify_line" && -n "$tests_line" ]] ||
+  fail "ci.yml must install and verify the pinned tmux before apple/bin/test.sh all"
+((path_line < verify_line && verify_line < tests_line)) ||
+  fail "ci.yml must install, then verify, the pinned tmux before apple/bin/test.sh all"
+
+# install-tmux.sh verify checks the same lookup order the apps and tests use.
+script_candidates="$(sed -n 's/^CANDIDATES=(\(.*\))$/\1/p' "$APPLE_ROOT/bin/install-tmux.sh")"
+[[ -n "$script_candidates" ]] || fail "install-tmux.sh candidate list not found"
+for source in Sources/Shared/DroneTmux.swift Sources/Pilot/Workspace.swift Tests/PilotTests/TerminalSessionTests.swift; do
+  swift_candidates="$(grep -o '"/[^"]*/tmux"' "$APPLE_ROOT/$source" | tr -d '"' | paste -sd ' ' -)"
+  [[ "$swift_candidates" == "$script_candidates" ]] ||
+    fail "$source tmux lookup ($swift_candidates) differs from install-tmux.sh ($script_candidates)"
+done
+
+cp "$APPLE_ROOT/bin/install-tmux.sh" "$work/apple/bin/"
+mkdir -p "$work/tmux-tools" "$work/tmux-bin"
+cat > "$work/tmux-tools/curl" <<'TOOL'
+#!/bin/bash
+while [[ $# -gt 0 ]]; do
+  [[ "$1" == -o ]] && printf 'tampered archive\n' > "$2"
+  shift
+done
+TOOL
+fake_tmux() {
+  # shellcheck disable=SC2016 # $1 belongs to the generated script.
+  printf '#!/bin/bash\n[[ "$1" == -V ]] && printf "%%s\\n" "%s"\n' "$2" > "$1"
+  chmod +x "$1"
+}
+pinned_version="$(sed -n 's/^TMUX_VERSION="\(.*\)"$/\1/p' "$APPLE_ROOT/bin/install-tmux.sh")"
+[[ -n "$pinned_version" ]] || fail "install-tmux.sh TMUX_VERSION not found"
+chmod +x "$work/tmux-tools/curl" "$work/apple/bin/install-tmux.sh"
+tmux_cache="$work/tmux-cache"
+cache_binary="$tmux_cache/blau/tmux/$pinned_version-libevent-$(sed -n 's/^LIBEVENT_VERSION="\(.*\)"$/\1/p' "$APPLE_ROOT/bin/install-tmux.sh")/bin/tmux"
+
+# A source archive whose digest differs from the pin is rejected before build.
+status=0
+output="$(PATH="$work/tmux-tools:$PATH" XDG_CACHE_HOME="$tmux_cache" \
+  "$work/apple/bin/install-tmux.sh" path 2>&1)" || status=$?
+[[ "$status" == 1 && "$output" == *"checksum mismatch"* ]] ||
+  fail "a tampered tmux source archive was not rejected: $status $output"
+[[ ! -e "$cache_binary" ]] || fail "a rejected tmux build left a cached binary"
+
+# A cached binary that is not the pinned version is never handed out.
+mkdir -p "${cache_binary%/*}"
+fake_tmux "$cache_binary" "tmux 3.0"
+status=0
+XDG_CACHE_HOME="$tmux_cache" "$work/apple/bin/install-tmux.sh" path >/dev/null 2>&1 || status=$?
+[[ "$status" == 1 ]] || fail "a cached tmux of the wrong version was accepted"
+fake_tmux "$cache_binary" "tmux $pinned_version"
+[[ "$(XDG_CACHE_HOME="$tmux_cache" "$work/apple/bin/install-tmux.sh" path)" == "$cache_binary" ]] ||
+  fail "the cached pinned tmux was not reused"
+
+# verify: the first tmux the apps would select must be the pinned version.
+fake_tmux "$work/tmux-bin/pinned" "tmux $pinned_version"
+fake_tmux "$work/tmux-bin/drifted" "tmux 9.9"
+BLAU_TMUX_CANDIDATES="$work/tmux-bin/missing:$work/tmux-bin/pinned" \
+  "$work/apple/bin/install-tmux.sh" verify >/dev/null || fail "the pinned tmux failed verification"
+for candidates in "$work/tmux-bin/drifted" "$work/tmux-bin/drifted:$work/tmux-bin/pinned" "$work/tmux-bin/missing"; do
+  status=0
+  BLAU_TMUX_CANDIDATES="$candidates" "$work/apple/bin/install-tmux.sh" verify >/dev/null 2>&1 || status=$?
+  [[ "$status" == 1 ]] || fail "tmux verification accepted candidates $candidates"
+done
 
 printf 'Apple CI script orchestration checks passed.\n'

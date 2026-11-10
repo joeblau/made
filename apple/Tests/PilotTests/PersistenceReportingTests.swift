@@ -67,4 +67,39 @@ struct PersistenceReportingTests {
         #expect(!saved)
         #expect(try context.fetch(FetchDescriptor<Note>()).contains { $0.id == note.id })
     }
+
+    @Test("A failed delete rolls back only its own changes, never an earlier unsaved edit")
+    func failedDeleteKeepsEarlierUnsavedEdit() throws {
+        let context = try makeContext()
+        let edited = Note(body: "before")
+        let doomed = Note(body: "delete me")
+        context.insert(edited)
+        context.insert(doomed)
+        try context.save()
+
+        edited.body = "typed while disk full"
+        #expect(!context.saveReporting(operation: "Editing note") { _ in
+            throw InjectedFailure.unavailable
+        })
+
+        // Still failing: the destructive change is refused before it starts.
+        #expect(!context.saveEarlierChangesBeforeDestructiveChange(operation: "Deleting note") { _ in
+            throw InjectedFailure.unavailable
+        })
+        #expect(edited.body == "typed while disk full")
+        #expect(context.hasChanges)
+
+        // The earlier edit saves, then the delete itself fails and rolls back.
+        #expect(context.saveEarlierChangesBeforeDestructiveChange(operation: "Deleting note"))
+        #expect(!context.hasChanges)
+        context.delete(doomed)
+        #expect(!context.saveReporting(operation: "Deleting note", rollbackOnFailure: true) { _ in
+            throw InjectedFailure.unavailable
+        })
+
+        #expect(edited.body == "typed while disk full")
+        let persisted = try ModelContext(context.container).fetch(FetchDescriptor<Note>())
+        #expect(persisted.first { $0.id == edited.id }?.body == "typed while disk full")
+        #expect(persisted.contains { $0.id == doomed.id })
+    }
 }

@@ -515,6 +515,13 @@ enum PilotSchemaV3: VersionedSchema {
 }
 
 /// Adds the optional Android target without changing the shipped V3 checksum.
+///
+/// V4 has shipped, and while it is the current schema it lists the live model
+/// classes. Its entity hashes are pinned by
+/// `PilotSchemaMigrationTests.shippedSchemaVersionsNeverChangeTheirHashes`, so
+/// adding or changing a stored property on any live model fails that test.
+/// To change a model, freeze V4 as nested snapshot classes (like V3), add a V5
+/// with the live classes and a migration stage, and record V5's hashes there.
 enum PilotSchemaV4: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(4, 0, 0) }
 

@@ -5,10 +5,16 @@ Reuses the repo's known-good android-robot.symbolset scaffold (Notes + Guides),
 fitting each brand's artwork into the cap-height box at the Ultralight/Regular/
 Black 'Small' anchors with a uniform scale + translate baked into coordinates
 (no runtime transforms, matching how the robot was exported).
+
+`--check` regenerates in memory and fails if any Brand*.symbolset differs from
+the committed assets (apple/bin/build-ci.sh runs it); `--assets DIR` targets a
+different asset catalog, which the CI script test uses for a scratch copy.
 """
+import argparse
 import math
 import os
 import re
+import sys
 
 # Resolve everything relative to this script so regeneration is path-independent:
 # apple/bin/make-brand-symbols.py  ->  repo root is two directories up.
@@ -309,12 +315,19 @@ def transform_path(tokens, s, tx, ty):
     return "".join(out)
 
 
-def main():
-    robot = open(ROBOT).read()
+def render():
+    """Return {symbolset name: {filename: contents}} for every brand.
+
+    Pure: reads the robot scaffold and source SVGs, writes nothing, so write
+    mode and --check share exactly one rendering path.
+    """
+    with open(ROBOT, encoding="utf-8") as f:
+        robot = f.read()
     prefix = robot.split('  <g id="Symbols">')[0]
     # Drop the robot's provenance comment; each brand gets its own below.
     prefix = re.sub(r"<!--.*?-->\n", "", prefix, count=1, flags=re.DOTALL)
 
+    rendered = {}
     for src, name, descname, fillrule, provenance in BRANDS:
         header = (
             "<!--\n"
@@ -328,9 +341,11 @@ def main():
             "  tints like a native SF Symbol.\n"
             "-->\n"
         )
-        svg = open(os.path.join(SOURCES, src)).read()
+        with open(os.path.join(SOURCES, src), encoding="utf-8") as f:
+            svg = f.read()
         ds = re.findall(r'd="([^"]+)"', svg)
-        assert len(ds) == 1, f"{src}: expected 1 path, got {len(ds)}"
+        if len(ds) != 1:
+            raise SystemExit(f"{src}: expected 1 path, got {len(ds)}")
         tokens = tokenize(ds[0])
         pts = list(sample(tokens))
         xs = [p[0] for p in pts]
@@ -354,20 +369,100 @@ def main():
             out += f'   <g id="{layer}">\n    <path{fr} d="{d}"/>\n   </g>\n'
         out += "  </g>\n</svg>\n"
 
-        dest_dir = os.path.join(ASSETS, f"{name}.symbolset")
-        os.makedirs(dest_dir, exist_ok=True)
         fname = descname + ".svg"
-        with open(os.path.join(dest_dir, fname), "w") as f:
-            f.write(out)
-        with open(os.path.join(dest_dir, "Contents.json"), "w") as f:
-            f.write(
-                '{\n  "info" : {\n    "author" : "xcode",\n    "version" : 1\n  },\n'
-                '  "symbols" : [\n    {\n      "filename" : "'
-                + fname
-                + '",\n      "idiom" : "universal"\n    }\n  ]\n}\n'
-            )
-        print(f"{name}: bbox {w:.1f}x{h:.1f} scale {s:.2f} -> {dest_dir}")
+        contents = (
+            '{\n  "info" : {\n    "author" : "xcode",\n    "version" : 1\n  },\n'
+            '  "symbols" : [\n    {\n      "filename" : "'
+            + fname
+            + '",\n      "idiom" : "universal"\n    }\n  ]\n}\n'
+        )
+        rendered[name] = {fname: out, "Contents.json": contents}
+        print(f"{name}: bbox {w:.1f}x{h:.1f} scale {s:.2f}", file=sys.stderr)
+    return rendered
+
+
+def write(rendered, assets):
+    for name, files in rendered.items():
+        dest_dir = os.path.join(assets, f"{name}.symbolset")
+        os.makedirs(dest_dir, exist_ok=True)
+        # Generated symbolsets hold exactly the generated files; drop leftovers
+        # (a renamed glyph, a hand-added variant) so --check stays satisfiable.
+        for entry in sorted(os.listdir(dest_dir)):
+            path = os.path.join(dest_dir, entry)
+            if entry not in files and not entry.startswith(".") and os.path.isfile(path):
+                os.remove(path)
+        for fname, contents in files.items():
+            # Exact bytes: no platform newline translation on write.
+            with open(os.path.join(dest_dir, fname), "wb") as f:
+                f.write(contents.encode("utf-8"))
+        print(f"{name} -> {dest_dir}")
+
+
+def check(rendered, assets):
+    """Return a list of human-readable drift findings (empty when in sync)."""
+    problems = []
+    for name, files in rendered.items():
+        dest_dir = os.path.join(assets, f"{name}.symbolset")
+        if not os.path.isdir(dest_dir):
+            problems.append(f"{name}.symbolset: missing")
+            continue
+        for fname, expected in files.items():
+            path = os.path.join(dest_dir, fname)
+            try:
+                # Binary read: text mode's universal newlines would map CRLF or a
+                # lone CR to LF and hide line-ending drift from the comparison.
+                with open(path, "rb") as f:
+                    actual = f.read()
+            except OSError:
+                problems.append(f"{name}.symbolset/{fname}: missing")
+                continue
+            if actual != expected.encode("utf-8"):
+                problems.append(f"{name}.symbolset/{fname}: differs from generator output")
+        for entry in sorted(os.listdir(dest_dir)):
+            if entry not in files and not entry.startswith("."):  # Finder metadata
+                problems.append(f"{name}.symbolset/{entry}: not produced by the generator")
+    # Every Brand* symbolset must come from BRANDS, and every source must feed one.
+    generated = {f"{name}.symbolset" for name in rendered}
+    for entry in sorted(os.listdir(assets)):
+        if entry.startswith("Brand") and entry.endswith(".symbolset") and entry not in generated:
+            problems.append(f"{entry}: no BRANDS entry in make-brand-symbols.py")
+    listed = {src for src, *_ in BRANDS}
+    for entry in sorted(os.listdir(SOURCES)):
+        if entry.endswith(".svg") and entry not in listed:
+            problems.append(f"brand-symbol-sources/{entry}: no BRANDS entry in make-brand-symbols.py")
+    return problems
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="verify the committed symbolsets equal the generator output; write nothing",
+    )
+    parser.add_argument(
+        "--assets",
+        default=ASSETS,
+        help="asset catalog to write or check (default: Pilot's Assets.xcassets)",
+    )
+    args = parser.parse_args(argv)
+    if not os.path.isdir(args.assets):
+        parser.error(f"--assets is not a directory: {args.assets}")
+
+    rendered = render()
+    if not args.check:
+        write(rendered, args.assets)
+        return 0
+    problems = check(rendered, args.assets)
+    if problems:
+        print("Brand SF Symbols drifted from apple/bin/make-brand-symbols.py:", file=sys.stderr)
+        for problem in problems:
+            print(f"  {problem}", file=sys.stderr)
+        print("Edit the source SVG or generator, then run apple/bin/make-brand-symbols.py.", file=sys.stderr)
+        return 1
+    print(f"Brand SF Symbols match the generator ({len(rendered)} symbolsets).")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
