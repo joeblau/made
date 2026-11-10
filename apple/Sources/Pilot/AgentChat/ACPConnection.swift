@@ -202,6 +202,13 @@ actor ACPConnection {
     private var closure: ACPConnectionError?
     private var exitStatus: Int32?
     private var stderrTail = Data()
+    /// The agent's process group, when it leads its own (Foundation spawns
+    /// children that way). Signalling it also reaches the agent's tool
+    /// subprocesses and MCP servers; it is never Cockpit's own group.
+    private var processGroup: pid_t?
+    /// Started by `close(with:)`: every close, for any reason, ends with the
+    /// agent's process group gone, escalating from SIGTERM to SIGKILL.
+    private var reaper: Task<Void, Never>?
 
     init(maxLineBytes: Int = ACPConnection.defaultMaxLineBytes) {
         framer = ACPLineFramer(maxLineBytes: maxLineBytes)
@@ -270,6 +277,9 @@ actor ACPConnection {
         }
 
         self.process = process
+        let pid = process.processIdentifier
+        let group = getpgid(pid)
+        processGroup = group == pid && group != getpgrp() ? group : nil
         stdin = input.fileHandleForWriting
         Task { await self.consumeStandardOutput(stdoutChunks) }
         Task { await self.consumeStandardError(stderrChunks) }
@@ -347,21 +357,11 @@ actor ACPConnection {
     }
 
     /// Closes stdin so the agent can shut down cleanly, then escalates to
-    /// SIGTERM and SIGKILL if it lingers.
+    /// SIGTERM and SIGKILL if it lingers. Idempotent: after an earlier close
+    /// for another reason it waits for that close's escalation instead.
     func terminate() async {
-        guard let process else {
-            close(with: .closedByClient)
-            return
-        }
         close(with: .closedByClient)
-        for _ in 0..<20 where process.isRunning {
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        if process.isRunning { process.terminate() }
-        for _ in 0..<20 where process.isRunning {
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        await reaper?.value
     }
 
     // MARK: Internals
@@ -415,7 +415,6 @@ actor ACPConnection {
                 lines = try framer.append(chunk)
             } catch {
                 close(with: .lineTooLong(limit: framer.maxLineBytes))
-                process?.terminate()
                 return
             }
             for line in lines { dispatch(line) }
@@ -445,6 +444,33 @@ actor ACPConnection {
         // agent itself is gone; don't wait on it forever.
         try? await Task.sleep(for: .seconds(2))
         close(with: .exited(status: status, diagnostics: diagnostics))
+    }
+
+    /// A client close first gives the agent a moment to exit on stdin EOF;
+    /// any other close means it misbehaved or already exited, so whatever is
+    /// left of its process group is signalled at once.
+    private func reapAgent(gracefully: Bool) async {
+        if gracefully { await waitForAgentExit() }
+        if agentIsAlive { signalAgent(SIGTERM) }
+        await waitForAgentExit()
+        if agentIsAlive { signalAgent(SIGKILL) }
+    }
+
+    private func waitForAgentExit() async {
+        for _ in 0..<20 where agentIsAlive {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    private var agentIsAlive: Bool {
+        if process?.isRunning == true { return true }
+        guard let processGroup else { return false }
+        return kill(-processGroup, 0) == 0
+    }
+
+    private func signalAgent(_ signo: Int32) {
+        if let processGroup, kill(-processGroup, signo) == 0 { return }
+        if let process, process.isRunning { kill(process.processIdentifier, signo) }
     }
 
     private var diagnostics: String {
@@ -491,5 +517,9 @@ actor ACPConnection {
         let handle = stdin
         stdin = nil
         writeQueue.async { try? handle?.close() }
+        if process != nil {
+            let gracefully = reason == .closedByClient
+            reaper = Task { await self.reapAgent(gracefully: gracefully) }
+        }
     }
 }

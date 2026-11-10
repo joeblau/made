@@ -54,6 +54,27 @@ enum ScreenMirrorWindowSelectionPolicy {
     }
 }
 
+/// One capture stream as ``ScreenMirror`` drives it. ScreenCaptureKit's
+/// `SCStream` backs production; tests substitute a fake so the start/stop
+/// lifecycle can be exercised without screen-recording access.
+@MainActor
+protocol ScreenMirrorCaptureStream: AnyObject {
+    func startCapture() async throws
+    func stopCapture() async throws
+    func updateConfiguration(_ configuration: SCStreamConfiguration) async throws
+}
+
+/// Finds the registered main window and builds a configured, not yet started
+/// stream for it. Returns nil while that window is not on screen.
+@MainActor
+protocol ScreenMirrorCaptureSource: AnyObject {
+    func hasCaptureAccess() -> Bool
+    func makeStream(
+        mainWindowID: () -> CGWindowID?,
+        configuration: (CGRect) -> SCStreamConfiguration
+    ) async throws -> (any ScreenMirrorCaptureStream)?
+}
+
 /// Captures Pilot's own main window with ScreenCaptureKit, encodes each frame
 /// to HEVC off the main thread, and hands it to a ``FrameSender`` for delivery
 /// to the Plotter (iPad) app.
@@ -69,7 +90,17 @@ final class ScreenMirror {
     private(set) var isRunning = false
     var onClientConnected: (() -> Void)?
     private let sender: FrameSender
-    private var stream: SCStream?
+    private let captureSource: any ScreenMirrorCaptureSource
+    private var stream: (any ScreenMirrorCaptureStream)?
+    /// Bumped by every `start()` and `stop()`. Each capture attempt and each
+    /// scheduled restart carries the generation it was started under and
+    /// re-checks it after every suspension, so once `stop()` returns no
+    /// in-flight start, retry, or restart can bring a stream back.
+    @ObservationIgnored private var generation: UInt64 = 0
+    /// The single pending no-window retry or unexpected-stop restart. Stored
+    /// so `start()` and `stop()` can cancel it.
+    @ObservationIgnored private var restartTask: Task<Void, Never>?
+    private let restartDelay: Duration
     /// AppKit window number for the live Pilot workspace surface. A companion
     /// extension window belongs to the same process, so bundle/size heuristics
     /// alone are no longer enough to identify the intended capture target.
@@ -77,7 +108,6 @@ final class ScreenMirror {
     /// Non-isolated handler that owns the SCStream delegate + output callbacks,
     /// which the framework requires to run off the main actor.
     private let output: StreamOutput
-    private let outputQueue = DispatchQueue(label: "app.blau.screenmirror.output")
 
     /// Target width in pixels; the stream downscales to this and `scalesToFit`
     /// preserves aspect ratio for the height. Capped at 4K wide.
@@ -95,16 +125,19 @@ final class ScreenMirror {
     private var captureWidth = 0
     private var captureHeight = 0
 
-    init(sender: FrameSender) {
+    init(
+        sender: FrameSender,
+        captureSource: (any ScreenMirrorCaptureSource)? = nil,
+        restartDelay: Duration = .seconds(1)
+    ) {
         self.sender = sender
-        self.output = StreamOutput(sender: sender)
+        let output = StreamOutput(sender: sender)
+        self.output = output
+        self.captureSource = captureSource ?? ScreenCaptureKitMirrorSource(output: output)
+        self.restartDelay = restartDelay
         self.output.onStop = { [weak self] in
             Task { @MainActor in
-                guard let self else { return }
-                self.isRunning = false
-                self.stream = nil
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                self.start()
+                self?.captureDidStopUnexpectedly()
             }
         }
 
@@ -136,11 +169,19 @@ final class ScreenMirror {
 
     func start() {
         guard !isRunning else { return }
+        generation &+= 1
+        cancelPendingRestart()
         isRunning = true
-        Task { await self.beginCapture() }
+        let generation = self.generation
+        Task { await self.beginCapture(generation: generation) }
     }
 
     func stop() {
+        // Invalidate any in-flight start and any scheduled restart before
+        // touching the stream, so nothing started under an older generation
+        // can commit a stream after this returns.
+        generation &+= 1
+        cancelPendingRestart()
         isRunning = false
         let stream = self.stream
         self.stream = nil
@@ -149,58 +190,109 @@ final class ScreenMirror {
         }
     }
 
+    /// True while `generation` still names the capture the caller started and
+    /// nothing has stopped it since.
+    private func isCurrent(_ generation: UInt64) -> Bool {
+        isRunning && self.generation == generation
+    }
+
+    private func cancelPendingRestart() {
+        restartTask?.cancel()
+        restartTask = nil
+    }
+
+    /// Schedules the single restart allowed for `generation`. A later
+    /// `start()` or `stop()` cancels it and bumps the generation, so a sleep
+    /// that outlives either never calls `start()`.
+    private func scheduleRestart(generation: UInt64) {
+        cancelPendingRestart()
+        let delay = restartDelay
+        restartTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled, let self, self.generation == generation else { return }
+            self.restartTask = nil
+            self.start()
+        }
+    }
+
+    /// ScreenCaptureKit stopped the committed stream on its own. Only a
+    /// running, committed capture recovers; after `stop()` (or while a start is
+    /// still in flight) the callback is ignored.
+    private func captureDidStopUnexpectedly() {
+        guard isRunning, stream != nil else { return }
+        isRunning = false
+        stream = nil
+        scheduleRestart(generation: generation)
+    }
+
     func setMainWindowID(_ windowID: CGWindowID?) {
         mainWindowID = windowID
     }
 
     // MARK: - Capture setup
 
-    private func beginCapture() async {
+    private func beginCapture(generation: UInt64) async {
         // A companion connecting in the background must never trigger a system
         // prompt. Request access explicitly in Set Up Cockpit instead.
-        guard CGPreflightScreenCaptureAccess() else {
-            isRunning = false
+        guard captureSource.hasCaptureAccess() else {
+            if isCurrent(generation) { isRunning = false }
             return
         }
 
+        var pendingWidth = 0
+        var pendingHeight = 0
+        let prepared: (any ScreenMirrorCaptureStream)?
         do {
-            // Prompts the first time if not yet granted; silent once granted.
-            let content = try await SCShareableContent.excludingDesktopWindows(
-                false,
-                onScreenWindowsOnly: true
+            prepared = try await captureSource.makeStream(
+                mainWindowID: { self.mainWindowID },
+                configuration: { frame in
+                    let aspect = frame.height > 0 ? frame.width / frame.height : 16.0 / 9.0
+                    // Capture at native window resolution, capped at 4K wide.
+                    let nativeWidth = max(1, Int((frame.width).rounded()))
+                    let width = min(self.targetWidth, nativeWidth)
+                    let height = max(1, Int((Double(width) / aspect).rounded()))
+                    pendingWidth = width
+                    pendingHeight = height
+                    return self.makeConfiguration(width: width, height: height)
+                }
             )
-
-            guard let window = pickPilotWindow(from: content.windows) else {
-                // No suitable window yet (app may still be launching) — a
-                // transient state, not a permission problem. The only retry.
-                isRunning = false
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-                if !Task.isCancelled { start() }
-                return
-            }
-
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-
-            let frame = window.frame
-            let aspect = frame.height > 0 ? frame.width / frame.height : 16.0 / 9.0
-            // Capture at native window resolution, capped at 4K wide.
-            let nativeWidth = max(1, Int((frame.width).rounded()))
-            let width = min(targetWidth, nativeWidth)
-            let height = max(1, Int((Double(width) / aspect).rounded()))
-            captureWidth = width
-            captureHeight = height
-            let config = makeConfiguration(width: width, height: height)
-
-            let stream = SCStream(filter: filter, configuration: config, delegate: output)
-            try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: outputQueue)
-            try await stream.startCapture()
-            self.stream = stream
         } catch {
             // Preflight already confirmed access, so a throw here is a transient
             // capture failure, not a permission problem — don't self-retry into
             // the prompt loop. The next Plotter (re)connect starts cleanly.
-            isRunning = false
+            if isCurrent(generation) { isRunning = false }
+            return
         }
+
+        // stop() or a newer start() ran during the window lookup: this attempt
+        // is abandoned before anything was started.
+        guard isCurrent(generation) else { return }
+
+        guard let stream = prepared else {
+            // No suitable window yet (app may still be launching) — a
+            // transient state, not a permission problem. The only retry.
+            isRunning = false
+            scheduleRestart(generation: generation)
+            return
+        }
+
+        do {
+            try await stream.startCapture()
+        } catch {
+            if isCurrent(generation) { isRunning = false }
+            return
+        }
+
+        guard isCurrent(generation) else {
+            // stop() ran while startCapture was in flight. The stream started
+            // late and belongs to no one, so stop it here instead of leaving a
+            // 60 fps encode and the recording indicator running.
+            try? await stream.stopCapture()
+            return
+        }
+        captureWidth = pendingWidth
+        captureHeight = pendingHeight
+        self.stream = stream
     }
 
     /// Builds a capture configuration for the current ``captureChroma``. 4:4:4
@@ -239,13 +331,72 @@ final class ScreenMirror {
             }
         }
     }
+}
+
+// MARK: - ScreenCaptureKit capture source
+
+/// Production ``ScreenMirrorCaptureStream``: forwards to the wrapped `SCStream`.
+@MainActor
+private final class ScreenCaptureKitMirrorStream: ScreenMirrorCaptureStream {
+    private let stream: SCStream
+
+    init(stream: SCStream) {
+        self.stream = stream
+    }
+
+    func startCapture() async throws {
+        try await stream.startCapture()
+    }
+
+    func stopCapture() async throws {
+        try await stream.stopCapture()
+    }
+
+    func updateConfiguration(_ configuration: SCStreamConfiguration) async throws {
+        try await stream.updateConfiguration(configuration)
+    }
+}
+
+/// Production ``ScreenMirrorCaptureSource`` backed by ScreenCaptureKit.
+@MainActor
+private final class ScreenCaptureKitMirrorSource: ScreenMirrorCaptureSource {
+    /// Non-isolated handler that owns the SCStream delegate + output callbacks,
+    /// which the framework requires to run off the main actor.
+    private let output: StreamOutput
+    private let outputQueue = DispatchQueue(label: "app.blau.screenmirror.output")
+
+    init(output: StreamOutput) {
+        self.output = output
+    }
+
+    func hasCaptureAccess() -> Bool {
+        CGPreflightScreenCaptureAccess()
+    }
+
+    func makeStream(
+        mainWindowID: () -> CGWindowID?,
+        configuration: (CGRect) -> SCStreamConfiguration
+    ) async throws -> (any ScreenMirrorCaptureStream)? {
+        // Prompts the first time if not yet granted; silent once granted.
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        )
+        guard let window = pickPilotWindow(from: content.windows, mainWindowID: mainWindowID()) else {
+            return nil
+        }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        let stream = SCStream(filter: filter, configuration: configuration(window.frame), delegate: output)
+        try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: outputQueue)
+        return ScreenCaptureKitMirrorStream(stream: stream)
+    }
 
     /// Picks the exact registered main Pilot window. Before the AppKit reader
     /// attaches (or while Main is briefly absent from ScreenCaptureKit's list),
     /// returning nil makes capture retry instead of mirroring Extension and
     /// projecting its annotations into Main's differently sized coordinate
     /// space.
-    private func pickPilotWindow(from windows: [SCWindow]) -> SCWindow? {
+    private func pickPilotWindow(from windows: [SCWindow], mainWindowID: CGWindowID?) -> SCWindow? {
         guard let mainWindowID else { return nil }
         let bundleID = Bundle.main.bundleIdentifier
         let candidates = windows.map { window in
