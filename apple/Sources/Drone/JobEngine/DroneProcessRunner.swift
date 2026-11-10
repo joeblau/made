@@ -230,10 +230,23 @@ enum DroneProcessRunner {
             throw POSIXError(.EIO)
         }
         defer { posix_spawnattr_destroy(&attributes) }
+        // Start every job with no blocked signals and default dispositions:
+        // a spawning Swift concurrency thread blocks SIGTERM, SIGHUP, SIGINT,
+        // and more, and droned ignores SIGTERM/SIGINT. Both survive exec, so
+        // without this a job would never see the group SIGTERM that cancels it.
+        var unblocked = sigset_t()
+        sigemptyset(&unblocked)
+        var defaults = sigset_t()
+        sigfillset(&defaults)
+        sigdelset(&defaults, SIGKILL)
+        sigdelset(&defaults, SIGSTOP)
         guard posix_spawnattr_setpgroup(&attributes, 0) == 0,
+              posix_spawnattr_setsigmask(&attributes, &unblocked) == 0,
+              posix_spawnattr_setsigdefault(&attributes, &defaults) == 0,
               posix_spawnattr_setflags(
                   &attributes,
-                  Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT)
+                  Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+                      | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)
               ) == 0
         else { throw POSIXError(.EIO) }
 

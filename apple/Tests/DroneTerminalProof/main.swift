@@ -24,13 +24,16 @@ enum DroneTerminalProof {
         expect(created.sessionID == duplicate.sessionID, "duplicate create started another terminal")
         _ = try await engine.attach(created.sessionID, pairingID: pairingID, connectionID: connectionID, after: .zero)
         try await engine.input(
-            Data("printf 'drone-pty-✓\\n'\n".utf8),
+            // printf assembles the marker, so only the command's output (never
+            // the echoed command line) contains it.
+            Data("printf '%s-%s\\n' drone pty-✓\n".utf8),
             sessionID: created.sessionID,
             pairingID: pairingID,
             connectionID: connectionID
         )
         let first = try await output(
             containing: "drone-pty-✓",
+            socket: socket,
             sessionID: created.sessionID,
             pairingID: pairingID,
             connectionID: connectionID,
@@ -49,6 +52,16 @@ enum DroneTerminalProof {
             pairingID: pairingID,
             connectionID: connectionID
         )
+        // The attached tmux client must follow the PTY resize. If it doesn't,
+        // tmux pans its undersized view to follow the cursor and output near
+        // column 0 vanishes behind a long prompt.
+        let clientDeadline = ContinuousClock.now + .seconds(5)
+        var clientSize = tmuxQuery(socket: socket, ["list-clients", "-F", "#{client_width}x#{client_height}"])
+        while clientSize != "100x30", ContinuousClock.now < clientDeadline {
+            try await Task.sleep(for: .milliseconds(50))
+            clientSize = tmuxQuery(socket: socket, ["list-clients", "-F", "#{client_width}x#{client_height}"])
+        }
+        expect(clientSize == "100x30", "tmux client did not follow the PTY resize: \(tmuxDiagnostics(socket: socket))")
         let resized = try await engine.snapshot(created.sessionID, pairingID: pairingID)
         expect(resized.columns == 100 && resized.rows == 30, "resize did not persist")
         let directory = try await engine.workingDirectory(created.sessionID, pairingID: pairingID)
@@ -65,13 +78,14 @@ enum DroneTerminalProof {
             after: first.cursor
         )
         try await engine.input(
-            Data("printf 'after-reattach\\n'\n".utf8),
+            Data("printf '%s-%s\\n' after reattach\n".utf8),
             sessionID: created.sessionID,
             pairingID: pairingID,
             connectionID: secondConnection
         )
         _ = try await output(
             containing: "after-reattach",
+            socket: socket,
             sessionID: created.sessionID,
             pairingID: pairingID,
             connectionID: secondConnection,
@@ -102,6 +116,7 @@ enum DroneTerminalProof {
 
     private static func output(
         containing needle: String,
+        socket: String,
         sessionID: DroneSessionID,
         pairingID: UUID,
         connectionID: UUID,
@@ -119,7 +134,35 @@ enum DroneTerminalProof {
             if text.contains(needle) { return page }
             try await Task.sleep(for: .milliseconds(25))
         }
-        throw ProofError.failed("output did not contain \(needle); received \(text)")
+        throw ProofError.failed(
+            "output did not contain \(needle); tmux: \(tmuxDiagnostics(socket: socket)); received \(text)"
+        )
+    }
+
+    /// tmux's own view of client and window sizes, so a failure on a remote
+    /// runner shows whether the attached client and its window disagree.
+    private static func tmuxDiagnostics(socket: String) -> String {
+        func query(_ arguments: [String]) -> String { tmuxQuery(socket: socket, arguments) }
+        let version = query(["-V"])
+        let clients = query(["list-clients", "-F", "#{client_width}x#{client_height}"])
+        let windows = query(["list-windows", "-a", "-F", "#{window_width}x#{window_height} #{window_size}"])
+        let panes = query(["list-panes", "-a", "-F", "#{pane_width}x#{pane_height} cursor=#{cursor_x},#{cursor_y}"])
+        return "\(version); clients=[\(clients)] windows=[\(windows)] panes=[\(panes)]"
+    }
+
+    private static func tmuxQuery(socket: String, _ arguments: [String]) -> String {
+        guard let tmux = DroneTmux.locate() else { return "tmux not found" }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tmux)
+        process.arguments = ["-L", socket] + arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        guard (try? process.run()) != nil else { return "unavailable" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data.prefix(1_024), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

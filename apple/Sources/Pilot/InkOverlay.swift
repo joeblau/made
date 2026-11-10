@@ -199,6 +199,9 @@ final class InkOverlayViewController: NSViewController, @MainActor PaperMarkupVi
     }
 
     func paperMarkupViewControllerDidChangeMarkup(_ paperMarkupViewController: PaperMarkupViewController) {
+        // PaperKit reports edits asynchronously. A report still in flight when
+        // the overlay is dismissed must not register undo on the cleared canvas.
+        guard !dismissed else { return }
         guard let markup = paperMarkupViewController.markup, markup != lastMarkup else { return }
         if let previous = lastMarkup {
             annotationUndoManager.registerUndo(withTarget: self) { $0.restoreMarkup(previous) }
