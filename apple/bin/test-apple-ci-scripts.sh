@@ -3,7 +3,9 @@
 # shared per-platform derived data, pinned policy flags, and the guarantee that
 # test-without-building only follows a successful build-for-testing of the same
 # products in the same invocation. Also exercises the Apple Release ordering
-# guard that keeps GitHub's latest release on the highest version and build.
+# guard that keeps GitHub's latest release on the highest version and build,
+# and proves the committed-project check rejects every kind of XcodeGen drift,
+# including never-committed new files.
 set -euo pipefail
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/apple-ci-scripts-test.XXXXXX")"
@@ -704,5 +706,88 @@ GATE_WAIT=30 run_gate "$(run_json push completed '"success"')" "$(jobs_json succ
   "$(run_json push in_progress null)" ||
   fail "the gate must wait for an in-progress CI run of the release commit"
 rm -f "$work/tools/gh"
+
+# The committed-project check fails on any drift between apple/made.xcodeproj
+# and what pinned XcodeGen generates, including a generated scheme that was
+# never committed, which `git diff --exit-code` cannot see.
+repo="$work/xcodegen-repo"
+mkdir -p "$repo/apple/bin"
+cp "$APPLE_ROOT/bin/install-xcodegen.sh" "$repo/apple/bin/"
+cp "$APPLE_ROOT/../.gitignore" "$repo/.gitignore"
+xcodegen_version="$(sed -n 's/^VERSION="\(.*\)"$/\1/p' "$APPLE_ROOT/bin/install-xcodegen.sh")"
+[[ -n "$xcodegen_version" ]] || fail "could not read the pinned XcodeGen version"
+xcodegen_cache="$work/xdg-cache"
+mkdir -p "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin"
+cat > "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin/xcodegen" <<'TOOL'
+#!/bin/bash
+set -euo pipefail
+printf 'xcodegen %s\n' "$*" >> "$CI_TEST_LOG"
+project=apple/made.xcodeproj
+mkdir -p "$project/xcshareddata/xcschemes" "$project/project.xcworkspace" "$project/xcuserdata"
+printf 'objects\n' > "$project/project.pbxproj"
+printf 'workspace\n' > "$project/project.xcworkspace/contents.xcworkspacedata"
+printf 'Pilot\n' > "$project/xcshareddata/xcschemes/Pilot.xcscheme"
+printf 'Copilot\n' > "$project/xcshareddata/xcschemes/Copilot.xcscheme"
+# Per-user state is gitignored and never counts as drift.
+printf 'local\n' > "$project/xcuserdata/state.plist"
+case "${CI_TEST_XCODEGEN_DRIFT:-}" in
+  new-scheme) printf 'Wingman\n' > "$project/xcshareddata/xcschemes/Wingman.xcscheme" ;;
+  modified) printf 'changed\n' >> "$project/project.pbxproj" ;;
+  removed-scheme) rm "$project/xcshareddata/xcschemes/Copilot.xcscheme" ;;
+  '') ;;
+  *) exit 64 ;;
+esac
+TOOL
+chmod +x "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin/xcodegen"
+repo_git() {
+  git -C "$repo" -c user.name=ci-test -c user.email=ci-test@example.invalid \
+    -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"
+}
+check_committed() {
+  (
+    cd "$repo/apple"
+    CI_TEST_XCODEGEN_DRIFT="${1:-}" XDG_CACHE_HOME="$xcodegen_cache" \
+      bin/install-xcodegen.sh check-committed
+  ) >/dev/null 2>&1
+}
+repo_git init -q
+(cd "$repo" && CI_TEST_XCODEGEN_DRIFT='' "$xcodegen_cache/blau/xcodegen/$xcodegen_version/xcodegen/bin/xcodegen")
+repo_git add -A
+repo_git commit -qm 'generated project'
+[[ -z "$(repo_git ls-files -- apple/made.xcodeproj/xcuserdata)" ]] ||
+  fail "per-user Xcode state was committed; .gitignore no longer excludes it"
+reset_log
+check_committed || fail "a committed project that matches XcodeGen must pass"
+expect_calls 1 '^xcodegen generate --spec apple/project.yml --project apple$'
+for drift in new-scheme modified removed-scheme; do
+  reset_log
+  if check_committed "$drift"; then
+    fail "the committed-project check accepted XcodeGen drift: $drift"
+  fi
+  expect_calls 1 '^xcodegen generate --spec apple/project.yml --project apple$'
+  if [[ "$drift" == new-scheme ]]; then
+    repo_git diff --quiet --exit-code -- apple/made.xcodeproj ||
+      fail "expected the untracked scheme to be invisible to git diff"
+  fi
+  repo_git checkout -q -- apple/made.xcodeproj
+  repo_git clean -qf -- apple/made.xcodeproj
+  [[ -z "$(repo_git status --porcelain -- apple/made.xcodeproj)" ]] ||
+    fail "could not restore the committed project after $drift"
+done
+status=0
+(cd "$repo/apple" && XDG_CACHE_HOME="$xcodegen_cache" bin/install-xcodegen.sh check-committed extra) \
+  >/dev/null 2>&1 || status=$?
+[[ "$status" == 2 ]] || fail "check-committed with extra arguments exited $status, expected 2"
+
+# Every workflow step that regenerates the project to verify it uses the check
+# above, never the tracked-files-only `git diff`.
+workflows="$APPLE_ROOT/../.github/workflows"
+if grep -n 'git diff --exit-code -- apple/made.xcodeproj' "$workflows"/*.yml; then
+  fail "a workflow verifies apple/made.xcodeproj with git diff, which ignores new files"
+fi
+[[ "$(grep -c 'apple/bin/install-xcodegen.sh check-committed$' "$workflows/ci.yml")" == 1 ]] ||
+  fail "ci.yml must verify the committed Xcode project with check-committed"
+[[ "$(grep -c 'apple/bin/install-xcodegen.sh check-committed$' "$workflows/apple-release.yml")" == 2 ]] ||
+  fail "both apple-release.yml project steps must verify with check-committed"
 
 printf 'Apple CI script orchestration checks passed.\n'

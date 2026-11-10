@@ -521,9 +521,7 @@ jobs:
           apple/bin/verify-installed-chromiumkit.sh
       - name: Generate and verify the Xcode project
         run: |
-          apple/bin/install-xcodegen.sh generate \
-            --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/made.xcodeproj
+          apple/bin/install-xcodegen.sh check-committed
           apple/bin/app-icon-tool.swift validate
       - name: Run the signed Chromium release gates
         env:
@@ -779,9 +777,7 @@ jobs:
             >> "$GITHUB_ENV"
       - name: Generate and verify the Xcode project
         run: |
-          apple/bin/install-xcodegen.sh generate \
-            --spec apple/project.yml --project apple
-          git diff --exit-code -- apple/made.xcodeproj
+          apple/bin/install-xcodegen.sh check-committed
           apple/bin/app-icon-tool.swift validate
       - name: Archive ${{ matrix.scheme }}
         shell: bash
