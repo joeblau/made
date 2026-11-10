@@ -86,7 +86,8 @@ enum DroneWorkerProof {
                 case "expiry":
                     try await verifyExpiredOwnerRevocation(
                         controller: controller, connectionID: connectionID, controllerID: controllerID,
-                        service: service, observed: observed
+                        service: service, observed: observed,
+                        stateDirectory: root.appendingPathComponent("state", isDirectory: true)
                     )
                 case "disconnect":
                     try await verifyDisconnectedOwnerRevocation(
@@ -140,7 +141,8 @@ enum DroneWorkerProof {
             try await verifyOwnerControl(service: service, port: port, workspace: workspace)
             try await verifyRevocationAndHealth(
                 controller: controller, connectionID: connectionID, controllerID: controllerID,
-                service: service, observed: observed, port: port, pairingStorage: workerPairingStorage
+                service: service, observed: observed, port: port, pairingStorage: workerPairingStorage,
+                stateDirectory: root.appendingPathComponent("state", isDirectory: true)
             )
             controller.stop()
             await service.stop()
@@ -540,8 +542,12 @@ extension DroneWorkerProof {
 extension DroneWorkerProof {
     private static func verifyExpiredOwnerRevocation(
         controller: DroneLANTransport, connectionID: DroneConnectionID, controllerID: UUID,
-        service: DroneWorkerService, observed: ProofObserved
+        service: DroneWorkerService, observed: ProofObserved, stateDirectory: URL
     ) async throws {
+        let finishedRecords = try await runFinishedJob(
+            controller: controller, connectionID: connectionID, controllerID: controllerID,
+            service: service, observed: observed, stateDirectory: stateDirectory
+        )
         let lease = try await service.issueToolLease(controllerID: controllerID, permissions: .jobs, lifetime: 1)
         let pid = try await startTrackedProcess(
             controller: controller, connectionID: connectionID, lease: lease, observed: observed,
@@ -556,6 +562,8 @@ extension DroneWorkerProof {
         try await expectUnauthorized(remoteCancel, observed: observed)
         try await service.revokeController(controllerID)
         try await expectProcessStopped(pid)
+        expect(jobRecordNames(stateDirectory: stateDirectory, controllerID: controllerID).isDisjoint(with: finishedRecords),
+               "revocation kept the controller's finished job records")
     }
 
     private static func verifyDisconnectedOwnerRevocation(
@@ -926,7 +934,8 @@ extension DroneWorkerProof {
         service: DroneWorkerService,
         observed: ProofObserved,
         port: UInt16,
-        pairingStorage: ProofPairingStorage
+        pairingStorage: ProofPairingStorage,
+        stateDirectory: URL
     ) async throws {
         let initial = await service.healthSnapshot()
         expect(initial.listenerReady && initial.paired && initial.storageHealthy, "live health was not truthful")
@@ -939,6 +948,10 @@ extension DroneWorkerProof {
             body: .toolRead(DroneToolReadRequest(path: "main.swift", maxBytes: 1_024))
         ), on: other.connectionID)
         try await expectUnauthorized(foreignRead, observed: other.observed)
+        let finishedRecords = try await runFinishedJob(
+            controller: controller, connectionID: connectionID, controllerID: controllerID,
+            service: service, observed: observed, stateDirectory: stateDirectory
+        )
         let pid = try await startTrackedProcess(
             controller: controller, connectionID: connectionID, lease: lease, observed: observed
         )
@@ -949,6 +962,9 @@ extension DroneWorkerProof {
         } catch DroneTransportFailure.storage {}
         let failed = await service.healthSnapshot()
         expect(!failed.storageHealthy, "revocation storage failure was hidden from health")
+        // Pin removal failed, but the local revocation still deletes job records.
+        expect(jobRecordNames(stateDirectory: stateDirectory, controllerID: controllerID).isDisjoint(with: finishedRecords),
+               "failed revocation kept the controller's finished job records")
         do {
             _ = try await service.issueToolLease(controllerID: controllerID, permissions: .files)
             throw ProofError.failed("revoked controller obtained a fresh grant")
@@ -1000,6 +1016,36 @@ extension DroneWorkerProof {
               let pid = Int32(String(decoding: output.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)),
               pid > 1 else { throw ProofError.failed("fixture PID missing") }
         return pid
+    }
+
+    /// Runs one short tool job to completion and returns the job record files
+    /// it added, so a revocation proof can check those specific records.
+    private static func runFinishedJob(
+        controller: DroneLANTransport, connectionID: DroneConnectionID, controllerID: UUID,
+        service: DroneWorkerService, observed: ProofObserved, stateDirectory: URL
+    ) async throws -> Set<String> {
+        let before = jobRecordNames(stateDirectory: stateDirectory, controllerID: controllerID)
+        let lease = try await service.issueToolLease(controllerID: controllerID, permissions: .jobs)
+        let id = UUID()
+        controller.send(DroneEnvelope(
+            kind: .toolRun, requestID: id, lease: lease, idempotencyKey: UUID().uuidString,
+            body: .toolRun(DroneToolProcessRequest(executable: "sh", arguments: ["-c", "printf done"], timeout: 5))
+        ), on: connectionID)
+        let completion = try await waitForResponse(id, kind: .toolCompletion, observed: observed)
+        guard case .toolCompletion(let body) = completion.body, body.status == .succeeded else {
+            throw ProofError.failed("finished job fixture failed")
+        }
+        let added = jobRecordNames(stateDirectory: stateDirectory, controllerID: controllerID).subtracting(before)
+        expect(!added.isEmpty, "finished job left no record to purge")
+        return added
+    }
+
+    private static func jobRecordNames(stateDirectory: URL, controllerID: UUID) -> Set<String> {
+        let directory = stateDirectory.appendingPathComponent(
+            "jobs/controllers/\(controllerID.uuidString)/jobs", isDirectory: true
+        )
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return Set(names.filter { $0.hasSuffix(".json") && !$0.hasPrefix(".") })
     }
 
     private static func expectProcessStopped(_ pid: Int32) async throws {
