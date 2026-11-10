@@ -1066,6 +1066,7 @@ final class Workspace {
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {
         guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }) else { return false }
+        if focusedPaneID == pane.id { restoreFocusedPane(save: false) } // rolled back with this removal
         let context = modelContext
         let deletedDevicePaneID = pane.kind.isAppleTool ? pane.id : nil
         pane.tearDownRuntimeResources(preservingDevicePreference: true)
@@ -1117,16 +1118,15 @@ final class Workspace {
         let allPanes = sortedPanes
         guard allPanes.count > 1 else { return }
 
-        // Focus mode: cycle through every pane and switch the full-screened
-        // one. The user explicitly opted into single-pane viewing, so the
-        // arrow keys should rotate that pane like tabs.
-        if focusedPaneID != nil {
-            let currentIndex = allPanes.firstIndex(where: { $0.id == focusedPaneID }) ?? 0
+        // Focus mode rotates the full-screened pane like tabs. `focusedPaneID`
+        // must name an expanded pane (#434); a dangling saved ID is restored.
+        if let currentIndex = allPanes.firstIndex(where: { $0.id == focusedPaneID && !$0.isCollapsed }) {
             let count = allPanes.count
             let nextIndex = ((currentIndex + delta) % count + count) % count
             focusPane(allPanes[nextIndex])
             return
         }
+        restoreFocusedPane()
 
         // Normal split mode: skip collapsed panes since selecting an invisible
         // slit isn't useful.
@@ -1243,7 +1243,7 @@ final class Workspace {
 
     func collapsePane(_ pane: Pane) {
         guard !pane.isCollapsed else { return }
-
+        if focusedPaneID == pane.id { pane.wasCollapsedBeforeFocus = false; restoreFocusedPane(save: false) }
         let currentFraction = normalizedExpandedSizeFractions[pane.id] ?? pane.sizeFraction
         pane.restoredSizeFraction = currentFraction > 0 ? currentFraction : 1.0 / Double(max(panes.count, 1))
         pane.isCollapsed = true
