@@ -171,6 +171,17 @@ key and verifies the Developer ID signature before installation. ChromiumKit
 support releases are explicitly prevented from replacing the semantic app
 release as GitHub's latest release.
 
+Because the website and Cockpit's feed both follow GitHub's latest release, a
+release must be the highest published semantic version. Before any build and
+again immediately before publication, the workflow refuses a tag that is not
+above every published (non-draft) `vMAJOR.MINOR.PATCH` release, and refuses a
+build number that is not above the `sparkle:version` in that release's
+appcast. Publication is serialized across tags so the check and
+`gh release create --latest` cannot interleave. An older-line hotfix, or a
+recovery run for a tag that a newer release has overtaken, therefore fails;
+tag a new higher version instead. `apple/bin/test-apple-ci-scripts.sh` runs the
+workflow's own check against stubbed release listings.
+
 The disk image is created after appcast generation so the signed feed continues
 to select only the versioned ZIP. Checksums are generated after stapling, and
 publication requires all five assets. The release notes include installation
