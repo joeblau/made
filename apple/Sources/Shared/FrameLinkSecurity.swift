@@ -79,6 +79,11 @@ struct FrameLinkSecureSession {
         peerKey?.rawRepresentation.base64EncodedString()
     }
 
+    /// The identity key this session's hello and proof records carry.
+    var localPublicKeyBase64: String {
+        localKey.publicKey.rawRepresentation.base64EncodedString()
+    }
+
     init(
         localKey: Curve25519.KeyAgreement.PrivateKey,
         trustedPeerPublicKey: String? = nil

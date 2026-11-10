@@ -777,11 +777,11 @@ public final class FrameReceiver: @unchecked Sendable {
     private var pendingOutbound: [Data] = []
     private var invalidPacketCount = 0
     private let pairingStore = FrameLinkPairingStore()
-    private var localKey: Curve25519.KeyAgreement.PrivateKey
     /// Where identity rotations come from; `nil` for an ephemeral identity
     /// that must never adopt the device key.
     private let identityChanges: DeviceIdentity.ChangeSource?
     private var identityObserver: (any NSObjectProtocol)?
+    /// The only owner of the identity key this receiver proves.
     private var security: FrameLinkSecureSession
     private var pairingRequest: FrameLinkPairingRequest?
 
@@ -820,7 +820,6 @@ public final class FrameReceiver: @unchecked Sendable {
         let key = isTesting
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())
-        localKey = key
         self.identityChanges = identityChanges ?? (isTesting ? nil : .stored)
         security = FrameLinkSecureSession(
             localKey: key,
@@ -888,13 +887,11 @@ public final class FrameReceiver: @unchecked Sendable {
         }
     }
 
-    /// The identity key new FrameLink handshakes prove.
+    /// The identity key the live secure session proves.
     func localIdentityPublicKeyBase64() async -> String {
         await withCheckedContinuation { continuation in
             queue.async { [weak self] in
-                continuation.resume(
-                    returning: self?.localKey.publicKey.rawRepresentation.base64EncodedString() ?? ""
-                )
+                continuation.resume(returning: self?.security.localPublicKeyBase64 ?? "")
             }
         }
     }
@@ -911,8 +908,8 @@ public final class FrameReceiver: @unchecked Sendable {
     /// around it with the same Pilot pin, and a connection authenticated with
     /// the rotated-out key is torn down and retried.
     private func adoptLocalIdentityLocked(_ key: Curve25519.KeyAgreement.PrivateKey) {
-        guard key.publicKey.rawRepresentation != localKey.publicKey.rawRepresentation else { return }
-        localKey = key
+        guard key.publicKey.rawRepresentation.base64EncodedString() != security.localPublicKeyBase64
+        else { return }
         security = FrameLinkSecureSession(
             localKey: key,
             trustedPeerPublicKey: security.trustedPeerPublicKey

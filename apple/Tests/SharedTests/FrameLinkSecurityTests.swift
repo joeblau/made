@@ -15,6 +15,9 @@ final class FrameLinkSecurityTests: XCTestCase {
         let plotterHello = try XCTUnwrap(plotter.begin(random: { Data(repeating: 2, count: $0) }))
         let plotterRequest = try pairingRequest(pilot.receive(plotterHello, displayName: "Plotter"))
         let pilotRequest = try pairingRequest(plotter.receive(pilotHello, displayName: "Pilot"))
+        // `localPublicKeyBase64` reports the key the hello actually carries.
+        XCTAssertEqual(pilotRequest.publicKey, pilot.localPublicKeyBase64)
+        XCTAssertEqual(plotterRequest.publicKey, plotter.localPublicKeyBase64)
         XCTAssertFalse(pilot.isAuthenticated)
         XCTAssertFalse(plotter.isAuthenticated)
 
