@@ -126,6 +126,167 @@ final class NativePaneLifecycleTests: XCTestCase {
         XCTAssertFalse(container.mainContext.hasChanges)
     }
 
+    /// #434: closing the focused pane must leave focus mode, or the survivors
+    /// stay collapsed behind a dangling, persisted `focusedPaneID`.
+    @MainActor
+    func testRemovingFocusedPaneLeavesFocusModeAndExpandsSurvivor() throws {
+        let (container, workspace, panes) = try multiPaneFixture(count: 2)
+        let (focused, survivor) = (panes[0], panes[1])
+        workspace.focusPane(focused)
+        XCTAssertEqual(workspace.focusedPaneID, focused.id)
+        XCTAssertTrue(survivor.isCollapsed)
+
+        XCTAssertTrue(workspace.removePane(focused))
+        XCTAssertNil(workspace.focusedPaneID)
+        XCTAssertFalse(survivor.isCollapsed, "The only remaining pane must be visible")
+        XCTAssertEqual(workspace.selectedPaneID, survivor.id)
+        XCTAssertFalse(container.mainContext.hasChanges, "The repaired layout is saved with the removal")
+    }
+
+    /// #434: hiding the focused pane restores the pre-focus layout instead of
+    /// leaving `focusedPaneID` attached to a collapsed pane.
+    @MainActor
+    func testCollapsingFocusedPaneLeavesFocusModeAndRestoresLayout() throws {
+        let (container, workspace, panes) = try multiPaneFixture(count: 3)
+        workspace.focusPane(panes[0])
+        XCTAssertTrue(panes[1].isCollapsed && panes[2].isCollapsed)
+
+        workspace.collapsePane(panes[0])
+        XCTAssertNil(workspace.focusedPaneID)
+        XCTAssertTrue(panes[0].isCollapsed)
+        XCTAssertFalse(panes[1].isCollapsed)
+        XCTAssertFalse(panes[2].isCollapsed)
+        XCTAssertEqual(workspace.selectedPaneID, panes[1].id)
+        XCTAssertFalse(container.mainContext.hasChanges)
+    }
+
+    /// #434: an ID saved before the fix (no longer an expanded pane) must not
+    /// make ⌘→ re-enter focus mode.
+    @MainActor
+    func testDanglingFocusedPaneIDDoesNotReenterFocusModeWhenCycling() throws {
+        let (container, workspace, panes) = try multiPaneFixture(count: 2)
+        defer { withExtendedLifetime(container) {} }
+        workspace.focusedPaneID = UUID()
+
+        workspace.selectNextPane()
+        XCTAssertNil(workspace.focusedPaneID)
+        XCTAssertFalse(panes[0].isCollapsed)
+        XCTAssertFalse(panes[1].isCollapsed)
+        XCTAssertEqual(workspace.selectedPaneID, panes[1].id)
+    }
+
+    /// #434: a dangling `focusedPaneID` saved by an older build is repaired at
+    /// launch, so the lone collapsed survivor is visible again.
+    @MainActor
+    func testStoreLaunchRepairsDanglingFocusedPaneID() throws {
+        let (container, workspace, panes) = try multiPaneFixture(count: 1)
+        let pane = panes[0]
+        pane.isCollapsed = true
+        pane.wasCollapsedBeforeFocus = false
+        workspace.focusedPaneID = UUID()
+        try container.mainContext.save()
+
+        let defaultsName = "app.blau.pilot.focus-repair-test.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let store = WorkspaceStore(modelContext: container.mainContext,
+                                   workspaceGroups: WorkspaceGroups(defaults: defaults), defaults: defaults)
+        withExtendedLifetime(store) {}
+
+        XCTAssertNil(workspace.focusedPaneID)
+        XCTAssertFalse(pane.isCollapsed, "The only pane must be visible after relaunch")
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertFalse(container.mainContext.hasChanges, "The repair is saved at launch")
+    }
+
+    @MainActor
+    func testFailedPaneRemovalKeepsEarlierUnsavedEdit() throws {
+        // #437: an edit whose save already failed stays pending for retry. A
+        // later failed removal must not roll it back along with itself.
+        let (container, workspace, pane) = try singlePaneFixture()
+        workspace.name = "Renamed while disk full"
+        XCTAssertTrue(container.mainContext.hasChanges)
+
+        XCTAssertFalse(workspace.removePane(pane, allowEmpty: true, performSave: { _ in
+            throw SaveFailure.rejected
+        }))
+        XCTAssertEqual(workspace.name, "Renamed while disk full")
+        XCTAssertTrue(container.mainContext.hasChanges, "The unsaved edit stays available for Retry")
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+    }
+
+    @MainActor
+    func testFailedPaneRemovalRollsBackOnlyItsOwnChanges() throws {
+        // #437: when earlier work can be saved first, the failing removal's
+        // rollback discards only the removal.
+        let (container, workspace, pane) = try singlePaneFixture()
+        workspace.name = "Renamed before close"
+        var saveAttempts = 0
+        XCTAssertFalse(workspace.removePane(pane, allowEmpty: true, performSave: { context in
+            saveAttempts += 1
+            guard saveAttempts == 1 else { throw SaveFailure.rejected }
+            try context.save()
+        }))
+        XCTAssertEqual(saveAttempts, 2)
+        XCTAssertEqual(workspace.name, "Renamed before close")
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertFalse(container.mainContext.hasChanges)
+        let persisted = try ModelContext(container).fetch(FetchDescriptor<Workspace>())
+        XCTAssertEqual(persisted.first { $0.id == workspace.id }?.name, "Renamed before close")
+    }
+
+    @MainActor
+    func testClosingLastPaneWithBlockedEarlierEditCreatesNoPlaceholder() throws {
+        // #437: while an earlier edit can't be saved the removal is refused,
+        // so the New Tab placeholder must not be created and stranded.
+        let (container, workspace, pane) = try singlePaneFixture()
+        workspace.name = "Renamed while disk full"
+        XCTAssertFalse(workspace.replaceLastPaneWithNewTab(pane, performSave: { _ in
+            throw SaveFailure.rejected
+        }))
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Pane>()).map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertEqual(workspace.frontmostTerminalPaneID, pane.id)
+        XCTAssertEqual(workspace.name, "Renamed while disk full")
+        XCTAssertTrue(container.mainContext.hasChanges, "The unsaved edit stays available for Retry")
+    }
+
+    @MainActor
+    func testClosingLastPaneWhileSavesFailKeepsOnlyTheOriginal() throws {
+        // #437: the placeholder's own insert fails to save and stays pending,
+        // so removePane refuses; the placeholder must still be dropped.
+        let (container, workspace, pane) = try singlePaneFixture()
+        XCTAssertFalse(workspace.replaceLastPaneWithNewTab(pane, performSave: { _ in
+            throw SaveFailure.rejected
+        }))
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Pane>()).map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertEqual(workspace.frontmostTerminalPaneID, pane.id)
+        XCTAssertTrue(pane.workspace === workspace)
+    }
+
+    @MainActor
+    func testClosingLastPaneWhoseRemovalFailsDropsTheSavedPlaceholder() throws {
+        // The placeholder saves, the removal itself fails and rolls back; the
+        // saved placeholder is then deleted so only the original remains.
+        let (container, workspace, pane) = try singlePaneFixture()
+        var saveAttempts = 0
+        XCTAssertFalse(workspace.replaceLastPaneWithNewTab(pane, performSave: { context in
+            saveAttempts += 1
+            if saveAttempts == 2 { throw SaveFailure.rejected }
+            try context.save()
+        }))
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertEqual(workspace.frontmostTerminalPaneID, pane.id)
+        let persisted = try ModelContext(container).fetch(FetchDescriptor<Pane>())
+        XCTAssertEqual(persisted.map(\.id), [pane.id])
+    }
+
     @MainActor
     func testCacheRetainsIdentityAndUpdatesContextWithoutRecreatingPane() {
         let cache = CockpitPaneControllerCache()
@@ -519,6 +680,24 @@ final class NativePaneLifecycleTests: XCTestCase {
         container.mainContext.insert(workspace)
         try container.mainContext.save()
         return (container, workspace, pane)
+    }
+
+    @MainActor
+    private func multiPaneFixture(count: Int) throws -> (ModelContainer, Workspace, [Pane]) {
+        let schema = Schema([Workspace.self, Pane.self, BrowserState.self, EditorState.self,
+                             Note.self, RemoteDesktopConnection.self, ExtensionWorkspaceLink.self])
+        let container = try ModelContainer(
+            for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        )
+        let workspace = Workspace(name: "Focus fixture")
+        // Editors keep these layout tests free of terminal engines.
+        let panes = (0..<count).map { Pane(kind: .editor, sortOrder: $0) }
+        workspace.panes = panes
+        for pane in panes { pane.workspace = workspace }
+        workspace.selectedPaneID = panes[0].id
+        container.mainContext.insert(workspace)
+        try container.mainContext.save()
+        return (container, workspace, panes)
     }
 }
 

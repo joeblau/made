@@ -155,7 +155,10 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         defaults.set(document.device.rawValue, forKey: "mockups.device")
         defaults.set(document.layout.rawValue, forKey: "mockups.layout")
         defaults.set(document.motion.rawValue, forKey: "mockups.motion")
-        defaults.set(try? JSONEncoder().encode(document.timeline), forKey: "mockups.timeline")
+        // Launch discards a timeline that fails isValid, so never persist one; the last valid save stays (#435).
+        if document.timeline.isValid {
+            defaults.set(try? JSONEncoder().encode(document.timeline), forKey: "mockups.timeline")
+        }
         center.needsLayout = true
         stage.update()
         refreshControls()

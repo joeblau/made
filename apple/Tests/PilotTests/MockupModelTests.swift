@@ -586,6 +586,82 @@ struct MockupModelTests {
         #expect(!MockupTimeline(keyframes: []).isValid)
     }
 
+    @Test("Editing cannot produce a timeline that launch validation would discard")
+    func keyframeEditingStaysValid() throws {
+        // Appending and retiming stop at the 120 s total instead of reaching 150 s (#435).
+        var timeline = MockupTimeline(keyframes: [MockupKeyframe(pose: MockupPose(), duration: 2)])
+        for _ in 0..<5 {
+            if let id = timeline.addKeyframe(at: timeline.duration, pose: MockupPose(yaw: 1)) {
+                timeline.setDuration(30, for: id)
+            }
+            timeline.setDuration(30, for: timeline.keyframes[0].id)
+            #expect(timeline.isValid)
+        }
+        #expect(timeline.keyframes.map(\.duration) == [30, 30, 30, 30])
+        #expect(timeline.duration == MockupTimeline.maximumTotalDuration)
+        #expect(timeline.addKeyframe(at: timeline.duration, pose: MockupPose()) == nil)
+        timeline.setDuration(10, for: timeline.keyframes[1].id)
+        let appendedID = timeline.addKeyframe(at: timeline.duration, pose: MockupPose(yaw: 2))
+        let appended = try #require(appendedID)
+        timeline.setDuration(30, for: appended)
+        #expect(timeline.keyframes.last?.duration == 20)
+        #expect(timeline.duration == MockupTimeline.maximumTotalDuration && timeline.isValid)
+
+        // Removing and dragging diamonds keep every segment within the 30 s per-keyframe cap.
+        var merged = MockupTimeline(keyframes: [
+            MockupKeyframe(pose: MockupPose(), duration: 30),
+            MockupKeyframe(pose: MockupPose(yaw: 1), duration: 30),
+            MockupKeyframe(pose: MockupPose(yaw: 2), duration: 1),
+        ])
+        merged.removeKeyframe(merged.keyframes[1].id)
+        #expect(merged.keyframes.map(\.duration) == [30, 1])
+        #expect(merged.isValid)
+        var dragged = MockupTimeline(keyframes: [
+            MockupKeyframe(pose: MockupPose(), duration: 20),
+            MockupKeyframe(pose: MockupPose(yaw: 1), duration: 20),
+            MockupKeyframe(pose: MockupPose(yaw: 2), duration: 1),
+        ])
+        dragged.moveKeyframe(dragged.keyframes[1].id, to: 35)
+        #expect(dragged.keyframes.map(\.duration) == [30, 10, 1])
+        #expect(dragged.isValid)
+
+        // Inserting next to an existing diamond cannot leave a sub-minimum segment.
+        var split = MockupTimeline(keyframes: [
+            MockupKeyframe(pose: MockupPose(), duration: 2),
+            MockupKeyframe(pose: MockupPose(yaw: 1), duration: 2),
+        ])
+        #expect(split.addKeyframe(at: 1.95, pose: MockupPose(yaw: 0.5)) == nil)
+        #expect(split.addKeyframe(at: 0.002, pose: MockupPose(yaw: 0.5)) == nil)
+        #expect(split.keyframes.map(\.duration) == [2, 2])
+        #expect(split.isValid)
+
+        // Edits pinned to a bound can land one ulp past it with non-dyadic durations; they must still save.
+        func makeTimeline(_ durations: [Double]) -> MockupTimeline {
+            MockupTimeline(keyframes: durations.enumerated().map {
+                MockupKeyframe(pose: MockupPose(yaw: Double($0.offset)), duration: $0.element)
+            })
+        }
+        var pinnedDrag = makeTimeline([0.7, 0.1, 1.0])
+        pinnedDrag.moveKeyframe(pinnedDrag.keyframes[2].id, to: 0.75)
+        #expect(pinnedDrag.isValid)
+        var dragToEnd = makeTimeline([3, 2])
+        dragToEnd.moveKeyframe(dragToEnd.keyframes[1].id, to: 5)
+        #expect(dragToEnd.isValid)
+        var budgetFirst = makeTimeline([0.1, 7.7, 29.9, 29.9, 24.3])
+        budgetFirst.setDuration(30, for: budgetFirst.keyframes[0].id)
+        #expect(budgetFirst.duration > MockupTimeline.maximumTotalDuration - 0.001)
+        #expect(budgetFirst.isValid)
+        var budgetMiddle = makeTimeline([0.3, 29.9, 0.9, 30, 30])
+        budgetMiddle.setDuration(30, for: budgetMiddle.keyframes[2].id)
+        #expect(budgetMiddle.duration > MockupTimeline.maximumTotalDuration - 0.001)
+        #expect(budgetMiddle.isValid)
+        var fullMerge = makeTimeline([1.1, 29.3, 29.9, 0.1, 29.9, 29.7])
+        #expect(fullMerge.isValid)
+        fullMerge.removeKeyframe(fullMerge.keyframes[3].id)
+        #expect(abs(fullMerge.keyframes[2].duration - MockupTimeline.maximumKeyframeDuration) < 0.001)
+        #expect(fullMerge.isValid)
+    }
+
     @Test("The document captures inspector poses into selected keyframes")
     func documentKeyframeEditing() throws {
         let document = MockupDocument()
@@ -659,6 +735,31 @@ struct MockupModelTests {
         let restored = try JSONDecoder().decode(MockupTimeline.self, from: data)
         #expect(restored == controller.document.timeline)
         controller.updatePresentation(isActive: false, isSelected: false)
+    }
+
+    @Test("An invalid timeline is never saved over the last valid custom timeline")
+    func invalidTimelineIsNotSaved() throws {
+        let suite = "mockup-timeline-invalid-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(MockupKind.video.rawValue, forKey: "mockups.kind")
+        let controller = MockupsViewController(defaults: defaults)
+        controller.loadViewIfNeeded()
+        let custom = MockupTimeline(keyframes: [
+            MockupKeyframe(pose: MockupPose(), duration: 30),
+            MockupKeyframe(pose: MockupPose(yaw: 1), duration: 30),
+        ])
+        controller.document.timeline = custom
+        controller.updatePresentation(isActive: true, isSelected: true)
+        // Five 30 s keyframes are individually in range but total 150 s, which fails isValid on reload.
+        let tooLong = MockupTimeline(keyframes: (0..<5).map { MockupKeyframe(pose: MockupPose(yaw: Double($0)), duration: 30) })
+        #expect(!tooLong.isValid)
+        controller.document.timeline = tooLong
+        controller.updatePresentation(isActive: true, isSelected: true)
+        let data = try #require(defaults.data(forKey: "mockups.timeline"))
+        #expect(try JSONDecoder().decode(MockupTimeline.self, from: data) == custom)
+        controller.updatePresentation(isActive: false, isSelected: false)
+        #expect(MockupsViewController(defaults: defaults).document.timeline == custom)
     }
 
     @Test("Keyframe poses drive the actual SceneKit video frames")

@@ -407,6 +407,11 @@ final class WorkspaceStore {
     }
 
     func deleteNote(_ note: Note) {
+        // #437: a rollback below must discard only this deletion.
+        guard modelContext.saveEarlierChangesBeforeDestructiveChange(operation: "Deleting note") else {
+            changeCount += 1
+            return
+        }
         let wasSelected = selectedNoteID == note.id
         let remaining = notes.filter { $0.id != note.id }
         modelContext.delete(note)
@@ -523,6 +528,13 @@ final class WorkspaceStore {
     }
 
     func deleteRemoteConnection(_ connection: RemoteDesktopConnection) {
+        // #437: a rollback below must discard only this deletion.
+        guard modelContext.saveEarlierChangesBeforeDestructiveChange(
+            operation: "Deleting remote desktop connection"
+        ) else {
+            changeCount += 1
+            return
+        }
         let wasSelected = selectedRemoteConnectionID == connection.id
         let remaining = remoteConnections.filter { $0.id != connection.id }
         modelContext.delete(connection)
@@ -621,6 +633,7 @@ final class WorkspaceStore {
         self.isRunnersMode = defaults.bool(forKey: "runnersMode")
         self.isMockupsMode = defaults.bool(forKey: "mockupsMode")
         cleanupBadDirectories()
+        repairDanglingFocusedPanes()
         if let selectedWorkspaceID, !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
             self.selectedWorkspaceID = workspaces.first?.id
         }
@@ -639,6 +652,19 @@ final class WorkspaceStore {
                 pane.currentDirectory = ""
             }
         }
+    }
+
+    /// #434: builds before the fix could save a `focusedPaneID` that no longer
+    /// names an expanded pane, leaving survivors collapsed after relaunch.
+    /// Leave focus mode for those workspaces once, at launch.
+    private func repairDanglingFocusedPanes() {
+        guard let all = try? modelContext.fetch(FetchDescriptor<Workspace>()) else { return }
+        let dangling = all.filter { ws in
+            ws.focusedPaneID != nil && !ws.panes.contains { $0.id == ws.focusedPaneID && !$0.isCollapsed }
+        }
+        guard !dangling.isEmpty else { return }
+        for workspace in dangling { workspace.prepareForPaneTransfer() }
+        modelContext.saveReporting(operation: "Repairing focused panes")
     }
 
     /// Demo-mode only: seed a couple of representative workspaces so the
@@ -718,13 +744,21 @@ final class WorkspaceStore {
         _ workspace: Workspace,
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {
+        // #437: a rollback below must discard only this deletion, and nothing
+        // is torn down while earlier unsaved work blocks the delete.
+        guard modelContext.saveEarlierChangesBeforeDestructiveChange(
+            operation: "Deleting workspace",
+            performSave: performSave
+        ) else {
+            changeCount += 1
+            return false
+        }
         let wasSelected = selectedWorkspaceID == workspace.id
         let deletedLinks = extensionWorkspaceLinks.filter { $0.sourceWorkspaceID == workspace.id }
         let deletedPanes = deletedLinks.compactMap(\.workspace).flatMap(\.panes) + workspace.panes
-        let deletedDevicePaneIDs = Set(deletedPanes.filter { $0.kind.isAppleTool }.map(\.id))
-        for pane in deletedPanes {
-            pane.tearDownRuntimeResources(preservingDevicePreference: true)
-        }
+        // Runtime state is captured now and destroyed only after the deletion
+        // is saved; a rollback must find every pane's runtime intact (#438).
+        let runtimeTeardowns = deletedPanes.map { $0.prepareRuntimeTeardown() }
         for link in deletedLinks {
             modelContext.delete(link)
         }
@@ -739,8 +773,8 @@ final class WorkspaceStore {
             return false
         }
         workspaceGroups.forget(workspace.id)
-        for paneID in deletedDevicePaneIDs {
-            DeviceCaptureRegistry.shared.clearPreference(paneID: paneID)
+        for teardown in runtimeTeardowns {
+            teardown.perform()
         }
         changeCount += 1
         if wasSelected {
@@ -765,6 +799,8 @@ final class WorkspaceStore {
               sourceIdentity.projectID == payload.projectID,
               sourceIdentity.surface == payload.sourceSurface,
               destinationIdentity.projectID == payload.projectID else { return false }
+        // #437: a rollback below must discard only this move.
+        guard modelContext.saveEarlierChangesBeforeDestructiveChange(operation: "Moving pane") else { return false }
 
         if source === destination {
             guard pane !== target else { return false }

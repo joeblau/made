@@ -839,27 +839,11 @@ final class Pane {
         )
     }
 
-    /// Stops every runtime-only resource owned by this pane. During a
-    /// transactional deletion, iOS capture is deliberately left alive until
-    /// the save succeeds: a rollback can keep presenting the same SwiftUI view,
-    /// so stopping it early would leave the restored pane dormant. The caller
-    /// clears its preference and evicts/stops the session immediately after a
-    /// successful save.
-    func tearDownRuntimeResources(preservingDevicePreference: Bool = false) {
-        // A placeholder may have started discovery while browsing device lists.
-        let probedPaneID = id
-        MainActor.assumeIsolated { NewTabProbes.release(paneID: probedPaneID, keeping: nil) }
-        if kind.isTerminalTool {
-            let session = terminalSession
-            TerminalSessionProvider.shared.invalidate(pane: self, session: session)
-            Task { _ = await session.close() }
-        }
-        if preservingDevicePreference, kind.isAppleTool {
-            let paneID = id
-            MainActor.assumeIsolated { SimulatorRegistry.shared.remove(paneID: paneID) }
-            return
-        }
-        stopRuntimeResources(isDestructive: true)
+    /// Captures, without stopping, this pane's runtime while the model is live.
+    /// Deletions perform it only after their save succeeds: a rollback cannot
+    /// revive tmux, a fast command, an agent chat, or a capture session (#438).
+    func prepareRuntimeTeardown() -> PaneRuntimeTeardown {
+        PaneRuntimeTeardown(paneID: id, kind: kind, terminalSession: kind.isTerminalTool ? terminalSession : nil)
     }
 
     /// Suspends window-bound resources without destroying terminal execution.
@@ -870,12 +854,10 @@ final class Pane {
             let session = terminalSession
             Task { await session.suspend() }
         }
-        stopRuntimeResources(isDestructive: false)
+        Self.stopRuntimeResources(paneID: id, kind: kind, isDestructive: false)
     }
 
-    private func stopRuntimeResources(isDestructive: Bool) {
-        let paneID = id
-        let paneKind = kind
+    fileprivate static func stopRuntimeResources(paneID: UUID, kind paneKind: PaneKind, isDestructive: Bool) {
         MainActor.assumeIsolated {
             switch paneKind {
             case .device, .simulator:
@@ -896,6 +878,25 @@ final class Pane {
                 break
             }
         }
+    }
+}
+
+/// A deleted pane's runtime, held by identifier rather than model so it stays
+/// valid after the save. Dropped unperformed when the save fails (#438).
+struct PaneRuntimeTeardown {
+    let paneID: UUID
+    let kind: PaneKind
+    fileprivate let terminalSession: (any CockpitTerminalSession)?
+
+    @MainActor
+    func perform() {
+        // A placeholder may have started discovery while browsing device lists.
+        NewTabProbes.release(paneID: paneID, keeping: nil)
+        if let terminalSession {
+            TerminalSessionProvider.shared.invalidate(paneID: paneID, session: terminalSession)
+            Task { _ = await terminalSession.close() }
+        }
+        Pane.stopRuntimeResources(paneID: paneID, kind: kind, isDestructive: true)
     }
 }
 
@@ -1014,7 +1015,7 @@ final class Workspace {
         side: Side,
         browserEngine: BrowserEngine = .webKit,
         terminalDestination: TerminalDestination = .local,
-        chooseModeOnOpen: Bool = false
+        chooseModeOnOpen: Bool = false, performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Pane {
         let maxOrder = panes.map(\.sortOrder).max() ?? -1
         let pane = Pane(
@@ -1054,7 +1055,7 @@ final class Workspace {
             frontmostTerminalPaneID = pane.id
         }
         syncDefaultRootPathIfNeeded()
-        _ = modelContext?.saveReporting(operation: "Adding pane")
+        _ = modelContext?.saveReporting(operation: "Adding pane", performSave: performSave)
         pane.isChoosingMode = chooseModeOnOpen
         return pane
     }
@@ -1065,10 +1066,10 @@ final class Workspace {
         allowEmpty: Bool = false,
         performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Bool {
-        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }) else { return false }
-        let context = modelContext
-        let deletedDevicePaneID = pane.kind.isAppleTool ? pane.id : nil
-        pane.tearDownRuntimeResources(preservingDevicePreference: true)
+        let context = modelContext // #437: earlier unsaved work is saved first, or blocks the removal, so a rollback stays local.
+        guard panes.count > 1 || allowEmpty, panes.contains(where: { $0 === pane }), context?.saveEarlierChangesBeforeDestructiveChange(operation: "Removing pane", performSave: performSave) ?? true else { return false }
+        if focusedPaneID == pane.id { restoreFocusedPane(save: false) } // rolled back with this removal
+        let runtimeTeardown = pane.prepareRuntimeTeardown()
         panes.removeAll { $0.id == pane.id }
         if selectedPaneID == pane.id {
             selectedPaneID = sortedPanes.first(where: { !$0.isCollapsed })?.id ?? sortedPanes.first?.id
@@ -1079,7 +1080,7 @@ final class Workspace {
         }
         syncDefaultRootPathForPaneTransfer()
         guard let context else {
-            clearDeletedDevicePreference(paneID: deletedDevicePaneID)
+            MainActor.assumeIsolated { runtimeTeardown.perform() }
             return true
         }
         guard context.saveReporting(
@@ -1087,15 +1088,8 @@ final class Workspace {
             rollbackOnFailure: true,
             performSave: performSave
         ) else { return false }
-        clearDeletedDevicePreference(paneID: deletedDevicePaneID)
+        MainActor.assumeIsolated { runtimeTeardown.perform() }
         return true
-    }
-
-    private func clearDeletedDevicePreference(paneID: UUID?) {
-        guard let paneID else { return }
-        MainActor.assumeIsolated {
-            DeviceCaptureRegistry.shared.clearPreference(paneID: paneID)
-        }
     }
 
     func setFrontmostTerminalPaneID(_ paneID: UUID?) {
@@ -1117,16 +1111,15 @@ final class Workspace {
         let allPanes = sortedPanes
         guard allPanes.count > 1 else { return }
 
-        // Focus mode: cycle through every pane and switch the full-screened
-        // one. The user explicitly opted into single-pane viewing, so the
-        // arrow keys should rotate that pane like tabs.
-        if focusedPaneID != nil {
-            let currentIndex = allPanes.firstIndex(where: { $0.id == focusedPaneID }) ?? 0
+        // Focus mode rotates the full-screened pane like tabs. `focusedPaneID`
+        // must name an expanded pane (#434); a dangling saved ID is restored.
+        if let currentIndex = allPanes.firstIndex(where: { $0.id == focusedPaneID && !$0.isCollapsed }) {
             let count = allPanes.count
             let nextIndex = ((currentIndex + delta) % count + count) % count
             focusPane(allPanes[nextIndex])
             return
         }
+        restoreFocusedPane()
 
         // Normal split mode: skip collapsed panes since selecting an invisible
         // slit isn't useful.
@@ -1243,7 +1236,7 @@ final class Workspace {
 
     func collapsePane(_ pane: Pane) {
         guard !pane.isCollapsed else { return }
-
+        if focusedPaneID == pane.id { pane.wasCollapsedBeforeFocus = false; restoreFocusedPane(save: false) }
         let currentFraction = normalizedExpandedSizeFractions[pane.id] ?? pane.sizeFraction
         pane.restoredSizeFraction = currentFraction > 0 ? currentFraction : 1.0 / Double(max(panes.count, 1))
         pane.isCollapsed = true

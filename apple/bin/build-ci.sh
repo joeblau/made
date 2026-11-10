@@ -6,6 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib/xcodebuild-ci.sh"
 
 python3 "$APPLE_ROOT/bin/check-cockpit-ui-boundary.py"
 "$APPLE_ROOT/bin/app-icon-tool.swift" validate
+python3 "$APPLE_ROOT/bin/make-brand-symbols.py" --check
 "$APPLE_ROOT/bin/benchmark-annexb.sh" --typecheck
 "$APPLE_ROOT/bin/check-annexb-parity.sh" --typecheck
 "$APPLE_ROOT/bin/check-android-stream-live.sh" --typecheck

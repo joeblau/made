@@ -181,6 +181,8 @@ struct AgentTranscript: Equatable, Sendable {
     static let maximumDiffLines = 20_000
     static let rootKey = "root"
     static let terminalTruncationMarker = "[earlier output truncated]\n"
+    /// Closes an agent message cut at `ACPBounds.messageBytes`.
+    static let messageTruncationMarker = "\n\n[message truncated]"
 
     private(set) var items: [AgentChatItem] = []
     private(set) var childItems: [String: [AgentChatItem]] = [:]
@@ -362,11 +364,13 @@ struct AgentTranscript: Equatable, Sendable {
             appendThought(text, messageID: messageID, to: session, stamp: stamp, events: &events)
         case .userMessage(let text):
             // Replayed history on session/load, or a subagent's task prompt.
-            if case .user(let existing)? = list(session).last?.content {
-                modify(session, at: list(session).count - 1) { $0.content = .user(existing + text) }
+            if case .user? = list(session).last?.content {
+                if !lastMessageIsFull(in: session) {
+                    appendInPlace(text, session: session, at: list(session).count - 1)
+                }
             } else if !text.isEmpty {
                 if isReplaying, isRoot, !items.isEmpty { turnIndex += 1 }
-                appendItem(.user(text), to: session, stamp: stamp, events: &events)
+                appendItem(.user(Self.boundedMessage(text)), to: session, stamp: stamp, events: &events)
             }
         case .toolCall(let fields), .toolCallUpdate(let fields):
             upsertTool(fields, in: session, stamp: stamp, events: &events)
@@ -519,9 +523,41 @@ struct AgentTranscript: Equatable, Sendable {
     private mutating func appendAssistant(_ text: String, to session: String, stamp: Date?, events: inout [AgentActivityEvent]) {
         guard !text.isEmpty else { return }
         if case .assistant? = list(session).last?.content {
+            guard !lastMessageIsFull(in: session) else { return }
             appendInPlace(text, session: session, at: list(session).count - 1)
         } else {
-            appendItem(.assistant(text), to: session, stamp: stamp, events: &events)
+            appendItem(.assistant(Self.boundedMessage(text)), to: session, stamp: stamp, events: &events)
+        }
+    }
+
+    /// Message text keeps to `ACPBounds.messageBytes`: the chunk that would
+    /// overflow is cut at a character boundary and closed with
+    /// `messageTruncationMarker`; once closed, later chunks are dropped.
+    static func appendMessageText(_ chunk: String, to text: inout String) {
+        let limit = ACPBounds.messageBytes - messageTruncationMarker.utf8.count
+        let used = text.utf8.count
+        guard used <= limit else { return }
+        if chunk.utf8.count <= limit - used {
+            text += chunk
+        } else {
+            text += chunk.utf8Prefix(limit - used)
+            text += messageTruncationMarker
+        }
+    }
+
+    static func boundedMessage(_ text: String) -> String {
+        var bounded = ""
+        appendMessageText(text, to: &bounded)
+        return bounded
+    }
+
+    /// The session's last message already carries the truncation marker. Only
+    /// a Bool escapes, so the text buffer stays uniquely owned for the append.
+    private func lastMessageIsFull(in session: String) -> Bool {
+        let limit = ACPBounds.messageBytes - Self.messageTruncationMarker.utf8.count
+        switch list(session).last?.content {
+        case .assistant(let text)?, .user(let text)?: return text.utf8.count > limit
+        default: return false
         }
     }
 
@@ -569,14 +605,19 @@ struct AgentTranscript: Equatable, Sendable {
         return (open.index, ACPBounds.thoughtBytes - open.thought.text.utf8.count)
     }
 
-    /// Appends to prose or a thought in place: taking the payload out first
-    /// leaves its buffer uniquely referenced, so a chunk doesn't copy it all.
+    /// Appends to prose, replayed user text, or a thought in place: taking
+    /// the payload out first leaves its buffer uniquely referenced, so a
+    /// chunk doesn't copy it all.
     private mutating func appendInPlace(_ text: String, session: String, at index: Int) {
         modify(session, at: index) { item in
             if case .assistant(var existing) = item.content {
                 item.content = .notice("")
-                existing += text
+                Self.appendMessageText(text, to: &existing)
                 item.content = .assistant(existing)
+            } else if case .user(var existing) = item.content {
+                item.content = .notice("")
+                Self.appendMessageText(text, to: &existing)
+                item.content = .user(existing)
             } else if case .thought(var thought) = item.content {
                 item.content = .notice("")
                 thought.text += text
