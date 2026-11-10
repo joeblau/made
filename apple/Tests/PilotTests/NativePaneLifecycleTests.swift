@@ -175,6 +175,30 @@ final class NativePaneLifecycleTests: XCTestCase {
         XCTAssertEqual(workspace.selectedPaneID, panes[1].id)
     }
 
+    /// #434: a dangling `focusedPaneID` saved by an older build is repaired at
+    /// launch, so the lone collapsed survivor is visible again.
+    @MainActor
+    func testStoreLaunchRepairsDanglingFocusedPaneID() throws {
+        let (container, workspace, panes) = try multiPaneFixture(count: 1)
+        let pane = panes[0]
+        pane.isCollapsed = true
+        pane.wasCollapsedBeforeFocus = false
+        workspace.focusedPaneID = UUID()
+        try container.mainContext.save()
+
+        let defaultsName = "app.blau.pilot.focus-repair-test.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: defaultsName))
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let store = WorkspaceStore(modelContext: container.mainContext,
+                                   workspaceGroups: WorkspaceGroups(defaults: defaults), defaults: defaults)
+        withExtendedLifetime(store) {}
+
+        XCTAssertNil(workspace.focusedPaneID)
+        XCTAssertFalse(pane.isCollapsed, "The only pane must be visible after relaunch")
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertFalse(container.mainContext.hasChanges, "The repair is saved at launch")
+    }
+
     @MainActor
     func testCacheRetainsIdentityAndUpdatesContextWithoutRecreatingPane() {
         let cache = CockpitPaneControllerCache()
@@ -570,6 +594,7 @@ final class NativePaneLifecycleTests: XCTestCase {
         return (container, workspace, pane)
     }
 
+    @MainActor
     private func multiPaneFixture(count: Int) throws -> (ModelContainer, Workspace, [Pane]) {
         let schema = Schema([Workspace.self, Pane.self, BrowserState.self, EditorState.self,
                              Note.self, RemoteDesktopConnection.self, ExtensionWorkspaceLink.self])

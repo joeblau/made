@@ -621,6 +621,7 @@ final class WorkspaceStore {
         self.isRunnersMode = defaults.bool(forKey: "runnersMode")
         self.isMockupsMode = defaults.bool(forKey: "mockupsMode")
         cleanupBadDirectories()
+        repairDanglingFocusedPanes()
         if let selectedWorkspaceID, !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
             self.selectedWorkspaceID = workspaces.first?.id
         }
@@ -639,6 +640,19 @@ final class WorkspaceStore {
                 pane.currentDirectory = ""
             }
         }
+    }
+
+    /// #434: builds before the fix could save a `focusedPaneID` that no longer
+    /// names an expanded pane, leaving survivors collapsed after relaunch.
+    /// Leave focus mode for those workspaces once, at launch.
+    private func repairDanglingFocusedPanes() {
+        guard let all = try? modelContext.fetch(FetchDescriptor<Workspace>()) else { return }
+        let dangling = all.filter { ws in
+            ws.focusedPaneID != nil && !ws.panes.contains { $0.id == ws.focusedPaneID && !$0.isCollapsed }
+        }
+        guard !dangling.isEmpty else { return }
+        for workspace in dangling { workspace.prepareForPaneTransfer() }
+        modelContext.saveReporting(operation: "Repairing focused panes")
     }
 
     /// Demo-mode only: seed a couple of representative workspaces so the
