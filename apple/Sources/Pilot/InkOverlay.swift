@@ -14,6 +14,9 @@ struct RemoteInkStroke {
 final class RemoteInkModel {
     private(set) var strokes: [RemoteInkStroke] = []
     private(set) var changeID = 0
+    /// Running point total across `strokes`, kept so the protocol ceilings can
+    /// be checked against the whole drawing before a peer message mutates it.
+    private(set) var pointCount = 0
 
     /// Called when Pilot edits the remote ink (undo/clear) so the change can be
     /// forwarded to the iPad, which owns the authoritative PencilKit drawing and
@@ -24,19 +27,43 @@ final class RemoteInkModel {
         !strokes.isEmpty
     }
 
-    func handle(_ message: AnnotationMessage) {
+    /// Applies a peer annotation message. Returns `false`, leaving the ink
+    /// untouched, when the result would exceed the protocol's total stroke or
+    /// point ceilings; `FrameProtocol` bounds each message, and this bounds the
+    /// running total that incremental `addStroke` messages accumulate. The
+    /// caller must not acknowledge a rejected message; the iPad's next
+    /// `.replaceDrawing` resync (itself bounded) restores agreement.
+    @discardableResult
+    func handle(_ message: AnnotationMessage) -> Bool {
         switch message {
         case .replaceDrawing(let drawing):
+            guard Self.withinLimits(
+                strokeCount: drawing.strokes.count,
+                pointCount: drawing.strokes.reduce(0) { $0 + $1.points.count }
+            ) else { return false }
             strokes = drawing.strokes.map(Self.makeStroke)
+            pointCount = strokes.reduce(0) { $0 + $1.points.count }
         case .addStroke(let stroke):
+            guard Self.withinLimits(
+                strokeCount: strokes.count + 1,
+                pointCount: pointCount + stroke.points.count
+            ) else { return false }
             // Each incoming line is its own undo-stack entry.
             strokes.append(Self.makeStroke(from: stroke))
+            pointCount += stroke.points.count
         case .clear:
             strokes.removeAll()
+            pointCount = 0
         case .undo:
-            if !strokes.isEmpty { strokes.removeLast() }
+            if !strokes.isEmpty { pointCount -= strokes.removeLast().points.count }
         }
         changeID += 1
+        return true
+    }
+
+    private static func withinLimits(strokeCount: Int, pointCount: Int) -> Bool {
+        strokeCount <= FrameProtocol.maxAnnotationStrokes
+            && pointCount <= FrameProtocol.maxAnnotationPoints
     }
 
     /// Undo the last remote stroke. Optimistically drops it locally for instant
@@ -44,7 +71,7 @@ final class RemoteInkModel {
     /// reconciles any mismatch.
     func undo() {
         guard !strokes.isEmpty else { return }
-        strokes.removeLast()
+        pointCount -= strokes.removeLast().points.count
         changeID += 1
         onLocalEdit?(.undo)
     }
@@ -53,6 +80,7 @@ final class RemoteInkModel {
     func clear() {
         guard !strokes.isEmpty else { return }
         strokes.removeAll()
+        pointCount = 0
         changeID += 1
         onLocalEdit?(.clear)
     }

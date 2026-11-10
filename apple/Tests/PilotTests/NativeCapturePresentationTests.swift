@@ -345,6 +345,41 @@ final class NativeCapturePresentationTests: XCTestCase {
         XCTAssertFalse(model.hasInk)
     }
 
+    func testRemoteInkRejectsAddStrokesBeyondTheProtocolTotals() {
+        let color = AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1)
+        func stroke(points: Int) -> AnnotationStroke {
+            AnnotationStroke(color: color, width: 0.01,
+                             points: Array(repeating: AnnotationPoint(x: 0.5, y: 0.5), count: points))
+        }
+
+        // Each message is individually valid, but the running point total must
+        // stop at the protocol ceiling instead of growing without bound.
+        let model = RemoteInkModel()
+        let perStroke = FrameProtocol.maxAnnotationPoints / 4
+        for _ in 0..<4 { XCTAssertTrue(model.handle(.addStroke(stroke(points: perStroke)))) }
+        let changeID = model.changeID
+        XCTAssertFalse(model.handle(.addStroke(stroke(points: 2))))
+        XCTAssertEqual(model.strokes.count, 4)
+        XCTAssertEqual(model.pointCount, 4 * perStroke)
+        XCTAssertEqual(model.changeID, changeID)
+
+        // Undo frees capacity again.
+        XCTAssertTrue(model.handle(.undo))
+        XCTAssertEqual(model.pointCount, 3 * perStroke)
+        XCTAssertTrue(model.handle(.addStroke(stroke(points: 2))))
+
+        // The stroke count is capped as well.
+        let strokes = RemoteInkModel()
+        XCTAssertTrue(strokes.handle(.replaceDrawing(AnnotationDrawing(
+            strokes: Array(repeating: stroke(points: 2), count: FrameProtocol.maxAnnotationStrokes)
+        ))))
+        XCTAssertFalse(strokes.handle(.addStroke(stroke(points: 2))))
+        XCTAssertEqual(strokes.strokes.count, FrameProtocol.maxAnnotationStrokes)
+        XCTAssertTrue(strokes.handle(.clear))
+        XCTAssertEqual(strokes.pointCount, 0)
+        XCTAssertTrue(strokes.handle(.addStroke(stroke(points: 2))))
+    }
+
     private func buttons(in root: NSView) -> [NSButton] {
         (root as? NSButton).map { [$0] } ?? root.subviews.flatMap { buttons(in: $0) }
     }
