@@ -57,15 +57,32 @@ enum DeviceIdentity {
     /// key until relaunch (issue #429).
     static let didChangeNotification = Notification.Name("app.blau.securechannel.identityDidChange")
 
-    /// Run `handler` after every identity rotation. The handler runs on the
-    /// posting thread, so it should only hop to its owner's queue. Remove the
-    /// returned token with `NotificationCenter.default.removeObserver(_:)`.
-    static func observeChanges(_ handler: @escaping @Sendable () -> Void) -> any NSObjectProtocol {
-        NotificationCenter.default.addObserver(
+    /// Run `handler` after every identity rotation posted on `center`. The
+    /// handler runs on the posting thread, so it should only hop to its
+    /// owner's queue. Remove the returned token from the same `center`.
+    static func observeChanges(
+        center: NotificationCenter = .default,
+        _ handler: @escaping @Sendable () -> Void
+    ) -> any NSObjectProtocol {
+        center.addObserver(
             forName: didChangeNotification,
             object: nil,
             queue: nil
         ) { _ in handler() }
+    }
+
+    /// Where a live transport hears about rotations and how it reloads the
+    /// stored key afterwards. Production transports use `.stored`; tests
+    /// inject a private center and loader so the rotation path runs without
+    /// touching the Keychain.
+    struct ChangeSource {
+        var center: NotificationCenter
+        var load: @Sendable () throws -> Curve25519.KeyAgreement.PrivateKey
+
+        /// The process-wide notification and the Keychain-backed identity.
+        static var stored: ChangeSource {
+            ChangeSource(center: .default, load: { try DeviceIdentity.loadOrCreate() })
+        }
     }
 
     /// Discard the current identity and generate a fresh key pair (e.g. the

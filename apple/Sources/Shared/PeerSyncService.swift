@@ -34,7 +34,9 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     private var running = false
     private var authenticator: PeerSyncAuthenticator
     private var pendingPairing: PendingPairing?
-    private let usesEphemeralIdentity: Bool
+    /// Where identity rotations come from; `nil` for an ephemeral identity
+    /// that must never adopt the device key.
+    private let identityChanges: DeviceIdentity.ChangeSource?
     @ObservationIgnored private var identityObserver: (any NSObjectProtocol)?
     private var activePeer: MCPeerID?
 
@@ -66,14 +68,23 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         }
     }
 
-    init(role: Role, displayName: String, usesEphemeralIdentity: Bool = false) {
+    /// `identityChanges` is a test seam: when set, the rotation observer is
+    /// installed on its center and reloads through its loader even with an
+    /// ephemeral identity. Production leaves it `nil`, which observes
+    /// `DeviceIdentity.ChangeSource.stored` unless the identity is ephemeral.
+    init(
+        role: Role,
+        displayName: String,
+        usesEphemeralIdentity: Bool = false,
+        identityChanges: DeviceIdentity.ChangeSource? = nil
+    ) {
         let isTesting = usesEphemeralIdentity
             || ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
         let identity = isTesting
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())
         self.role = role
-        self.usesEphemeralIdentity = isTesting
+        self.identityChanges = identityChanges ?? (isTesting ? nil : .stored)
         self.peerID = MCPeerID(displayName: displayName)
         self.session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
         self.authenticator = PeerSyncAuthenticator(
@@ -82,15 +93,17 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         )
         super.init()
         session.delegate = self
-        if !isTesting {
-            identityObserver = DeviceIdentity.observeChanges { [weak self] in
+        if let center = self.identityChanges?.center {
+            identityObserver = DeviceIdentity.observeChanges(center: center) { [weak self] in
                 self?.reloadLocalIdentity()
             }
         }
     }
 
     deinit {
-        if let identityObserver { NotificationCenter.default.removeObserver(identityObserver) }
+        if let identityObserver, let center = identityChanges?.center {
+            center.removeObserver(identityObserver)
+        }
     }
 
     func start() {
@@ -144,16 +157,6 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         return candidate == trusted ? .trusted : .approvalRequired(isKeyChange: true)
     }
 
-    /// Rebuild the authenticator around `key`, keeping the pinned peer, and
-    /// restart the transport so every advertisement, invitation, pending
-    /// approval and live session proves the current identity (issue #429).
-    /// The peer still pins the old key, so it sees the key-change approval.
-    func adoptLocalIdentity(_ key: Curve25519.KeyAgreement.PrivateKey) {
-        transportQueue.async { [weak self] in
-            self?.adoptLocalIdentityOnQueue(key)
-        }
-    }
-
     /// The identity key the transport currently advertises and proves.
     func localIdentityPublicKeyBase64() async -> String {
         await withCheckedContinuation { continuation in
@@ -165,12 +168,16 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
 
     private func reloadLocalIdentity() {
         transportQueue.async { [weak self] in
-            guard let self, !self.usesEphemeralIdentity,
-                  let key = try? DeviceIdentity.loadOrCreate() else { return }
+            guard let self, let load = self.identityChanges?.load,
+                  let key = try? load() else { return }
             self.adoptLocalIdentityOnQueue(key)
         }
     }
 
+    /// Rebuild the authenticator around `key`, keeping the pinned peer, and
+    /// restart the transport so every advertisement, invitation, pending
+    /// approval and live session proves the current identity (issue #429).
+    /// The peer still pins the old key, so it sees the key-change approval.
     private func adoptLocalIdentityOnQueue(_ key: Curve25519.KeyAgreement.PrivateKey) {
         guard key.publicKey.rawRepresentation.base64EncodedString()
             != authenticator.localPublicKeyBase64 else { return }

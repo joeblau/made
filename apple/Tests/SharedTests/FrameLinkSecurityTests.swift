@@ -97,23 +97,33 @@ final class FrameLinkSecurityTests: XCTestCase {
         XCTAssertEqual(pilot.receive(plotterApproval.proof), .authenticated)
     }
 
-    func testFrameLinkEndpointsProveARotatedIdentity() async {
-        let sender = FrameSender(usesEphemeralIdentity: true)
-        let receiver = FrameReceiver()
+    func testFrameLinkEndpointsProveTheStoredKeyAfterAnIdentityRotation() async {
+        // A private center and loader stand in for the Keychain identity, so
+        // this drives the production path: rotation notification ->
+        // observer -> reload through the loader -> rebuilt FrameLink identity.
+        let center = NotificationCenter()
+        let stored = Curve25519.KeyAgreement.PrivateKey()
+        let storedRaw = stored.rawRepresentation
+        let storedPublic = stored.publicKey.rawRepresentation.base64EncodedString()
+        let changes = DeviceIdentity.ChangeSource(
+            center: center,
+            load: { try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: storedRaw) }
+        )
+        let sender = FrameSender(usesEphemeralIdentity: true, identityChanges: changes)
+        let receiver = FrameReceiver(identityChanges: changes)
         let originalSender = await sender.localIdentityPublicKeyBase64()
         let originalReceiver = await receiver.localIdentityPublicKeyBase64()
-        let rotated = Curve25519.KeyAgreement.PrivateKey()
-        let rotatedPublic = rotated.publicKey.rawRepresentation.base64EncodedString()
+        XCTAssertNotEqual(originalSender, storedPublic)
+        XCTAssertNotEqual(originalReceiver, storedPublic)
 
-        sender.adoptLocalIdentity(rotated)
-        receiver.adoptLocalIdentity(rotated)
+        // `post` runs both observers synchronously and each reload is queued
+        // on its endpoint's queue ahead of the getter, so these reads are ordered.
+        center.post(name: DeviceIdentity.didChangeNotification, object: nil)
 
         let senderKey = await sender.localIdentityPublicKeyBase64()
         let receiverKey = await receiver.localIdentityPublicKeyBase64()
-        XCTAssertNotEqual(senderKey, originalSender)
-        XCTAssertNotEqual(receiverKey, originalReceiver)
-        XCTAssertEqual(senderKey, rotatedPublic, "Pilot's FrameLink must prove the stored key")
-        XCTAssertEqual(receiverKey, rotatedPublic, "Plotter's FrameLink must prove the stored key")
+        XCTAssertEqual(senderKey, storedPublic, "Pilot's FrameLink must prove the stored key")
+        XCTAssertEqual(receiverKey, storedPublic, "Plotter's FrameLink must prove the stored key")
     }
 
     private func authenticateTrusted(

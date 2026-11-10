@@ -19,21 +19,34 @@ final class PeerSyncAuthenticationTests: XCTestCase {
     }
 
     @MainActor
-    func testServiceAdvertisesAndProvesARotatedIdentity() async {
+    func testServiceAdvertisesTheStoredKeyAfterAnIdentityRotation() async {
+        // A private center and loader stand in for the Keychain identity, so
+        // this drives the production path: rotation notification ->
+        // observer -> reload through the loader -> rebuilt authenticator.
+        let center = NotificationCenter()
+        let stored = Curve25519.KeyAgreement.PrivateKey()
+        let storedRaw = stored.rawRepresentation
+        let storedPublic = stored.publicKey.rawRepresentation.base64EncodedString()
         let service = PeerSyncService(
             role: .advertiser,
             displayName: "Rotation Test",
-            usesEphemeralIdentity: true
+            usesEphemeralIdentity: true,
+            identityChanges: DeviceIdentity.ChangeSource(
+                center: center,
+                load: { try Curve25519.KeyAgreement.PrivateKey(rawRepresentation: storedRaw) }
+            )
         )
         let original = await service.localIdentityPublicKeyBase64()
-        let rotated = Curve25519.KeyAgreement.PrivateKey()
-        service.adoptLocalIdentity(rotated)
+        XCTAssertNotEqual(original, storedPublic)
+
+        // `post` runs the observer synchronously and the reload is queued on
+        // the transport queue ahead of the getter, so this read is ordered.
+        center.post(name: DeviceIdentity.didChangeNotification, object: nil)
 
         let advertised = await service.localIdentityPublicKeyBase64()
-        XCTAssertNotEqual(advertised, original)
         XCTAssertEqual(
             advertised,
-            rotated.publicKey.rawRepresentation.base64EncodedString(),
+            storedPublic,
             "after regeneration the sync transport must advertise and prove the stored key"
         )
     }
