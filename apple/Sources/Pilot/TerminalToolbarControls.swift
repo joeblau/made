@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 
 enum TerminalToolbarSelection {
     static func pane(for pane: Pane?) -> Pane? {
@@ -347,7 +348,7 @@ extension Workspace {
         // Keep the original pane and drop the unused placeholder directly.
         // removePane(placeholder) would hit the same save-earlier gate when
         // the placeholder's own insert failed to save, leaving it behind.
-        placeholder.tearDownRuntimeResources(preservingDevicePreference: true)
+        placeholder.prepareRuntimeTeardown().perform() // dropped for good; a failed delete stays pending (#438)
         panes.removeAll { $0 === placeholder }
         selectedPaneID = selection
         frontmostTerminalPaneID = frontmost
