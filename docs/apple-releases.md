@@ -134,7 +134,10 @@ read back after creation.
 
 Use a GitHub ruleset to restrict creation and deletion of tags matching `v*`
 to release maintainers. The workflow also refuses tags whose target commit is
-not reachable from `main`.
+not reachable from `main`. Every release job checks out and asserts the exact
+commit that validation resolved, and publishing re-checks that the tag still
+names it, so a tag moved mid-run fails the release instead of mixing binaries
+from two commits.
 
 ## Cut a release
 
