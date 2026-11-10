@@ -136,6 +136,34 @@ public enum AnnotationMessage: Codable, Sendable, Hashable {
     case undo
 }
 
+/// Keeps Pilot's mirrored ink identical, index for index, to Plotter's drawing
+/// (issue #431). Pilot applies `.addStroke` as an append and `.undo` as "drop
+/// the last stroke", so those incremental messages are only correct when the
+/// change provably is exactly that. PencilKit's eraser, undoing an erase, and
+/// stroke splits change the drawing in the middle, so any change that is not a
+/// provable append or last-stroke removal resends the whole drawing.
+enum AnnotationMirrorSync {
+    /// The single message that turns Pilot's `mirrored` strokes into `current`,
+    /// or nil when they already match.
+    static func message(
+        from mirrored: [AnnotationStroke],
+        to current: [AnnotationStroke]
+    ) -> AnnotationMessage? {
+        if current == mirrored { return nil }
+        if current.count == mirrored.count + 1,
+           let appended = current.last,
+           current.dropLast().elementsEqual(mirrored) {
+            return .addStroke(appended)
+        }
+        if current.count + 1 == mirrored.count,
+           mirrored.dropLast().elementsEqual(current) {
+            return .undo
+        }
+        if current.isEmpty { return .clear }
+        return .replaceDrawing(AnnotationDrawing(strokes: current))
+    }
+}
+
 struct MouseMove: Codable, Sendable {
     let dx: Float
     let dy: Float

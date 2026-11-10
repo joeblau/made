@@ -43,6 +43,12 @@ final class MirrorModel {
     /// which then echoes the corrected drawing back to Pilot.
     var onRemoteAnnotation: ((AnnotationMessage) -> Void)?
 
+    /// Invoked on the main actor each time a Pilot session authenticates, so
+    /// the canvas resends its full drawing. Runs after the receiver flushes the
+    /// packets queued while disconnected (that queue keeps only the newest
+    /// few), so the resync is the last word on Pilot's ink (issue #431).
+    var onCockpitAuthenticated: (() -> Void)?
+
     private let receiver = FrameReceiver()
     private let renderer = HEVCMirrorRenderer()
     private let dashboardStore = DashboardSnapshotStore(appGroup: PlotterSnapshotStore.appGroupID)
@@ -113,6 +119,7 @@ final class MirrorModel {
                 )
                 WidgetCenter.shared.reloadAllTimelines()
                 PlotterActivityController.shared.setConnected(connected, title: "Cockpit")
+                if connected { self?.onCockpitAuthenticated?() }
             }
         }
         receiver.onPairingRequestChanged = { [weak self] request in
