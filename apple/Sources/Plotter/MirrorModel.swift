@@ -52,7 +52,7 @@ final class MirrorModel {
     /// few), so the resync is the last word on Pilot's ink (issue #431).
     var onCockpitAuthenticated: (() -> Void)?
 
-    private let receiver = FrameReceiver()
+    private let receiver: FrameReceiver
     private let renderer = HEVCMirrorRenderer()
     private let dashboardStore = DashboardSnapshotStore(appGroup: PlotterSnapshotStore.appGroupID)
     let dashboardActivities = DashboardActivityController(urlScheme: PlotterDashboardRoute.urlScheme)
@@ -83,7 +83,10 @@ final class MirrorModel {
     /// screen (byte-identical stills) never re-renders an identical thumbnail.
     private var lastSnapshotNudgeHash: Int?
 
-    init() {
+    /// `receiver` is a test seam: tests pass their own ``FrameReceiver`` to
+    /// drive the real connection callbacks this model installs on it.
+    init(receiver: FrameReceiver = FrameReceiver()) {
+        self.receiver = receiver
         dashboardSnapshots = PlotterDashboardSnapshots(store: dashboardStore)
         dashboardActivities.restore()
         updateDashboardActivities(for: Set(DashboardFamily.allCases))

@@ -97,3 +97,73 @@ struct PlotterDashboardStateTests {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
     }
 }
+
+@MainActor
+private final class ResyncCounter {
+    var count = 0
+}
+
+/// Issue #431: Plotter re-sends its full drawing to every newly authenticated
+/// Cockpit session, because the receiver's disconnected queue keeps only the
+/// newest packets. These drive the real callbacks ``MirrorModel`` installs on
+/// its ``FrameReceiver``. `FrameReceiver.didAuthenticatePilot` invokes
+/// `onConnectedChanged(true)` and then flushes its queue on the receiver's
+/// serial queue; the resync this hook triggers is enqueued on that same queue
+/// later, from the main actor, so it always follows the flushed packets.
+@Suite("Plotter annotation mirror wiring", .serialized)
+@MainActor
+struct PlotterAnnotationMirrorWiringTests {
+    @Test("Every Cockpit authentication triggers a full canvas resync; a disconnect does not")
+    func authenticationTriggersResync() async throws {
+        let receiver = FrameReceiver()
+        let model = MirrorModel(receiver: receiver)
+        let resyncs = ResyncCounter()
+        model.onCockpitAuthenticated = { resyncs.count += 1 }
+        let connectedChanged = try #require(receiver.onConnectedChanged)
+
+        connectedChanged(true)
+        #expect(await eventually { resyncs.count == 1 && model.isCockpitConnected })
+
+        connectedChanged(false)
+        #expect(await eventually { !model.isCockpitConnected })
+        #expect(resyncs.count == 1)
+
+        // A reconnect authenticates a new session, which resyncs again.
+        connectedChanged(true)
+        #expect(await eventually { resyncs.count == 2 && model.isCockpitConnected })
+
+        connectedChanged(false)
+        #expect(await eventually { !model.isCockpitConnected })
+        #expect(resyncs.count == 2)
+    }
+
+    @Test("sendAnnotation reports an annotation too large to encode as undelivered")
+    func sendAnnotationReportsUndeliverable() {
+        let model = MirrorModel(receiver: FrameReceiver())
+        let strokes = (0..<40).map { id in
+            AnnotationStroke(
+                color: AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1),
+                width: 0.01,
+                points: (0..<1_000).map { index in
+                    AnnotationPoint(
+                        x: (Double(id * 1_000 + index) + 0.123456789) / 7_919.0,
+                        y: (Double(index) + 0.987654321) / 7_927.0
+                    )
+                }
+            )
+        }
+        // AnnotationMirrorSync advances its record of Pilot's ink only when
+        // this returns true, so an oversized replacement must return false.
+        #expect(!model.sendAnnotation(.replaceDrawing(AnnotationDrawing(strokes: strokes))))
+        #expect(model.sendAnnotation(.addStroke(strokes[0])))
+        #expect(model.sendAnnotation(.clear))
+    }
+
+    private func eventually(_ condition: () -> Bool) async -> Bool {
+        for _ in 0..<300 {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
+    }
+}

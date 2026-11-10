@@ -1,5 +1,8 @@
 import Foundation
 import Testing
+#if canImport(UIKit)
+import UIKit
+#endif
 
 @testable import Copilot
 
@@ -522,11 +525,58 @@ struct AnnotationMirrorSyncTests {
         )
     }
 
-    private func isIncremental(_ message: AnnotationMessage) -> Bool {
-        switch message {
-        case .addStroke, .undo: return true
-        case .replaceDrawing, .clear: return false
+    @Test("Wide-gamut ink colors are clamped into the wire range and round-trip")
+    func wideGamutColorNormalizes() {
+        let points = stroke(1).points
+        // Extended-sRGB components as UIKit reports them for Display P3 ink:
+        // the wire format refuses them, which would fail the mirror closed.
+        let raw = AnnotationStroke(
+            color: AnnotationColor(red: 1.09, green: -0.2, blue: 0.5, alpha: 1),
+            width: 0.01,
+            points: points
+        )
+        #expect(!AnnotationMirrorSync.isEncodable(.addStroke(raw)))
+
+        let color = AnnotationColor.normalized(red: 1.09, green: -0.2, blue: 0.5, alpha: 1)
+        #expect(color == AnnotationColor(red: 1, green: 0, blue: 0.5, alpha: 1))
+        #expect(
+            AnnotationColor.normalized(red: .nan, green: .infinity, blue: -.infinity, alpha: 0.25)
+                == AnnotationColor(red: 0, green: 0, blue: 0, alpha: 0.25)
+        )
+
+        let message = AnnotationMessage.addStroke(AnnotationStroke(color: color, width: 0.01, points: points))
+        let payload = FrameProtocol.encode(.annotation(seq: 7, message: message))
+        #expect(!payload.isEmpty)
+        guard case .annotation(let seq, let decoded)? = FrameProtocol.decode(payload) else {
+            Issue.record("a normalized wide-gamut stroke must decode")
+            return
         }
+        #expect(seq == 7)
+        #expect(decoded == message)
+
+        // The mirror sends it as an ordinary append and stays in sync.
+        var sync = AnnotationMirrorSync()
+        var sent: [AnnotationMessage] = []
+        sync.sync(to: [AnnotationStroke(color: color, width: 0.01, points: points)]) { outgoing in
+            sent.append(outgoing)
+            return AnnotationMirrorSync.isEncodable(outgoing)
+        }
+        #expect(!sync.isOutOfSync)
+        #expect(sent == [message])
+
+        #if canImport(UIKit)
+        // The premise, with the real UIKit conversion Plotter uses: Display P3
+        // red is outside 0...1 in extended sRGB, and normalizes to a stroke
+        // the wire accepts.
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        UIColor(displayP3Red: 1, green: 0, blue: 0, alpha: 1)
+            .getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        #expect(red > 1 || green < 0 || blue < 0)
+        let wire = AnnotationColor.normalized(
+            red: Double(red), green: Double(green), blue: Double(blue), alpha: Double(alpha)
+        )
+        #expect(AnnotationMirrorSync.isEncodable(.addStroke(AnnotationStroke(color: wire, width: 0.01, points: points))))
+        #endif
     }
 
     @Test("FrameReceiver refuses, rather than queues, an annotation too large to encode")
@@ -630,25 +680,33 @@ struct AnnotationMirrorSyncTests {
         #expect(tooLargeForOneMessage(.addStroke(unencodable)))
         canvas.append(unencodable)
         #expect(AnnotationMirrorSync.fitsPilotLimits(canvas))
+        delivered.removeAll()
         sync.sync(to: canvas, send: send)
         #expect(sync.isOutOfSync)
         #expect(sync.mirrored.isEmpty)
         #expect(pilot.isEmpty)
-        #expect(delivered.last == .clear)
+        #expect(delivered == [.clear])
 
         // While out of sync even a provable append is a full rebuild, never an
-        // incremental op against whatever Pilot holds; the rebuild reaches the
-        // unencodable stroke, so Pilot ends cleared again.
+        // incremental op against whatever Pilot holds. The rebuild is
+        // preflighted: with the unencodable stroke present it is doomed, so
+        // Pilot never sees a cleared-then-partial drawing or the large strokes
+        // before it, only the single fail-closed `.clear`.
         attempted.removeAll()
+        delivered.removeAll()
         canvas.append(denseStroke(99, points: 10))
         sync.sync(to: canvas, send: send)
         #expect(sync.isOutOfSync)
         #expect(pilot.isEmpty)
-        #expect(delivered.last == .clear)
-        #expect(attempted.first == .replaceDrawing(AnnotationDrawing(strokes: canvas)))
-        #expect(!attempted.contains(.undo))
-        let firstClear = attempted.firstIndex(of: .clear) ?? attempted.endIndex
-        #expect(!attempted[..<firstClear].contains(where: isIncremental))
+        #expect(delivered == [.clear])
+        #expect(attempted == [.replaceDrawing(AnnotationDrawing(strokes: canvas)), .clear])
+
+        // A resync (Pilot reconnect) while it is present behaves the same way.
+        delivered.removeAll()
+        sync.resync(to: canvas, send: send)
+        #expect(sync.isOutOfSync)
+        #expect(pilot.isEmpty)
+        #expect(delivered == [.clear])
 
         // Erasing the unencodable stroke (now a middle stroke) restores sync
         // with a stroke-by-stroke rebuild.
@@ -656,6 +714,19 @@ struct AnnotationMirrorSyncTests {
         sync.sync(to: canvas, send: send)
         #expect(!sync.isOutOfSync)
         #expect(sync.mirrored == canvas)
+        #expect(pilot == canvas)
+
+        // From in sync, a non-append change that brings it back (undoing the
+        // erase restores it in the middle) is also only the fail-closed clear.
+        delivered.removeAll()
+        canvas.insert(unencodable, at: canvas.count - 1)
+        sync.sync(to: canvas, send: send)
+        #expect(sync.isOutOfSync)
+        #expect(pilot.isEmpty)
+        #expect(delivered == [.clear])
+        canvas.removeAll { $0 == unencodable }
+        sync.sync(to: canvas, send: send)
+        #expect(!sync.isOutOfSync)
         #expect(pilot == canvas)
 
         // A drawing that fits in one annotation is still a single replace.
