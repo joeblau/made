@@ -165,6 +165,56 @@ final class NativePaneLifecycleTests: XCTestCase {
     }
 
     @MainActor
+    func testClosingLastPaneWithBlockedEarlierEditCreatesNoPlaceholder() throws {
+        // #437: while an earlier edit can't be saved the removal is refused,
+        // so the New Tab placeholder must not be created and stranded.
+        let (container, workspace, pane) = try singlePaneFixture()
+        workspace.name = "Renamed while disk full"
+        XCTAssertFalse(workspace.replaceLastPaneWithNewTab(pane, performSave: { _ in
+            throw SaveFailure.rejected
+        }))
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Pane>()).map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertEqual(workspace.frontmostTerminalPaneID, pane.id)
+        XCTAssertEqual(workspace.name, "Renamed while disk full")
+        XCTAssertTrue(container.mainContext.hasChanges, "The unsaved edit stays available for Retry")
+    }
+
+    @MainActor
+    func testClosingLastPaneWhileSavesFailKeepsOnlyTheOriginal() throws {
+        // #437: the placeholder's own insert fails to save and stays pending,
+        // so removePane refuses; the placeholder must still be dropped.
+        let (container, workspace, pane) = try singlePaneFixture()
+        XCTAssertFalse(workspace.replaceLastPaneWithNewTab(pane, performSave: { _ in
+            throw SaveFailure.rejected
+        }))
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(try container.mainContext.fetch(FetchDescriptor<Pane>()).map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertEqual(workspace.frontmostTerminalPaneID, pane.id)
+        XCTAssertTrue(pane.workspace === workspace)
+    }
+
+    @MainActor
+    func testClosingLastPaneWhoseRemovalFailsDropsTheSavedPlaceholder() throws {
+        // The placeholder saves, the removal itself fails and rolls back; the
+        // saved placeholder is then deleted so only the original remains.
+        let (container, workspace, pane) = try singlePaneFixture()
+        var saveAttempts = 0
+        XCTAssertFalse(workspace.replaceLastPaneWithNewTab(pane, performSave: { context in
+            saveAttempts += 1
+            if saveAttempts == 2 { throw SaveFailure.rejected }
+            try context.save()
+        }))
+        XCTAssertEqual(workspace.panes.map(\.id), [pane.id])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertEqual(workspace.frontmostTerminalPaneID, pane.id)
+        let persisted = try ModelContext(container).fetch(FetchDescriptor<Pane>())
+        XCTAssertEqual(persisted.map(\.id), [pane.id])
+    }
+
+    @MainActor
     func testCacheRetainsIdentityAndUpdatesContextWithoutRecreatingPane() {
         let cache = CockpitPaneControllerCache()
         let pane = Pane(kind: .editor, sortOrder: 0)

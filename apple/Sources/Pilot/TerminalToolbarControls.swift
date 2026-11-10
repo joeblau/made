@@ -319,14 +319,47 @@ extension Workspace {
                     self.removePane(pane)
                     return
                 }
-                let placeholder = self.addPane(kind: .terminal, side: .right, chooseModeOnOpen: true)
-                if !self.removePane(pane) {
-                    // Keep the original pane; drop the unused placeholder.
-                    self.removePane(placeholder)
-                    placeholder.isChoosingMode = false
-                }
+                self.replaceLastPaneWithNewTab(pane)
             }
         }
+    }
+
+    /// Swaps the only pane for the New Tab page. When the removal can't be
+    /// saved, the original pane, its selection, and its frontmost terminal
+    /// stay exactly as they were and no placeholder is left behind.
+    @MainActor
+    @discardableResult
+    func replaceLastPaneWithNewTab(
+        _ pane: Pane,
+        performSave: (ModelContext) throws -> Void = { try $0.save() }
+    ) -> Bool {
+        guard panes.count == 1, panes.first === pane else { return false }
+        // #437: removePane refuses while earlier work is unsaved, so don't
+        // create a placeholder that the refusal would strand.
+        guard modelContext?.saveEarlierChangesBeforeDestructiveChange(
+            operation: "Removing pane",
+            performSave: performSave
+        ) ?? true else { return false }
+        let selection = selectedPaneID
+        let frontmost = frontmostTerminalPaneID
+        let placeholder = addPane(kind: .terminal, side: .right, chooseModeOnOpen: true, performSave: performSave)
+        guard !removePane(pane, performSave: performSave) else { return true }
+        // Keep the original pane and drop the unused placeholder directly.
+        // removePane(placeholder) would hit the same save-earlier gate when
+        // the placeholder's own insert failed to save, leaving it behind.
+        placeholder.tearDownRuntimeResources(preservingDevicePreference: true)
+        panes.removeAll { $0 === placeholder }
+        selectedPaneID = selection
+        frontmostTerminalPaneID = frontmost
+        syncDefaultRootPathForPaneTransfer()
+        if let context = modelContext {
+            // Cancels a still-pending insert; otherwise deletes the saved
+            // placeholder. A failed save stays pending for retry.
+            context.delete(placeholder)
+            _ = context.saveReporting(operation: "Removing pane", performSave: performSave)
+        }
+        placeholder.isChoosingMode = false
+        return false
     }
 
     @MainActor

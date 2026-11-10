@@ -1014,7 +1014,7 @@ final class Workspace {
         side: Side,
         browserEngine: BrowserEngine = .webKit,
         terminalDestination: TerminalDestination = .local,
-        chooseModeOnOpen: Bool = false
+        chooseModeOnOpen: Bool = false, performSave: (ModelContext) throws -> Void = { try $0.save() }
     ) -> Pane {
         let maxOrder = panes.map(\.sortOrder).max() ?? -1
         let pane = Pane(
@@ -1054,7 +1054,7 @@ final class Workspace {
             frontmostTerminalPaneID = pane.id
         }
         syncDefaultRootPathIfNeeded()
-        _ = modelContext?.saveReporting(operation: "Adding pane")
+        _ = modelContext?.saveReporting(operation: "Adding pane", performSave: performSave)
         pane.isChoosingMode = chooseModeOnOpen
         return pane
     }
