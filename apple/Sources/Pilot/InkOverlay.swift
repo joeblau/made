@@ -17,6 +17,11 @@ final class RemoteInkModel {
     /// Running point total across `strokes`, kept so the protocol ceilings can
     /// be checked against the whole drawing before a peer message mutates it.
     private(set) var pointCount = 0
+    /// True after a peer message was rejected, until a `.replaceDrawing` or
+    /// `.clear` is accepted. Incremental `.addStroke` / `.undo` messages assume
+    /// every earlier message was applied, so while this is set they are
+    /// refused instead of landing at the wrong index (issue #431).
+    private(set) var isAwaitingResync = false
 
     /// Called when Pilot edits the remote ink (undo/clear) so the change can be
     /// forwarded to the iPad, which owns the authoritative PencilKit drawing and
@@ -31,8 +36,10 @@ final class RemoteInkModel {
     /// untouched, when the result would exceed the protocol's total stroke or
     /// point ceilings; `FrameProtocol` bounds each message, and this bounds the
     /// running total that incremental `addStroke` messages accumulate. The
-    /// caller must not acknowledge a rejected message; the iPad's next
-    /// `.replaceDrawing` resync (itself bounded) restores agreement.
+    /// caller must not acknowledge a rejected message. After a rejection the
+    /// model also refuses every incremental message until a full
+    /// `.replaceDrawing` (itself bounded) or `.clear` restores agreement, so a
+    /// later `.undo` / `.addStroke` never assumes the rejected one was applied.
     @discardableResult
     func handle(_ message: AnnotationMessage) -> Bool {
         switch message {
@@ -40,25 +47,36 @@ final class RemoteInkModel {
             guard Self.withinLimits(
                 strokeCount: drawing.strokes.count,
                 pointCount: drawing.strokes.reduce(0) { $0 + $1.points.count }
-            ) else { return false }
+            ) else { return reject() }
             strokes = drawing.strokes.map(Self.makeStroke)
             pointCount = strokes.reduce(0) { $0 + $1.points.count }
+            isAwaitingResync = false
         case .addStroke(let stroke):
+            guard !isAwaitingResync else { return false }
             guard Self.withinLimits(
                 strokeCount: strokes.count + 1,
                 pointCount: pointCount + stroke.points.count
-            ) else { return false }
+            ) else { return reject() }
             // Each incoming line is its own undo-stack entry.
             strokes.append(Self.makeStroke(from: stroke))
             pointCount += stroke.points.count
         case .clear:
             strokes.removeAll()
             pointCount = 0
+            isAwaitingResync = false
         case .undo:
+            guard !isAwaitingResync else { return false }
             if !strokes.isEmpty { pointCount -= strokes.removeLast().points.count }
         }
         changeID += 1
         return true
+    }
+
+    /// Refuses a message and stops applying incremental ones until the next
+    /// full replacement or clear.
+    private func reject() -> Bool {
+        isAwaitingResync = true
+        return false
     }
 
     private static func withinLimits(strokeCount: Int, pointCount: Int) -> Bool {
