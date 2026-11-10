@@ -2,6 +2,10 @@ import Darwin
 import Foundation
 
 struct DroneStoredJob: Codable, Equatable {
+    /// The record layout this build reads and writes. A record without a version
+    /// predates versioning and uses layout 1. Any other version is quarantined.
+    static let currentSchemaVersion = 1
+
     var id: DroneJobID
     var controllerID: UUID
     var idempotencyKey: String
@@ -15,6 +19,7 @@ struct DroneStoredJob: Codable, Equatable {
     var droppedEventCount: UInt64
     var cancellationRequested: Bool
     var events: [DroneJobEvent]
+    var schemaVersion: Int? = DroneStoredJob.currentSchemaVersion
 
     var snapshot: DroneJobSnapshot {
         DroneJobSnapshot(
@@ -47,6 +52,7 @@ final class DroneJobStore: @unchecked Sendable {
     private let now: @Sendable () -> TimeInterval
     private var jobs: [DroneJobID: DroneStoredJob] = [:]
     private var keys: [JobKey: DroneJobID] = [:]
+    private var quarantinedEntries = 0
 
     init(
         stateURL: URL,
@@ -58,6 +64,14 @@ final class DroneJobStore: @unchecked Sendable {
         self.now = now
         try Self.createPrivateDirectory(at: self.stateURL)
         try recover()
+    }
+
+    /// Records set aside because this build could not decode or trust them.
+    /// Nonzero means storage is unhealthy until an owner inspects the directory.
+    var quarantinedEntryCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return quarantinedEntries
     }
 
     func create(_ create: DroneJobCreate) throws -> (snapshot: DroneJobSnapshot, isNew: Bool) {
@@ -287,6 +301,10 @@ final class DroneJobStore: @unchecked Sendable {
         keys.removeValue(forKey: key)
     }
 
+    /// Loads every record this build can decode and trust. A record that cannot
+    /// be read, has an unknown schema version, or conflicts with another record
+    /// is moved into `quarantine/` instead of aborting startup, so one bad or
+    /// newer-version record never keeps the daemon down.
     private func recover() throws {
         let controllersURL = stateURL.appendingPathComponent("controllers", isDirectory: true)
         try Self.createPrivateDirectory(at: controllersURL)
@@ -295,30 +313,34 @@ final class DroneJobStore: @unchecked Sendable {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
         ) else { throw DroneJobError.storeCorrupted }
-        for case let controllerURL as URL in controllers {
-            guard let controllerID = UUID(uuidString: controllerURL.lastPathComponent) else {
-                throw DroneJobError.storeCorrupted
+        // Snapshot listings before moving entries out of the enumerated directory.
+        for controllerURL in controllers.allObjects.compactMap({ $0 as? URL }) {
+            guard let controllerID = UUID(uuidString: controllerURL.lastPathComponent),
+                  (try? controllerURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
+                  let records = FileManager.default.enumerator(
+                      at: controllerURL.appendingPathComponent("jobs", isDirectory: true),
+                      includingPropertiesForKeys: [.fileSizeKey],
+                      options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
+                  )
+            else {
+                try quarantine(controllerURL)
+                continue
             }
-            let jobsURL = controllerURL.appendingPathComponent("jobs", isDirectory: true)
-            guard let records = FileManager.default.enumerator(
-                at: jobsURL,
-                includingPropertiesForKeys: [.fileSizeKey],
-                options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
-            ) else { throw DroneJobError.storeCorrupted }
             var controllerCount = 0
-            for case let recordURL as URL in records {
-                controllerCount += 1
-                guard controllerCount <= limits.maximumJobsPerController,
-                      recordURL.pathExtension == "json",
-                      let size = try recordURL.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-                      size <= limits.maximumStoredRecordBytes,
-                      let data = try? Data(contentsOf: recordURL, options: []),
-                      var job = try? decoder().decode(DroneStoredJob.self, from: data),
-                      job.controllerID == controllerID,
-                      jobs[job.id] == nil
-                else { throw DroneJobError.storeCorrupted }
+            for recordURL in records.allObjects.compactMap({ $0 as? URL }) {
+                guard controllerCount < limits.maximumJobsPerController,
+                      var job = loadRecord(at: recordURL, controllerID: controllerID)
+                else {
+                    try quarantine(recordURL)
+                    continue
+                }
                 let key = JobKey(controllerID: job.controllerID, idempotencyKey: job.idempotencyKey)
-                guard keys[key] == nil else { throw DroneJobError.storeCorrupted }
+                guard jobs[job.id] == nil, keys[key] == nil else {
+                    try quarantine(recordURL)
+                    continue
+                }
+                controllerCount += 1
+                job.schemaVersion = DroneStoredJob.currentSchemaVersion
                 if !job.state.isTerminal {
                     append(.notice(.recoveredAfterRestart), to: &job)
                     job.state = job.cancellationRequested ? .cancelled : .failed
@@ -335,6 +357,49 @@ final class DroneJobStore: @unchecked Sendable {
                 keys[key] = job.id
             }
         }
+        quarantinedEntries = Self.entryCount(in: quarantineURL)
+    }
+
+    /// Size is checked before any read so an oversized record is never allocated.
+    private func loadRecord(at recordURL: URL, controllerID: UUID) -> DroneStoredJob? {
+        guard recordURL.pathExtension == "json",
+              let values = try? recordURL.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize,
+              size <= limits.maximumStoredRecordBytes,
+              let data = try? Data(contentsOf: recordURL, options: []),
+              let job = try? decoder().decode(DroneStoredJob.self, from: data),
+              (job.schemaVersion ?? 1) == DroneStoredJob.currentSchemaVersion,
+              job.controllerID == controllerID,
+              recordURL.lastPathComponent == "\(job.idempotencyKey).json"
+        else { return nil }
+        return job
+    }
+
+    private var quarantineURL: URL {
+        stateURL.appendingPathComponent("quarantine", isDirectory: true)
+    }
+
+    /// Moves an untrusted entry aside without reading it further. If the move
+    /// fails, startup fails rather than silently overwriting the only copy.
+    private func quarantine(_ url: URL) throws {
+        let destination = quarantineURL.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try Self.createPrivateDirectory(at: destination)
+            try FileManager.default.moveItem(
+                at: url,
+                to: destination.appendingPathComponent(url.lastPathComponent)
+            )
+        } catch {
+            throw DroneJobError.storeCorrupted
+        }
+    }
+
+    private static func entryCount(in directory: URL) -> Int {
+        (try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ))?.count ?? 0
     }
 
     private func persist(_ job: DroneStoredJob) throws {

@@ -135,6 +135,7 @@ enum DroneJobProof {
         let recoveredSnapshot = try recoveredEngine.snapshot(id: recovered.snapshot.id, controllerID: controllerID)
         expect(recoveredSnapshot.state == .failed, "interrupted job was rerun or left ambiguous")
         expect(recoveredSnapshot.failure?.code == .workerRestarted, "restart failure was not explicit")
+        try verifyQuarantinedRecovery(in: workspace, root: root)
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
     }
 
@@ -311,6 +312,78 @@ enum DroneJobProof {
         )
         expect(outcome.exitCode == 0, "backpressure caused the child writer to fail")
         expect(receivedBytes == 2 * 1_024 * 1_024, "backpressure lost child output")
+    }
+
+    /// #440: one undecodable or newer-version record must be set aside, not abort recovery.
+    private static func verifyQuarantinedRecovery(in workspace: URL, root: URL) throws {
+        let workspaceID = UUID()
+        let registry = try DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
+        let state = root.appendingPathComponent("quarantine-jobs", isDirectory: true)
+        func create(_ controllerID: UUID, _ key: String) -> DroneJobCreate {
+            DroneJobCreate(
+                controllerID: controllerID,
+                idempotencyKey: key,
+                request: DroneJobRequest(workspaceID: workspaceID, operation: .readFile(
+                    DroneReadFileOperation(relativePath: "main.swift")
+                ))
+            )
+        }
+        func recordURL(_ controllerID: UUID, _ key: String) -> URL {
+            state.appendingPathComponent("controllers", isDirectory: true)
+                .appendingPathComponent(controllerID.uuidString, isDirectory: true)
+                .appendingPathComponent("jobs", isDirectory: true)
+                .appendingPathComponent("\(key).json")
+        }
+        func rewrite(_ url: URL, _ change: (inout [String: Any]) -> Void) throws {
+            guard var object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any] else {
+                throw ProofError.failed("stored job record was not a JSON object")
+            }
+            change(&object)
+            try JSONSerialization.data(withJSONObject: object).write(to: url)
+        }
+        let keptController = UUID()
+        let futureController = UUID()
+        let seeded = try DroneJobStore(stateURL: state, limits: DroneJobEngineLimits())
+        expect(seeded.quarantinedEntryCount == 0, "a clean store reported quarantined records")
+        let legacy = try seeded.create(create(keptController, "quarantine-legacy-0001")).snapshot
+        let future = try seeded.create(create(futureController, "quarantine-future-0001")).snapshot
+        // A record written before schema versioning must still load.
+        try rewrite(recordURL(keptController, "quarantine-legacy-0001")) { _ = $0.removeValue(forKey: "schemaVersion") }
+        // A record from a newer build (after a documented rollback) must be set aside.
+        try rewrite(recordURL(futureController, "quarantine-future-0001")) { $0["schemaVersion"] = 2 }
+        let garbage = recordURL(keptController, "quarantine-garbage-01")
+        try Data("{\"id\": not json".utf8).write(to: garbage)
+        let strayController = state.appendingPathComponent("controllers/not-a-controller", isDirectory: true)
+        try FileManager.default.createDirectory(at: strayController, withIntermediateDirectories: true)
+
+        let engine = try DroneJobEngine(stateURL: state, workspaces: registry)
+        expect(engine.quarantinedRecordCount == 3, "recovery quarantined \(engine.quarantinedRecordCount) entries, expected 3")
+        let kept = try engine.snapshot(id: legacy.id, controllerID: keptController)
+        expect(kept.state == .failed && kept.failure?.code == .workerRestarted, "legacy record was not recovered")
+        do {
+            _ = try engine.snapshot(id: future.id, controllerID: futureController)
+            throw ProofError.failed("a newer-version record was loaded by an older schema")
+        } catch DroneJobError.jobNotFound {}
+        expect(!FileManager.default.fileExists(atPath: garbage.path), "garbage record was left in place")
+        expect(!FileManager.default.fileExists(atPath: strayController.path), "stray controller entry was left in place")
+        expect(!FileManager.default.fileExists(atPath: recordURL(futureController, "quarantine-future-0001").path),
+               "newer-version record was left where a retry could overwrite it")
+        let quarantined = try FileManager.default.contentsOfDirectory(
+            atPath: state.appendingPathComponent("quarantine", isDirectory: true).path
+        )
+        expect(quarantined.count == 3, "quarantined records were not preserved for the owner")
+
+        // Storage stays reported as quarantined across restarts until the owner
+        // clears it, and the records that were kept remain idempotent.
+        let restarted = try DroneJobEngine(stateURL: state, workspaces: registry)
+        expect(restarted.quarantinedRecordCount == 3, "restart hid previously quarantined records")
+        let retried = try restarted.createJob(create(keptController, "quarantine-legacy-0001"))
+        expect(retried.id == legacy.id, "recovered legacy record lost idempotency")
+        let migrated = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: recordURL(keptController, "quarantine-legacy-0001"))
+        ) as? [String: Any]
+        expect((migrated?["schemaVersion"] as? Int) == DroneStoredJob.currentSchemaVersion,
+               "recovered legacy record was not rewritten with the current schema version")
     }
 
     private static func terminal(

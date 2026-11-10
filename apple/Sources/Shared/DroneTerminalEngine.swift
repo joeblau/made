@@ -31,8 +31,13 @@ actor DroneTerminalEngine: DroneTerminalServicing {
     }
 
     private struct Catalog: Codable {
+        /// The catalog layout this build reads and writes. A catalog without a
+        /// version predates versioning and uses layout 1; any other is quarantined.
+        static let currentSchemaVersion = 1
+
         var records: [Record] = []
         var creates: [CreateRecord] = []
+        var schemaVersion: Int? = Catalog.currentSchemaVersion
     }
 
     private final class Session {
@@ -64,6 +69,8 @@ actor DroneTerminalEngine: DroneTerminalServicing {
     private let workspaces: [UUID: URL]
     private let tmux: DroneTmux
     private let catalogURL: URL
+    /// Catalogs recovery moved aside instead of loading; nonzero is unhealthy storage.
+    nonisolated let quarantinedCatalogCount: Int
     private var sessions: [DroneSessionID: Session] = [:]
     private var creates: [CreateRecord] = []
 
@@ -97,11 +104,10 @@ actor DroneTerminalEngine: DroneTerminalServicing {
             attributes: [.posixPermissions: 0o700]
         )
         catalogURL = stateDirectory.appendingPathComponent("terminals.json")
-        let catalog = try Self.loadCatalog(from: catalogURL)
+        let quarantineURL = stateDirectory.appendingPathComponent("quarantine", isDirectory: true)
+        let catalog = try DroneTerminalEngine.loadCatalog(from: catalogURL, quarantine: quarantineURL)
+        quarantinedCatalogCount = DroneTerminalEngine.entryCount(in: quarantineURL)
         for record in catalog.records {
-            guard record.tmuxName == Self.tmuxName(for: record.sessionID),
-                  sessions[record.sessionID] == nil
-            else { throw DroneTerminalError.persistenceFailed }
             sessions[record.sessionID] = Session(
                 record: record,
                 configuration: configuration,
@@ -668,17 +674,57 @@ actor DroneTerminalEngine: DroneTerminalServicing {
         return environment
     }
 
-    private static func loadCatalog(from url: URL) throws -> Catalog {
+    /// Returns the persisted catalog only when this build can decode and trust
+    /// all of it. Otherwise the file is moved into `quarantine/` and recovery
+    /// starts empty, so a corrupt or newer-version catalog never stops the
+    /// daemon. Size is checked before any read so the file is never over-allocated.
+    private static func loadCatalog(from url: URL, quarantine: URL) throws -> Catalog {
         guard FileManager.default.fileExists(atPath: url.path) else { return Catalog() }
-        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-              let size = attributes[.size] as? Int, size <= 8 * 1_048_576
-        else { throw DroneTerminalError.persistenceFailed }
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attributes[.size] as? Int, size <= maximumCatalogBytes,
+           let data = try? Data(contentsOf: url),
+           let catalog = try? JSONDecoder().decode(Catalog.self, from: data),
+           isTrusted(catalog) {
+            return catalog
+        }
+        // If the move fails, fail startup rather than later overwriting the only copy.
         do {
-            return try JSONDecoder().decode(Catalog.self, from: Data(contentsOf: url))
+            let destination = quarantine.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: destination,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try FileManager.default.moveItem(
+                at: url,
+                to: destination.appendingPathComponent(url.lastPathComponent)
+            )
         } catch {
             throw DroneTerminalError.persistenceFailed
         }
+        return Catalog()
     }
+
+    private static func isTrusted(_ catalog: Catalog) -> Bool {
+        guard (catalog.schemaVersion ?? 1) == Catalog.currentSchemaVersion else { return false }
+        var sessionIDs = Set<DroneSessionID>()
+        for record in catalog.records {
+            guard record.tmuxName == tmuxName(for: record.sessionID),
+                  sessionIDs.insert(record.sessionID).inserted
+            else { return false }
+        }
+        return true
+    }
+
+    private static func entryCount(in directory: URL) -> Int {
+        (try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ))?.count ?? 0
+    }
+
+    private static let maximumCatalogBytes = 8 * 1_048_576
 
     private static func tmuxName(for sessionID: DroneSessionID) -> String {
         "drone-\(sessionID.rawValue.uuidString.lowercased())"

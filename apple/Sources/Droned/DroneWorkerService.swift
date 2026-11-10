@@ -8,7 +8,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     private let pairingStore: DronePairingStore
     private let healthProbeDirectory: URL
     private var listenerReady = false
-    private var storageHealthy = true
+    private var storageHealthy: Bool
     private var stopping = false
     private var revokedControllers = Set<UUID>()
     private let permissionCeiling: DroneControllerPermissions
@@ -55,6 +55,11 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
             workspaces: DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
         )
         tools = DroneJobToolEngine(jobs: jobs)
+        // Recovery sets undecodable or newer-version records aside instead of
+        // failing startup; report that as unhealthy storage while serving.
+        let quarantined = terminals.quarantinedCatalogCount + jobs.quarantinedRecordCount
+        storageHealthy = quarantined == 0
+        if quarantined > 0 { onAudit?("storage.quarantined") }
     }
 
     func grantController(

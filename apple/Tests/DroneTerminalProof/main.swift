@@ -111,7 +111,42 @@ enum DroneTerminalProof {
         )
         try await recovered.close(created.sessionID, pairingID: pairingID, connectionID: secondConnection)
         try await recovered.close(created.sessionID, pairingID: pairingID, connectionID: secondConnection)
+        try verifyQuarantinedCatalog(root: root, workspaceID: workspaceID, workspace: workspace)
         print("Drone terminal proof passed: real PTY, Unicode, resize, cwd, reattach, restart, authorization, and close.")
+    }
+
+    /// #440: an undecodable or newer-version catalog must be set aside, not abort startup.
+    private static func verifyQuarantinedCatalog(root: URL, workspaceID: UUID, workspace: URL) throws {
+        let state = root.appendingPathComponent("quarantine-state", isDirectory: true)
+        try FileManager.default.createDirectory(at: state, withIntermediateDirectories: true)
+        let catalogURL = state.appendingPathComponent("terminals.json")
+        let quarantineURL = state.appendingPathComponent("quarantine", isDirectory: true)
+        func start() throws -> DroneTerminalEngine {
+            try DroneTerminalEngine(
+                workspaces: [workspaceID: workspace],
+                stateDirectory: state,
+                tmuxSocketName: "drone-proof-\(UUID().uuidString)"
+            )
+        }
+
+        try Data("{\"records\": [not json".utf8).write(to: catalogURL)
+        let garbage = try start()
+        expect(garbage.quarantinedCatalogCount == 1, "garbage catalog was not quarantined")
+        expect(!FileManager.default.fileExists(atPath: catalogURL.path), "garbage catalog was left in place")
+
+        try Data(#"{"creates":[],"records":[],"schemaVersion":2}"#.utf8).write(to: catalogURL)
+        let future = try start()
+        expect(future.quarantinedCatalogCount == 2, "newer-version catalog was not quarantined")
+        expect(!FileManager.default.fileExists(atPath: catalogURL.path), "newer-version catalog was left in place")
+
+        // A catalog written before schema versioning must still load, and earlier
+        // quarantined catalogs keep storage reported as unhealthy after restart.
+        try Data(#"{"creates":[],"records":[]}"#.utf8).write(to: catalogURL)
+        let legacy = try start()
+        expect(legacy.quarantinedCatalogCount == 2, "legacy catalog was quarantined or restart hid quarantine")
+        expect(FileManager.default.fileExists(atPath: catalogURL.path), "legacy catalog was moved aside")
+        let preserved = try FileManager.default.contentsOfDirectory(atPath: quarantineURL.path)
+        expect(preserved.count == 2, "quarantined catalogs were not preserved for the owner")
     }
 
     private static func output(
