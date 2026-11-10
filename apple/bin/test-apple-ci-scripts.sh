@@ -2,7 +2,8 @@
 # Exercise build-ci.sh/test.sh orchestration without invoking a compiler:
 # shared per-platform derived data, pinned policy flags, and the guarantee that
 # test-without-building only follows a successful build-for-testing of the same
-# products in the same invocation.
+# products in the same invocation. Also exercises the Apple Release ordering
+# guard that keeps GitHub's latest release on the highest version and build.
 set -euo pipefail
 APPLE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/apple-ci-scripts-test.XXXXXX")"
@@ -309,5 +310,151 @@ awk -F '\t' '
 ' "$failed_evidence/commands.tsv" || fail "failed benchmark command was not recorded"
 awk -F '\t' '$1 == "build" { exit $7 == 1 ? 0 : 1 }' "$failed_evidence/totals.tsv" ||
   fail "failed benchmark phase total was not recorded"
+
+# The Apple Release ordering guard (issue #421): GitHub's latest release, which
+# the website and Cockpit's Sparkle feed follow, must be the highest semantic
+# version with the highest build. Run the workflow's own step body against a
+# stubbed `gh`. release-metadata and publish must carry the identical check.
+release_workflow="$APPLE_ROOT/../.github/workflows/apple-release.yml"
+release_guard="$work/release-guard"
+mkdir -p "$release_guard/tools"
+awk -v name='Require a release above every published version' -v out="$release_guard/step" '
+  in_run && $0 == "" { blanks += 1; next }
+  in_run {
+    if (substr($0, 1, 10) == "          ") {
+      for (; blanks > 0; blanks--) print "" > (out "-" found ".sh")
+      print substr($0, 11) > (out "-" found ".sh")
+      next
+    }
+    in_run = 0
+    in_step = 0
+    blanks = 0
+  }
+  in_env {
+    if (substr($0, 1, 10) == "          ") {
+      print substr($0, 11) > (out "-" found ".env")
+      next
+    }
+    in_env = 0
+  }
+  $0 == "      - name: " name { found += 1; in_step = 1; next }
+  /^      - / || /^  [^ ]/ { in_step = 0 }
+  in_step && $0 == "        env:" { in_env = 1; next }
+  in_step && $0 == "        run: |" { in_run = 1 }
+' "$release_workflow"
+[[ -s "$release_guard/step-1.sh" && -s "$release_guard/step-2.sh" && ! -e "$release_guard/step-3.sh" ]] ||
+  fail "apple-release.yml must run the release ordering check in release-metadata and publish"
+cmp -s "$release_guard/step-1.sh" "$release_guard/step-2.sh" ||
+  fail "release-metadata and publish ordering checks differ"
+# Each guard step's own env block must feed it from its own job's outputs; a
+# whole-file search would also match the macOS/TestFlight job env and the
+# publish step that already read needs.release-metadata.outputs.
+step=0
+for expression in steps.release.outputs needs.release-metadata.outputs; do
+  step=$((step + 1))
+  printf '%s\n' \
+    "GH_TOKEN: \${{ github.token }}" \
+    "RELEASE_BUILD_NUMBER: \${{ $expression.build-number }}" \
+    "RELEASE_TAG: \${{ $expression.tag }}" > "$release_guard/expected-$step.env"
+  cmp -s "$release_guard/expected-$step.env" "$release_guard/step-$step.env" ||
+    fail "ordering check $step must receive GH_TOKEN, RELEASE_BUILD_NUMBER, and RELEASE_TAG from $expression"
+done
+cat > "$release_guard/tools/gh" <<'TOOL'
+#!/bin/bash
+printf 'gh %s\n' "$*" >> "$RELEASE_GUARD_FIXTURES/calls"
+if [[ "$1 $2" == "api --paginate" ]]; then
+  [[ -e "$RELEASE_GUARD_FIXTURES/api-failure" ]] && { printf 'HTTP 502\n' >&2; exit 1; }
+  [[ "$3" == "repos/example/made/releases?per_page=100" ]] || exit 3
+  cat "$RELEASE_GUARD_FIXTURES/releases.json"
+elif [[ "$1 $2" == "release download" ]]; then
+  tag="$3"
+  directory=""
+  while [[ $# -gt 0 ]]; do
+    [[ "$1" == --dir ]] && directory="$2"
+    shift
+  done
+  printf '%s\n' "$tag" > "$RELEASE_GUARD_FIXTURES/downloaded"
+  cp "$RELEASE_GUARD_FIXTURES/appcast-$tag.xml" "$directory/appcast.xml"
+else
+  exit 4
+fi
+TOOL
+chmod +x "$release_guard/tools/gh"
+release_json() { # tag [appcast|none] [draft]
+  local assets='[]'
+  [[ "${2:-none}" == appcast ]] && assets='[{"name":"made-x-macOS.zip"},{"name":"appcast.xml"}]'
+  printf '{"tag_name":"%s","draft":%s,"assets":%s}' "$1" "${3:-false}" "$assets"
+}
+appcast_for() { # tag build
+  printf '<?xml version="1.0" encoding="utf-8"?>\n<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><title>%s</title><sparkle:version>%s</sparkle:version><sparkle:shortVersionString>%s</sparkle:shortVersionString><enclosure url="https://example.invalid/%s.zip" length="1" type="application/octet-stream" sparkle:edSignature="c2ln"/></item></channel></rss>\n' \
+    "${1#v}" "$2" "${1#v}" "$1" > "$RELEASE_GUARD_FIXTURES/appcast-$1.xml"
+}
+reset_release_guard() { # releases-json
+  export RELEASE_GUARD_FIXTURES="$release_guard/fixtures"
+  rm -rf "$RELEASE_GUARD_FIXTURES" "$release_guard/runner-temp"
+  mkdir -p "$RELEASE_GUARD_FIXTURES" "$release_guard/runner-temp"
+  printf '%s' "$1" > "$RELEASE_GUARD_FIXTURES/releases.json"
+}
+run_release_guard() { # tag build
+  PATH="$release_guard/tools:$PATH" RELEASE_TAG="$1" RELEASE_BUILD_NUMBER="$2" \
+    GITHUB_REPOSITORY=example/made GH_TOKEN=test RUNNER_TEMP="$release_guard/runner-temp" \
+    bash --noprofile --norc -eo pipefail "$release_guard/step-1.sh" > "$release_guard/log" 2>&1
+}
+expect_release_allowed() {
+  run_release_guard "$1" "$2" || fail "release $1 ($2) was refused: $(cat "$release_guard/log")"
+}
+expect_release_refused() { # tag build reason
+  if run_release_guard "$1" "$2"; then
+    fail "release $1 ($2) must be refused: $3"
+  fi
+}
+
+# The first semantic release has nothing to exceed; drafts and ChromiumKit
+# support releases are not semantic app releases.
+reset_release_guard "[$(release_json chromiumkit-123 none),$(release_json v9.0.0 appcast true)]"
+expect_release_allowed v1.0.0 1.1
+[[ ! -e "$RELEASE_GUARD_FIXTURES/downloaded" ]] || fail "no appcast should be read without a semantic release"
+
+# A higher version with a higher build is allowed; versions compare numerically
+# across paginated responses, so v1.10.0 is above v1.9.0.
+reset_release_guard "[$(release_json v1.3.0 appcast),$(release_json v1.9.0 appcast)][$(release_json v1.2.0 appcast)]"
+appcast_for v1.9.0 50.1
+expect_release_allowed v1.10.0 51.1
+[[ "$(cat "$RELEASE_GUARD_FIXTURES/downloaded")" == v1.9.0 ]] ||
+  fail "the build must be compared with the highest release's appcast"
+expect_release_allowed v1.9.1 50.2
+
+# An older-line hotfix, a recovered older tag, or a republished version would
+# move GitHub's latest release, and the Sparkle feed, backwards.
+expect_release_refused v1.2.1 51.1 "lower version than v1.9.0"
+expect_release_refused v1.9.0 51.1 "same version as v1.9.0"
+expect_release_refused v1.8.9 99.1 "lower version than v1.9.0"
+grep -Fq 'is not above the highest published release v1.9.0' "$release_guard/log" ||
+  fail "an ordering refusal must name the highest release: $(cat "$release_guard/log")"
+
+# Sparkle compares CFBundleVersion: a higher version with a lower or equal build
+# than the published feed would never be offered to existing installs.
+expect_release_refused v1.10.0 49.9 "lower build than 50.1"
+expect_release_refused v1.10.0 50.1 "same build as 50.1"
+expect_release_refused v1.10.0 50 "build 50 is not above 50.1"
+
+# A pre-Sparkle highest release has no feed build to exceed.
+reset_release_guard "[$(release_json v0.9.0 none)]"
+expect_release_allowed v0.10.0 3.1
+[[ ! -e "$RELEASE_GUARD_FIXTURES/downloaded" ]] || fail "a release without an appcast must not be downloaded"
+
+# Malformed inputs and unreadable listings or feeds fail closed.
+reset_release_guard "[$(release_json v1.0.0 appcast)]"
+appcast_for v1.0.0 'not-a-build'
+expect_release_refused v1.1.0 9.1 "unreadable published build"
+printf '<rss></rss>\n' > "$RELEASE_GUARD_FIXTURES/appcast-v1.0.0.xml"
+expect_release_refused v1.1.0 9.1 "published appcast without a build"
+appcast_for v1.0.0 8.1
+expect_release_allowed v1.1.0 9.1
+expect_release_refused v1.1.0-beta 9.1 "non-semantic tag"
+expect_release_refused v1.1.0 'nine' "non-numeric build number"
+touch "$RELEASE_GUARD_FIXTURES/api-failure"
+expect_release_refused v1.1.0 9.1 "release listing failed"
+unset RELEASE_GUARD_FIXTURES
 
 printf 'Apple CI script orchestration checks passed.\n'
