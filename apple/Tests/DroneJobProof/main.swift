@@ -936,6 +936,41 @@ enum DroneJobProof {
                "recovered legacy record was not rewritten with the current schema version")
     }
 
+    private static func terminal(
+        _ id: DroneJobID,
+        controllerID: UUID,
+        engine: DroneJobEngine,
+        expected: DroneJobState
+    ) async throws -> DroneJobSnapshot {
+        for _ in 0..<600 {
+            let snapshot = try engine.snapshot(id: id, controllerID: controllerID)
+            if snapshot.state.isTerminal {
+                expect(snapshot.state == expected, "job ended in \(snapshot.state), expected \(expected)")
+                return snapshot
+            }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        throw ProofError.failed("job timed out waiting for terminal state")
+    }
+
+    private static func runProcess(_ executable: String, _ arguments: [String], directory: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = directory
+        try process.run()
+        process.waitUntilExit()
+        expect(process.terminationStatus == 0, "setup process failed")
+    }
+
+    private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
+        if !condition() { fatalError(message) }
+    }
+}
+
+// The residual #440 record-recovery proofs live in an extension so the
+// enum body stays within the type-length limit.
+extension DroneJobProof {
     /// #440: a record that decodes and passes the schema, owner and name checks
     /// but cannot be recovered (overflow-prone counters, out-of-order history,
     /// or a recovery persist that throws) is quarantined, and the rest of the
@@ -1113,37 +1148,6 @@ enum DroneJobProof {
                "an unremovable expired record was served")
         expect(FileManager.default.fileExists(atPath: recordURL.path),
                "the fixture did not block deleting the expired record")
-    }
-
-    private static func terminal(
-        _ id: DroneJobID,
-        controllerID: UUID,
-        engine: DroneJobEngine,
-        expected: DroneJobState
-    ) async throws -> DroneJobSnapshot {
-        for _ in 0..<600 {
-            let snapshot = try engine.snapshot(id: id, controllerID: controllerID)
-            if snapshot.state.isTerminal {
-                expect(snapshot.state == expected, "job ended in \(snapshot.state), expected \(expected)")
-                return snapshot
-            }
-            try await Task.sleep(for: .milliseconds(25))
-        }
-        throw ProofError.failed("job timed out waiting for terminal state")
-    }
-
-    private static func runProcess(_ executable: String, _ arguments: [String], directory: URL) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        process.currentDirectoryURL = directory
-        try process.run()
-        process.waitUntilExit()
-        expect(process.terminationStatus == 0, "setup process failed")
-    }
-
-    private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
-        if !condition() { fatalError(message) }
     }
 }
 
