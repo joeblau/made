@@ -31,6 +31,8 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     private var browser: MCNearbyServiceBrowser?
     private var reconnectWork: DispatchWorkItem?
     private var pairingTimeoutWork: DispatchWorkItem?
+    private var authenticationTimeoutWork: DispatchWorkItem?
+    private var earlyFrames = PeerSyncEarlyFrameBuffer<MCPeerID>()
     private var running = false
     private var authenticator: PeerSyncAuthenticator
     private var pendingPairing: PendingPairing?
@@ -44,6 +46,10 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     private static let identityDiscoveryKey = "identity"
     private static let invitationTimeout: TimeInterval = 60
     private static let pairingTimeout: TimeInterval = 45
+    /// Deadline for the sync hello/ready exchange after `.connected`. Pairing
+    /// approval happens before the invitation is accepted, so this covers only
+    /// the automatic handshake; a stalled one is torn down and retried (#430).
+    static let authenticationTimeout: TimeInterval = 10
 
     private struct InvitationContext: Codable {
         let publicKey: String
@@ -217,6 +223,9 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         reconnectWork = nil
         pairingTimeoutWork?.cancel()
         pairingTimeoutWork = nil
+        authenticationTimeoutWork?.cancel()
+        authenticationTimeoutWork = nil
+        earlyFrames.removeAll()
         advertiser?.stopAdvertisingPeer()
         advertiser = nil
         browser?.stopBrowsingForPeers()
@@ -381,6 +390,40 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         transportQueue.asyncAfter(deadline: .now() + Self.pairingTimeout, execute: work)
     }
 
+    /// Every `.connected` handshake either authenticates or is torn down by
+    /// this deadline, so a lost or rejected hello cannot leave both apps at
+    /// "Authenticating" with `scheduleReconnect` blocked by a connected peer.
+    private func scheduleAuthenticationDeadline(for peerID: MCPeerID) {
+        authenticationTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.authenticationTimeoutWork = nil
+            guard self.running,
+                  self.activePeer == peerID,
+                  !self.authenticator.isAuthenticated else { return }
+            self.tearDownStalledHandshake(with: peerID)
+        }
+        authenticationTimeoutWork = work
+        transportQueue.asyncAfter(deadline: .now() + Self.authenticationTimeout, execute: work)
+    }
+
+    private func tearDownStalledHandshake(with peerID: MCPeerID) {
+        authenticationTimeoutWork?.cancel()
+        authenticationTimeoutWork = nil
+        activePeer = nil
+        authenticator.resetSession()
+        earlyFrames.removeAll()
+        // `cancelConnectPeer` alone may not drop an already-connected peer.
+        // The session carries only the active peer, so disconnect it all.
+        session.cancelConnectPeer(peerID)
+        session.disconnect()
+        DispatchQueue.main.async { [weak self] in
+            self?.isConnected = false
+            self?.statusText = "Sync authentication timed out; reconnecting"
+        }
+        scheduleReconnect()
+    }
+
     private func clearPendingPairing(for peerID: MCPeerID, status: String) {
         guard let pending = pendingPairing,
               pending.peerID == peerID else { return }
@@ -423,7 +466,11 @@ private extension PeerSyncService {
             updateStatus("Connecting to \(peerID.displayName)")
 
         case .connected:
-            guard activePeer == nil || activePeer == peerID else {
+            // A repeated `.connected` must not restart the session: a new
+            // nonce would replace the hello the peer already accepted, and
+            // the peer rejects a second hello (#430).
+            guard activePeer != peerID else { return }
+            guard activePeer == nil else {
                 session.cancelConnectPeer(peerID)
                 return
             }
@@ -432,13 +479,24 @@ private extension PeerSyncService {
                 updateStatus("Rejected unpaired sync peer")
                 session.cancelConnectPeer(peerID)
                 activePeer = nil
+                earlyFrames.discard(peerID)
                 return
             }
             updateStatus("Authenticating \(peerID.displayName)")
             sendRaw(hello, to: peerID)
+            scheduleAuthenticationDeadline(for: peerID)
+            // Replay the peer's hello if it arrived before this callback.
+            let early = earlyFrames.take(for: peerID)
+            earlyFrames.removeAll()
+            if let early {
+                handleReceived(early, from: peerID)
+            }
 
         case .notConnected:
+            earlyFrames.discard(peerID)
             if activePeer == peerID {
+                authenticationTimeoutWork?.cancel()
+                authenticationTimeoutWork = nil
                 activePeer = nil
                 authenticator.resetSession()
                 DispatchQueue.main.async { [weak self] in
@@ -454,6 +512,11 @@ private extension PeerSyncService {
     }
 
     func handleReceived(_ data: Data, from peerID: MCPeerID) {
+        // MultipeerConnectivity can deliver a peer's hello before its
+        // `.connected` callback; hold one bounded frame for replay (#430).
+        if running, activePeer == nil, earlyFrames.hold(data, from: peerID) {
+            return
+        }
         guard activePeer == peerID,
               let opened = authenticator.open(data) else {
             updateStatus("Rejected unauthenticated sync data")
@@ -464,6 +527,8 @@ private extension PeerSyncService {
             sendRaw(response, to: peerID)
 
         case .authenticated:
+            authenticationTimeoutWork?.cancel()
+            authenticationTimeoutWork = nil
             DispatchQueue.main.async { [weak self] in
                 self?.isConnected = true
                 self?.statusText = "Connected securely to \(peerID.displayName)"

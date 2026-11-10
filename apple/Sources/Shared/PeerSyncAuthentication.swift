@@ -8,6 +8,46 @@ struct PeerSyncPairingRequest: Identifiable, Equatable, Sendable {
     let isKeyChange: Bool
 }
 
+/// Holds sync frames that MultipeerConnectivity delivered before the sender's
+/// `.connected` state callback was handled. Data and state callbacks arrive
+/// independently, and each side sends its hello exactly once, so dropping an
+/// early hello stalls the handshake on both devices (#430). Frames are bounded
+/// before they are retained, one per peer for a few peers, and are replayed
+/// only through `PeerSyncAuthenticator.open`, which still verifies each one.
+struct PeerSyncEarlyFrameBuffer<Peer: Hashable> {
+    /// A sealed hello is a few hundred bytes of JSON; nothing larger is a hello.
+    static var maxFrameBytes: Int { 4_096 }
+    static var maxPeers: Int { 4 }
+
+    private var frames: [Peer: Data] = [:]
+
+    var count: Int { frames.count }
+
+    /// Retains `data` as the newest pre-connection frame from `peer`. Returns
+    /// false, retaining nothing, when the frame or the peer count is out of bounds.
+    @discardableResult
+    mutating func hold(_ data: Data, from peer: Peer) -> Bool {
+        guard !data.isEmpty,
+              data.count <= Self.maxFrameBytes,
+              frames[peer] != nil || frames.count < Self.maxPeers else { return false }
+        frames[peer] = data
+        return true
+    }
+
+    /// Hands back the held frame for `peer` at most once.
+    mutating func take(for peer: Peer) -> Data? {
+        frames.removeValue(forKey: peer)
+    }
+
+    mutating func discard(_ peer: Peer) {
+        frames.removeValue(forKey: peer)
+    }
+
+    mutating func removeAll() {
+        frames.removeAll()
+    }
+}
+
 /// Pure authentication state machine for the Multipeer control channel.
 /// Multipeer still provides transport encryption; this layer binds every
 /// command to the explicitly pinned X25519 device identity and a fresh,

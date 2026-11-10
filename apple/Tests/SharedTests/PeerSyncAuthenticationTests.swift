@@ -170,6 +170,70 @@ final class PeerSyncAuthenticationTests: XCTestCase {
         XCTAssertEqual(pilot.open(fresh), .message(Data("fresh".utf8)))
     }
 
+    /// #430: MultipeerConnectivity can deliver the peer's hello before the
+    /// local `.connected` callback runs `beginSession()`. The hello is sent
+    /// once, so it must be held and replayed exactly once, not dropped.
+    func testHelloDeliveredBeforeBeginSessionCompletesHandshakeWhenReplayed() throws {
+        let keys = makeAuthenticators()
+        var pilot = keys.pilot
+        var copilot = keys.copilot
+        var early = PeerSyncEarlyFrameBuffer<String>()
+
+        let copilotHello = try XCTUnwrap(copilot.beginSession(
+            random: { Data(repeating: 0x22, count: $0) }
+        ))
+        XCTAssertNil(pilot.open(copilotHello), "a hello before beginSession cannot be processed yet")
+        XCTAssertLessThanOrEqual(copilotHello.count, PeerSyncEarlyFrameBuffer<String>.maxFrameBytes)
+        XCTAssertTrue(early.hold(copilotHello, from: "copilot"))
+
+        let pilotHello = try XCTUnwrap(pilot.beginSession(
+            random: { Data(repeating: 0x11, count: $0) }
+        ))
+        let replay = try XCTUnwrap(early.take(for: "copilot"))
+        XCTAssertNil(early.take(for: "copilot"), "the early hello replays exactly once")
+
+        guard case .helloResponse(let readyForCopilot)? = pilot.open(replay),
+              case .helloResponse(let readyForPilot)? = copilot.open(pilotHello) else {
+            return XCTFail("expected mutual hello responses after replaying the early hello")
+        }
+        XCTAssertEqual(pilot.open(readyForPilot), .authenticated)
+        XCTAssertEqual(copilot.open(readyForCopilot), .authenticated)
+        XCTAssertTrue(pilot.isAuthenticated)
+        XCTAssertTrue(copilot.isAuthenticated)
+    }
+
+    func testEarlyFrameBufferBoundsFramesAndPeersBeforeRetaining() {
+        typealias Buffer = PeerSyncEarlyFrameBuffer<String>
+        var early = Buffer()
+
+        XCTAssertFalse(early.hold(Data(), from: "a"))
+        XCTAssertFalse(early.hold(Data(count: Buffer.maxFrameBytes + 1), from: "a"))
+        XCTAssertEqual(early.count, 0)
+
+        for index in 0 ..< Buffer.maxPeers {
+            XCTAssertTrue(early.hold(Data([UInt8(index)]), from: "peer-\(index)"))
+        }
+        XCTAssertFalse(early.hold(Data([0xFF]), from: "extra"), "peer count stays bounded")
+        XCTAssertTrue(early.hold(Data([0xAA]), from: "peer-0"), "a known peer's newest frame replaces its old one")
+        XCTAssertEqual(early.count, Buffer.maxPeers)
+        XCTAssertEqual(early.take(for: "peer-0"), Data([0xAA]))
+        XCTAssertNil(early.take(for: "extra"))
+
+        early.discard("peer-1")
+        XCTAssertNil(early.take(for: "peer-1"))
+        early.removeAll()
+        XCTAssertEqual(early.count, 0)
+    }
+
+    func testSyncHandshakeHasAuthenticationDeadline() {
+        XCTAssertGreaterThan(PeerSyncService.authenticationTimeout, 0)
+        XCTAssertLessThanOrEqual(
+            PeerSyncService.authenticationTimeout,
+            30,
+            "a stalled sync handshake must be torn down well before users give up"
+        )
+    }
+
     private func makeAuthenticators() -> (
         pilot: PeerSyncAuthenticator,
         copilot: PeerSyncAuthenticator
