@@ -227,6 +227,8 @@ enum ACPBounds {
     static let subjectCharacters = 512
     static let errorSummaryCharacters = 200
     static let thoughtBytes = 256 * 1_024
+    /// One assistant or agent-replayed user message, truncation marker included.
+    static let messageBytes = 512 * 1_024
     static let terminalOutputBytes = 256 * 1_024
     static let contentBytes = 512 * 1_024
     static let blockTextBytes = 512 * 1_024
