@@ -147,6 +147,7 @@ enum DroneJobProof {
         expect(recoveredSnapshot.failure?.code == .workerRestarted, "restart failure was not explicit")
         try verifyQuarantinedRecovery(in: workspace, root: root)
         try verifyUnrecoverableRecordQuarantine(in: workspace, root: root)
+        try verifyUnremovableExpiredRecord(in: workspace, root: root)
         print("Drone job proof passed: idempotency, real build, files, Git, cancellation, bounds, and recovery.")
     }
 
@@ -705,6 +706,49 @@ enum DroneJobProof {
         expect(entries.count == 1 && entries.first.flatMap {
             try? Data(contentsOf: $0.appendingPathComponent("unpersistable-job-01.json"))
         } == pending, "the unpersistable record was not quarantined unchanged")
+    }
+
+    /// #440: an expired record whose `jobs/` directory is read-only can be
+    /// neither unlinked nor renamed into `quarantine/` (both need write access
+    /// to the parent). Startup must skip it and report unhealthy storage, not
+    /// fail with `storeCorrupted` and crash-loop under launchd.
+    private static func verifyUnremovableExpiredRecord(in workspace: URL, root: URL) throws {
+        // Root bypasses directory permissions, so the fixture cannot block the delete.
+        guard geteuid() != 0 else { return }
+        let workspaceID = UUID()
+        let controllerID = UUID()
+        let key = "unremovable-expired-1"
+        let state = root.appendingPathComponent("unremovable-expired", isDirectory: true)
+        let jobsURL = state.appendingPathComponent("controllers/\(controllerID.uuidString)/jobs", isDirectory: true)
+        let recordURL = jobsURL.appendingPathComponent("\(key).json")
+        let seeded = try DroneJobStore(stateURL: state, limits: DroneJobEngineLimits())
+        let finished = try seeded.create(DroneJobCreate(
+            controllerID: controllerID, idempotencyKey: key,
+            request: DroneJobRequest(
+                workspaceID: workspaceID,
+                operation: .readFile(DroneReadFileOperation(relativePath: "main.swift"))
+            )
+        )).snapshot
+        try seeded.finish(id: finished.id, state: .completed, result: nil, failure: nil)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: jobsURL.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: jobsURL.path) }
+        let lifetime = DroneJobEngineLimits().idempotencyLifetime
+        let reopened: DroneJobStore
+        do {
+            reopened = try DroneJobStore(
+                stateURL: state, limits: DroneJobEngineLimits(),
+                now: { Date().timeIntervalSince1970 + lifetime + 1 }
+            )
+        } catch {
+            throw ProofError.failed("an unremovable expired record failed startup: \(error)")
+        }
+        expect(reopened.quarantinedEntryCount == 1,
+               "an unremovable expired record reported \(reopened.quarantinedEntryCount) unhealthy entries, expected 1")
+        expect((try? reopened.snapshot(controllerID: controllerID, idempotencyKey: key)) == nil,
+               "an unremovable expired record was served")
+        expect(FileManager.default.fileExists(atPath: recordURL.path),
+               "the fixture did not block deleting the expired record")
     }
 
     private static func terminal(

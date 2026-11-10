@@ -98,7 +98,8 @@ final class DroneJobStore: @unchecked Sendable {
         try recover()
     }
 
-    /// Records set aside because this build could not decode or trust them.
+    /// Records set aside because this build could not decode or trust them,
+    /// plus expired records recovery could neither delete nor move aside.
     /// Nonzero means storage is unhealthy until an owner inspects the directory.
     var quarantinedEntryCount: Int {
         lock.lock()
@@ -395,9 +396,14 @@ final class DroneJobStore: @unchecked Sendable {
     /// conflicting with another record, or a recovery append, persist or delete
     /// that fails) moves that record into `quarantine/` and recovery continues,
     /// so one bad or newer-version record never keeps the daemon down. The
-    /// quarantine entry reports storage as unhealthy. Only a failed move into
+    /// quarantine entry reports storage as unhealthy. An expired record that
+    /// can be neither deleted nor moved aside (for example, because its `jobs/`
+    /// directory is read-only or immutable, which blocks unlink and rename
+    /// alike) is left in place, never loaded, and counted as unhealthy storage
+    /// rather than aborting startup: it was due for deletion, so nothing is
+    /// lost if a later write replaces it. Any other failed move into
     /// quarantine stops startup, because the daemon would later overwrite the
-    /// only copy.
+    /// only copy of a record it still owes a controller.
     private func recover() throws {
         let controllersURL = stateURL.appendingPathComponent("controllers", isDirectory: true)
         try Self.createPrivateDirectory(at: controllersURL)
@@ -406,6 +412,7 @@ final class DroneJobStore: @unchecked Sendable {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants]
         ) else { throw DroneJobError.storeCorrupted }
+        var unremovableExpiredRecords = 0
         // Snapshot listings before moving entries out of the enumerated directory.
         for controllerURL in controllers.allObjects.compactMap({ $0 as? URL }) {
             guard let controllerID = UUID(uuidString: controllerURL.lastPathComponent),
@@ -443,7 +450,11 @@ final class DroneJobStore: @unchecked Sendable {
                     do {
                         try FileManager.default.removeItem(at: recordURL)
                     } catch {
-                        try quarantine(recordURL)
+                        do {
+                            try quarantine(recordURL)
+                        } catch {
+                            unremovableExpiredRecords += 1
+                        }
                     }
                     continue
                 }
@@ -461,7 +472,7 @@ final class DroneJobStore: @unchecked Sendable {
                 keys[key] = job.id
             }
         }
-        quarantinedEntries = Self.entryCount(in: quarantineURL)
+        quarantinedEntries = Self.entryCount(in: quarantineURL) + unremovableExpiredRecords
     }
 
     /// Finalizes a record that was not final when the worker stopped. Throws
@@ -508,8 +519,11 @@ final class DroneJobStore: @unchecked Sendable {
         stateURL.appendingPathComponent("quarantine", isDirectory: true)
     }
 
-    /// Moves an untrusted entry aside without reading it further. If the move
-    /// fails, startup fails rather than silently overwriting the only copy.
+    /// Moves an untrusted entry aside without reading it further. Throws
+    /// `storeCorrupted` when the move fails, removing the empty destination so
+    /// it is not counted as a quarantined entry; `recover()` then fails startup
+    /// rather than silently overwriting the only copy, except for an expired
+    /// record, which it leaves in place and reports as unhealthy.
     private func quarantine(_ url: URL) throws {
         let destination = quarantineURL.appendingPathComponent(UUID().uuidString, isDirectory: true)
         do {
@@ -519,6 +533,7 @@ final class DroneJobStore: @unchecked Sendable {
                 to: destination.appendingPathComponent(url.lastPathComponent)
             )
         } catch {
+            try? FileManager.default.removeItem(at: destination)
             throw DroneJobError.storeCorrupted
         }
     }

@@ -125,9 +125,12 @@ build that understands those records and move them back, or remove them
 deliberately. A job record's recovery fails when its event sequence or
 dropped-event counter is out of range or its history is out of order, when the
 recovery notice cannot be written back within the record size limit or the
-disk write fails, or when an expired record cannot be deleted. Startup fails
-only if the worker cannot move an entry aside, because then it would later
-overwrite the only copy.
+disk write fails, or when an expired record cannot be deleted. An expired
+record that can be neither deleted nor moved aside (for example, because its
+`jobs/` directory is read-only or immutable) is left in place, never served,
+and reported as unhealthy storage rather than aborting startup; it was already
+due for deletion. Startup fails only if the worker cannot move aside any other
+entry, because then it would later overwrite the only copy.
 
 ## Execution and recovery semantics
 
