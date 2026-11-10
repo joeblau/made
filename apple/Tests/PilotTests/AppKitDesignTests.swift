@@ -33,6 +33,53 @@ struct AppKitDesignTests {
         #expect(content.alphaValue == 1)
     }
 
+    @Test("Transient surfaces present and dismiss without stranding a hidden or faded view")
+    func transientPresence() async throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+                              styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let content = try #require(window.contentView)
+        let toast = NSView(frame: NSRect(x: 100, y: 80, width: 120, height: 40))
+        toast.wantsLayer = true
+        toast.isHidden = true
+        content.addSubview(toast)
+
+        // Offscreen: no animation, immediate state.
+        CockpitMotion.present(toast)
+        #expect(!toast.isHidden && toast.alphaValue == 1)
+        #expect(toast.layer?.animation(forKey: CockpitMotion.presenceAnimationKey) == nil)
+        CockpitMotion.dismiss(toast)
+        #expect(toast.isHidden && toast.alphaValue == 1)
+
+        window.orderFront(nil)
+        for _ in 0..<3 { CockpitMotion.present(toast) }
+        #expect(!toast.isHidden && toast.alphaValue == 1)
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            #expect(toast.layer?.animationKeys()?.filter { $0 == CockpitMotion.presenceAnimationKey }.count == 1)
+        }
+        // A present during the exit fade wins: the view stays shown at full alpha.
+        CockpitMotion.dismiss(toast)
+        CockpitMotion.present(toast)
+        try await Task.sleep(for: .seconds(CockpitMotion.presenceDuration + 0.2))
+        #expect(!toast.isHidden && toast.alphaValue == 1)
+        // An uninterrupted exit hides and restores alpha for the next present.
+        CockpitMotion.dismiss(toast)
+        try await Task.sleep(for: .seconds(CockpitMotion.presenceDuration + 0.2))
+        #expect(toast.isHidden && toast.alphaValue == 1)
+    }
+
+    @Test("Drop highlight adds one overlay and clears it")
+    func dropHighlight() {
+        let target = NSView(frame: NSRect(x: 0, y: 0, width: 80, height: 28))
+        for _ in 0..<3 { CockpitMotion.setDropHighlight(true, on: target) }
+        let overlays = target.layer?.sublayers?.filter { $0.name == CockpitMotion.dropHighlightName } ?? []
+        #expect(overlays.count == 1)
+        #expect(overlays.first?.frame == target.layer?.bounds)
+        CockpitMotion.setDropHighlight(false, on: target)
+        #expect(target.layer?.sublayers?.contains { $0.name == CockpitMotion.dropHighlightName } != true)
+    }
+
     @Observable
     final class Model {
         var value = 0

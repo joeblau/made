@@ -191,8 +191,16 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
     }
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { context == .withinApplication ? .move : [] }
     override func menu(for event: NSEvent) -> NSMenu? { contextMenuProvider?() }
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { decode(sender) == nil ? [] : .move }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let payload = decode(sender) else { return [] }
+        // A tab dragged over itself is not a destination worth announcing.
+        if payload.paneID != pane.id { CockpitMotion.setDropHighlight(true, on: self) }
+        return .move
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) { CockpitMotion.setDropHighlight(false, on: self) }
+    override func draggingEnded(_ sender: NSDraggingInfo) { CockpitMotion.setDropHighlight(false, on: self) }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        CockpitMotion.setDropHighlight(false, on: self)
         guard let payload = decode(sender) else { return false }
         return onDrop?(payload) ?? false
     }

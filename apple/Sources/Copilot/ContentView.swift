@@ -37,6 +37,7 @@ struct ContentView: View {
     @State private var walkie: CopilotWalkieTalkie
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showModelDownloadConfirmation = false
     @State private var showSpeechStorage = false
     /// The error that sent the user to the storage sheet ("Manage Storage"),
@@ -103,6 +104,10 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             mainContent
+            // Connecting swaps the placeholder for the list: crossfade it.
+            // Keyed on emptiness, never on `workspaces` (it syncs each second).
+            .animation(LiquidGlassMetrics.stateChange, value: isPeerConnected)
+            .animation(LiquidGlassMetrics.stateChange, value: workspaces.isEmpty)
             .toolbar {
                 deviceToolbar
                 // Settings/storage and the two dashboards are separate groups
@@ -116,7 +121,10 @@ struct ContentView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                trackpadInset
+                // Mirrors the top inset: the controls rise from the bottom
+                // edge when Cockpit connects and leave the same way.
+                VStack(spacing: 0) { trackpadInset }
+                    .animation(LiquidGlassMetrics.spring, value: isPeerConnected)
             }
             .safeAreaInset(edge: .top) {
                 // Below the toolbar, never over it: the download banner and
@@ -547,6 +555,7 @@ struct ContentView: View {
                     TrackpadView(syncService: syncService)
                 }
             }
+            .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
         }
     }
 

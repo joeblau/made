@@ -387,10 +387,13 @@ final class NotesViewController: NSViewController, CockpitPanePresenting {
     private func flashCopiedToast() {
         guard presentationActive else { return }
         toastDismiss?.cancel()
-        canvas.toast.isHidden = false
+        CockpitMotion.present(canvas.toast)
         NSAccessibility.post(element: canvas.toastLabel, notification: .announcementRequested,
                              userInfo: [.announcement: "Copied", .priority: NSAccessibilityPriorityLevel.medium.rawValue])
-        let work = DispatchWorkItem { [weak self] in self?.canvas.toast.isHidden = true }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            CockpitMotion.dismiss(self.canvas.toast)
+        }
         toastDismiss = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
@@ -806,10 +809,16 @@ private class NoteDropButton: NSButton {
     }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        NoteTabTransfer.read(from: sender.draggingPasteboard) == nil ? [] : .move
+        guard NoteTabTransfer.read(from: sender.draggingPasteboard) != nil else { return [] }
+        CockpitMotion.setDropHighlight(true, on: self)
+        return .move
     }
 
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) { CockpitMotion.setDropHighlight(false, on: self) }
+    override func draggingEnded(_ sender: any NSDraggingInfo) { CockpitMotion.setDropHighlight(false, on: self) }
+
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        CockpitMotion.setDropHighlight(false, on: self)
         guard let transfer = NoteTabTransfer.read(from: sender.draggingPasteboard), let onDrop else { return false }
         onDrop(transfer.id)
         return true

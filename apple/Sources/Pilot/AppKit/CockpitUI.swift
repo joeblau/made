@@ -73,6 +73,111 @@ enum CockpitMotion {
         animation.timingFunction = CAMediaTimingFunction(name: .easeOut)
         view.layer?.add(animation, forKey: contentAnimationKey)
     }
+
+    // MARK: Transient surfaces (toasts, pills)
+
+    static let presenceAnimationKey = "cockpit.presence"
+    static let presenceDuration: TimeInterval = 0.16
+    /// Transient surfaces settle from (and leave to) this scale about their centre.
+    static let presenceScale: CGFloat = 0.97
+
+    /// Shows a transient surface: it fades in and settles from 97 % about its
+    /// centre. Under Reduce Motion it only fades. Interrupting a `dismiss`
+    /// cancels it, so a repeat trigger never ends hidden.
+    static func present(_ view: NSView, animated: Bool = true) {
+        view.layer?.removeAnimation(forKey: presenceAnimationKey)
+        presenceGeneration &+= 1
+        view.layer?.setValue(presenceGeneration, forKey: presenceGenerationKey)
+        view.alphaValue = 1
+        view.isHidden = false
+        guard animated, view.window?.isVisible == true else { return }
+        view.wantsLayer = true
+        guard let layer = view.layer else { return }
+        layer.add(presenceAnimation(appearing: true, bounds: view.bounds), forKey: presenceAnimationKey)
+    }
+
+    /// Hides a transient surface along the path `present` brought it in, then
+    /// sets `isHidden`. A `present` before the fade ends wins.
+    static func dismiss(_ view: NSView, animated: Bool = true) {
+        view.layer?.removeAnimation(forKey: presenceAnimationKey)
+        guard animated, !view.isHidden, view.window?.isVisible == true, let layer = view.layer else {
+            view.isHidden = true
+            view.alphaValue = 1
+            return
+        }
+        presenceGeneration &+= 1
+        let generation = presenceGeneration
+        layer.setValue(generation, forKey: presenceGenerationKey)
+        view.alphaValue = 0
+        layer.add(presenceAnimation(appearing: false, bounds: view.bounds), forKey: presenceAnimationKey)
+        // A main-queue deadline, not a CATransaction completion: the hide must
+        // not depend on the render server. Any later present/dismiss bumps the
+        // generation, so only this uninterrupted fade hides the view.
+        DispatchQueue.main.asyncAfter(deadline: .now() + presenceDuration) { [weak view] in
+            MainActor.assumeIsolated {
+                guard let view, view.layer?.value(forKey: presenceGenerationKey) as? Int == generation else { return }
+                view.isHidden = true
+                view.alphaValue = 1
+            }
+        }
+    }
+
+    private static let presenceGenerationKey = "cockpit.presence.generation"
+    private static var presenceGeneration = 0
+
+    private static func presenceAnimation(appearing: Bool, bounds: NSRect) -> CAAnimation {
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = appearing ? 0 : 1
+        fade.toValue = appearing ? 1 : 0
+        var animations: [CAAnimation] = [fade]
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            // AppKit backing layers anchor at their origin: scale about the centre.
+            let centre = CATransform3DMakeTranslation(bounds.midX, bounds.midY, 0)
+            let scaled = CATransform3DTranslate(
+                CATransform3DScale(centre, presenceScale, presenceScale, 1), -bounds.midX, -bounds.midY, 0)
+            let scale = CABasicAnimation(keyPath: "transform")
+            scale.fromValue = NSValue(caTransform3D: appearing ? scaled : CATransform3DIdentity)
+            scale.toValue = NSValue(caTransform3D: appearing ? CATransform3DIdentity : scaled)
+            animations.append(scale)
+        }
+        let group = CAAnimationGroup()
+        group.animations = animations
+        group.duration = presenceDuration
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        return group
+    }
+
+    // MARK: Drop targets
+
+    static let dropHighlightName = "cockpit.drop-highlight"
+
+    /// Drop-target feedback: the selection tint fades in over 0.12 s while a
+    /// valid drag hovers, and clears instantly when it leaves or lands.
+    static func setDropHighlight(_ active: Bool, on view: NSView, cornerRadius: CGFloat = 6) {
+        view.wantsLayer = true
+        guard let host = view.layer else { return }
+        let existing = host.sublayers?.first { $0.name == dropHighlightName }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
+        guard active else { existing?.removeFromSuperlayer(); return }
+        if let existing { existing.frame = host.bounds; return }
+        let overlay = CALayer()
+        overlay.name = dropHighlightName
+        overlay.frame = host.bounds
+        overlay.cornerRadius = max(cornerRadius, host.cornerRadius)
+        view.effectiveAppearance.performAsCurrentDrawingAppearance {
+            overlay.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+        }
+        host.addSublayer(overlay)
+        guard view.window?.isVisible == true, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.12
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        overlay.add(fade, forKey: "fade")
+    }
 }
 
 @MainActor
