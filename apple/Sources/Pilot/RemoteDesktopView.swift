@@ -430,7 +430,16 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         reconnect.perform = { [weak self] in self?.reconnectSession() }
         let footer = RRUI.stack([clipboard, RRUI.spacer(), status, reconnect], axis: .horizontal)
         footer.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
-        let stack = RRUI.stack([header, content, footer], spacing: 0)
+        let divider = NSBox()
+        divider.boxType = .separator
+        // The card body takes every spare point so the clipboard/status bar
+        // stays pinned to the bottom edge as a footer instead of riding up
+        // under the sign-in form (a gravity-area stack leaves the slack below).
+        content.setContentHuggingPriority(.init(1), for: .vertical)
+        content.setContentCompressionResistancePriority(.init(1), for: .vertical)
+        footer.setContentHuggingPriority(.required, for: .vertical)
+        let stack = RRUI.stack([header, content, divider, footer], spacing: 0)
+        stack.distribution = .fill
         RRUI.fillWidth(stack)
         RRUI.pin(stack, to: view)
         zoomObservation = RRZoomObservation { [weak self] in
@@ -686,6 +695,14 @@ private final class RemoteConnectionHeader: NSView, NSDraggingSource {
         let titleField = RRUI.label(title, size: 12, weight: .medium)
         titleField.maximumNumberOfLines = 1
         let options = RRButton("", symbol: "ellipsis") { }
+        // A Liquid Glass capsule, matching the pane header's close/hide buttons.
+        options.imagePosition = .imageOnly
+        options.bezelStyle = .glass
+        options.borderShape = .capsule
+        options.controlSize = .small
+        options.symbolConfiguration = .init(pointSize: 11, weight: .medium)
+        options.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        options.heightAnchor.constraint(equalToConstant: 20).isActive = true
         options.setAccessibilityLabel("Options for \(title)")
         options.perform = { [weak self, weak options] in
             guard let self, let options else { return }
