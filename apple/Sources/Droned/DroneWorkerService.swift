@@ -8,7 +8,7 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
     private let pairingStore: DronePairingStore
     private let healthProbeDirectory: URL
     private var listenerReady = false
-    private var storageHealthy = true
+    private var storageHealthy: Bool
     private var stopping = false
     private var revokedControllers = Set<UUID>()
     private let permissionCeiling: DroneControllerPermissions
@@ -55,6 +55,11 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
             workspaces: DroneWorkspaceRegistry(workspaces: [workspaceID: workspace])
         )
         tools = DroneJobToolEngine(jobs: jobs)
+        // Recovery sets undecodable or newer-version records aside instead of
+        // failing startup; report that as unhealthy storage while serving.
+        let quarantined = terminals.quarantinedCatalogCount + jobs.quarantinedRecordCount
+        storageHealthy = quarantined == 0
+        if quarantined > 0 { onAudit?("storage.quarantined") }
     }
 
     func grantController(
@@ -167,6 +172,13 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
         } catch {
             storageHealthy = false
         }
+        // A job recorded finished while its process group could not be
+        // confirmed gone (recovery or a member that outlived SIGKILL) keeps
+        // storage unhealthy until recovery confirms it or the owner acts (#441).
+        if storageHealthy, jobs.unverifiedProcessGroupCount > 0 {
+            storageHealthy = false
+            onAudit?("job.processGroupUnverified")
+        }
         return DroneWorkerHealthSnapshot(
             listenerReady: listenerReady && !stopping, paired: paired, storageHealthy: storageHealthy
         )
@@ -198,14 +210,27 @@ actor DroneWorkerService: DroneWorkerHealthReporting {
             onAudit?("revocation.storageFailed")
             // Local denial remains active even when persistent pin removal failed.
             await cancelRevokedOperations(operations)
+            removeRevokedJobRecords(controllerID)
             for connection in connections {
                 await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
             }
             throw error
         }
         await cancelRevokedOperations(operations)
+        removeRevokedJobRecords(controllerID)
         for connection in connections {
             await terminals.disconnect(pairingID: controllerID, connectionID: connection.rawValue)
+        }
+    }
+
+    /// A revoked controller's job records (file contents, process output) are
+    /// deleted now; jobs still finishing are deleted by the engine's next purge.
+    private func removeRevokedJobRecords(_ controllerID: UUID) {
+        do {
+            try jobs.removeFinishedJobs(controllerID: controllerID)
+        } catch {
+            storageHealthy = false
+            onAudit?("revocation.jobPurgeFailed")
         }
     }
 

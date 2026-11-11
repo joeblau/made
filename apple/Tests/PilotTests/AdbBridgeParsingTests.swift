@@ -184,6 +184,49 @@ struct AdbBridgeParsingTests {
         #expect(dropped == 44)
     }
 
+    // MARK: - input shell lifecycle
+
+    /// #445: writing to an input shell whose adb already exited (device went
+    /// offline, `adb kill-server`) must fail with a catchable EPIPE. Without
+    /// F_SETNOSIGPIPE the write raises SIGPIPE, which kills the test host just
+    /// as it kills Cockpit.
+    @Test
+    func writesToDeadInputShellFailWithoutSIGPIPE() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // Stands in for `adb -s <serial> shell`: closes its stdin at once but
+        // stays alive, so `isRunning` is still true when each write lands.
+        let deadStdin = directory.appendingPathComponent("dead-stdin-adb")
+        try Data("#!/bin/sh\nexec 0<&-\nexec sleep 30\n".utf8).write(to: deadStdin)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: deadStdin.path)
+
+        let injector = AndroidInputInjector(adbURL: deadStdin, serial: "emulator-5554")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while await injector.failedWriteCount < 3, ContinuousClock.now < deadline {
+            for index in 0..<16 {
+                await injector.send(.tap(x: index, y: index))
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        await injector.shutdown()
+        #expect(await injector.failedWriteCount >= 3)
+
+        // A shell that exits immediately races `isRunning` against every
+        // write; a burst of commands must not take the process down either.
+        let exiting = directory.appendingPathComponent("exiting-adb")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: exiting)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: exiting.path)
+        let racing = AndroidInputInjector(adbURL: exiting, serial: "emulator-5554")
+        for round in 0..<20 {
+            for index in 0..<16 {
+                await racing.send(.keyevent(round * 16 + index))
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await racing.shutdown()
+    }
+
     // MARK: - gesture classification
 
     @Test

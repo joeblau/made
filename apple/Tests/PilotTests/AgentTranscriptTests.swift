@@ -491,6 +491,41 @@ struct AgentTranscriptTests {
     }
 
     @Test
+    func assistantAndReplayedUserTextAreBoundedWithATruncationMarker() throws {
+        var transcript = AgentTranscript()
+        transcript.isReplaying = true
+        let chunk = String(repeating: "m", count: 200 * 1_024)
+        for _ in 0..<4 { transcript.apply(note(.userMessage(chunk)), rootSessionID: "s", now: start) }
+        for _ in 0..<4 { transcript.apply(note(.agentMessage(chunk)), rootSessionID: "s", now: start) }
+        #expect(transcript.items.count == 2)
+        let marker = AgentTranscript.messageTruncationMarker
+        guard case .user(let user)? = transcript.items.first?.content,
+              case .assistant(let assistant)? = transcript.items.last?.content else {
+            Issue.record("expected one user and one assistant item")
+            return
+        }
+        for text in [user, assistant] {
+            #expect(text.utf8.count <= ACPBounds.messageBytes)
+            #expect(text.hasSuffix(marker))
+            #expect(text.utf8.count > ACPBounds.messageBytes - marker.utf8.count)
+        }
+        // A full message takes no more chunks and is not re-laid out.
+        let revision = try #require(transcript.items.last).revision
+        transcript.apply(note(.agentMessage("more")), rootSessionID: "s", now: start)
+        #expect(transcript.items.last?.revision == revision)
+
+        // One oversized chunk is cut when its item is created, at a character boundary.
+        var fresh = AgentTranscript()
+        fresh.apply(note(.agentMessage(String(repeating: "é", count: 300 * 1_024))), rootSessionID: "s", now: start)
+        guard case .assistant(let single)? = fresh.items.first?.content else {
+            Issue.record("expected an assistant item")
+            return
+        }
+        #expect(single.utf8.count <= ACPBounds.messageBytes && single.hasSuffix(marker))
+        #expect(single.dropLast(marker.count).allSatisfy { $0 == "é" })
+    }
+
+    @Test
     func codexRerouteAndHistoryGapThoughtsBecomeNotices() throws {
         var transcript = AgentTranscript()
         transcript.apply(thought("Model rerouted from gpt-a to gpt-b (capacity).\n\n", messageID: nil),
