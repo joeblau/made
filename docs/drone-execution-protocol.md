@@ -212,6 +212,26 @@ pairing. An unexpired full table rejects new creates; it must not evict entries
 and risk duplicate execution. Later durable job storage (#322) must persist
 this decision atomically with job creation.
 
+The catalog byte budget and finished-terminal retention are per pairing too, so
+while at most 32 pairings hold terminal state, one pairing exhausting its
+idempotency allowance, byte budget or retention cannot make another pairing's
+create, close, or same-key retry fail. A pairing's terminal and create records
+may take at most 2 MiB of the persisted catalog, measured as an upper bound on
+their encoded size; the catalog holds 32 pairings at that budget. The requested
+environment is stored once, on the terminal record, and a create that would
+pass the pairing's budget returns `resourceLimit` before tmux runs. Each
+pairing keeps up to 1,024 finished (closed or exited) terminals, and never
+drops one that an unexpired create record references.
+
+Two limits are deliberately shared across pairings and are not covered by that
+guarantee. The 64 live sessions are a worker-wide cap: a pairing holding all
+of them makes every other pairing's create return `resourceLimit` until one
+closes or exits. And when more than 32 pairings hold state (state left by
+revoked controllers), keeping the catalog under its cap takes precedence: the
+oldest finished terminals of any pairing that no unexpired create record
+references are dropped, and a create that still cannot fit returns
+`resourceLimit`.
+
 TCP retransmission and replay-window rejection are not execution idempotency:
 both layers are required. Requests other than create either are naturally
 idempotent state reads/transitions or carry request IDs so implementations can
@@ -238,7 +258,7 @@ These are worker/controller protocol requirements, not UI hints:
 | Detached reconnect queue | 1 MiB and 256 records per session; stop reads on overflow and emit `backpressure` |
 | Worker sessions / concurrent jobs | 64 live sessions and 32 running jobs; excess create returns `resourceLimit` |
 | Connections | 8 per worker and one active attachment per session; excess/surplus connections rejected |
-| Idempotency records | 1,024 per pairing, 24-hour TTL; fail new creates when full |
+| Idempotency records | 1,024 per pairing, 24-hour TTL; fail new creates when full; 2 MiB catalog budget per pairing |
 | Heartbeats | every 5 seconds; no valid record for 15 seconds closes transport only |
 | Handshake / request deadlines | 8 seconds / 30 seconds; deadlines never terminate detached execution |
 | Environment | at most 32 entries; 64-byte names and 4 KiB values |
@@ -341,6 +361,35 @@ same-key retries return that record without executing again. Jobs interrupted
 before a terminal record fail explicitly as `workerRestarted`; retained-history
 gaps remain `outputGap` rather than silently dropping output. In-memory output
 history is only a replay fast path, not the durable authority.
+Finished job records older than the 24-hour idempotency lifetime are deleted
+for every controller: at startup they are removed rather than reloaded, and a
+periodic purge removes them while the worker runs, whether or not that
+controller creates more jobs. Revoking a controller deletes its finished
+records at once; its in-flight records are deleted by the next purge after
+they finish. Only records that exist at revocation are affected: a controller
+approved again under the same peer ID keeps its new records for the full
+idempotency lifetime.
+A process job runs as its own process group (#441). The record is marked
+`launching` before the leader is spawned, and the leader starts suspended until
+its group ID and start time are persisted. Every exit path kills the group and
+waits, bounded, for it to disappear before the job is recorded finished. On
+restart, recovery kills a matching leftover group before finalizing the job.
+The wait re-sends SIGKILL on every poll, so a child forked while the first
+signal was delivered is killed too; zombies (exited, not yet reaped) never
+count as running members.
+When a group cannot be confirmed gone (a member owned by another user, a
+member still running after SIGKILL, a group the kernel cannot list, a record
+that does not match the live process table, or a `launching` record whose
+group was never persisted), the job is still finalized but carries a
+`processGroupUnverified` notice, and the worker writes its own ledger entry
+under `jobs/unverified-groups/`. That entry holds only the job ID, the
+recorded group and the `launching` marker, never the controller's request,
+output or result, and no controller can read it. Worker storage health reports
+unhealthy while any entry exists, and each restart retries the kill and
+removes the entry once the group is confirmed gone. The job record itself is
+unaffected: it expires, is deleted on revocation, and releases its
+idempotency key exactly like any other finished record. Descendants that call
+`setsid`/`setpgid` to leave the job's group are outside this guarantee.
 
 Authorization, resource-governance and recovery acceptance remains tracked in
 #326/#327. Keep detailed security findings and remediation evidence in private

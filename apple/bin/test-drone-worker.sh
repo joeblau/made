@@ -39,6 +39,7 @@ xcrun swiftc \
   "$APPLE_ROOT/Sources/Drone/JobEngine/"*.swift \
   "$APPLE_ROOT/Sources/Droned/DroneWorkerService.swift" \
   "$APPLE_ROOT/Sources/Droned/DroneDaemon.swift" \
+  "$APPLE_ROOT/Tests/DroneWorkerProof/StorageQuarantineProof.swift" \
   "$APPLE_ROOT/Tests/DroneWorkerProof/main.swift"
 
 xcrun swiftc -parse-as-library -swift-version 6 -o "$BUILD_DIR/drone" \

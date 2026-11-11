@@ -114,6 +114,36 @@ failure or incomplete shutdown. A later successful probe does not erase that
 failure. Repair the underlying problem, preserve identity/job records, then
 restart and confirm `drone doctor` succeeds before enabling further rollout.
 
+Job records and the terminal catalog carry a `schemaVersion`. At startup, a
+record or catalog that the running build cannot read, that has an unknown
+version, that conflicts with another record, or whose recovery fails is moved
+into a `quarantine/` directory beside it (`jobs/quarantine/` or
+`terminals/quarantine/` under the worker state directory). The worker keeps serving the remaining records and
+reports unhealthy storage while either quarantine directory has entries. This
+happens after rolling back past a build that wrote newer records. Reinstall a
+build that understands those records and move them back, or remove them
+deliberately. A job record's recovery fails when its event sequence or
+dropped-event counter is out of range or its history is out of order, when the
+recovery notice cannot be written back within the record size limit or the
+disk write fails, or when an expired record cannot be deleted. An expired
+record that can be neither deleted nor moved aside (for example, because its
+`jobs/` directory is read-only or immutable) is left in place, never served,
+and reported as unhealthy storage rather than aborting startup; it was already
+due for deletion. Startup fails only if the worker cannot move aside any other
+entry, because then it would later overwrite the only copy.
+
+Storage is also reported unhealthy while `jobs/unverified-groups/` has
+entries: a job was recorded finished, or recovered after a crash, without proof
+that its process group exited. Each entry names the job ID and its recorded
+process group; it is kept apart from the controller's job record, which still
+expires and is deleted on revocation as usual. Each restart retries the kill
+and removes the entry once the group is confirmed gone. If it stays, inspect
+the user's processes for leftovers from that group (a setuid descendant or a
+process stuck in uninterruptible I/O), stop them, and restart. An entry with
+`launching` set and no `processGroup` has no recorded group to check: after
+confirming nothing from that job is running, remove the entry file and
+restart.
+
 ## Execution and recovery semantics
 
 - Remote tmux sessions survive Cockpit disconnects and application restarts.

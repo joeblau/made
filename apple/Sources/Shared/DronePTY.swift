@@ -8,11 +8,17 @@ final class DronePTY: @unchecked Sendable {
     private let queue = DispatchQueue(label: "app.blau.drone.pty")
     private let lock = NSLock()
     private let source: DispatchSourceRead
-    private let onOutput: @Sendable (Data) -> Void
+    private let onOutput: @Sendable (DronePTY, Data) -> Void
     private let onExit: @Sendable () -> Void
     private var sourceSuspended = true
     private var flowBlocked = false
     private var closed = false
+    /// Set from the moment a read starts until the receiver reports, through
+    /// `completeOutputDelivery(resumeReading:)`, that it appended the chunk.
+    /// While it is set the read source stays suspended and `resumeReading()`
+    /// does nothing, so at most one chunk is ever on its way to the receiver
+    /// and chunks are appended in the order they were read (#443).
+    private var chunkInFlight = false
 
     init(
         executable: String,
@@ -20,7 +26,7 @@ final class DronePTY: @unchecked Sendable {
         environment: [String: String],
         columns: UInt16,
         rows: UInt16,
-        onOutput: @escaping @Sendable (Data) -> Void,
+        onOutput: @escaping @Sendable (DronePTY, Data) -> Void,
         onExit: @escaping @Sendable () -> Void
     ) throws {
         self.onOutput = onOutput
@@ -116,15 +122,27 @@ final class DronePTY: @unchecked Sendable {
         }
     }
 
+    /// Resumes reading unless the PTY is closed or a chunk is still in
+    /// flight; in that case only `completeOutputDelivery` may resume it.
     func resumeReading() {
         lock.withLock {
-            guard !closed else { return }
+            guard !closed, !chunkInFlight else { return }
             flowBlocked = false
             if sourceSuspended {
                 sourceSuspended = false
                 source.resume()
             }
         }
+    }
+
+    /// Called by the receiver once the chunk passed to `onOutput` has been
+    /// appended (or dropped). Clears the in-flight gate and, if requested,
+    /// resumes reading the next chunk.
+    func completeOutputDelivery(resumeReading shouldResume: Bool) {
+        lock.withLock {
+            chunkInFlight = false
+        }
+        if shouldResume { resumeReading() }
     }
 
     func close() {
@@ -148,18 +166,27 @@ final class DronePTY: @unchecked Sendable {
     }
 
     private func readOneChunk() {
-        lock.withLock {
-            guard !closed, !sourceSuspended else { return }
+        // Claim the in-flight gate in the same critical section that suspends
+        // the source, so a concurrent `resumeReading()` cannot let a second
+        // read start before this chunk has been delivered.
+        let shouldRead = lock.withLock { () -> Bool in
+            guard !closed, !sourceSuspended else { return false }
             sourceSuspended = true
             source.suspend()
+            guard !chunkInFlight else { return false }
+            chunkInFlight = true
+            return true
         }
+        guard shouldRead else { return }
         var bytes = [UInt8](repeating: 0, count: DroneLimits.maxOutputChunkBytes)
         let count = Darwin.read(master, &bytes, bytes.count)
         if count > 0 {
-            onOutput(Data(bytes.prefix(count)))
+            onOutput(self, Data(bytes.prefix(count)))
         } else if count < 0, errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK {
-            resumeReading()
+            completeOutputDelivery(resumeReading: true)
         } else {
+            // End of output: the gate stays claimed so nothing resumes reading
+            // and the exit can only follow every chunk already delivered.
             onExit()
         }
     }
