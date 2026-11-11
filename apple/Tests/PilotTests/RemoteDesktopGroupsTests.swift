@@ -284,6 +284,29 @@ struct RemoteDesktopGroupLayoutTests {
             let document = try #require(form.documentView)
             #expect(document.visibleRect.intersects(connect.convert(connect.bounds, to: document)))
         }
+        // Each card's clipboard/status bar is a footer pinned to the card's
+        // bottom edge, below the sign-in form, however tall the card is.
+        let clipboards = views.compactMap { $0 as? NSButton }.filter { $0.title == "Share clipboard" }
+        #expect(clipboards.count == machines.count)
+        for clipboard in clipboards {
+            var ancestor = clipboard.superview
+            while let candidate = ancestor, !String(describing: type(of: candidate)).contains("RemoteConnectionSurface") {
+                ancestor = candidate.superview
+            }
+            let card = try #require(ancestor)
+            let cardFrame = card.convert(card.bounds, to: nil)
+            let footerFrame = clipboard.convert(clipboard.bounds, to: nil)
+            #expect(footerFrame.minY - cardFrame.minY < 20, "Share clipboard must sit in a footer at the card's bottom edge")
+            let connect = try #require(descendants(card).compactMap { $0 as? NSButton }.first { $0.title == "Connect" })
+            #expect(connect.convert(connect.bounds, to: nil).minY > footerFrame.maxY, "The footer sits below the sign-in form")
+            let divider = try #require(descendants(card).compactMap { $0 as? NSBox }.first { $0.boxType == .separator })
+            let dividerFrame = divider.convert(divider.bounds, to: nil)
+            #expect(dividerFrame.height >= 1 && dividerFrame.width >= cardFrame.width - 1, "A full-width divider separates the footer")
+            #expect(dividerFrame.minY >= footerFrame.maxY - 1, "The divider sits directly above the footer")
+        }
+        let options = views.compactMap { $0 as? NSButton }.filter { $0.accessibilityLabel()?.hasPrefix("Options for") == true }
+        #expect(options.count == machines.count)
+        #expect(options.allSatisfy { $0.bezelStyle == .glass && $0.borderShape == .capsule }, "Card options use a Liquid Glass capsule")
         let bitmap = try #require(view.bitmapImageRepForCachingDisplay(in: view.bounds))
         view.cacheDisplay(in: view.bounds, to: bitmap)
         let left = try #require(bitmap.colorAt(x: bitmap.pixelsWide / 4, y: bitmap.pixelsHigh * 3 / 4)?.usingColorSpace(.deviceRGB))
