@@ -79,6 +79,11 @@ struct FrameLinkSecureSession {
         peerKey?.rawRepresentation.base64EncodedString()
     }
 
+    /// The identity key this session's hello and proof records carry.
+    var localPublicKeyBase64: String {
+        localKey.publicKey.rawRepresentation.base64EncodedString()
+    }
+
     init(
         localKey: Curve25519.KeyAgreement.PrivateKey,
         trustedPeerPublicKey: String? = nil
@@ -247,7 +252,11 @@ struct FrameLinkSecureSession {
         receiveKey = nil
         outboundSequence = 0
         replay = ReplayWindow(size: 4_096)
+        // A buffered proof is bound to this connection's transcript. Teardown
+        // (deadline, peer close, stop) dismisses the prompt without approve or
+        // reject, so drop it here or every reconnect's proof would be refused.
         pendingHello = nil
+        pendingProof = nil
         isAuthenticated = false
     }
 

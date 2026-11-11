@@ -20,6 +20,16 @@ public enum FrameProtocol {
     public static let maxSampleBytes = 32 * 1_024 * 1_024
     public static let maxJPEGBytes = 16 * 1_024 * 1_024
     public static let maxAnnotationBytes = 1 * 1_024 * 1_024
+    /// Ink ceilings for one annotation message and for the running total a
+    /// receiver accumulates from incremental `addStroke` messages.
+    public static let maxAnnotationStrokes = 4_096
+    public static let maxAnnotationPoints = 100_000
+    /// Accepted `AnnotationStroke.width`, which is normalized: a fraction of
+    /// the shorter side of the video content rect (Plotter divides the pen
+    /// width by it; Pilot multiplies it back by its overlay's shorter side).
+    /// The floor sits below a 1.5 pt pen on an 8K-wide rect; the ceiling is a
+    /// stroke as wide as the whole short side.
+    public static let annotationStrokeWidthRange: ClosedRange<Double> = 0.000_1...1
     public static let maxDashboardBytes = 512 * 1_024
 
     // MARK: - Models
@@ -362,14 +372,14 @@ public enum FrameProtocol {
         case .clear, .undo:
             return true
         }
-        guard strokes.count <= 4_096 else { return false }
+        guard strokes.count <= maxAnnotationStrokes else { return false }
         var pointCount = 0
         for stroke in strokes {
-            guard stroke.width.isFinite, (0.1...256).contains(stroke.width),
+            guard stroke.width.isFinite, annotationStrokeWidthRange.contains(stroke.width),
                   [stroke.color.red, stroke.color.green, stroke.color.blue, stroke.color.alpha]
                     .allSatisfy({ $0.isFinite && (0...1).contains($0) }) else { return false }
             let (newCount, overflow) = pointCount.addingReportingOverflow(stroke.points.count)
-            guard !overflow, newCount <= 100_000,
+            guard !overflow, newCount <= maxAnnotationPoints,
                   stroke.points.allSatisfy({ point in
                       point.x.isFinite && point.y.isFinite
                           && abs(point.x) <= 1_000_000 && abs(point.y) <= 1_000_000

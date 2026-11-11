@@ -41,6 +41,47 @@ struct WingmanCommandTests {
         ) == .rejectStale)
     }
 
+    @Test("a reply-loss retry from a fast watch clock is never executed twice")
+    func fastWatchClockRetryIsDeduplicated() {
+        var ledger = WingmanCommandLedger()
+        // The watch clock runs ahead by the full tolerated skew, so the first
+        // delivery arrives with a negative age.
+        let command = WingmanGesturePayload.Command(
+            id: UUID(),
+            sentAt: now.addingTimeInterval(WingmanCommandLedger.maximumFutureSkew)
+        )
+        #expect(ledger.decide(command, now: now, isPilotConnected: true) == .acceptAndExecute)
+
+        // The retry is still fresh (age 2.5 s) but arrives more than
+        // maximumAge of phone time after acceptance.
+        let retryAt = now.addingTimeInterval(WingmanGesturePayload.maximumAge + 0.5)
+        #expect(ledger.decide(command, now: retryAt, isPilotConnected: true) == .acknowledgeDuplicate)
+
+        // Retention holds through the last instant the command is fresh, then
+        // the entry is pruned together with freshness.
+        let lastFreshInstant = command.sentAt.addingTimeInterval(WingmanGesturePayload.maximumAge)
+        #expect(ledger.decide(command, now: lastFreshInstant, isPilotConnected: true)
+            == .acknowledgeDuplicate)
+        let afterFreshness = lastFreshInstant.addingTimeInterval(0.001)
+        #expect(ledger.decide(command, now: afterFreshness, isPilotConnected: true) == .rejectStale)
+        #expect(ledger.accepted[command.id] == nil)
+    }
+
+    @Test("a duplicate with a later sentAt extends retention to its own freshness window")
+    func laterDuplicateExtendsRetention() {
+        var ledger = WingmanCommandLedger()
+        let id = UUID()
+        let first = WingmanGesturePayload.Command(id: id, sentAt: now)
+        let later = WingmanGesturePayload.Command(id: id, sentAt: now.addingTimeInterval(1))
+        #expect(ledger.decide(first, now: now, isPilotConnected: true) == .acceptAndExecute)
+        #expect(ledger.decide(later, now: now.addingTimeInterval(0.5), isPilotConnected: true)
+            == .acknowledgeDuplicate)
+        // `first` is no longer fresh, but `later` still is and must not execute.
+        let afterFirstExpires = now.addingTimeInterval(WingmanGesturePayload.maximumAge + 0.5)
+        #expect(ledger.decide(later, now: afterFirstExpires, isPilotConnected: true)
+            == .acknowledgeDuplicate)
+    }
+
     @Test("payload identity is mandatory")
     func malformedPayloads() {
         #expect(WingmanGesturePayload.command(from: [

@@ -330,7 +330,9 @@ struct SecureMessagingView: View {
                 signaling: client,
                 token: token,
                 staticKey: identity,
-                peerStatic: peerKey
+                peerStatic: peerKey,
+                // A rotation closes this channel; Connect then loads the new key (#429).
+                identityChanges: .stored
             )
             replaceActiveConnection(&transport, with: t) { $0.disconnect() }
             t.connect()

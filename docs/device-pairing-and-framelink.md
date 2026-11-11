@@ -87,6 +87,23 @@ immediately. Packet kinds also enforce video-dimension, parameter-set, sample,
 JPEG, and annotation ceilings. Diagnostics expose only aggregate invalid/drop
 counters, never payload contents.
 
+Kneeboard ink is mirrored stroke for stroke (issue #431). Plotter sends
+`.addStroke` / `.undo` only for a provable append or last-stroke removal, and a
+full rebuild otherwise and after every Pilot authentication, Pilot-originated
+undo or clear, and layout re-anchor. A rebuild is one `.replaceDrawing` when it
+fits in `maxAnnotationBytes`; a drawing within Pilot's ceilings that does not
+(about 23k full-precision points) is rebuilt as `.clear` followed by one
+`.addStroke` per stroke, and counts as delivered only if every message was;
+that rebuild starts only after every stroke is checked to encode on its own. An
+annotation that cannot be encoded is refused, never queued. Plotter clamps ink
+colors into the wire's `0...1` range (wide-gamut ink reports extended-sRGB
+components outside it). Plotter enforces Pilot's total stroke/point ceilings
+before sending; when a drawing is over them, or one of its strokes is too large
+to encode on its own, Plotter sends Pilot a single `.clear` (never a partial
+rebuild), shows that the drawing is too large to mirror, and sends only full
+rebuilds until one succeeds. Pilot, after rejecting a message, refuses
+incremental messages until a replacement or clear arrives.
+
 ## Revocation and key rotation
 
 - Plotter can revoke its Pilot pin by long-pressing the connection badge and
@@ -96,8 +113,15 @@ counters, never payload contents.
   and administrative flows; it removes the Keychain pin and disconnects the
   authenticated client.
 - Regenerating a device identity is a rotation, not an automatic replacement.
-  The other device sees a key-change warning and must explicitly approve the
-  new verification code. Rejecting it preserves the old pin.
+  The control-sync and FrameLink transports drop every session proven with the
+  old key at once and reconnect with the new one, so the other device sees a
+  key-change warning and must explicitly approve the new verification code.
+  Rejecting it preserves the old pin. Settings shows "Waiting" rather than
+  "Synced" until the approved peer reconnects. A secure-messaging channel
+  (connected or still handshaking) is closed and marked failed; it never
+  restarts with the old key, and **Connect** builds a new channel with the new
+  one. Each transport also reloads the stored key right after it subscribes,
+  so a rotation during startup is not missed.
 - Uninstalling an app or clearing its Keychain removes its local identity and
   therefore requires a new pairing ceremony.
 

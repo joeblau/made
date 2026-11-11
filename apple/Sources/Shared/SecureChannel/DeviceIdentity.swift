@@ -19,29 +19,84 @@ enum DeviceIdentity {
     /// Service scopes the item to this app family.
     private static let service = "app.blau.securechannel"
 
-    // Access to `cached` is always serialized by `lock`, so the unchecked
-    // annotation is sound (Swift 6 can't prove the lock discipline statically).
-    nonisolated(unsafe) private static var cached: Curve25519.KeyAgreement.PrivateKey?
-    private static let lock = NSLock()
+    /// The process-wide identity: the Keychain item, announced on the
+    /// default notification center. Every production path goes through it.
+    static let vault = Vault(
+        storage: Vault.Storage(
+            read: { try readKeychain(account: account) },
+            write: { try writeKeychain($0, account: account) }
+        ),
+        center: .default
+    )
+
+    /// Owns one identity key: where it is persisted, the process-lifetime
+    /// cache, and the center that hears about rotations. `DeviceIdentity`
+    /// uses the Keychain-backed `vault`; tests build a vault over in-memory
+    /// storage and a private center so the real rotation path runs without
+    /// touching any Keychain (issue #429).
+    final class Vault: @unchecked Sendable {
+        struct Storage: Sendable {
+            var read: @Sendable () throws -> Data?
+            var write: @Sendable (Data) throws -> Void
+        }
+
+        /// Where `regenerate()` posts `didChangeNotification`.
+        let center: NotificationCenter
+        private let storage: Storage
+        // Access to `cached` is always serialized by `lock`, so the unchecked
+        // Sendable conformance is sound (Swift 6 can't prove the lock
+        // discipline statically).
+        private let lock = NSLock()
+        private var cached: Curve25519.KeyAgreement.PrivateKey?
+
+        init(storage: Storage, center: NotificationCenter) {
+            self.storage = storage
+            self.center = center
+        }
+
+        /// Load the persisted key, generating and storing one on first use.
+        /// Throws only if storage is unavailable for write on first generation.
+        func loadOrCreate() throws -> Curve25519.KeyAgreement.PrivateKey {
+            try lock.withLock { () throws -> Curve25519.KeyAgreement.PrivateKey in
+                if let cached { return cached }
+
+                if let raw = try storage.read(),
+                   let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {
+                    cached = key
+                    return key
+                }
+
+                let key = Curve25519.KeyAgreement.PrivateKey()
+                try storage.write(key.rawRepresentation)
+                cached = key
+                return key
+            }
+        }
+
+        /// Replace the key, then tell every live authenticator on `center`.
+        @discardableResult
+        func regenerate() throws -> Curve25519.KeyAgreement.PrivateKey {
+            let key = try lock.withLock { () throws -> Curve25519.KeyAgreement.PrivateKey in
+                let key = Curve25519.KeyAgreement.PrivateKey()
+                try storage.write(key.rawRepresentation)
+                cached = key
+                return key
+            }
+            // Outside the lock: observers reload through `loadOrCreate()`.
+            center.post(name: DeviceIdentity.didChangeNotification, object: nil)
+            return key
+        }
+
+        /// The rotation notifications and reloads for this vault's key.
+        var changeSource: ChangeSource {
+            ChangeSource(center: center, load: { [self] in try self.loadOrCreate() })
+        }
+    }
 
     /// Load the persisted identity key, generating and storing one on first use.
     /// Throws only if the Keychain is unavailable for write on first generation.
     static func loadOrCreate() throws -> Curve25519.KeyAgreement.PrivateKey {
-        lock.lock()
-        defer { lock.unlock() }
-
-        if let cached { return cached }
-
-        if let raw = try readKeychain(account: account),
-           let key = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: raw) {
-            cached = key
-            return key
-        }
-
-        let key = Curve25519.KeyAgreement.PrivateKey()
-        try writeKeychain(key.rawRepresentation, account: account)
-        cached = key
-        return key
+        try vault.loadOrCreate()
     }
 
     /// The local device's public key as base64 — the value to share with a peer.
@@ -51,17 +106,44 @@ enum DeviceIdentity {
         return key.publicKey.rawRepresentation.base64EncodedString()
     }
 
+    /// Posted (on the regenerating thread, after the new key is stored and
+    /// cached) whenever `regenerate()` replaces the identity. Every live
+    /// authenticator observes it so no session keeps proving the rotated-out
+    /// key until relaunch (issue #429).
+    static let didChangeNotification = Notification.Name("app.blau.securechannel.identityDidChange")
+
+    /// Run `handler` after every identity rotation posted on `center`. The
+    /// handler runs on the posting thread, so it should only hop to its
+    /// owner's queue. Remove the returned token from the same `center`.
+    static func observeChanges(
+        center: NotificationCenter = .default,
+        _ handler: @escaping @Sendable () -> Void
+    ) -> any NSObjectProtocol {
+        center.addObserver(
+            forName: didChangeNotification,
+            object: nil,
+            queue: nil
+        ) { _ in handler() }
+    }
+
+    /// Where a live transport hears about rotations and how it reloads the
+    /// stored key afterwards. Production transports use `.stored`; tests
+    /// inject a private center and loader so the rotation path runs without
+    /// touching the Keychain.
+    struct ChangeSource {
+        var center: NotificationCenter
+        var load: @Sendable () throws -> Curve25519.KeyAgreement.PrivateKey
+
+        /// The process-wide notification and the Keychain-backed identity.
+        static var stored: ChangeSource { DeviceIdentity.vault.changeSource }
+    }
+
     /// Discard the current identity and generate a fresh key pair (e.g. the
     /// user tapped "Regenerate & re-sync"). The new public key must then be
     /// re-announced to the peer.
     @discardableResult
     static func regenerate() throws -> Curve25519.KeyAgreement.PrivateKey {
-        lock.lock()
-        defer { lock.unlock() }
-        let key = Curve25519.KeyAgreement.PrivateKey()
-        try writeKeychain(key.rawRepresentation, account: account)
-        cached = key
-        return key
+        try vault.regenerate()
     }
 
     /// Persist the paired peer's public key (base64), trusting it for the

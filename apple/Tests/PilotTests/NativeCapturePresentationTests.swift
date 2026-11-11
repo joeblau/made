@@ -345,6 +345,364 @@ final class NativeCapturePresentationTests: XCTestCase {
         XCTAssertFalse(model.hasInk)
     }
 
+    func testRemoteInkRejectsAddStrokesBeyondTheProtocolTotals() {
+        let color = AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1)
+        func stroke(points: Int) -> AnnotationStroke {
+            AnnotationStroke(color: color, width: 0.01,
+                             points: Array(repeating: AnnotationPoint(x: 0.5, y: 0.5), count: points))
+        }
+
+        // Each message is individually valid, but the running point total must
+        // stop at the protocol ceiling instead of growing without bound.
+        let model = RemoteInkModel()
+        let perStroke = FrameProtocol.maxAnnotationPoints / 4
+        for _ in 0..<4 { XCTAssertTrue(model.handle(.addStroke(stroke(points: perStroke)))) }
+        let changeID = model.changeID
+        XCTAssertFalse(model.handle(.addStroke(stroke(points: 2))))
+        XCTAssertEqual(model.strokes.count, 4)
+        XCTAssertEqual(model.pointCount, 4 * perStroke)
+        XCTAssertEqual(model.changeID, changeID)
+
+        // The rejection quarantines incremental ops (issue #431); a full
+        // replacement restores agreement, and undo then frees capacity again.
+        XCTAssertFalse(model.handle(.undo))
+        XCTAssertEqual(model.pointCount, 4 * perStroke)
+        XCTAssertTrue(model.handle(.replaceDrawing(AnnotationDrawing(
+            strokes: Array(repeating: stroke(points: perStroke), count: 4)
+        ))))
+        XCTAssertTrue(model.handle(.undo))
+        XCTAssertEqual(model.pointCount, 3 * perStroke)
+        XCTAssertTrue(model.handle(.addStroke(stroke(points: 2))))
+
+        // The stroke count is capped as well.
+        let strokes = RemoteInkModel()
+        XCTAssertTrue(strokes.handle(.replaceDrawing(AnnotationDrawing(
+            strokes: Array(repeating: stroke(points: 2), count: FrameProtocol.maxAnnotationStrokes)
+        ))))
+        XCTAssertFalse(strokes.handle(.addStroke(stroke(points: 2))))
+        XCTAssertEqual(strokes.strokes.count, FrameProtocol.maxAnnotationStrokes)
+        XCTAssertTrue(strokes.handle(.clear))
+        XCTAssertEqual(strokes.pointCount, 0)
+        XCTAssertTrue(strokes.handle(.addStroke(stroke(points: 2))))
+    }
+
+    /// Issue #431: once Pilot rejects a stroke, the iPad's later `.undo` of
+    /// that stroke must not remove a different one, and later strokes must
+    /// not land at shifted indices.
+    func testRemoteInkRefusesIncrementalOpsAfterARejectionUntilAResync() {
+        let color = AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1)
+        func stroke(points: Int, x: Double = 0.5) -> AnnotationStroke {
+            AnnotationStroke(color: color, width: 0.01,
+                             points: Array(repeating: AnnotationPoint(x: x, y: 0.5), count: points))
+        }
+        let big = stroke(points: FrameProtocol.maxAnnotationPoints - 10)
+        let small = stroke(points: 5, x: 0.2)
+        let rejected = stroke(points: 20, x: 0.8)
+
+        let model = RemoteInkModel()
+        XCTAssertTrue(model.handle(.addStroke(big)))
+        XCTAssertTrue(model.handle(.addStroke(small)))
+        XCTAssertFalse(model.handle(.addStroke(rejected)))
+        XCTAssertTrue(model.isAwaitingResync)
+
+        // The iPad undoes the stroke Pilot never applied: Pilot must keep
+        // `small` rather than drop it in the rejected stroke's place.
+        XCTAssertFalse(model.handle(.undo))
+        XCTAssertEqual(model.strokes.count, 2)
+        XCTAssertEqual(model.strokes.last?.points.first?.x, 0.2)
+        XCTAssertFalse(model.handle(.addStroke(stroke(points: 2))))
+        XCTAssertEqual(model.strokes.count, 2)
+
+        // A full replacement is authoritative and resumes incremental ops.
+        XCTAssertTrue(model.handle(.replaceDrawing(AnnotationDrawing(strokes: [small]))))
+        XCTAssertFalse(model.isAwaitingResync)
+        XCTAssertTrue(model.handle(.addStroke(rejected)))
+        XCTAssertEqual(model.strokes.count, 2)
+        XCTAssertTrue(model.handle(.undo))
+        XCTAssertEqual(model.strokes.count, 1)
+
+        // `.clear` also resumes incremental ops.
+        XCTAssertFalse(model.handle(.addStroke(stroke(points: FrameProtocol.maxAnnotationPoints))))
+        XCTAssertFalse(model.handle(.undo))
+        XCTAssertTrue(model.handle(.clear))
+        XCTAssertTrue(model.handle(.addStroke(small)))
+    }
+
+    /// Issue #431, end to end: Plotter's ``AnnotationMirrorSync`` drives the
+    /// real ``RemoteInkModel`` through the wire format, so every message is
+    /// `FrameProtocol`-encoded (a refused encode is an undelivered send, as in
+    /// `FrameReceiver.sendAnnotation`) and Pilot applies what it decodes.
+    /// Plotter enforces Pilot's ceilings before sending, so Pilot never
+    /// rejects. A drawing within the ceilings but over `maxAnnotationBytes`
+    /// as one replacement is rebuilt as a clear plus one stroke per message;
+    /// only past the ceilings, or for a single stroke too large to encode,
+    /// does Pilot show no ink while Plotter reports out of sync.
+    func testPlotterMirrorNeverSendsInkPilotRejects() {
+        let color = AnnotationColor(red: 1, green: 0, blue: 0, alpha: 1)
+        // The width Plotter's normalization produces for a 4 pt pen on an
+        // iPad-sized content rect.
+        let width = AnnotationStroke.normalizedWidth(penWidth: 4, contentWidth: 1_024, contentHeight: 700)
+        func stroke(_ id: Int, points: Int) -> AnnotationStroke {
+            AnnotationStroke(color: color, width: width,
+                             points: Array(repeating: AnnotationPoint(x: Double(id) / 10_000, y: 0.5),
+                                           count: points))
+        }
+        let pilot = RemoteInkModel()
+        var plotter = AnnotationMirrorSync()
+        var seq: UInt32 = 0
+        var rejections = 0
+        var undecodable = 0
+        let send: (AnnotationMessage) -> Bool = { message in
+            seq &+= 1
+            let payload = FrameProtocol.encode(.annotation(seq: seq, message: message))
+            guard !payload.isEmpty else { return false }
+            guard case .annotation(_, let decoded)? = FrameProtocol.decode(payload) else {
+                undecodable += 1
+                return true
+            }
+            if !pilot.handle(decoded) { rejections += 1 }
+            return true
+        }
+        func tooLargeForOneMessage(_ message: AnnotationMessage) -> Bool {
+            FrameProtocol.encode(.annotation(seq: 0, message: message)).isEmpty
+        }
+        func assertMirrors(_ canvas: [AnnotationStroke], line: UInt = #line) {
+            if plotter.isOutOfSync {
+                XCTAssertFalse(pilot.hasInk, line: line)
+            } else {
+                XCTAssertEqual(pilot.strokes.count, canvas.count, line: line)
+                XCTAssertEqual(pilot.strokes.map(\.points.count), canvas.map(\.points.count), line: line)
+                XCTAssertEqual(
+                    pilot.strokes.map { Double($0.points.first?.x ?? -1) },
+                    canvas.map { $0.points.first?.x ?? -1 },
+                    line: line
+                )
+                XCTAssertEqual(pilot.strokes.map { Double($0.width) }, canvas.map(\.width), line: line)
+            }
+        }
+
+        // The very first real stroke reaches Pilot: its normalized width is
+        // accepted by the wire format.
+        var canvas = [stroke(0, points: 2)]
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Stroke ceiling: every message here fits in `maxAnnotationBytes`.
+        canvas = (0..<(FrameProtocol.maxAnnotationStrokes - 1)).map { stroke($0, points: 2) }
+        plotter.sync(to: canvas, send: send)
+        canvas.append(stroke(FrameProtocol.maxAnnotationStrokes - 1, points: 2))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // One stroke past Pilot's stroke ceiling: not sent as `.addStroke`.
+        canvas.append(stroke(FrameProtocol.maxAnnotationStrokes, points: 2))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertTrue(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Undoing it is not sent as `.undo` (which would drop the previous
+        // stroke on Pilot); the full drawing is replaced instead.
+        canvas.removeLast()
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Eraser in the middle, then incremental ops again.
+        canvas.remove(at: 1)
+        plotter.sync(to: canvas, send: send)
+        canvas.append(stroke(9_000, points: 2))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Point ceiling, built from appends that each fit on the wire.
+        canvas = []
+        plotter.sync(to: canvas, send: send)
+        let quarter = FrameProtocol.maxAnnotationPoints / 4
+        for id in 0..<4 {
+            canvas.append(stroke(id, points: quarter))
+            plotter.sync(to: canvas, send: send)
+            assertMirrors(canvas)
+        }
+        XCTAssertFalse(plotter.isOutOfSync)
+
+        // One stroke past Pilot's point ceiling: not sent as `.addStroke`.
+        canvas.append(stroke(4, points: 3))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertTrue(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Undoing it needs a 100k-point replacement over `maxAnnotationBytes`;
+        // Pilot is rebuilt stroke by stroke rather than sent `.undo`.
+        canvas.removeLast()
+        XCTAssertTrue(tooLargeForOneMessage(.replaceDrawing(AnnotationDrawing(strokes: canvas))))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // The eraser removes a middle stroke: a 75k-point replacement, still
+        // over `maxAnnotationBytes`, rebuilt the same way.
+        canvas.remove(at: 1)
+        XCTAssertTrue(tooLargeForOneMessage(.replaceDrawing(AnnotationDrawing(strokes: canvas))))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // A Pilot-originated undo is applied on the iPad, which then resyncs
+        // (as it does after a rotation or a Pilot reconnect).
+        pilot.undo()
+        canvas.removeLast()
+        plotter.resync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Incremental ops resume after a rebuild.
+        canvas.append(stroke(5, points: 3))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // A single stroke too large to encode on its own fails closed.
+        canvas = []
+        plotter.sync(to: canvas, send: send)
+        let unencodable = stroke(7, points: FrameProtocol.maxAnnotationPoints)
+        XCTAssertTrue(tooLargeForOneMessage(.addStroke(unencodable)))
+        canvas = [unencodable]
+        plotter.sync(to: canvas, send: send)
+        XCTAssertTrue(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        // Once it is gone, a full replacement restores sync.
+        canvas = [stroke(8, points: 3)]
+        plotter.sync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        assertMirrors(canvas)
+
+        XCTAssertEqual(rejections, 0)
+        XCTAssertEqual(undecodable, 0)
+    }
+
+    /// Issue #431, across a reconnect: strokes drawn while Pilot is away reach
+    /// it through the authentication-triggered resync, not the disconnected
+    /// queue. The link is modelled on `FrameReceiver`: `sendAnnotation`
+    /// refuses what it cannot encode; while disconnected `enqueueOutboundLocked`
+    /// queues the packet but keeps only the newest 16; on authentication
+    /// `didAuthenticatePilot` flushes that queue and then
+    /// `MirrorModel.onCockpitAuthenticated` makes the canvas call
+    /// `AnnotationMirrorSync.resync`. Pilot is the real ``RemoteInkModel``
+    /// fed through `FrameProtocol` encode/decode.
+    func testReconnectResyncRestoresStrokesDrawnWhileDisconnected() {
+        let pendingLimit = 16
+        let color = AnnotationColor(red: 0, green: 0.5, blue: 1, alpha: 1)
+        let width = AnnotationStroke.normalizedWidth(penWidth: 4, contentWidth: 1_024, contentHeight: 700)
+        func stroke(_ id: Int) -> AnnotationStroke {
+            AnnotationStroke(color: color, width: width, points: [
+                AnnotationPoint(x: Double(id) / 100, y: 0.1),
+                AnnotationPoint(x: Double(id) / 100, y: 0.5),
+                AnnotationPoint(x: Double(id) / 100 + 0.01, y: 0.9),
+            ])
+        }
+        let pilot = RemoteInkModel()
+        var plotter = AnnotationMirrorSync()
+        var seq: UInt32 = 0
+        var connected = true
+        var linkRefuses = false
+        var pending: [Data] = []
+        var rejections = 0
+        func apply(_ payload: Data) {
+            guard case .annotation(_, let decoded)? = FrameProtocol.decode(payload) else {
+                XCTFail("an annotation the link accepted must decode")
+                return
+            }
+            if !pilot.handle(decoded) { rejections += 1 }
+        }
+        let send: (AnnotationMessage) -> Bool = { message in
+            guard !linkRefuses else { return false }
+            seq &+= 1
+            let payload = FrameProtocol.encode(.annotation(seq: seq, message: message))
+            guard !payload.isEmpty else { return false }
+            if connected {
+                apply(payload)
+            } else {
+                pending.append(payload)
+                if pending.count > pendingLimit { pending.removeFirst(pending.count - pendingLimit) }
+            }
+            return true
+        }
+        func authenticate() {
+            connected = true
+            let flushed = pending
+            pending.removeAll()
+            flushed.forEach(apply)
+        }
+        func pilotMatches(_ canvas: [AnnotationStroke]) -> Bool {
+            pilot.strokes.map(\.points) == canvas.map { $0.points.map { CGPoint(x: $0.x, y: $0.y) } }
+                && pilot.strokes.map { Double($0.width) } == canvas.map(\.width)
+        }
+
+        var canvas: [AnnotationStroke] = []
+        for id in 0..<3 {
+            canvas.append(stroke(id))
+            plotter.sync(to: canvas, send: send)
+        }
+        XCTAssertTrue(pilotMatches(canvas))
+
+        // Pilot drops off; 20 strokes are drawn. Each was handed to the link,
+        // so the mirror records them, but the queue keeps only the newest 16.
+        connected = false
+        for id in 3..<23 {
+            canvas.append(stroke(id))
+            plotter.sync(to: canvas, send: send)
+        }
+        XCTAssertFalse(plotter.isOutOfSync)
+        XCTAssertEqual(plotter.mirrored, canvas)
+        XCTAssertEqual(pending.count, pendingLimit)
+
+        // The flush alone leaves Pilot four strokes short, with later strokes
+        // at the wrong indices; the resync that follows authentication fixes it.
+        authenticate()
+        XCTAssertEqual(pilot.strokes.count, canvas.count - (20 - pendingLimit))
+        XCTAssertFalse(pilotMatches(canvas))
+        plotter.resync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        XCTAssertTrue(pilotMatches(canvas))
+
+        // Incremental ops line up again: Pilot's undo drops the same stroke.
+        canvas.removeLast()
+        plotter.sync(to: canvas, send: send)
+        XCTAssertTrue(pilotMatches(canvas))
+
+        // Sends the link refuses outright never advance the mirror: 18 strokes
+        // drawn while refused leave it at the last delivered drawing, out of
+        // sync, and Pilot untouched.
+        let delivered = canvas
+        connected = false
+        linkRefuses = true
+        for id in 100..<118 {
+            canvas.append(stroke(id))
+            plotter.sync(to: canvas, send: send)
+            XCTAssertEqual(plotter.mirrored, delivered)
+            XCTAssertTrue(plotter.isOutOfSync)
+        }
+        XCTAssertTrue(pending.isEmpty)
+        XCTAssertTrue(pilotMatches(delivered))
+
+        // Reauthentication resyncs the whole drawing and resumes sync.
+        linkRefuses = false
+        authenticate()
+        plotter.resync(to: canvas, send: send)
+        XCTAssertFalse(plotter.isOutOfSync)
+        XCTAssertEqual(plotter.mirrored, canvas)
+        XCTAssertTrue(pilotMatches(canvas))
+        canvas.append(stroke(200))
+        plotter.sync(to: canvas, send: send)
+        XCTAssertTrue(pilotMatches(canvas))
+
+        XCTAssertEqual(rejections, 0)
+    }
+
     private func buttons(in root: NSView) -> [NSButton] {
         (root as? NSButton).map { [$0] } ?? root.subviews.flatMap { buttons(in: $0) }
     }

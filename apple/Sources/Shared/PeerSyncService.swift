@@ -2,6 +2,20 @@ import CryptoKit
 import Foundation
 @preconcurrency import MultipeerConnectivity
 
+/// The MCSession operations the sync handshake drives. `MCSession` is the
+/// production transport; tests inject a recorder so they run the real
+/// callback, early-frame replay and authentication-deadline logic of
+/// `PeerSyncService` without radios (#430). Every call happens on the
+/// service's serial transport queue.
+protocol PeerSyncSessionTransport: AnyObject {
+    var connectedPeers: [MCPeerID] { get }
+    func send(_ data: Data, toPeers peerIDs: [MCPeerID], with mode: MCSessionSendDataMode) throws
+    func cancelConnectPeer(_ peerID: MCPeerID)
+    func disconnect()
+}
+
+extension MCSession: PeerSyncSessionTransport {}
+
 @Observable
 final class PeerSyncService: NSObject, @unchecked Sendable {
     enum Role { case advertiser, browser }
@@ -20,7 +34,15 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
 
     private let role: Role
     private let peerID: MCPeerID
+    /// Invitations and the delegate always use the real session.
     private let session: MCSession
+    /// Sends, cancels and disconnects; `session` in production.
+    private let transport: any PeerSyncSessionTransport
+    /// False only in the test seam: the service then never advertises or
+    /// browses, but still runs every state transition and status update.
+    private let discoversPeers: Bool
+    private let authenticationDeadline: TimeInterval
+    private let reconnectDelay: TimeInterval
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let transportQueue = DispatchQueue(
@@ -31,15 +53,34 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     private var browser: MCNearbyServiceBrowser?
     private var reconnectWork: DispatchWorkItem?
     private var pairingTimeoutWork: DispatchWorkItem?
+    private var authenticationTimeoutWork: DispatchWorkItem?
+    private var earlyFrames = PeerSyncEarlyFrameBuffer<MCPeerID>()
     private var running = false
     private var authenticator: PeerSyncAuthenticator
     private var pendingPairing: PendingPairing?
+    /// Where identity rotations come from; `nil` for an ephemeral identity
+    /// that must never adopt the device key.
+    private let identityChanges: DeviceIdentity.ChangeSource?
+    @ObservationIgnored private var identityObserver: (any NSObjectProtocol)?
     private var activePeer: MCPeerID?
 
     private static let serviceType = "blau-sync"
     private static let identityDiscoveryKey = "identity"
     private static let invitationTimeout: TimeInterval = 60
     private static let pairingTimeout: TimeInterval = 45
+    /// Deadline for the sync hello/ready exchange after `.connected`. Pairing
+    /// approval happens before the invitation is accepted, so this covers only
+    /// the automatic handshake; a stalled one is torn down and retried (#430).
+    ///
+    /// It also bounds the one stale-hello case the early-frame buffer cannot
+    /// rule out: a hello carries no freshness binding beyond its HMAC, so a
+    /// late frame from an earlier connection of the same peer could be held
+    /// and replayed instead of the fresh one. The peer's `ready` then fails
+    /// the session-ID check, nothing authenticates, and this deadline tears
+    /// the connection down for a clean retry. Binding freshness into the
+    /// hello would change the wire protocol both apps speak.
+    static let authenticationTimeout: TimeInterval = 10
+    static let defaultReconnectDelay: TimeInterval = 2
 
     private struct InvitationContext: Codable {
         let publicKey: String
@@ -64,21 +105,104 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         }
     }
 
-    init(role: Role, displayName: String, usesEphemeralIdentity: Bool = false) {
+    /// `identityChanges` is a test seam: when set, the rotation observer is
+    /// installed on its center and reloads through its loader even with an
+    /// ephemeral identity. Production leaves it `nil`, which observes
+    /// `DeviceIdentity.ChangeSource.stored` unless the identity is ephemeral.
+    convenience init(
+        role: Role,
+        displayName: String,
+        usesEphemeralIdentity: Bool = false,
+        identityChanges: DeviceIdentity.ChangeSource? = nil
+    ) {
         let isTesting = usesEphemeralIdentity
             || ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
         let identity = isTesting
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())
-        self.role = role
-        self.peerID = MCPeerID(displayName: displayName)
-        self.session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
-        self.authenticator = PeerSyncAuthenticator(
-            localKey: identity,
-            peerPublicKeyBase64: isTesting ? nil : DeviceIdentity.peerPublicKeyBase64()
+        let peerID = MCPeerID(displayName: displayName)
+        let session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
+        self.init(
+            role: role,
+            peerID: peerID,
+            session: session,
+            transport: session,
+            discoversPeers: true,
+            authenticator: PeerSyncAuthenticator(
+                localKey: identity,
+                peerPublicKeyBase64: isTesting ? nil : DeviceIdentity.peerPublicKeyBase64()
+            ),
+            identityChanges: identityChanges ?? (isTesting ? nil : .stored),
+            authenticationDeadline: PeerSyncService.authenticationTimeout,
+            reconnectDelay: PeerSyncService.defaultReconnectDelay
         )
+    }
+
+    /// Test seam (#430): runs the real handshake, early-frame replay,
+    /// authentication deadline and reconnect logic over `transport`, with
+    /// `authenticator` carrying the pinned peer and no advertiser or browser.
+    /// Short timings let a test observe the deadline without sleeping 10 s.
+    /// `identityChanges` drives identity rotation through a started service
+    /// (#429); `nil` never rotates.
+    convenience init(
+        role: Role,
+        displayName: String,
+        authenticator: PeerSyncAuthenticator,
+        transport: any PeerSyncSessionTransport,
+        authenticationTimeout: TimeInterval,
+        reconnectDelay: TimeInterval,
+        identityChanges: DeviceIdentity.ChangeSource? = nil
+    ) {
+        let peerID = MCPeerID(displayName: displayName)
+        self.init(
+            role: role,
+            peerID: peerID,
+            session: MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required),
+            transport: transport,
+            discoversPeers: false,
+            authenticator: authenticator,
+            identityChanges: identityChanges,
+            authenticationDeadline: authenticationTimeout,
+            reconnectDelay: reconnectDelay
+        )
+    }
+
+    private init(
+        role: Role,
+        peerID: MCPeerID,
+        session: MCSession,
+        transport: any PeerSyncSessionTransport,
+        discoversPeers: Bool,
+        authenticator: PeerSyncAuthenticator,
+        identityChanges: DeviceIdentity.ChangeSource?,
+        authenticationDeadline: TimeInterval,
+        reconnectDelay: TimeInterval
+    ) {
+        self.role = role
+        self.identityChanges = identityChanges
+        self.peerID = peerID
+        self.session = session
+        self.transport = transport
+        self.discoversPeers = discoversPeers
+        self.authenticator = authenticator
+        self.authenticationDeadline = authenticationDeadline
+        self.reconnectDelay = reconnectDelay
         super.init()
         session.delegate = self
+        if let center = self.identityChanges?.center {
+            identityObserver = DeviceIdentity.observeChanges(center: center) { [weak self] in
+                self?.reloadLocalIdentity()
+            }
+            // The key above was loaded before this observer existed; reload
+            // once so a rotation in between is not missed (issue #429).
+            reloadLocalIdentity()
+        }
+    }
+
+    deinit {
+        if let identityObserver, let center = identityChanges?.center {
+            center.removeObserver(identityObserver)
+        }
     }
 
     func start() {
@@ -132,12 +256,51 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         return candidate == trusted ? .trusted : .approvalRequired(isKeyChange: true)
     }
 
+    /// The identity key the transport currently advertises and proves.
+    func localIdentityPublicKeyBase64() async -> String {
+        await withCheckedContinuation { continuation in
+            transportQueue.async { [weak self] in
+                continuation.resume(returning: self?.authenticator.localPublicKeyBase64 ?? "")
+            }
+        }
+    }
+
+    private func reloadLocalIdentity() {
+        transportQueue.async { [weak self] in
+            guard let self, let load = self.identityChanges?.load,
+                  let key = try? load() else { return }
+            self.adoptLocalIdentityOnQueue(key)
+        }
+    }
+
+    /// Rebuild the authenticator around `key`, keeping the pinned peer, and
+    /// restart the transport so every advertisement, invitation, pending
+    /// approval and live session proves the current identity (issue #429).
+    /// The peer still pins the old key, so it sees the key-change approval.
+    private func adoptLocalIdentityOnQueue(_ key: Curve25519.KeyAgreement.PrivateKey) {
+        guard key.publicKey.rawRepresentation.base64EncodedString()
+            != authenticator.localPublicKeyBase64 else { return }
+        authenticator = authenticator.replacingLocalKey(key)
+        // `startTransport()` first tears down the session, any pending
+        // approval and the advertisement that carried the old key.
+        if running { startTransport() }
+    }
+
     private func startTransport() {
         stopTransport()
         running = true
+        startDiscovery(restarting: false)
+    }
+
+    /// (Re)creates the advertiser or browser for this role. In the test seam
+    /// only the status changes, so reconnects stay observable without radios.
+    private func startDiscovery(restarting: Bool) {
         switch role {
         case .advertiser:
-            updateStatus("Advertising sync service")
+            updateStatus(restarting ? "Restarting sync advertisement" : "Advertising sync service")
+            advertiser?.stopAdvertisingPeer()
+            advertiser = nil
+            guard discoversPeers else { return }
             let adv = MCNearbyServiceAdvertiser(
                 peer: peerID,
                 discoveryInfo: [Self.identityDiscoveryKey: authenticator.localPublicKeyBase64],
@@ -148,7 +311,10 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             adv.startAdvertisingPeer()
 
         case .browser:
-            updateStatus("Browsing for Cockpit sync service")
+            updateStatus(restarting ? "Restarting Cockpit discovery" : "Browsing for Cockpit sync service")
+            browser?.stopBrowsingForPeers()
+            browser = nil
+            guard discoversPeers else { return }
             let br = MCNearbyServiceBrowser(peer: peerID, serviceType: Self.serviceType)
             br.delegate = self
             browser = br
@@ -162,11 +328,14 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         reconnectWork = nil
         pairingTimeoutWork?.cancel()
         pairingTimeoutWork = nil
+        authenticationTimeoutWork?.cancel()
+        authenticationTimeoutWork = nil
+        earlyFrames.removeAll()
         advertiser?.stopAdvertisingPeer()
         advertiser = nil
         browser?.stopBrowsingForPeers()
         browser = nil
-        session.disconnect()
+        transport.disconnect()
         pendingPairing?.completion(false)
         pendingPairing = nil
         activePeer = nil
@@ -188,41 +357,20 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
             self.reconnectWork = nil
             guard self.running else { return }
             // Don't reconnect if we already have peers
-            guard self.session.connectedPeers.isEmpty else { return }
-            switch self.role {
-            case .advertiser:
-                self.updateStatus("Restarting sync advertisement")
-                self.advertiser?.stopAdvertisingPeer()
-                let adv = MCNearbyServiceAdvertiser(
-                    peer: self.peerID,
-                    discoveryInfo: [
-                        Self.identityDiscoveryKey: self.authenticator.localPublicKeyBase64,
-                    ],
-                    serviceType: Self.serviceType
-                )
-                adv.delegate = self
-                self.advertiser = adv
-                adv.startAdvertisingPeer()
-            case .browser:
-                self.updateStatus("Restarting Cockpit discovery")
-                self.browser?.stopBrowsingForPeers()
-                let br = MCNearbyServiceBrowser(peer: self.peerID, serviceType: Self.serviceType)
-                br.delegate = self
-                self.browser = br
-                br.startBrowsingForPeers()
-            }
+            guard self.transport.connectedPeers.isEmpty else { return }
+            self.startDiscovery(restarting: true)
         }
         reconnectWork = work
-        transportQueue.asyncAfter(deadline: .now() + 2, execute: work)
+        transportQueue.asyncAfter(deadline: .now() + reconnectDelay, execute: work)
     }
 
     @discardableResult
     private func sendAuthenticated(_ data: Data, mode: MCSessionSendDataMode) -> Bool {
         guard let activePeer,
-              session.connectedPeers.contains(activePeer),
+              transport.connectedPeers.contains(activePeer),
               let envelope = authenticator.sealMessage(data) else { return false }
         do {
-            try session.send(envelope, toPeers: [activePeer], with: mode)
+            try transport.send(envelope, toPeers: [activePeer], with: mode)
             return true
         } catch {
             updateStatus("Could not send to Cockpit: \(error.localizedDescription)")
@@ -231,7 +379,7 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
     }
 
     private func sendRaw(_ data: Data, to peer: MCPeerID) {
-        try? session.send(data, toPeers: [peer], with: .reliable)
+        try? transport.send(data, toPeers: [peer], with: .reliable)
     }
 
     private func updateStatus(_ status: String) {
@@ -326,6 +474,40 @@ final class PeerSyncService: NSObject, @unchecked Sendable {
         transportQueue.asyncAfter(deadline: .now() + Self.pairingTimeout, execute: work)
     }
 
+    /// Every `.connected` handshake either authenticates or is torn down by
+    /// this deadline, so a lost or rejected hello cannot leave both apps at
+    /// "Authenticating" with `scheduleReconnect` blocked by a connected peer.
+    private func scheduleAuthenticationDeadline(for peerID: MCPeerID) {
+        authenticationTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.authenticationTimeoutWork = nil
+            guard self.running,
+                  self.activePeer == peerID,
+                  !self.authenticator.isAuthenticated else { return }
+            self.tearDownStalledHandshake(with: peerID)
+        }
+        authenticationTimeoutWork = work
+        transportQueue.asyncAfter(deadline: .now() + authenticationDeadline, execute: work)
+    }
+
+    private func tearDownStalledHandshake(with peerID: MCPeerID) {
+        authenticationTimeoutWork?.cancel()
+        authenticationTimeoutWork = nil
+        activePeer = nil
+        authenticator.resetSession()
+        earlyFrames.removeAll()
+        // `cancelConnectPeer` alone may not drop an already-connected peer.
+        // The session carries only the active peer, so disconnect it all.
+        transport.cancelConnectPeer(peerID)
+        transport.disconnect()
+        DispatchQueue.main.async { [weak self] in
+            self?.isConnected = false
+            self?.statusText = "Sync authentication timed out; reconnecting"
+        }
+        scheduleReconnect()
+    }
+
     private func clearPendingPairing(for peerID: MCPeerID, status: String) {
         guard let pending = pendingPairing,
               pending.peerID == peerID else { return }
@@ -368,22 +550,37 @@ private extension PeerSyncService {
             updateStatus("Connecting to \(peerID.displayName)")
 
         case .connected:
-            guard activePeer == nil || activePeer == peerID else {
-                session.cancelConnectPeer(peerID)
+            // A repeated `.connected` must not restart the session: a new
+            // nonce would replace the hello the peer already accepted, and
+            // the peer rejects a second hello (#430).
+            guard activePeer != peerID else { return }
+            guard activePeer == nil else {
+                transport.cancelConnectPeer(peerID)
                 return
             }
             activePeer = peerID
             guard let hello = authenticator.beginSession() else {
                 updateStatus("Rejected unpaired sync peer")
-                session.cancelConnectPeer(peerID)
+                transport.cancelConnectPeer(peerID)
                 activePeer = nil
+                earlyFrames.discard(peerID)
                 return
             }
             updateStatus("Authenticating \(peerID.displayName)")
             sendRaw(hello, to: peerID)
+            scheduleAuthenticationDeadline(for: peerID)
+            // Replay the peer's hello if it arrived before this callback.
+            let early = earlyFrames.take(for: peerID)
+            earlyFrames.removeAll()
+            if let early {
+                handleReceived(early, from: peerID)
+            }
 
         case .notConnected:
+            earlyFrames.discard(peerID)
             if activePeer == peerID {
+                authenticationTimeoutWork?.cancel()
+                authenticationTimeoutWork = nil
                 activePeer = nil
                 authenticator.resetSession()
                 DispatchQueue.main.async { [weak self] in
@@ -399,6 +596,11 @@ private extension PeerSyncService {
     }
 
     func handleReceived(_ data: Data, from peerID: MCPeerID) {
+        // MultipeerConnectivity can deliver a peer's hello before its
+        // `.connected` callback; hold one bounded frame for replay (#430).
+        if running, activePeer == nil, earlyFrames.hold(data, from: peerID) {
+            return
+        }
         guard activePeer == peerID,
               let opened = authenticator.open(data) else {
             updateStatus("Rejected unauthenticated sync data")
@@ -409,6 +611,8 @@ private extension PeerSyncService {
             sendRaw(response, to: peerID)
 
         case .authenticated:
+            authenticationTimeoutWork?.cancel()
+            authenticationTimeoutWork = nil
             DispatchQueue.main.async { [weak self] in
                 self?.isConnected = true
                 self?.statusText = "Connected securely to \(peerID.displayName)"
@@ -502,7 +706,7 @@ private extension PeerSyncService {
     ) {
         guard activePeer == nil,
               pendingPairing == nil,
-              session.connectedPeers.isEmpty else {
+              transport.connectedPeers.isEmpty else {
             reply.call(false, session: nil)
             return
         }
@@ -546,7 +750,7 @@ private extension PeerSyncService {
     ) {
         guard activePeer == nil,
               pendingPairing == nil,
-              session.connectedPeers.isEmpty else { return }
+              transport.connectedPeers.isEmpty else { return }
         switch Self.pairingDecision(
             candidate: candidate,
             trusted: authenticator.peerPublicKeyBase64

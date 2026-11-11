@@ -12,7 +12,9 @@ portrait, landscape left, and landscape right. Do not add
 The video and PencilKit canvas always share one transform. The unzoomed video
 uses an aspect-fit rectangle calculated from the current window bounds, and
 annotations travel over the wire as normalized coordinates relative to that
-rectangle. Rotation, Split View, Stage Manager resizing, and external display
+rectangle. Stroke width is normalized the same way, as a fraction of the
+rectangle's shorter side, and the wire format accepts only that normalized
+range. Rotation, Split View, Stage Manager resizing, and external display
 resizing therefore change only the local projection; they do not change an
 annotation's location on the mirrored Mac content.
 

@@ -28,8 +28,15 @@ final class SecureIdentity {
 
     var isSynced: Bool { peerPublicKey != nil }
 
+    /// The identity key this device proves; `DeviceIdentity.vault` in production.
+    private let vault: DeviceIdentity.Vault
+    /// Reads the approved peer pin; the pairing store in production.
+    private let loadPeerPin: @Sendable () -> String?
+
     init(role: ConnectedDeviceAppRole, isolated: Bool = false) {
         self.role = role
+        self.vault = DeviceIdentity.vault
+        self.loadPeerPin = { DeviceIdentity.peerPublicKeyBase64() }
         let environment = ProcessInfo.processInfo.environment
         self.isIsolated = isolated || environment["BLAU_COCKPIT_FIXTURE"] != nil
             || environment["XCTestConfigurationFilePath"] != nil
@@ -42,8 +49,23 @@ final class SecureIdentity {
             return
         }
         // Auto-generate (or load) our key, and recall any previously synced peer.
-        self.localPublicKey = DeviceIdentity.publicKeyBase64()
-        self.peerPublicKey = Self.storedPeerPublicKey()
+        self.localPublicKey = Self.publicKeyBase64(from: DeviceIdentity.vault)
+        self.peerPublicKey = DeviceIdentity.peerPublicKeyBase64()
+    }
+
+    /// Test seam (issue #429): a live identity over an injected vault and pin
+    /// source, so regeneration runs end to end without touching any Keychain.
+    init(
+        role: ConnectedDeviceAppRole,
+        vault: DeviceIdentity.Vault,
+        peerPin: @escaping @Sendable () -> String?
+    ) {
+        self.role = role
+        self.vault = vault
+        self.loadPeerPin = peerPin
+        self.isIsolated = false
+        self.localPublicKey = Self.publicKeyBase64(from: vault)
+        self.peerPublicKey = peerPin()
     }
 
     /// Broadcast our public key to the connected peer. Safe to call repeatedly
@@ -59,27 +81,34 @@ final class SecureIdentity {
     func receive(_ announce: DeviceKeyAnnounce) {
         guard !isIsolated, announce.role != role,
               DeviceIdentity.parsePeerPublicKey(announce.publicKey) != nil,
-              announce.publicKey == DeviceIdentity.peerPublicKeyBase64() else { return }
+              announce.publicKey == loadPeerPin() else { return }
         peerPublicKey = announce.publicKey
     }
 
     /// Reload the pin after an explicit pairing decision stored it.
-    func refreshPeer() {
-        guard !isIsolated else { return }
-        peerPublicKey = Self.storedPeerPublicKey()
-    }
-
     /// `DeviceIdentity` reports an empty or malformed pin as `nil`, so Settings
     /// shows "Waiting to sync…" instead of a "Synced" badge over a blank key.
-    private static func storedPeerPublicKey() -> String? {
-        DeviceIdentity.peerPublicKeyBase64()
+    func refreshPeer() {
+        guard !isIsolated else { return }
+        peerPublicKey = loadPeerPin()
+    }
+
+    private static func publicKeyBase64(from vault: DeviceIdentity.Vault) -> String? {
+        (try? vault.loadOrCreate())?.publicKey.rawRepresentation.base64EncodedString()
     }
 
     /// Generate a fresh identity key and push it to the peer.
+    ///
+    /// `DeviceIdentity.regenerate()` notifies the Multipeer, FrameLink and
+    /// secure-messaging transports, which drop every session proven with the
+    /// old key (issue #429). The peer must approve that key change first, so
+    /// this side stops reporting "Synced" until an authenticated reconnect
+    /// reloads the pin via `refreshPeer()`.
     func regenerate() {
         guard !isIsolated else { return }
-        _ = try? DeviceIdentity.regenerate()
-        localPublicKey = DeviceIdentity.publicKeyBase64()
+        let rotated = (try? vault.regenerate()) != nil
+        localPublicKey = Self.publicKeyBase64(from: vault)
+        if rotated { peerPublicKey = nil }
         announce()
     }
 }

@@ -116,6 +116,34 @@ public struct AnnotationStroke: Codable, Sendable, Hashable {
     }
 }
 
+extension AnnotationColor {
+    /// A wire color from platform color components, clamped into the `0...1`
+    /// range ``FrameProtocol`` accepts (a non-finite component becomes `0`).
+    /// `UIColor.getRed(_:green:blue:alpha:)` reports extended-sRGB components
+    /// outside `0...1` for the wide-gamut (Display P3) colors `PKToolPicker`
+    /// offers; unclamped, such a stroke could never be encoded and Pilot's
+    /// mirror would fail closed for an ordinary drawing (issue #431).
+    static func normalized(red: Double, green: Double, blue: Double, alpha: Double) -> AnnotationColor {
+        func unit(_ component: Double) -> Double {
+            component.isFinite ? min(1, max(0, component)) : 0
+        }
+        return AnnotationColor(red: unit(red), green: unit(green), blue: unit(blue), alpha: unit(alpha))
+    }
+}
+
+extension AnnotationStroke {
+    /// The wire `width` for a pen `penWidth` points wide drawn over a video
+    /// content rect `contentWidth` x `contentHeight` points: a fraction of the
+    /// rect's shorter side, clamped into what ``FrameProtocol`` accepts so a
+    /// real stroke is never refused for its width (issue #431).
+    static func normalizedWidth(penWidth: Double, contentWidth: Double, contentHeight: Double) -> Double {
+        let range = FrameProtocol.annotationStrokeWidthRange
+        let scaleBase = max(1, min(contentWidth, contentHeight))
+        let width = max(1.5, penWidth.isFinite ? penWidth : 1.5) / scaleBase
+        return min(range.upperBound, max(range.lowerBound, width))
+    }
+}
+
 public struct AnnotationDrawing: Codable, Sendable, Hashable {
     public let strokes: [AnnotationStroke]
 
@@ -134,6 +162,151 @@ public enum AnnotationMessage: Codable, Sendable, Hashable {
     /// Undo the most recent stroke. Flows either direction: when one side undoes
     /// it tells the other to pop too, keeping both in sync.
     case undo
+}
+
+/// Keeps Pilot's mirrored ink identical, index for index, to Plotter's drawing
+/// (issue #431). Pilot applies `.addStroke` as an append and `.undo` as "drop
+/// the last stroke", so those incremental messages are only correct when the
+/// change provably is exactly that. PencilKit's eraser, undoing an erase, and
+/// stroke splits change the drawing in the middle, so any change that is not a
+/// provable append or last-stroke removal resends the whole drawing.
+///
+/// An instance is Plotter's record of what Pilot holds. It advances only when
+/// every message of a change was actually handed to the link (`send` returned
+/// `true`), and it never sends a message that Pilot's `RemoteInkModel` would
+/// reject for its total stroke/point ceilings.
+///
+/// A drawing within those ceilings can still be too large to encode as one
+/// `.replaceDrawing` (`maxAnnotationBytes` is reached at roughly 23k
+/// full-precision points, well under the 100k point ceiling). Such a drawing
+/// is delivered as `.clear` followed by one `.addStroke` per stroke, which
+/// Pilot applies as an exact rebuild (`.clear` also ends Pilot's post-rejection
+/// quarantine) with each stroke its own undo entry.
+///
+/// When a change cannot be mirrored at all (the drawing is over Pilot's
+/// ceilings, or one of its strokes is too large to encode on its own), it
+/// fails closed: it sends a `.clear` so Pilot shows no ink rather than ink
+/// that no longer matches, marks itself out of sync, and sends nothing
+/// incremental until a full rebuild (a replacement, or a clear and every
+/// stroke) succeeds. A stroke-by-stroke rebuild is preflighted, so a doomed
+/// one sends only that single fail-closed `.clear`, never a prefix of the
+/// drawing.
+struct AnnotationMirrorSync {
+    /// The strokes Pilot holds after every message handed to the link so far.
+    private(set) var mirrored: [AnnotationStroke] = []
+    /// True while Pilot does not mirror the canvas because a change could not
+    /// be delivered; the next change or resync attempts a full rebuild.
+    private(set) var isOutOfSync = false
+
+    /// Whether Pilot's `RemoteInkModel` accepts `strokes` as its whole drawing:
+    /// the same total ceilings it enforces on `.replaceDrawing` and on the
+    /// running total of `.addStroke`.
+    static func fitsPilotLimits(_ strokes: [AnnotationStroke]) -> Bool {
+        guard strokes.count <= FrameProtocol.maxAnnotationStrokes else { return false }
+        var points = 0
+        for stroke in strokes {
+            points += stroke.points.count
+            if points > FrameProtocol.maxAnnotationPoints { return false }
+        }
+        return true
+    }
+
+    /// Records `strokes` as already held by Pilot without sending anything
+    /// (seeded demo content, which has no peer).
+    mutating func assumeMirrored(_ strokes: [AnnotationStroke]) {
+        mirrored = strokes
+        isOutOfSync = false
+    }
+
+    /// Sends what makes Pilot's ink match `current`, if anything: one
+    /// incremental message for a provable append or last-stroke removal,
+    /// otherwise a full rebuild. While out of sync it is always a full rebuild.
+    mutating func sync(to current: [AnnotationStroke], send: (AnnotationMessage) -> Bool) {
+        if isOutOfSync {
+            resync(to: current, send: send)
+            return
+        }
+        guard let message = Self.message(from: mirrored, to: current) else { return }
+        deliver(message, producing: current, send: send)
+    }
+
+    /// Replaces Pilot's ink with `current`, unconditionally: one
+    /// `.replaceDrawing`, or a clear and every stroke when that is too large.
+    mutating func resync(to current: [AnnotationStroke], send: (AnnotationMessage) -> Bool) {
+        deliver(.replaceDrawing(AnnotationDrawing(strokes: current)), producing: current, send: send)
+    }
+
+    /// Empties Pilot's ink.
+    mutating func clear(send: (AnnotationMessage) -> Bool) {
+        deliver(.clear, producing: [], send: send)
+    }
+
+    private mutating func deliver(
+        _ message: AnnotationMessage,
+        producing current: [AnnotationStroke],
+        send: (AnnotationMessage) -> Bool
+    ) {
+        if Self.fitsPilotLimits(current) {
+            if send(message) || (Self.isReplacement(message) && Self.rebuild(current, send: send)) {
+                mirrored = current
+                isOutOfSync = false
+                return
+            }
+        }
+        // Fail closed: `mirrored` is not advanced past an undelivered or
+        // rejectable message, so nothing incremental may follow it.
+        isOutOfSync = true
+        if send(.clear) { mirrored = [] }
+    }
+
+    private static func isReplacement(_ message: AnnotationMessage) -> Bool {
+        if case .replaceDrawing = message { return true }
+        return false
+    }
+
+    /// Whether `message` passes ``FrameProtocol``'s per-message validation and
+    /// `maxAnnotationBytes`: exactly what `FrameReceiver.sendAnnotation` checks
+    /// before it hands a message to the link.
+    static func isEncodable(_ message: AnnotationMessage) -> Bool {
+        !FrameProtocol.encode(.annotation(seq: 0, message: message)).isEmpty
+    }
+
+    /// Rebuilds Pilot's ink as `strokes` one message at a time, for a drawing
+    /// within Pilot's ceilings (the caller checks them) that is too large for
+    /// a single replacement. Nothing is sent unless every stroke is
+    /// individually encodable, so a rebuild that cannot finish never clears
+    /// Pilot and replays a prefix of the drawing. Returns `true` only if every
+    /// message was handed to the link; on `false` Pilot may hold a prefix of
+    /// `strokes` (the link refused mid-rebuild), so the caller must fail
+    /// closed.
+    private static func rebuild(_ strokes: [AnnotationStroke], send: (AnnotationMessage) -> Bool) -> Bool {
+        guard strokes.allSatisfy({ Self.isEncodable(.addStroke($0)) }) else { return false }
+        guard send(.clear) else { return false }
+        for stroke in strokes where !send(.addStroke(stroke)) {
+            return false
+        }
+        return true
+    }
+
+    /// The single message that turns Pilot's `mirrored` strokes into `current`,
+    /// or nil when they already match.
+    static func message(
+        from mirrored: [AnnotationStroke],
+        to current: [AnnotationStroke]
+    ) -> AnnotationMessage? {
+        if current == mirrored { return nil }
+        if current.count == mirrored.count + 1,
+           let appended = current.last,
+           current.dropLast().elementsEqual(mirrored) {
+            return .addStroke(appended)
+        }
+        if current.count + 1 == mirrored.count,
+           mirrored.dropLast().elementsEqual(current) {
+            return .undo
+        }
+        if current.isEmpty { return .clear }
+        return .replaceDrawing(AnnotationDrawing(strokes: current))
+    }
 }
 
 struct MouseMove: Codable, Sendable {

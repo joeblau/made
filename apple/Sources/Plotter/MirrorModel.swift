@@ -17,6 +17,9 @@ let plotterMirrorLog = Logger(subsystem: "app.blau.plotter", category: "Mirror")
 final class MirrorModel {
     private(set) var statusText = "Idle"
     private(set) var annotationStatusText = "Annotation idle"
+    /// True while the canvas drawing exceeds what Cockpit can mirror, so
+    /// Cockpit shows no ink until a full replacement fits again (issue #431).
+    private(set) var isAnnotationMirrorOutOfSync = false
     private(set) var frameCount = 0
     private(set) var isCockpitConnected = false
     private(set) var videoSize: CGSize = .zero
@@ -43,7 +46,13 @@ final class MirrorModel {
     /// which then echoes the corrected drawing back to Pilot.
     var onRemoteAnnotation: ((AnnotationMessage) -> Void)?
 
-    private let receiver = FrameReceiver()
+    /// Invoked on the main actor each time a Pilot session authenticates, so
+    /// the canvas resends its full drawing. Runs after the receiver flushes the
+    /// packets queued while disconnected (that queue keeps only the newest
+    /// few), so the resync is the last word on Pilot's ink (issue #431).
+    var onCockpitAuthenticated: (() -> Void)?
+
+    private let receiver: FrameReceiver
     private let renderer = HEVCMirrorRenderer()
     private let dashboardStore = DashboardSnapshotStore(appGroup: PlotterSnapshotStore.appGroupID)
     let dashboardActivities = DashboardActivityController(urlScheme: PlotterDashboardRoute.urlScheme)
@@ -74,7 +83,10 @@ final class MirrorModel {
     /// screen (byte-identical stills) never re-renders an identical thumbnail.
     private var lastSnapshotNudgeHash: Int?
 
-    init() {
+    /// `receiver` is a test seam: tests pass their own ``FrameReceiver`` to
+    /// drive the real connection callbacks this model installs on it.
+    init(receiver: FrameReceiver = FrameReceiver()) {
+        self.receiver = receiver
         dashboardSnapshots = PlotterDashboardSnapshots(store: dashboardStore)
         dashboardActivities.restore()
         updateDashboardActivities(for: Set(DashboardFamily.allCases))
@@ -113,6 +125,7 @@ final class MirrorModel {
                 )
                 WidgetCenter.shared.reloadAllTimelines()
                 PlotterActivityController.shared.setConnected(connected, title: "Cockpit")
+                if connected { self?.onCockpitAuthenticated?() }
             }
         }
         receiver.onPairingRequestChanged = { [weak self] request in
@@ -296,13 +309,28 @@ final class MirrorModel {
         }
     }
 
-    func sendAnnotation(_ message: AnnotationMessage) {
+    /// Hands `message` to the frame link. Returns `false` when it could not be
+    /// encoded (too large), so the canvas does not assume Pilot applied it.
+    func sendAnnotation(_ message: AnnotationMessage) -> Bool {
         lastSentAnnotationSeq &+= 1
+        guard receiver.sendAnnotation(message, seq: lastSentAnnotationSeq) else { return false }
         annotationStatusText = "Sending annotations over frame stream"
-        receiver.sendAnnotation(message, seq: lastSentAnnotationSeq)
+        return true
+    }
+
+    /// Records whether Cockpit's ink currently mirrors this canvas (issue
+    /// #431). While it does not, Cockpit shows no ink and the canvas keeps
+    /// trying a full replacement on every change.
+    func setAnnotationMirrorOutOfSync(_ outOfSync: Bool) {
+        guard isAnnotationMirrorOutOfSync != outOfSync else { return }
+        isAnnotationMirrorOutOfSync = outOfSync
+        annotationStatusText = outOfSync
+            ? "Drawing too large to mirror to Cockpit"
+            : "Sending annotations over frame stream"
     }
 
     private func acknowledgeAnnotation(_ seq: UInt32) {
+        guard !isAnnotationMirrorOutOfSync else { return }
         annotationStatusText = "Cockpit received your annotations"
     }
 

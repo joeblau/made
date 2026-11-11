@@ -35,6 +35,8 @@ struct ContentView: View {
             // Frame-count / status reads live in their own view so the 60fps
             // diagnostic ticks don't re-render the canvas or video reps.
             SearchingOverlay(mirror: mirror)
+
+            AnnotationMirrorWarning(mirror: mirror)
         }
         // Settings + Dashboard + Pilot (Mac) connection status, top-left. Clears
         // the annotation toolbar (undo/clear/reset), which sits top-trailing.
@@ -260,6 +262,36 @@ private struct ConnectionStatusBadge: View {
     }
 }
 
+/// Shown while the drawing cannot be mirrored to Cockpit (issue #431): it is
+/// over Pilot's total stroke/point ceilings, or one stroke is too large to
+/// send on its own. A drawing that is merely too large for one replacement is
+/// still mirrored, one stroke per message. Cockpit then shows no ink instead
+/// of ink that no longer matches, until an undo or erase removes the excess.
+private struct AnnotationMirrorWarning: View {
+    var mirror: MirrorModel
+
+    var body: some View {
+        let isOutOfSync = mirror.isAnnotationMirrorOutOfSync
+        VStack {
+            if isOutOfSync {
+                Label("Drawing too large to show on Cockpit", systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .glassEffect(.regular, in: Capsule())
+                    .environment(\.colorScheme, .dark)
+                    .accessibilityHint("Undo or erase strokes, or one very long stroke, to resume mirroring.")
+                    .transition(.opacity)
+            }
+            Spacer()
+        }
+        // Below the floating clusters (48pt circles, 12pt inset, 8pt gap).
+        .padding(.top, 72)
+        .allowsHitTesting(false)
+        .animation(LiquidGlassMetrics.stateChange, value: isOutOfSync)
+    }
+}
+
 /// The "searching for Cockpit" placeholder. Isolated into its own view so the
 /// per-frame `frameCount` updates only re-render this text — not the video or
 /// PencilKit canvas siblings.
@@ -334,27 +366,23 @@ private struct ZoomableMirrorView: UIViewRepresentable {
     func makeUIView(context: Context) -> ZoomableMirrorUIView {
         let view = ZoomableMirrorUIView()
         mirror.attach(view.sampleBufferDisplayLayer)
-        view.onStrokeAdded = { stroke, contentRect in
-            guard let s = Self.annotationStroke(from: stroke, contentRect: contentRect) else { return }
-            mirror.sendAnnotation(.addStroke(s))
+        view.onAnnotation = { message in
+            mirror.sendAnnotation(message)
         }
-        view.onUndo = {
-            mirror.sendAnnotation(.undo)
-        }
-        view.onResync = { drawing, contentRect in
-            mirror.sendAnnotation(.replaceDrawing(Self.annotationDrawing(
-                from: drawing,
-                contentRect: contentRect
-            )))
-        }
-        view.onClear = {
-            mirror.sendAnnotation(.clear)
+        view.onMirrorOutOfSyncChange = { outOfSync in
+            mirror.setAnnotationMirrorOutOfSync(outOfSync)
         }
         view.onCornerInsetsChange = onCornerInsetsChange
         // Apply undo/clear commands that originate on Pilot to this canvas (the
-        // authoritative drawing); the resulting change echoes back to Pilot.
+        // authoritative drawing); the resulting drawing echoes back to Pilot.
         mirror.onRemoteAnnotation = { [weak view] message in
             view?.applyRemoteCommand(message)
+        }
+        // Every (re)authenticated Pilot session starts from the full drawing:
+        // packets queued while disconnected can be dropped, and Pilot may hold
+        // ink from an earlier session (issue #431).
+        mirror.onCockpitAuthenticated = { [weak view] in
+            view?.resyncPilot()
         }
         view.videoSize = mirror.videoSize
         // Demo mode: show a representative still in place of the live video
@@ -382,7 +410,7 @@ private struct ZoomableMirrorView: UIViewRepresentable {
     /// into normalized [0,1] coordinates relative to the un-zoomed video
     /// content rect, so Pilot maps them back correctly regardless of how the
     /// iPad has locally zoomed/panned.
-    private static func annotationDrawing(
+    static func annotationDrawing(
         from drawing: PKDrawing,
         contentRect: CGRect
     ) -> AnnotationDrawing {
@@ -395,7 +423,6 @@ private struct ZoomableMirrorView: UIViewRepresentable {
     /// it has too few in-bounds points to be meaningful.
     static func annotationStroke(from stroke: PKStroke, contentRect: CGRect) -> AnnotationStroke? {
         let drawRect = contentRect
-        let scaleBase = max(1, min(drawRect.width, drawRect.height))
         let points = stroke.path.compactMap { point -> AnnotationPoint? in
             guard let normalized = PlotterGeometry.normalizedPoint(point.location, in: drawRect) else {
                 return nil
@@ -413,8 +440,14 @@ private struct ZoomableMirrorView: UIViewRepresentable {
         } / CGFloat(max(1, stroke.path.count))
 
         return AnnotationStroke(
-            color: AnnotationColor(red: rgba.red, green: rgba.green, blue: rgba.blue, alpha: rgba.alpha),
-            width: max(1.5, averageWidth) / scaleBase,
+            // Wide-gamut ink reports extended-sRGB components outside 0...1,
+            // which the wire format refuses (issue #431).
+            color: AnnotationColor.normalized(red: rgba.red, green: rgba.green, blue: rgba.blue, alpha: rgba.alpha),
+            width: AnnotationStroke.normalizedWidth(
+                penWidth: Double(averageWidth),
+                contentWidth: Double(drawRect.width),
+                contentHeight: Double(drawRect.height)
+            ),
             points: points
         )
     }
@@ -451,15 +484,15 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// Whether ``setToolPickerHidden(_:)`` currently has the picker hidden.
     private var isToolPickerCovered = false
 
-    /// One completed stroke was added — sent incrementally so each line is a
-    /// discrete entry on Pilot's undo stack.
-    var onStrokeAdded: ((PKStroke, CGRect) -> Void)?
-    /// The last stroke was removed (undo).
-    var onUndo: (() -> Void)?
-    /// Non-incremental change (multi-stroke, resize re-anchor) — resend the full
-    /// drawing so Pilot resyncs.
-    var onResync: ((PKDrawing, CGRect) -> Void)?
-    var onClear: (() -> Void)?
+    /// Sends the message that keeps Pilot's ink identical, stroke for stroke,
+    /// to this canvas: `.addStroke` / `.undo` only for a provable append or
+    /// last-stroke removal (so each line is a discrete entry on Pilot's undo
+    /// stack), `.clear`, or a full `.replaceDrawing` for anything else.
+    /// Returns `false` when the message could not be handed to the link, so
+    /// Pilot is not assumed to hold it.
+    var onAnnotation: ((AnnotationMessage) -> Bool)?
+    /// Pilot's ink stopped (`true`) or resumed (`false`) mirroring this canvas.
+    var onMirrorOutOfSyncChange: ((Bool) -> Void)?
     /// The corner-adapted safe area changed; receives ``cornerInsets``.
     var onCornerInsetsChange: ((EdgeInsets) -> Void)?
 
@@ -470,9 +503,13 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     /// Last value delivered to `onCornerInsetsChange`, to report only changes.
     private var reportedCornerInsets: EdgeInsets?
 
-    /// Stroke count at the last delivered change, to classify the next one as an
-    /// add / undo / resync.
-    private var lastStrokeCount = 0
+    /// The normalized strokes Pilot holds after every message delivered so
+    /// far. Each change is diffed against this (not just the stroke count), so
+    /// an eraser removing a middle stroke or an undone erase restoring one
+    /// resends the whole drawing instead of being misreported as undo / add,
+    /// and a message that cannot be delivered or would exceed Pilot's ink
+    /// ceilings marks the mirror out of sync instead (issue #431).
+    private var pilotMirror = AnnotationMirrorSync()
 
     /// Native size of the mirrored window; used to compute the aspect-fit
     /// content rect that annotations normalize against.
@@ -639,7 +676,7 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         ))
 
         canvasView.drawing = PKDrawing(strokes: strokes)
-        lastStrokeCount = strokes.count
+        pilotMirror.assumeMirrored(normalizedStrokes())
         updateCanvasAccessibilityValue()
     }
 
@@ -804,7 +841,7 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         }
     }
 
-    /// Empties this canvas and tells Pilot to clear too (`onClear` sends a single
+    /// Empties this canvas and tells Pilot to clear too (sends a single
     /// `.clear`). Used by both the trash and close buttons; the latter relies on
     /// the clear to also dismiss Pilot's ink overlay, which is ink-gated.
     private func clearCanvas() {
@@ -812,10 +849,9 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         // empty resync as well.
         isApplyingProgrammaticChange = true
         canvasView.drawing = PKDrawing()
-        lastStrokeCount = 0
         updateCanvasAccessibilityValue()
         isApplyingProgrammaticChange = false
-        onClear?()
+        updatePilotMirror { mirror, send in mirror.clear(send: send) }
     }
 
     /// An icon button for the glass toolbar (44 x 48pt at the default size,
@@ -926,43 +962,65 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
     // MARK: Drawing -> normalized annotation
 
     func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-        let count = canvasView.drawing.strokes.count
         updateCanvasAccessibilityValue()
-        guard !isApplyingProgrammaticChange else {
-            // Programmatic change (remote command / layout remap): keep the
-            // count in sync but don't echo a message back.
-            lastStrokeCount = count
-            return
-        }
-        let contentRect = PlotterGeometry.aspectFitRect(contentSize: videoSize, in: canvasView.bounds)
-        if count == lastStrokeCount + 1, let stroke = canvasView.drawing.strokes.last {
-            // One new line: send it incrementally so Pilot stacks it for undo.
-            onStrokeAdded?(stroke, contentRect)
-        } else if count == lastStrokeCount - 1 {
-            onUndo?()
-        } else {
-            // Multi-stroke change / unexpected: resync the whole drawing.
-            onResync?(canvasView.drawing, contentRect)
-        }
-        lastStrokeCount = count
+        // Programmatic changes (remote command / layout remap) send their own
+        // full resync once the mutation is complete.
+        guard !isApplyingProgrammaticChange else { return }
+        syncPilot()
     }
 
     /// Applies an annotation command sent by Pilot to this (authoritative)
-    /// canvas. Suppressed from echoing back, since Pilot already applied it.
+    /// canvas, then echoes the resulting drawing. Pilot already changed its
+    /// copy optimistically, but the canvas undo may not remove the newest
+    /// stroke (it can undo an erase), and a stroke from this canvas may have
+    /// crossed the command in flight, so only a full resync converges.
     func applyRemoteCommand(_ message: AnnotationMessage) {
         isApplyingProgrammaticChange = true
-        defer {
-            lastStrokeCount = canvasView.drawing.strokes.count
-            updateCanvasAccessibilityValue()
-            isApplyingProgrammaticChange = false
-        }
         switch message {
         case .undo:
             canvasView.undoManager?.undo()
         case .clear:
             canvasView.drawing = PKDrawing()
         case .addStroke, .replaceDrawing:
-            break // Pilot only sends undo / clear commands to the canvas.
+            // Pilot only sends undo / clear commands to the canvas.
+            isApplyingProgrammaticChange = false
+            return
+        }
+        updateCanvasAccessibilityValue()
+        isApplyingProgrammaticChange = false
+        resyncPilot()
+    }
+
+    /// The canvas drawing in Pilot's normalized annotation coordinates.
+    private func normalizedStrokes() -> [AnnotationStroke] {
+        let contentRect = PlotterGeometry.aspectFitRect(contentSize: videoSize, in: canvasView.bounds)
+        return ZoomableMirrorView.annotationDrawing(from: canvasView.drawing, contentRect: contentRect).strokes
+    }
+
+    /// Sends the one message that makes Pilot's ink match this canvas, if any.
+    private func syncPilot() {
+        let current = normalizedStrokes()
+        updatePilotMirror { mirror, send in mirror.sync(to: current, send: send) }
+    }
+
+    /// Replaces Pilot's ink with this canvas's full drawing, unconditionally.
+    /// Used after Pilot authenticates, after Pilot-originated edits, and after
+    /// a layout re-anchor.
+    func resyncPilot() {
+        let current = normalizedStrokes()
+        updatePilotMirror { mirror, send in mirror.resync(to: current, send: send) }
+    }
+
+    /// Runs one ``AnnotationMirrorSync`` step against the link and reports a
+    /// change in whether Pilot still mirrors this canvas.
+    private func updatePilotMirror(
+        _ step: (inout AnnotationMirrorSync, (AnnotationMessage) -> Bool) -> Void
+    ) {
+        let wasOutOfSync = pilotMirror.isOutOfSync
+        let send = onAnnotation ?? { _ in false }
+        step(&pilotMirror, send)
+        if pilotMirror.isOutOfSync != wasOutOfSync {
+            onMirrorOutOfSyncChange?(pilotMirror.isOutOfSync)
         }
     }
 
@@ -1005,21 +1063,12 @@ private final class ZoomableMirrorUIView: UIView, PKCanvasViewDelegate, UIGestur
         if wasUndoRegistrationEnabled {
             undoManager?.enableUndoRegistration()
         }
-        lastStrokeCount = canvasView.drawing.strokes.count
         updateCanvasAccessibilityValue()
         isApplyingProgrammaticChange = false
 
         // Pilot stores normalized drawing data. Send exactly one replacement
         // after a real canvas mapping so both sides remain authoritative.
-        reportResync(in: currentRect)
-    }
-
-    /// Resyncs the entire drawing to Pilot (used after a resize re-anchor or any
-    /// non-incremental change). Coordinates are in the canvas's own un-zoomed
-    /// space relative to the content rect, so they stay stable for Pilot.
-    private func reportResync(in contentRect: CGRect) {
-        onResync?(canvasView.drawing, contentRect)
-        lastStrokeCount = canvasView.drawing.strokes.count
+        resyncPilot()
     }
 
     private func updateCanvasAccessibilityValue() {

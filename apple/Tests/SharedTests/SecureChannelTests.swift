@@ -1,6 +1,7 @@
 import Foundation
 import XCTest
 import CryptoKit
+import Network
 
 @testable import Copilot
 
@@ -453,7 +454,294 @@ final class SecureChannelTests: XCTestCase {
         XCTAssertEqual(sender.abandoned, Array(93...100))
     }
 
+    // MARK: - SecureChannelCore handshake state (#427)
+
+    /// An initiator msg1 retry can land inside the responder's hole-punch
+    /// window because the receive loop is already running. Before #427 the
+    /// responder installed transport keys there, the `.holePunching ->
+    /// .connected` edge was silently dropped, and the responder stayed in
+    /// `.handshake` forever: later retries only re-sent msg2 and `sendText`
+    /// refused to send. Keys are now installed only in `.handshake`, so the
+    /// early msg1 is ignored and the next retry completes the channel.
+    @MainActor
+    func testHandshakeDuringHolePunchingDoesNotStrandResponder() async throws {
+        let initiatorStatic = Curve25519.KeyAgreement.PrivateKey()
+        let responderStatic = Curve25519.KeyAgreement.PrivateKey()
+        let responderPort = SecureChannelCore.randomEphemeralPort()
+        var peerPort = SecureChannelCore.randomEphemeralPort()
+        while peerPort == responderPort {
+            peerPort = SecureChannelCore.randomEphemeralPort()
+        }
+
+        // The test plays the initiator over a real loopback UDP socket so it
+        // controls exactly when msg1 reaches the responder.
+        let peer = try LoopbackUDPPeer(localPort: peerPort)
+        defer { peer.stop() }
+        try await waitUntil("test peer socket ready") { peer.isReady }
+
+        RendezvousStubProtocol.peerResponse = try JSONSerialization.data(withJSONObject: [
+            "publicKey": initiatorStatic.publicKey.rawRepresentation.base64EncodedString(),
+            "ip": "127.0.0.1",
+            "port": Int(peerPort),
+        ])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RendezvousStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            session.invalidateAndCancel()
+            RendezvousStubProtocol.peerResponse = nil
+        }
+
+        let signaling = try SignalingClient(session: session)
+        let token = try SecurePairingStore.generateToken()
+        let responder = SecureChannelCore(
+            role: .responder,
+            signaling: signaling,
+            token: token,
+            staticKey: responderStatic,
+            peerStatic: initiatorStatic.publicKey,
+            identityChanges: nil,
+            localPort: responderPort,
+            handshakeSchedule: HandshakeRetrySchedule(
+                interval: .milliseconds(500),
+                timeout: .seconds(30)
+            )
+        )
+        defer { responder.disconnect() }
+        responder.connect()
+
+        // The first hole-punch byte proves the responder's socket and receive
+        // loop are live while it is still in its 750 ms hole-punch window.
+        try await waitUntil("responder hole-punch byte") { !peer.datagrams.isEmpty }
+        let stateWhenMsg1Sent = responder.state
+        XCTAssertEqual(stateWhenMsg1Sent, .holePunching)
+
+        let (initiator, msg1) = try NoiseIK.Initiator.start(
+            staticKey: initiatorStatic,
+            responderStatic: responderStatic.publicKey
+        )
+        var msg1Packet = PacketCodec.encodeHeader(type: .handshake, counter: 0)
+        msg1Packet.append(msg1)
+        peer.send(msg1Packet)
+
+        try await waitUntil("responder leaves hole punching") {
+            responder.state != .holePunching
+        }
+
+        // The initiator's retry timer re-sends the identical msg1 packet.
+        peer.send(msg1Packet)
+        try await waitUntil("responder connects on the retried msg1") {
+            responder.state == .connected
+        }
+
+        // The responder hands msg2 to the socket and then transitions to
+        // .connected in the same main-actor task, but the test peer records
+        // the datagram only after loopback delivery and a main-queue hop, so
+        // wait for msg2 itself rather than reading it straight after connect.
+        try await waitUntil("responder msg2 reply") {
+            peer.datagrams.contains { (try? PacketCodec.parse($0))?.type == .handshake }
+        }
+        let reply = try XCTUnwrap(
+            peer.datagrams
+                .compactMap { try? PacketCodec.parse($0) }
+                .first { $0.type == .handshake },
+            "responder must answer the retried msg1 with msg2"
+        )
+        let initiatorKeys = try initiator.receive(reply.ciphertextAndTag).keys
+
+        // The responder is genuinely usable: it sends traffic the initiator's
+        // keys can open, instead of refusing with "Not connected".
+        // Look up the ping by type rather than by index: a late duplicate
+        // msg2 from the cached re-send path may land after `sentBefore`.
+        let sentBefore = peer.datagrams.count
+        func firstControlPacket() -> Data? {
+            peer.datagrams.dropFirst(sentBefore).first {
+                (try? PacketCodec.parse($0))?.type == .reliableControl
+            }
+        }
+        responder.sendText("ping")
+        try await waitUntil("responder sends encrypted text") {
+            firstControlPacket() != nil
+        }
+        let receive = SecureChannelCore.Role.initiator.receiveKey(from: initiatorKeys)
+        let opened = try PacketCodec.open(
+            try XCTUnwrap(firstControlPacket()),
+            key: receive.key,
+            baseNonce: receive.nonce
+        )
+        XCTAssertEqual(opened.type, .reliableControl)
+        let envelope = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: opened.plaintext) as? [String: Any]
+        )
+        XCTAssertEqual(envelope["text"] as? String, "ping")
+    }
+
+    // MARK: - Identity rotation (#429)
+
+    /// `DeviceIdentity.Vault.regenerate()` persists the new key, posts the
+    /// change on its center, and live transports subscribed through the
+    /// vault's change source adopt it. The Keychain vault and `.stored`
+    /// source use the process-wide center the transports observe.
+    func testRegeneratePostsTheChangeThatLiveTransportsAdopt() async throws {
+        let center = NotificationCenter()
+        let slot = InMemoryIdentitySlot()
+        let vault = DeviceIdentity.Vault.inMemory(slot: slot, center: center)
+        let original = try vault.loadOrCreate()
+        let service = PeerSyncService(
+            role: .advertiser,
+            displayName: "Vault Rotation Test",
+            usesEphemeralIdentity: true,
+            identityChanges: vault.changeSource
+        )
+        let sender = FrameSender(usesEphemeralIdentity: true, identityChanges: vault.changeSource)
+        let serviceAtStart = await service.localIdentityPublicKeyBase64()
+        XCTAssertEqual(serviceAtStart, Self.base64(original))
+
+        let posted = expectation(
+            forNotification: DeviceIdentity.didChangeNotification,
+            object: nil,
+            notificationCenter: center
+        )
+        let rotated = try vault.regenerate()
+        await fulfillment(of: [posted], timeout: 1)
+
+        XCTAssertNotEqual(Self.base64(rotated), Self.base64(original))
+        XCTAssertEqual(slot.data, rotated.rawRepresentation, "the rotated key must be persisted")
+        XCTAssertEqual(try Self.base64(vault.loadOrCreate()), Self.base64(rotated))
+        // `post` runs each observer synchronously and each reload is queued
+        // ahead of these getters, so the reads are ordered after adoption.
+        let serviceKey = await service.localIdentityPublicKeyBase64()
+        let senderKey = await sender.localIdentityPublicKeyBase64()
+        XCTAssertEqual(serviceKey, Self.base64(rotated), "Multipeer must prove the regenerated key")
+        XCTAssertEqual(senderKey, Self.base64(rotated), "FrameLink must prove the regenerated key")
+
+        XCTAssertTrue(DeviceIdentity.vault.center === NotificationCenter.default)
+        XCTAssertTrue(DeviceIdentity.ChangeSource.stored.center === NotificationCenter.default)
+    }
+
+    /// "Regenerate & re-sync" rotates the identity, drops the synced peer
+    /// (it pins the old key and must approve the change), and announces the
+    /// stored key. Driven over an in-memory vault, never the Keychain.
+    @MainActor
+    func testSecureIdentityRegenerateClearsTheSyncedPeerAndAnnouncesTheStoredKey() throws {
+        let vault = DeviceIdentity.Vault.inMemory()
+        let pin = Curve25519.KeyAgreement.PrivateKey().publicKey.rawRepresentation.base64EncodedString()
+        let identity = SecureIdentity(role: .copilot, vault: vault, peerPin: { pin })
+        let before = try XCTUnwrap(identity.localPublicKey)
+        XCTAssertEqual(identity.peerPublicKey, pin)
+        XCTAssertTrue(identity.isSynced)
+        var announced: [DeviceKeyAnnounce] = []
+        identity.send = { message in
+            if case .deviceKey(let announce) = message { announced.append(announce) }
+        }
+
+        identity.regenerate()
+
+        let stored = try Self.base64(vault.loadOrCreate())
+        XCTAssertNotEqual(stored, before)
+        XCTAssertEqual(identity.localPublicKey, stored)
+        XCTAssertNil(identity.peerPublicKey, "a regenerated identity must stop reporting the old sync")
+        XCTAssertFalse(identity.isSynced)
+        XCTAssertEqual(announced.map(\.publicKey), [stored])
+    }
+
+    /// A secure-messaging channel mid-handshake (msg1 retries pending) is
+    /// closed the moment the identity rotates, stops proving the old key, and
+    /// refuses to restart; Connect builds a new channel with the new key.
+    @MainActor
+    func testIdentityRotationClosesAPendingSecureMessagingHandshake() async throws {
+        let vault = DeviceIdentity.Vault.inMemory()
+        let initiatorStatic = try vault.loadOrCreate()
+        let responderStatic = Curve25519.KeyAgreement.PrivateKey()
+        let initiatorPort = SecureChannelCore.randomEphemeralPort()
+        var peerPort = SecureChannelCore.randomEphemeralPort()
+        while peerPort == initiatorPort {
+            peerPort = SecureChannelCore.randomEphemeralPort()
+        }
+
+        // The test peer stands in for the responder and never answers msg1,
+        // so the initiator stays in `.handshake` re-sending it.
+        let peer = try LoopbackUDPPeer(localPort: peerPort)
+        defer { peer.stop() }
+        try await waitUntil("test peer socket ready") { peer.isReady }
+
+        RendezvousStubProtocol.peerResponse = try JSONSerialization.data(withJSONObject: [
+            "publicKey": responderStatic.publicKey.rawRepresentation.base64EncodedString(),
+            "ip": "127.0.0.1",
+            "port": Int(peerPort),
+        ])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RendezvousStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer {
+            session.invalidateAndCancel()
+            RendezvousStubProtocol.peerResponse = nil
+        }
+
+        let channel = SecureChannelCore(
+            role: .initiator,
+            signaling: try SignalingClient(session: session),
+            token: try SecurePairingStore.generateToken(),
+            staticKey: initiatorStatic,
+            peerStatic: responderStatic.publicKey,
+            identityChanges: vault.changeSource,
+            localPort: initiatorPort,
+            handshakeSchedule: HandshakeRetrySchedule(
+                interval: .milliseconds(100),
+                timeout: .seconds(30)
+            )
+        )
+        defer { channel.disconnect() }
+        channel.connect()
+
+        func handshakePackets() -> Int {
+            peer.datagrams.filter { (try? PacketCodec.parse($0))?.type == .handshake }.count
+        }
+        try await waitUntil("initiator msg1 and a retry") { handshakePackets() >= 2 }
+        XCTAssertEqual(channel.state, .handshake)
+
+        // Posted on the main thread, as `SecureIdentity.regenerate()` does.
+        try vault.regenerate()
+        XCTAssertEqual(channel.state, .failed(reason: SecureChannelCore.identityRotatedReason))
+
+        channel.connect()
+        XCTAssertEqual(
+            channel.state,
+            .failed(reason: SecureChannelCore.identityRotatedReason),
+            "a channel built on the rotated-out key must never restart"
+        )
+        let afterRotation = handshakePackets()
+        try await Task.sleep(for: .milliseconds(500))
+        // One packet may already have been on the loopback when it closed.
+        XCTAssertLessThanOrEqual(
+            handshakePackets(),
+            afterRotation + 1,
+            "no handshake retry may keep proving the rotated-out key"
+        )
+    }
+
+    private static func base64(_ key: Curve25519.KeyAgreement.PrivateKey) -> String {
+        key.publicKey.rawRepresentation.base64EncodedString()
+    }
+
     // MARK: - Helpers
+
+    private struct WaitTimedOut: Error {
+        let condition: String
+    }
+
+    @MainActor
+    private func waitUntil(
+        _ condition: String,
+        timeout: Duration = .seconds(5),
+        _ predicate: () -> Bool
+    ) async throws {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while !predicate(), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        guard predicate() else { throw WaitTimedOut(condition: condition) }
+    }
 
     private func completeHandshake() throws -> (initiator: TransportKeys, responder: TransportKeys) {
         let initiatorStatic = Curve25519.KeyAgreement.PrivateKey()
@@ -470,5 +758,133 @@ final class SecureChannelTests: XCTestCase {
         let (responderKeys, msg2) = try responder.respond()
         let (initiatorKeys, _) = try initiatorState.receive(msg2)
         return (initiatorKeys, responderKeys)
+    }
+
+    /// Answers every rendezvous request with the configured peer endpoint so a
+    /// `SecureChannelCore` proceeds straight to hole punching.
+    private final class RendezvousStubProtocol: URLProtocol {
+        nonisolated(unsafe) static var peerResponse: Data?
+
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+        override func startLoading() {
+            guard let url = request.url,
+                  let body = Self.peerResponse,
+                  let response = HTTPURLResponse(
+                      url: url,
+                      statusCode: 200,
+                      httpVersion: nil,
+                      headerFields: nil
+                  )
+            else {
+                client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+                return
+            }
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+
+        override func stopLoading() {}
+    }
+}
+
+/// A loopback UDP listener that stands in for the remote secure-channel peer,
+/// recording every datagram it receives and replying on the flow the
+/// responder opened. A socket connected to the responder's configured port
+/// would drop everything: the iOS Simulator does not keep a `0.0.0.0`-bound
+/// `NWConnection`'s required local port as the datagram source port, so the
+/// responder's packets arrive from an ephemeral port. Replying on the accepted
+/// flow still reaches the responder's socket.
+@MainActor
+private final class LoopbackUDPPeer {
+    private let listener: NWListener
+    private var flow: NWConnection?
+    private var pendingSends: [Data] = []
+    private(set) var isReady = false
+    private(set) var datagrams: [Data] = []
+
+    init(localPort: UInt16) throws {
+        guard let local = NWEndpoint.Port(rawValue: localPort) else { throw URLError(.badURL) }
+        let parameters = NWParameters.udp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: local)
+        parameters.allowLocalEndpointReuse = true
+        listener = try NWListener(using: parameters)
+        listener.stateUpdateHandler = { [weak self] state in
+            MainActor.assumeIsolated {
+                if case .ready = state { self?.isReady = true }
+            }
+        }
+        listener.newConnectionHandler = { [weak self] connection in
+            MainActor.assumeIsolated {
+                guard let self else {
+                    connection.cancel()
+                    return
+                }
+                self.accept(connection)
+            }
+        }
+        listener.start(queue: .main)
+    }
+
+    /// Sends on the responder's flow, holding packets until it has opened one.
+    func send(_ data: Data) {
+        guard let flow else {
+            pendingSends.append(data)
+            return
+        }
+        flow.send(content: data, completion: .contentProcessed { _ in })
+    }
+
+    func stop() {
+        flow?.cancel()
+        flow = nil
+        listener.cancel()
+    }
+
+    private func accept(_ connection: NWConnection) {
+        flow?.cancel()
+        flow = connection
+        connection.start(queue: .main)
+        receiveNext(on: connection)
+        let queued = pendingSends
+        pendingSends.removeAll()
+        queued.forEach(send)
+    }
+
+    private func receiveNext(on connection: NWConnection) {
+        connection.receiveMessage { [weak self] data, _, _, error in
+            MainActor.assumeIsolated {
+                guard let self, connection === self.flow else { return }
+                if let data, !data.isEmpty { self.datagrams.append(data) }
+                if error == nil { self.receiveNext(on: connection) }
+            }
+        }
+    }
+}
+
+/// In-memory stand-in for the Keychain item behind a `DeviceIdentity.Vault`.
+final class InMemoryIdentitySlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: Data?
+
+    var data: Data? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+}
+
+extension DeviceIdentity.Vault {
+    /// A vault over in-memory storage and a private center, so tests drive
+    /// the real identity-rotation path without touching any Keychain (#429).
+    static func inMemory(
+        slot: InMemoryIdentitySlot = InMemoryIdentitySlot(),
+        center: NotificationCenter = NotificationCenter()
+    ) -> DeviceIdentity.Vault {
+        DeviceIdentity.Vault(
+            storage: Storage(read: { slot.data }, write: { slot.data = $0 }),
+            center: center
+        )
     }
 }

@@ -141,7 +141,11 @@ public final class FrameSender: @unchecked Sendable {
     private var running = false
     private var framesSent = 0
     private var invalidPacketCount = 0
-    private let localKey: Curve25519.KeyAgreement.PrivateKey
+    private var localKey: Curve25519.KeyAgreement.PrivateKey
+    /// Where identity rotations come from; `nil` for an ephemeral identity
+    /// that must never adopt the device key.
+    private let identityChanges: DeviceIdentity.ChangeSource?
+    private var identityObserver: (any NSObjectProtocol)?
     private let pairingStore = FrameLinkPairingStore()
     private var trustedPeerPublicKey: String?
     private var pendingPairing: (id: ObjectIdentifier, request: FrameLinkPairingRequest)?
@@ -172,16 +176,38 @@ public final class FrameSender: @unchecked Sendable {
     /// Invoked when a client advertises its decode capabilities (handshake).
     public var onCapability: ((FrameLink.Capability) -> Void)?
 
-    public init(usesEphemeralIdentity: Bool = false) {
+    public convenience init(usesEphemeralIdentity: Bool = false) {
+        self.init(usesEphemeralIdentity: usesEphemeralIdentity, identityChanges: nil)
+    }
+
+    /// `identityChanges` is a test seam: when set, the rotation observer is
+    /// installed on its center and reloads through its loader even with an
+    /// ephemeral identity. `nil` observes `DeviceIdentity.ChangeSource.stored`
+    /// unless the identity is ephemeral.
+    init(usesEphemeralIdentity: Bool, identityChanges: DeviceIdentity.ChangeSource?) {
         let isTesting = usesEphemeralIdentity
             || ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
         localKey = isTesting
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())
+        self.identityChanges = identityChanges ?? (isTesting ? nil : .stored)
         trustedPeerPublicKey = isTesting ? nil : pairingStore.loadPeerPublicKey()
+        if let center = self.identityChanges?.center {
+            identityObserver = DeviceIdentity.observeChanges(center: center) { [weak self] in
+                self?.reloadLocalIdentity()
+            }
+            // The key above was loaded before this observer existed; reload
+            // once so a rotation in between is not missed (issue #429).
+            reloadLocalIdentity()
+        }
     }
 
-    deinit { stop() }
+    deinit {
+        if let identityObserver, let center = identityChanges?.center {
+            center.removeObserver(identityObserver)
+        }
+        stop()
+    }
 
     public func start() {
         queue.async { [weak self] in
@@ -224,6 +250,53 @@ public final class FrameSender: @unchecked Sendable {
             self.connections.removeAll()
             self.onClientCountChanged?(0)
         }
+    }
+
+    /// The identity key new FrameLink handshakes prove.
+    func localIdentityPublicKeyBase64() async -> String {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                continuation.resume(
+                    returning: self?.localKey.publicKey.rawRepresentation.base64EncodedString() ?? ""
+                )
+            }
+        }
+    }
+
+    /// Test seam (#429): authenticates `connection` exactly as a client the
+    /// listener accepted, so a test can hold a live handshake or pending
+    /// pairing without Bonjour.
+    func adoptForTesting(_ connection: NWConnection) {
+        queue.async { [weak self] in
+            self?.adopt(connection)
+        }
+    }
+
+    private func reloadLocalIdentity() {
+        queue.async { [weak self] in
+            guard let self, let load = self.identityChanges?.load,
+                  let key = try? load() else { return }
+            self.adoptLocalIdentityLocked(key)
+        }
+    }
+
+    /// Proves `key` from now on (issue #429). Clients authenticated with the
+    /// rotated-out key are disconnected; the listener stays up, so Plotter
+    /// reconnects and must approve the key change before frames flow again.
+    private func adoptLocalIdentityLocked(_ key: Curve25519.KeyAgreement.PrivateKey) {
+        guard key.publicKey.rawRepresentation != localKey.publicKey.rawRepresentation else { return }
+        localKey = key
+        let hadAuthenticatedClient = connections.values.contains { $0.security.isAuthenticated }
+        for state in connections.values {
+            state.authenticationDeadline?.cancel()
+            state.connection.cancel()
+        }
+        connections.removeAll()
+        if pendingPairing != nil {
+            pendingPairing = nil
+            onPairingRequestChanged?(nil)
+        }
+        if hadAuthenticatedClient { onClientCountChanged?(0) }
     }
 
     /// Sends one media packet to every connected client over the reliable TCP
@@ -716,6 +789,11 @@ public final class FrameReceiver: @unchecked Sendable {
     private var pendingOutbound: [Data] = []
     private var invalidPacketCount = 0
     private let pairingStore = FrameLinkPairingStore()
+    /// Where identity rotations come from; `nil` for an ephemeral identity
+    /// that must never adopt the device key.
+    private let identityChanges: DeviceIdentity.ChangeSource?
+    private var identityObserver: (any NSObjectProtocol)?
+    /// The only owner of the identity key this receiver proves.
     private var security: FrameLinkSecureSession
     private var pairingRequest: FrameLinkPairingRequest?
 
@@ -741,18 +819,40 @@ public final class FrameReceiver: @unchecked Sendable {
     /// actually connected.
     public var onConnectedChanged: ((Bool) -> Void)?
 
-    public init() {
+    public convenience init() {
+        self.init(identityChanges: nil)
+    }
+
+    /// `identityChanges` is a test seam: when set, the rotation observer is
+    /// installed on its center and reloads through its loader even with an
+    /// ephemeral identity. `nil` observes `DeviceIdentity.ChangeSource.stored`
+    /// unless the identity is ephemeral.
+    init(identityChanges: DeviceIdentity.ChangeSource?) {
         let isTesting = ProcessInfo.processInfo.environment.keys.contains("XCTestConfigurationFilePath")
         let key = isTesting
             ? Curve25519.KeyAgreement.PrivateKey()
             : ((try? DeviceIdentity.loadOrCreate()) ?? Curve25519.KeyAgreement.PrivateKey())
+        self.identityChanges = identityChanges ?? (isTesting ? nil : .stored)
         security = FrameLinkSecureSession(
             localKey: key,
             trustedPeerPublicKey: isTesting ? nil : pairingStore.loadPeerPublicKey()
         )
+        if let center = self.identityChanges?.center {
+            identityObserver = DeviceIdentity.observeChanges(center: center) { [weak self] in
+                self?.reloadLocalIdentity()
+            }
+            // The key above was loaded before this observer existed; reload
+            // once so a rotation in between is not missed (issue #429).
+            reloadLocalIdentity()
+        }
     }
 
-    deinit { stop() }
+    deinit {
+        if let identityObserver, let center = identityChanges?.center {
+            center.removeObserver(identityObserver)
+        }
+        stop()
+    }
 
     public func start() {
         queue.async { [weak self] in
@@ -802,8 +902,58 @@ public final class FrameReceiver: @unchecked Sendable {
         }
     }
 
-    public func sendAnnotation(_ message: AnnotationMessage, seq: UInt32) {
-        enqueueOutbound(FrameLink.encode(.annotation(seq: seq, message: message)))
+    /// The identity key the live secure session proves.
+    func localIdentityPublicKeyBase64() async -> String {
+        await withCheckedContinuation { continuation in
+            queue.async { [weak self] in
+                continuation.resume(returning: self?.security.localPublicKeyBase64 ?? "")
+            }
+        }
+    }
+
+    /// Test seam (#429): dials `endpoint` directly instead of discovering
+    /// Pilot over Bonjour, then authenticates exactly as a discovered stream.
+    func connectForTesting(to endpoint: NWEndpoint) {
+        queue.async { [weak self] in
+            guard let self, self.connection == nil else { return }
+            self.connect(to: endpoint)
+        }
+    }
+
+    private func reloadLocalIdentity() {
+        queue.async { [weak self] in
+            guard let self, let load = self.identityChanges?.load,
+                  let key = try? load() else { return }
+            self.adoptLocalIdentityLocked(key)
+        }
+    }
+
+    /// Proves `key` from now on (issue #429): the secure session is rebuilt
+    /// around it with the same Pilot pin, and a connection authenticated with
+    /// the rotated-out key is torn down and retried.
+    private func adoptLocalIdentityLocked(_ key: Curve25519.KeyAgreement.PrivateKey) {
+        guard key.publicKey.rawRepresentation.base64EncodedString() != security.localPublicKeyBase64
+        else { return }
+        security = FrameLinkSecureSession(
+            localKey: key,
+            trustedPeerPublicKey: security.trustedPeerPublicKey
+        )
+        if connection != nil { teardownConnection() }
+    }
+
+    /// Queues an annotation update for Pilot. Returns `false`, queuing
+    /// nothing, when the message cannot be encoded (it is over the protocol's
+    /// per-message stroke/point or `maxAnnotationBytes` limits), so the caller
+    /// knows Pilot will never see it (issue #431).
+    @discardableResult
+    public func sendAnnotation(_ message: AnnotationMessage, seq: UInt32) -> Bool {
+        let packet = FrameLink.encode(.annotation(seq: seq, message: message))
+        guard !packet.isEmpty else {
+            frameLinkLog.error("FrameReceiver: annotation (seq \(seq, privacy: .public)) too large to encode; not sent")
+            return false
+        }
+        enqueueOutbound(packet)
+        return true
     }
 
     /// Reports current link quality back to the sender over TCP, driving the
@@ -849,8 +999,10 @@ public final class FrameReceiver: @unchecked Sendable {
     }
 
     private func enqueueOutboundLocked(_ packet: Data) {
-        guard !packet.isEmpty,
-              connection?.state == .ready,
+        // An empty packet is an encode failure; never queue it in place of a
+        // real one (it would also evict a queued packet).
+        guard !packet.isEmpty else { return }
+        guard connection?.state == .ready,
               let record = security.seal(packet) else {
             pendingOutbound.append(packet)
             if pendingOutbound.count > 16 {
