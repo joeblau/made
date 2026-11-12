@@ -469,6 +469,7 @@
 		9E5CA98D818836DE6591E209 /* DashboardSnapshotStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5ABC06040C984B5F70185E3 /* DashboardSnapshotStoreTests.swift */; };
 		9EC1B194C52BE8EE670AE7B3 /* AgentChatTimelineCursor.swift in Sources */ = {isa = PBXBuildFile; fileRef = CAE42DD2A0D6ED7CEEA7859D /* AgentChatTimelineCursor.swift */; };
 		9ECF226D1061C49A839C3EF0 /* EditorPaneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F46D7F05FDC4239EFB222A9 /* EditorPaneView.swift */; };
+		9F4ED64BCD1002C89363BC31 /* GitHubStatusStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4E07B6604A738BA24E6B2A4 /* GitHubStatusStore.swift */; };
 		9F62F43CE638C1BC5930306F /* AgentTranscript.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3996910387E572BA06C8464F /* AgentTranscript.swift */; };
 		9F776E09C5BE9C8A31F6B808 /* DockerNativePresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF473328FC403D95F77EB28D /* DockerNativePresentationTests.swift */; };
 		9F7E41BF18917AC3B365D496 /* WingmanDeliveryState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD24581F338C2987036C440 /* WingmanDeliveryState.swift */; };
@@ -1447,6 +1448,7 @@
 		F3DF31ED6D732374F745AE8E /* BrowserStartPageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserStartPageView.swift; sourceTree = "<group>"; };
 		F494B70BE7239A214ED3F27F /* RepositoryPollingScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryPollingScheduler.swift; sourceTree = "<group>"; };
 		F4B1CB42E023D3F070FE75AD /* CopilotUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CopilotUITests.swift; sourceTree = "<group>"; };
+		F4E07B6604A738BA24E6B2A4 /* GitHubStatusStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitHubStatusStore.swift; sourceTree = "<group>"; };
 		F562118D7FBBE6CCA72AF08D /* DashboardPublisherTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardPublisherTests.swift; sourceTree = "<group>"; };
 		F59F3CAC3B7F2FD1B27F7A25 /* PlotterTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = PlotterTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		F636EB97BEC10DA926968C2D /* AgentChatSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatSession.swift; sourceTree = "<group>"; };
@@ -2007,6 +2009,7 @@
 				558B70C71B4C69DBF6C22A16 /* GhosttyMenuKeyEquivalentPolicy.swift */,
 				D0C9D883427F31C51E2CE318 /* GhosttyRuntime.swift */,
 				816C193307796EC2AFCFAE3E /* GhosttyTerminal.swift */,
+				F4E07B6604A738BA24E6B2A4 /* GitHubStatusStore.swift */,
 				C49BE3995F68E7CF284D531B /* GitHubTasksStore.swift */,
 				6FB9DCB7C4FF99FDDF01BB19 /* GitStatus.swift */,
 				F1A8CA9F655D9AE680F56B02 /* GlassCompat.swift */,
@@ -3298,6 +3301,7 @@
 				821D30018129130E03C04BE4 /* GhosttyMenuKeyEquivalentPolicy.swift in Sources */,
 				084814623442DF4F3BAE03CA /* GhosttyRuntime.swift in Sources */,
 				CAF154C293BCB0ECA66FE37B /* GhosttyTerminal.swift in Sources */,
+				9F4ED64BCD1002C89363BC31 /* GitHubStatusStore.swift in Sources */,
 				1AEA8BA19CC862B3ED8AD226 /* GitHubTasksStore.swift in Sources */,
 				38DCC055F9A4C36E89B20B0C /* GitStatus.swift in Sources */,
 				BA5FDD993BDA99A7354F8C4D /* GlassCompat.swift in Sources */,

@@ -20,6 +20,8 @@ final class PilotApp {
     let remoteInkModel = RemoteInkModel()
     let actionWatcher: WorkspaceActionWatcher
     let usageStore: UsageStore
+    /// GitHub's public Actions status, shared by every window's inspector.
+    let githubStatusStore = GitHubStatusStore()
     let agenticUseStore: AgenticUsageStore
     let runnersStore: RunnersStore
     let droneStore: DroneStore
@@ -188,7 +190,7 @@ final class PilotApp {
         controller.inspectorFactory = { [weak self] workspace in
             guard let self else { return nil }
             let inspector = InspectorViewController(workspace: workspace, usageStore: usageStore,
-                defaults: preferences, isLive: !isIsolated)
+                statusStore: githubStatusStore, defaults: preferences, isLive: !isIsolated)
             inspector.onOpenUsageSettings = { [weak self] in self?.showSettings(section: SettingsTab.usage) }
             return inspector
         }
