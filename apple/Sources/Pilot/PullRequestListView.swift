@@ -120,6 +120,8 @@ final class InspectorSectionHeader: NSView {
     /// otherwise the refresh button swaps itself for a spinner in place.
     private let spinner = NSProgressIndicator()
     private let refreshButton = CockpitRefreshButton(help: "Refresh", diameter: 26, action: {})
+    /// GitHub's own Actions incident level; hidden unless something is wrong.
+    let statusBadge = GitHubStatusBadge()
     var refresh: (() -> Void)?
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -132,7 +134,7 @@ final class InspectorSectionHeader: NSView {
         spinner.isHidden = true
         spinner.setAccessibilityLabel(CockpitRefreshButton.refreshingLabel)
         refreshButton.action = { [weak self] in self?.refresh?() }
-        InspectorNativeUI.pin(InspectorNativeUI.horizontal([icon, titleField, NSView(), spinner, refreshButton]), in: self, inset: 8)
+        InspectorNativeUI.pin(InspectorNativeUI.horizontal([icon, titleField, NSView(), statusBadge, spinner, refreshButton]), in: self, inset: 8)
         NSLayoutConstraint.activate([
             icon.widthAnchor.constraint(equalToConstant: 16),
             spinner.widthAnchor.constraint(equalToConstant: 16),
@@ -156,6 +158,9 @@ final class InspectorSectionHeader: NSView {
         spinner.isHidden = !showsPlainSpinner
         if showsPlainSpinner { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
     }
+    func update(githubStatus: GitHubActionsStatus?, defaults: UserDefaults = .standard) {
+        statusBadge.update(githubStatus, defaults: defaults)
+    }
 }
 /// The workspace owns tab selection; this controller owns only visible UI and polling.
 @MainActor
@@ -164,6 +169,7 @@ final class InspectorViewController: NSViewController {
     let gitStore: RepositoryStore
     let tasksStore: GitHubTasksStore
     let usageStore: UsageStore
+    let statusStore: GitHubStatusStore
     let defaults: UserDefaults
     let isLive: Bool
     var onOpenUsageSettings: (() -> Void)?
@@ -184,9 +190,11 @@ final class InspectorViewController: NSViewController {
     private lazy var usage = UsageViewController(store: usageStore, defaults: defaults)
 
     init(workspace: Workspace, usageStore: UsageStore, gitStore: RepositoryStore = RepositoryStore(),
-         tasksStore: GitHubTasksStore = GitHubTasksStore(), defaults: UserDefaults = .standard, isLive: Bool = true) {
+         tasksStore: GitHubTasksStore = GitHubTasksStore(), statusStore: GitHubStatusStore = GitHubStatusStore(),
+         defaults: UserDefaults = .standard, isLive: Bool = true) {
         self.workspace = workspace
         self.usageStore = usageStore
+        self.statusStore = statusStore
         self.gitStore = gitStore
         self.tasksStore = tasksStore
         self.defaults = defaults
@@ -277,6 +285,7 @@ final class InspectorViewController: NSViewController {
             zoomObserver = nil
             observedRoot = nil
             observedTab = nil
+            statusStore.setPolling(false, for: self)
             usage.setPresentationActive(false)
             if isLive {
                 // Usage has no repository polling. Suspend the native lists
@@ -329,6 +338,8 @@ final class InspectorViewController: NSViewController {
         tabs.selectedSegment = InspectorTab.allCases.firstIndex(of: tab) ?? 0
         tabs.font = InspectorNativeUI.font(11, defaults: defaults)
         synchronizePolling(tab: tab, root: workspace.effectiveRootPath)
+        statusStore.setPolling(isLive && isActive && tab == .actions, for: self)
+        header.update(githubStatus: tab == .actions ? statusStore.status : nil, defaults: defaults)
         if displayedTab != tab {
             usage.setPresentationActive(false)
             header.isHidden = tab == .usage
@@ -377,7 +388,9 @@ final class InspectorViewController: NSViewController {
     }
     private func refreshSelectedTab() {
         switch workspace.inspectorTab {
-        case .actions: gitStore.fetchWorkflowRuns(policy: .manual)
+        case .actions:
+            gitStore.fetchWorkflowRuns(policy: .manual)
+            if isLive { Task { await statusStore.refresh() } }
         case .tasks: tasksStore.refresh()
         case .pullRequests: gitStore.fetchPullRequests(policy: .manual)
         case .usage: usageStore.reload()
