@@ -443,8 +443,8 @@ private final class WorkspaceSidebarCell: NSTableCellView {
             row.topAnchor.constraint(equalTo: topAnchor, constant: 4),
             row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
         ])
-        gauge.widthAnchor.constraint(equalToConstant: 26).isActive = true
-        gauge.heightAnchor.constraint(equalToConstant: 26).isActive = true
+        gauge.widthAnchor.constraint(equalToConstant: WorkspaceGaugeView.diameter).isActive = true
+        gauge.heightAnchor.constraint(equalToConstant: WorkspaceGaugeView.diameter).isActive = true
         taskBadge.heightAnchor.constraint(equalToConstant: WorkspaceOpenTaskBadgeView.diameter).isActive = true
         for accessory in [gauge, taskBadge] as [NSView] {
             accessory.setContentHuggingPriority(.required, for: .horizontal)

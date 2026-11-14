@@ -38,6 +38,10 @@ final class WorkspaceGaugeView: NSButton {
     var running = 0 { didSet { needsDisplay = true } }
     var started = 0 { didSet { needsDisplay = true } }
     var onJump: (() -> Void)?
+    /// The ring's outer edge meets the view bounds, so the gauge and the
+    /// open-task badge beside it are circles of the same radius.
+    static let diameter = WorkspaceOpenTaskBadgeView.diameter
+    static let lineWidth: CGFloat = 3
     /// True on a selected (accent-filled) sidebar row, where label colours
     /// switch to white so the fraction stays legible.
     var isEmphasized = false { didSet { if oldValue != isEmphasized { needsDisplay = true } } }
@@ -55,14 +59,14 @@ final class WorkspaceGaugeView: NSButton {
     @objc private func jump() { if running > 0 { onJump?() } }
     override func draw(_ dirtyRect: NSRect) {
         guard started > 0 else { return }
-        let track = WorkspaceGaugeArc(fraction: 1).inset(by: 2).path(in: bounds)
-        track.lineWidth = 3
+        let track = WorkspaceGaugeArc(fraction: 1).inset(by: Self.lineWidth / 2).path(in: bounds)
+        track.lineWidth = Self.lineWidth
         track.lineCapStyle = .round
         (isEmphasized ? NSColor.white.withAlphaComponent(0.3) : NSColor.quaternaryLabelColor).setStroke()
         track.stroke()
         let fraction = Double(running) / Double(started)
-        let path = WorkspaceGaugeArc(fraction: fraction).inset(by: 2).path(in: bounds)
-        path.lineWidth = 3
+        let path = WorkspaceGaugeArc(fraction: fraction).inset(by: Self.lineWidth / 2).path(in: bounds)
+        path.lineWidth = Self.lineWidth
         path.lineCapStyle = .round
         let progressColor: NSColor = running == started ? .systemGreen : (isEmphasized ? .white : .controlAccentColor)
         progressColor.setStroke()
@@ -79,7 +83,7 @@ final class WorkspaceGaugeView: NSButton {
 /// row, so the background is painted here.
 @MainActor
 final class WorkspaceOpenTaskBadgeView: NSButton {
-    static let diameter: CGFloat = 18
+    static let diameter: CGFloat = 24
     static let horizontalPadding: CGFloat = 5
     static let maximumDisplayedCount = 99
 
