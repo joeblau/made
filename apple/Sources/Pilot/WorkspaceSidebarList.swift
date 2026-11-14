@@ -4,8 +4,16 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSource, NSTableViewDelegate, NSMenuDelegate {
+    /// What the list under the global modes shows: the workspaces, or every
+    /// agentic job across them grouped by state.
+    enum ListMode: String { case workspaces, inbox }
+    static let listModeKey = "sidebar.listMode"
+
     private enum Row: Hashable {
         case mode(SidebarSelection)
+        case switcher
+        case job(UUID)
+        case emptyInbox
         case heading(String)
         case workspace(UUID, group: UUID?)
         case group(UUID)
@@ -15,6 +23,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         case fixed
         case disclosure(String, Bool)
         case workspace(String, String?, Int, Int)
+        case job(AgentJob, String)
     }
 
     let store: WorkspaceStore
@@ -34,10 +43,16 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     private var isRefreshing = false
     private var lastBranchRefresh = Date.distantPast
     private var lastZoom = 0.0
+    private let defaults: UserDefaults
+    let jobs = AgentJobTracker()
+    private(set) var listMode: ListMode
+    private let switcher = NSSegmentedControl(labels: ["Workspaces", "Inbox"], trackingMode: .selectOne, target: nil, action: nil)
 
     init(store: WorkspaceStore, defaults: UserDefaults = .standard, isLive: Bool = true) {
         self.store = store
         self.isLive = isLive
+        self.defaults = defaults
+        listMode = defaults.string(forKey: Self.listModeKey).flatMap(ListMode.init(rawValue:)) ?? .workspaces
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { nil }
@@ -63,6 +78,11 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         table.menu = menu
         scroll.documentView = table
         view = scroll
+        switcher.target = self
+        switcher.action = #selector(switchListMode)
+        switcher.segmentDistribution = .fillEqually
+        switcher.setAccessibilityIdentifier("sidebar.list-mode")
+        switcher.setAccessibilityLabel("Sidebar list")
         refresh()
     }
 
@@ -120,22 +140,41 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             })
         }
         var next: [Row] = store.sidebarVisibility.visibleFeatures.map { .mode($0.selection) }
-        let pinned = workspaces.filter(\.isPinned)
-        if !pinned.isEmpty {
-            next.append(.heading("Pinned"))
-            next += pinned.map { .workspace($0.id, group: nil) }
-        }
-        next.append(.heading("Workspaces"))
-        next += store.workspaceGroups.visibleRows(workspaceIDs: store.unpinnedWorkspaceIDs).map {
-            switch $0 {
-            case .workspace(let id, let groupID): return .workspace(id, group: groupID)
-            case .group(let id): return .group(id)
-            case .emptyGroup(let id): return .emptyGroup(id)
+        next.append(.switcher)
+        let workspacesByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
+        // A job whose workspace is gone is dropped by the tracker's next poll.
+        let inbox = jobs.jobs.filter { workspacesByID[$0.workspaceID] != nil }
+        let jobsByID = Dictionary(uniqueKeysWithValues: inbox.map { ($0.paneID, $0) })
+        updateSwitcher(attention: inbox.count(where: \.needsAttention))
+        switch listMode {
+        case .inbox:
+            for state in AgentJobState.allCases {
+                let section = inbox.filter { $0.state == state }
+                guard !section.isEmpty else { continue }
+                next.append(.heading(state.title))
+                next += section.map { .job($0.paneID) }
+            }
+            if inbox.isEmpty { next.append(.emptyInbox) }
+        case .workspaces:
+            let pinned = workspaces.filter(\.isPinned)
+            if !pinned.isEmpty {
+                next.append(.heading("Pinned"))
+                next += pinned.map { .workspace($0.id, group: nil) }
+            }
+            next.append(.heading("Workspaces"))
+            next += store.workspaceGroups.visibleRows(workspaceIDs: store.unpinnedWorkspaceIDs).map {
+                switch $0 {
+                case .workspace(let id, let groupID): return .workspace(id, group: groupID)
+                case .group(let id): return .group(id)
+                case .emptyGroup(let id): return .emptyGroup(id)
+                }
             }
         }
-        let workspacesByID = Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) })
         let contents: [RowContent] = next.map { row in
             switch row {
+            case .job(let id):
+                guard let job = jobsByID[id] else { return .fixed }
+                return .job(job, workspacesByID[job.workspaceID]?.name ?? "")
             case .workspace(let id, _):
                 guard let workspace = workspacesByID[id] else { return .fixed }
                 return .workspace(workspace.name, branches.branches[id], workspace.badgeCount, store.openTaskCounts[id] ?? 0)
@@ -161,6 +200,10 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
 
     private func selectedRowValue() -> Row? {
         if let feature = store.activeSidebarFeature { return .mode(feature.selection) }
+        if listMode == .inbox {
+            guard let paneID = store.selectedWorkspace?.selectedPaneID, rows.contains(.job(paneID)) else { return nil }
+            return .job(paneID)
+        }
         return rows.first { if case .workspace(let id, _) = $0 { return id == store.selectedWorkspaceID }; return false }
     }
 
@@ -177,7 +220,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             _ = store.workspaceGroups.groups
             _ = store.openTaskCounts
             _ = branches.branches
-            for workspace in store.workspaces { _ = workspace.name; _ = workspace.badgeCount; _ = workspace.isPinned; _ = workspace.effectiveRootPath }
+            _ = jobs.jobs
+            for workspace in store.workspaces { _ = workspace.name; _ = workspace.badgeCount; _ = workspace.isPinned; _ = workspace.effectiveRootPath; _ = workspace.selectedPaneID }
         } onChange: { [weak self] in
             Task { @MainActor in
                 guard let self, generation == self.observationGeneration else { return }
@@ -195,6 +239,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
                 workspace.effectiveRootPath.map { WorkspaceBranchStore.Target(id: workspace.id, rootPath: $0) }
             })
         }
+        jobs.refresh(store: store)
         let visible = table.rows(in: table.visibleRect)
         guard visible.location != NSNotFound else { return }
         for index in visible.location..<min(rows.count, visible.location + visible.length) {
@@ -209,14 +254,18 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
         let zoom = CGFloat(CockpitUIZoomController.shared.factor)
         guard rows.indices.contains(row) else { return 28 * zoom }
-        if case .workspace = rows[row] { return 44 * zoom }
-        return 28 * zoom
+        switch rows[row] {
+        case .workspace, .job: return 44 * zoom
+        case .switcher: return 36 * zoom
+        default: return 28 * zoom
+        }
     }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
         guard rows.indices.contains(row) else { return false }
-        if case .heading = rows[row] { return false }
-        if case .emptyGroup = rows[row] { return false }
-        return true
+        switch rows[row] {
+        case .heading, .emptyGroup, .switcher, .emptyInbox: return false
+        default: return true
+        }
     }
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
         guard rows.indices.contains(row) else { return false }
@@ -271,8 +320,41 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         switch rows[table.selectedRow] {
         case .mode(let mode): onSelect?(mode)
         case .workspace(let id, _): onSelect?(.workspace(id))
+        case .job(let id): openJob(id)
         default: break
         }
+    }
+
+    /// Shows the job's workspace with its pane selected; looking at a
+    /// finished job moves it from Completed to Waiting for Input.
+    private func openJob(_ paneID: UUID) {
+        guard let job = jobs.jobs.first(where: { $0.paneID == paneID }),
+              let workspace = store.workspaces.first(where: { $0.id == job.workspaceID }),
+              let pane = workspace.panes.first(where: { $0.id == paneID }) else { return }
+        onSelect?(.workspace(workspace.id))
+        if pane.isCollapsed { workspace.expandPane(pane) }
+        workspace.selectedPaneID = pane.id
+        jobs.markSeen(paneID)
+    }
+
+    func setListMode(_ mode: ListMode) {
+        guard mode != listMode else { return }
+        listMode = mode
+        defaults.set(mode.rawValue, forKey: Self.listModeKey)
+        refresh()
+    }
+
+    @objc private func switchListMode() {
+        setListMode(switcher.selectedSegment == 1 ? .inbox : .workspaces)
+    }
+
+    private func updateSwitcher(attention: Int) {
+        switcher.setLabel(attention > 0 ? "Inbox (\(attention))" : "Inbox", forSegment: 1)
+        switcher.selectedSegment = listMode == .inbox ? 1 : 0
+        switcher.font = CockpitTypography.font(size: 11)
+        switcher.toolTip = attention > 0
+            ? "\(attention) agent \(attention == 1 ? "job needs" : "jobs need") your attention"
+            : "Agent jobs across all workspaces"
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         guard rows.indices.contains(row) else { return nil }
@@ -284,6 +366,27 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             cell.configure(workspace: workspace, branch: branches.branches[id], openTaskCount: store.openTaskCounts[id] ?? 0,
                            indentation: group == nil ? 0 : 16, store: store)
             return cell
+        case .switcher:
+            let cell = NSTableCellView()
+            switcher.removeFromSuperview()
+            switcher.translatesAutoresizingMaskIntoConstraints = false
+            cell.addSubview(switcher)
+            NSLayoutConstraint.activate([
+                switcher.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+                switcher.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
+                switcher.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            ])
+            return cell
+        case .job(let id):
+            guard let job = jobs.jobs.first(where: { $0.paneID == id }) else { return nil }
+            let cell = (table.makeView(withIdentifier: NSUserInterfaceItemIdentifier("job.cell"), owner: self) as? AgentJobSidebarCell) ?? AgentJobSidebarCell()
+            cell.identifier = NSUserInterfaceItemIdentifier("job.cell")
+            cell.configure(job: job, workspaceName: store.workspaces.first { $0.id == job.workspaceID }?.name ?? "")
+            return cell
+        case .emptyInbox:
+            let label = shellLabel("No agent jobs running", secondary: true)
+            label.setAccessibilityIdentifier("sidebar.inbox.empty")
+            return label
         case .mode(let mode):
             let (title, symbol) = Self.presentation(mode)
             let image = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil) ?? NSImage())
@@ -295,7 +398,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         case .heading(let title):
             let label = shellLabel(title, secondary: true)
             label.font = CockpitTypography.font(size: 11, weight: .semibold)
-            label.setAccessibilityIdentifier("sidebar.section." + title.lowercased())
+            label.setAccessibilityIdentifier("sidebar.section." + title.lowercased().replacingOccurrences(of: " ", with: "-"))
             label.setAccessibilityRoleDescription("Section heading")
             return label
         case .group(let id):
@@ -519,6 +622,73 @@ private final class WorkspaceSidebarCell: NSTableCellView {
             store.selectWorkspace(workspace.id)
             if pane.isCollapsed { workspace.expandPane(pane) }
             workspace.selectedPaneID = pane.id
+        }
+    }
+}
+
+/// An Inbox row: the job's pane title over "workspace · agent · status",
+/// with a state symbol at the trailing edge.
+@MainActor
+final class AgentJobSidebarCell: NSTableCellView {
+    private let title = shellLabel("")
+    private let detail = shellLabel("", secondary: true)
+    private let status = NSImageView()
+    private var job: AgentJob?
+
+    init() {
+        super.init(frame: .zero)
+        let labels = shellStack([title, detail], spacing: 2)
+        let row = shellStack([labels, status], orientation: .horizontal, spacing: 6)
+        row.distribution = .fill
+        row.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(row)
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            row.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+            row.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            row.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+        ])
+        status.symbolConfiguration = .init(pointSize: 13, weight: .medium)
+        status.setContentHuggingPriority(.required, for: .horizontal)
+        status.setContentCompressionResistancePriority(.required, for: .horizontal)
+        for label in [labels, title, detail] as [NSView] {
+            label.setContentHuggingPriority(.defaultLow - 1, for: .horizontal)
+            label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        }
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override var backgroundStyle: NSView.BackgroundStyle { didSet { updateStatusTint() } }
+
+    static func symbolName(for job: AgentJob) -> String {
+        switch job.state {
+        case .waiting: job.blocker == nil ? "ellipsis.bubble" : "exclamationmark.circle.fill"
+        case .working: "arrow.triangle.2.circlepath"
+        case .completed: "checkmark.circle.fill"
+        }
+    }
+
+    func configure(job: AgentJob, workspaceName: String) {
+        self.job = job
+        title.font = CockpitTypography.font(size: 12)
+        detail.font = CockpitTypography.font(size: 10)
+        title.stringValue = job.title
+        let parts = [workspaceName, job.agentName, job.statusText].filter { !$0.isEmpty }
+        detail.stringValue = parts.joined(separator: " · ")
+        status.image = NSImage(systemSymbolName: Self.symbolName(for: job), accessibilityDescription: nil)
+        status.toolTip = job.statusText
+        updateStatusTint()
+        setAccessibilityIdentifier("sidebar.job")
+        setAccessibilityLabel(([job.title] + parts).joined(separator: ", "))
+    }
+
+    private func updateStatusTint() {
+        guard let job else { return }
+        if backgroundStyle == .emphasized { status.contentTintColor = .white; return }
+        status.contentTintColor = switch job.state {
+        case .waiting: job.blocker == nil ? .secondaryLabelColor : .systemOrange
+        case .working: .controlAccentColor
+        case .completed: .systemGreen
         }
     }
 }
