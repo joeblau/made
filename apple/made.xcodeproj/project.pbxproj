@@ -120,6 +120,7 @@
 		254399DCAB1463859C2BC101 /* DroneSettingsIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D3CFD30F7FF46B907B30F6B /* DroneSettingsIntegrationTests.swift */; };
 		256050E22C440BA07F5889A9 /* AndroidDeviceRegistry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FD8F6A2DF17BA6E97F4D980 /* AndroidDeviceRegistry.swift */; };
 		25A699E8CD5105660A979C7D /* LegibleAccent.swift in Sources */ = {isa = PBXBuildFile; fileRef = D571608047B5720EA5320F9D /* LegibleAccent.swift */; };
+		25B67592AA989E69BA73C894 /* AgentJobTrackerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE441B181836037B34482FC /* AgentJobTrackerTests.swift */; };
 		25DB1C813527BADD1A77A5DB /* AgenticUseDashboardTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C31F6B28F8E695EF20655394 /* AgenticUseDashboardTests.swift */; };
 		262819ED6E1345D9BAE1994B /* SimulatorPrivateFrameworks.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA5D71034397A579AF6EC4E9 /* SimulatorPrivateFrameworks.swift */; };
 		2657BB2F946289788FD0A698 /* DockerStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79E505DC2441458F64FFEA45 /* DockerStore.swift */; };
@@ -172,6 +173,7 @@
 		3374231A4E544CA64E79365C /* RunnersDashboardSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9CE2FBBA7531EC7B7A75B02 /* RunnersDashboardSnapshot.swift */; };
 		339AD6F3DDDF14EA70862993 /* AgenticUseProviderBreakdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 491FF5DBB6C9B0E15C93F127 /* AgenticUseProviderBreakdown.swift */; };
 		345E33CD9766CD298899740F /* CopilotApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F576C8972BAC59C65A4821C /* CopilotApp.swift */; };
+		348C42D412D60B060722E78A /* AgentJobTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00F5FCE14E974E7769735C3 /* AgentJobTracker.swift */; };
 		348DDEF33CA8AF30542ACD1C /* ChromiumEngine.mm in Sources */ = {isa = PBXBuildFile; fileRef = B27F75406AA43CFCE2A71E76 /* ChromiumEngine.mm */; };
 		35BAA21F624D910C2420B584 /* DronePairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0742F056AD6240EAFF25A49E /* DronePairing.swift */; };
 		36F527562E8712741C069DFA /* CodeEditSourceEditor in Frameworks */ = {isa = PBXBuildFile; productRef = 95745E830EB40847F21156F5 /* CodeEditSourceEditor */; };
@@ -1281,6 +1283,7 @@
 		AE8192FB86073F87D8A875C3 /* PlotterSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlotterSnapshotStore.swift; sourceTree = "<group>"; };
 		AF473328FC403D95F77EB28D /* DockerNativePresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerNativePresentationTests.swift; sourceTree = "<group>"; };
 		AFDEABC5E473F6AB22D30F16 /* DevicePaneView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicePaneView.swift; sourceTree = "<group>"; };
+		B00F5FCE14E974E7769735C3 /* AgentJobTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentJobTracker.swift; sourceTree = "<group>"; };
 		B0D9D9BFBF5B7FE39597C22E /* CapturePaneChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CapturePaneChrome.swift; sourceTree = "<group>"; };
 		B146FEA1619C4BDD88B56B5D /* AgentModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentModelCatalog.swift; sourceTree = "<group>"; };
 		B1A7CA986AF67208DE04201F /* RemoteDesktopView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteDesktopView.swift; sourceTree = "<group>"; };
@@ -1325,6 +1328,7 @@
 		BE4DFAAD11EA34DDCA8540F6 /* macbook-pro-14-silver.usdz */ = {isa = PBXFileReference; lastKnownFileType = file.usdz; path = "macbook-pro-14-silver.usdz"; sourceTree = "<group>"; };
 		BE500437E4DED08ECD108821 /* DashboardSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DashboardSnapshotTests.swift; sourceTree = "<group>"; };
 		BE87061FFEBAF3694C17DABE /* DockerContainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockerContainer.swift; sourceTree = "<group>"; };
+		BEE441B181836037B34482FC /* AgentJobTrackerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentJobTrackerTests.swift; sourceTree = "<group>"; };
 		BF21FEF25FBF6431867348E8 /* SecureChannelDeadline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecureChannelDeadline.swift; sourceTree = "<group>"; };
 		BF418EA6C835E25C52FD6BB6 /* ScreenMirrorBitrateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenMirrorBitrateTests.swift; sourceTree = "<group>"; };
 		BF4B29FE0CA33B98A83D39B0 /* SharedTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SharedTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -1547,6 +1551,7 @@
 				BA8B2C4A55B63DED9DB4AE47 /* AgenticUsageProviderTests.swift */,
 				C31F6B28F8E695EF20655394 /* AgenticUseDashboardTests.swift */,
 				D231D4DF023135D097210E8F /* AgenticUseNativePresentationTests.swift */,
+				BEE441B181836037B34482FC /* AgentJobTrackerTests.swift */,
 				6D6A5584C48A7FFE82A204D3 /* AgentModelCatalogTests.swift */,
 				5E744D0C0A34270A77E0F33E /* AgentModelPickerGalleryTests.swift */,
 				7F0AB2004F960BF6D29D999E /* AgentModelPickerIntegrationTests.swift */,
@@ -1990,6 +1995,7 @@
 		7CC86BB7CC331B09675E1E0C /* Pilot */ = {
 			isa = PBXGroup;
 			children = (
+				B00F5FCE14E974E7769735C3 /* AgentJobTracker.swift */,
 				5FE2EB583B10A6711F23ACBB /* Assets.xcassets */,
 				948AB2018F218B875833A701 /* AwakeSessionController.swift */,
 				C88113B94930C4212D76BB8B /* BrowserAnnotate.swift */,
@@ -3173,6 +3179,7 @@
 				83D19BE5CF1D8D50316B71AC /* AgentChatSessionConfig.swift in Sources */,
 				9EC1B194C52BE8EE670AE7B3 /* AgentChatTimelineCursor.swift in Sources */,
 				6AD0D4760C24022AB27CAABE /* AgentChatTimelineTable.swift in Sources */,
+				348C42D412D60B060722E78A /* AgentJobTracker.swift in Sources */,
 				592595E599BF19324FB7A87F /* AgentModelCatalog.swift in Sources */,
 				9360F8F3044FDDC8340E139A /* AgentModelDiscovery.swift in Sources */,
 				637915089812849FE8650E12 /* AgentModelPickerController.swift in Sources */,
@@ -3671,6 +3678,7 @@
 				B21BC316B332311B467577B2 /* AgentChatSessionTests.swift in Sources */,
 				7232D02F4403C091ADBF8520 /* AgentChatTests.swift in Sources */,
 				2BF1CA3FA58D36C630E0C393 /* AgentChatTimelineTableTests.swift in Sources */,
+				25B67592AA989E69BA73C894 /* AgentJobTrackerTests.swift in Sources */,
 				1BF46125023F588BA935E5EC /* AgentModelCatalogTests.swift in Sources */,
 				93F1D9889A11D0AB73A19C48 /* AgentModelPickerGalleryTests.swift in Sources */,
 				093213450C3467FF62413FFA /* AgentModelPickerIntegrationTests.swift in Sources */,

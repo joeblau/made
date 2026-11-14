@@ -79,9 +79,11 @@ final class NativeCockpitWindowTests: XCTestCase {
         fixture.store.addWorkspace()
         let sidebar = WorkspaceSidebarViewController(store: fixture.store, defaults: fixture.defaults, isLive: false)
         let table = try XCTUnwrap(descendants(sidebar.view).compactMap { $0 as? NSTableView }.first)
-        // Six global modes (Notes … Mock-ups), then Pinned + 1, Workspaces + 1.
-        XCTAssertEqual(table.numberOfRows, 10, "Both sections remain expanded even with old collapsed preferences")
-        for row in [6, 8] {
+        // Six global modes (Notes … Mock-ups), the Workspaces/Inbox switcher,
+        // then Pinned + 1, Workspaces + 1.
+        XCTAssertEqual(table.numberOfRows, 11, "Both sections remain expanded even with old collapsed preferences")
+        XCTAssertFalse(sidebar.tableView(table, shouldSelectRow: 6), "The list switcher is not a selectable row")
+        for row in [7, 9] {
             XCTAssertTrue(sidebar.tableView(table, isGroupRow: row))
             XCTAssertFalse(sidebar.tableView(table, shouldSelectRow: row))
             let view = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: row))
@@ -1054,6 +1056,53 @@ final class NativeCockpitWindowTests: XCTestCase {
     @MainActor
     private func flattened(_ menu: NSMenu) -> [NSMenuItem] {
         menu.items.flatMap { [$0] + ($0.submenu.map(flattened) ?? []) }
+    }
+}
+
+// The Inbox lives in an extension to keep the class body within the lint limit.
+extension NativeCockpitWindowTests {
+    @MainActor
+    func testSidebarInboxListsAgentJobsByStateAndOpensTheirPane() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkspace()
+        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        let pane = try XCTUnwrap(workspace.panes.first)
+        fixture.store.addWorkspace()
+        let sidebar = WorkspaceSidebarViewController(store: fixture.store, defaults: fixture.defaults, isLive: false)
+        var selections: [SidebarSelection] = []
+        sidebar.onSelect = { selections.append($0) }
+        let table = try XCTUnwrap(descendants(sidebar.view).compactMap { $0 as? NSTableView }.first)
+        let switcherCell = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: 6))
+        let switcher = try XCTUnwrap(descendants(switcherCell).compactMap { $0 as? NSSegmentedControl }.first)
+        XCTAssertEqual(switcher.selectedSegment, 0)
+
+        sidebar.setListMode(.inbox)
+        XCTAssertEqual(fixture.defaults.string(forKey: WorkspaceSidebarViewController.listModeKey), "inbox")
+        // Six modes, the switcher, and the empty-Inbox placeholder.
+        XCTAssertEqual(table.numberOfRows, 8)
+        XCTAssertFalse(sidebar.tableView(table, shouldSelectRow: 7))
+
+        let observation = { (signal: AgentJobObservation.Signal) in
+            AgentJobObservation(paneID: pane.id, workspaceID: workspace.id, title: "Fix the build", agentName: "Claude", signal: signal)
+        }
+        sidebar.jobs.ingest([observation(.working)], focusedPaneID: nil)
+        sidebar.jobs.ingest([observation(.idle)], focusedPaneID: nil)
+        sidebar.refresh()
+        // Six modes, the switcher, the Completed heading, and the job.
+        XCTAssertEqual(table.numberOfRows, 9)
+        XCTAssertEqual(switcher.label(forSegment: 1), "Inbox (1)")
+        let heading = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: 7))
+        XCTAssertEqual(heading.accessibilityIdentifier(), "sidebar.section.completed")
+        let cell = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: 8) as? AgentJobSidebarCell)
+        XCTAssertEqual(cell.accessibilityLabel(), "Fix the build, \(workspace.name), Claude, Finished")
+
+        table.selectRowIndexes(IndexSet(integer: 8), byExtendingSelection: false)
+        XCTAssertEqual(selections, [.workspace(workspace.id)])
+        XCTAssertEqual(workspace.selectedPaneID, pane.id)
+        XCTAssertEqual(sidebar.jobs.jobs.map(\.state), [.waiting], "Opening a finished job marks it seen")
+        sidebar.refresh()
+        XCTAssertEqual(switcher.label(forSegment: 1), "Inbox")
     }
 }
 
