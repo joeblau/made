@@ -175,6 +175,9 @@ final class BrowserToolbarView: NSView, NSTextFieldDelegate {
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.spacing = 6
+        // Keep the first and last buttons off the rounded ends of the
+        // toolbar's glass capsule.
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
         if state.engine == .chromium {
             for wallet in WalletExtensionRegistry.discover() {
                 let button = BrowserNativeButton(wallet.name, symbol: wallet.systemImageName) {}

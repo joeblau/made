@@ -221,7 +221,7 @@ final class TerminalFastCommandToolbarView: NSStackView {
         alignment = .centerY
         spacing = 6
         // Leave room for the field's focus ring inside the toolbar's glass.
-        edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 6)
+        edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
         addArrangedSubview(TerminalFastCommandToolbarField(pane: pane))
         addArrangedSubview(TerminalFastCommandToolbarActions(pane: pane))
     }
