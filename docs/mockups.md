@@ -11,6 +11,11 @@ the layout, the pose, and a separate screenshot for each device in the layout.
   transparent background when the backdrop is set to None. **Copy** (or ⌘C on
   the canvas) puts the same image on the clipboard; in Video it copies the
   frame at the playhead.
+- **Shadow** (inspector) drops a shadow under the devices: None, Spread (a
+  wide soft halo) or Hug (tight to the edges), at Low, Medium or High
+  intensity. Drag the sun on the Light Source pad to move the light; the
+  shadow falls away from it. The live canvas, PNG, clipboard and MP4 all use
+  the same shadow, and it is kept on a transparent export.
 - **Video** plays an editable keyframe timeline. Motion presets (Turntable,
   Hero Tilt, Float, Open & Reveal, Flip In, Slide Up and Still) generate an
   initial timeline; changing a keyframe or transition makes it Custom. Export

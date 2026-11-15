@@ -321,6 +321,7 @@ final class MockupDocument {
         }
     }
     var selectedScreen = 0
+    var shadow = MockupShadow()
     /// Stable slots retain their content when a smaller layout hides them.
     private var screenshots: [NSImage?] = [nil, nil, nil]
     /// Static framing and the values captured by a keyframe (angles in radians).

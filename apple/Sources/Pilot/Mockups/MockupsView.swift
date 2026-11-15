@@ -30,6 +30,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     private let finishRow = NSStackView()
     private let styleControl = NSSegmentedControl(labels: MockupBackground.Style.allCases.map(\.rawValue), trackingMode: .selectOne, target: nil, action: nil)
     private let swatches = MockupSwatchGrid()
+    private lazy var shadowPanel = MockupShadowPanel(document: document)
     private lazy var chooseBackground = RRButton("Choose Image…", symbol: "photo") { [weak self] in self?.chooseBackgroundImage() }
     private let rotation = NSSlider(value: 0, minValue: -45, maxValue: 45, target: nil, action: nil)
     private let scale = NSSlider(value: 0.82, minValue: 0.3, maxValue: 1.1, target: nil, action: nil)
@@ -68,6 +69,9 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             document.timeline = saved
         } else {
             document.timeline = MockupTimeline.preset(document.motion, base: document.basePose)
+        }
+        if let data = defaults.data(forKey: "mockups.shadow"), let saved = try? JSONDecoder().decode(MockupShadow.self, from: data) {
+            document.shadow = saved
         }
         if let format = defaults.string(forKey: MockupColorFormat.defaultsKey).flatMap(MockupColorFormat.init(rawValue:)) {
             colorFormat = format
@@ -146,7 +150,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
                 _ = document.finishIndex; _ = document.screenshot; _ = document.rotation; _ = document.scale
                 _ = document.tiltX; _ = document.tiltY; _ = document.openAmount; _ = document.motion; _ = document.isPlaying
                 _ = document.positionX; _ = document.positionY; _ = document.timeline; _ = document.selectedKeyframeID
-                _ = document.layout; _ = document.selectedScreen
+                _ = document.layout; _ = document.selectedScreen; _ = document.shadow
                 for index in 0..<3 { _ = document.screenshot(at: index) }
             }, changed: { [weak self] in self?.documentChanged() })
             documentChanged()
@@ -163,6 +167,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         defaults.set(document.device.rawValue, forKey: "mockups.device")
         defaults.set(document.layout.rawValue, forKey: "mockups.layout")
         defaults.set(document.motion.rawValue, forKey: "mockups.motion")
+        defaults.set(try? JSONEncoder().encode(document.shadow), forKey: "mockups.shadow")
         // Launch discards a timeline that fails isValid, so never persist one; the last valid save stays (#435).
         if document.timeline.isValid {
             defaults.set(try? JSONEncoder().encode(document.timeline), forKey: "mockups.timeline")
@@ -268,6 +273,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             swatches,
             colorRow,
             chooseBackground,
+            shadowPanel,
             RRUI.label("Device", size: 15, weight: .semibold),
             Self.labeled("Turn", tiltY),
             Self.labeled("Tilt", tiltX),
@@ -372,6 +378,7 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         openRow.isHidden = !stage.models.contains(where: \.hasHinge)
         timeline.isHidden = document.kind != .video
         timeline.refresh()
+        shadowPanel.refresh()
         if exportTask == nil { exportButton.title = document.kind == .photo ? "Export PNG" : "Export MP4" }
     }
 

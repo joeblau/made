@@ -386,6 +386,7 @@
 		80BE92B32FA6EEDBE84BB724 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58DB20A29ED93A7D1EE1CE0A /* ContentView.swift */; };
 		8215293A3659A623F1D439BF /* ChromiumDiagnostics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DD0EE75429A9F0857603878 /* ChromiumDiagnostics.swift */; };
 		821D30018129130E03C04BE4 /* GhosttyMenuKeyEquivalentPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 558B70C71B4C69DBF6C22A16 /* GhosttyMenuKeyEquivalentPolicy.swift */; };
+		826A6DB89578E078C5FAC7AA /* MockupShadow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8834A0A63114A00E6FAC4877 /* MockupShadow.swift */; };
 		827CC7EF4EFEA655F5B4D8D6 /* ActiveConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A59083B564B415C04500D75 /* ActiveConnection.swift */; };
 		82A1EABA5075C9A5D7B5586D /* AndroidAVDCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D855A1DBD34E0C9043DBBF3B /* AndroidAVDCacheTests.swift */; };
 		82C0B8AA6FF2F07DABBF0A89 /* NotesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9065A68503ECF45158B100B /* NotesView.swift */; };
@@ -1208,6 +1209,7 @@
 		8772BD3D552E5A3B88D87192 /* PilotWalkieDeliveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PilotWalkieDeliveryTests.swift; sourceTree = "<group>"; };
 		87A17BDDCBA5DEDFFC24A3DB /* WorkspacePinOrderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspacePinOrderingTests.swift; sourceTree = "<group>"; };
 		87ECE49033A754A3D5C7DC36 /* MarkdownImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImage.swift; sourceTree = "<group>"; };
+		8834A0A63114A00E6FAC4877 /* MockupShadow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockupShadow.swift; sourceTree = "<group>"; };
 		885D4FC05E8901CD6BFA9FFD /* LocalServerProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalServerProbe.swift; sourceTree = "<group>"; };
 		88B9C8E399C962387A7FBE7C /* AgentActivityMachineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentActivityMachineTests.swift; sourceTree = "<group>"; };
 		88D6F7A3DECA35A6FAD1A746 /* Walkie.icon */ = {isa = PBXFileReference; lastKnownFileType = wrapper.icon; path = Walkie.icon; sourceTree = "<group>"; };
@@ -2214,6 +2216,7 @@
 				6973905E631217F034907202 /* MockupModel.swift */,
 				C270F5189D041B931B2416D2 /* MockupMotion.swift */,
 				16F41CB6F1BC0EC5F60898DF /* MockupRecolor.swift */,
+				8834A0A63114A00E6FAC4877 /* MockupShadow.swift */,
 				0FBEEDCDAA9D10BD1E7D500B /* MockupStageView.swift */,
 				DE352EACF52614D27A129953 /* MockupsView.swift */,
 				1D191B572D1FEA7DF0D60883 /* MockupTimeline.swift */,
@@ -3352,6 +3355,7 @@
 				CAEBC50B374DCC2A5C247849 /* MockupModel.swift in Sources */,
 				A6FD7A2E5F6B09B813F6952A /* MockupMotion.swift in Sources */,
 				BD4056E82AA49A1B51B757F2 /* MockupRecolor.swift in Sources */,
+				826A6DB89578E078C5FAC7AA /* MockupShadow.swift in Sources */,
 				A4DFC228ED96EBC88CCD54BD /* MockupStageView.swift in Sources */,
 				80AC2B1B03ADB10C7EC47A82 /* MockupTimeline.swift in Sources */,
 				402996C6E2FD3263DFCBDD2D /* MockupTimelineView.swift in Sources */,
