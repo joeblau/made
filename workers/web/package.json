@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",
-    "astro": "7.4.2",
+    "astro": "7.4.7",
     "cuer": "0.0.4",
     "react": "19.3.1",
     "react-dom": "19.3.1",
