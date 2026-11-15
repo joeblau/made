@@ -42,6 +42,55 @@ final class NativePaneLifecycleTests: XCTestCase {
         XCTAssertFalse(container.mainContext.hasChanges)
     }
 
+    /// Clicking a hidden pane's strip selects it; only the eye reveals it.
+    @MainActor
+    func testClickingHiddenStripSelectsWithoutRevealingUntilTheEyeIsPressed() throws {
+        let terminal = Pane(kind: .terminal, sortOrder: 0)
+        let editor = Pane(kind: .editor, sortOrder: 1)
+        let workspace = Workspace(name: "Strip")
+        workspace.panes = [terminal, editor]
+        terminal.workspace = workspace
+        editor.workspace = workspace
+        workspace.selectedPaneID = editor.id
+        let cache = CockpitPaneControllerCache()
+        defer { cache.closeAll() }
+        let presentation = CockpitWorkspaceViewController(
+            workspace: workspace, projectID: workspace.id, surface: .main, cache: cache,
+            factory: { _, _ in LifecyclePaneController() }, onDrop: { _, _ in false })
+        workspace.collapsePane(terminal)
+        presentation.view.frame = NSRect(x: 0, y: 0, width: 1200, height: 700)
+        presentation.refresh(isActive: true)
+        presentation.view.layoutSubtreeIfNeeded()
+        XCTAssertEqual(workspace.selectedPaneID, editor.id)
+
+        var eye: NSButton?
+        var stack: [NSView] = [presentation.view]
+        while let view = stack.popLast() {
+            if let button = view as? NSButton, button.toolTip == "Show \(terminal.displayTitle)" { eye = button }
+            stack.append(contentsOf: view.subviews)
+        }
+        let reveal = try XCTUnwrap(eye)
+        let strip = try XCTUnwrap(reveal.superview)
+
+        // The strip's tab is hidden while collapsed, but it carries the same
+        // selection callback a click on the strip runs.
+        var tab: CockpitPaneTab?
+        stack = [strip]
+        while let view = stack.popLast() {
+            if let found = view as? CockpitPaneTab { tab = found }
+            stack.append(contentsOf: view.subviews)
+        }
+        try XCTUnwrap(tab).onSelect?()
+        XCTAssertTrue(terminal.isCollapsed, "Selecting a hidden pane must not reveal it")
+        XCTAssertEqual(workspace.selectedPaneID, terminal.id)
+        XCTAssertNotNil(strip.layer?.backgroundColor, "The selected strip is tinted")
+
+        reveal.performClick(nil)
+        XCTAssertFalse(terminal.isCollapsed, "The eye reveals the pane")
+        XCTAssertEqual(workspace.selectedPaneID, terminal.id)
+        XCTAssertNil(strip.layer?.backgroundColor)
+    }
+
     @MainActor
     func testHiddenTerminalStripListsFastCommandControlsVertically() throws {
         let terminal = Pane(kind: .terminal, sortOrder: 0)
