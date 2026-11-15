@@ -590,6 +590,21 @@ final class CockpitToolbarGroups: NSStackView {
         for group in groups {
             // AppKit owns the segmented control's bezel, padding, and size.
             // Another glass capsule makes its selection pill look undersized.
+            if #available(macOS 27.0, *), group.count == 1, let tabs = group.first as? NSSegmentedControl, tabs.role == .tabs {
+                // In a toolbar AppKit draws a tab picker's pill but not its
+                // track, so the track is a glass capsule here. The pill is
+                // inset, so it does not look undersized the way a
+                // full-height selection would.
+                tabs.controlSize = .large
+                tabs.borderShape = .capsule
+                let row = NSStackView(views: [tabs])
+                row.edgeInsets = NSEdgeInsets(top: 0, left: 3, bottom: 0, right: 3)
+                let capsule = CockpitGlassView(content: row, cornerRadius: Self.capsuleHeight / 2)
+                capsule.translatesAutoresizingMaskIntoConstraints = false
+                capsule.heightAnchor.constraint(equalToConstant: Self.capsuleHeight).isActive = true
+                addArrangedSubview(capsule)
+                continue
+            }
             if group.count == 1, let segmented = group.first as? NSSegmentedControl {
                 segmented.controlSize = .extraLarge
                 segmented.heightAnchor.constraint(equalToConstant: Self.capsuleHeight).isActive = true
