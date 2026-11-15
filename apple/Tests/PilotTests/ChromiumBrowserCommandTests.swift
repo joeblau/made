@@ -139,6 +139,51 @@ struct ChromiumBrowserCommandTests {
         )
     }
 
+    @Test("Reload and navigation aimed at a closed Chromium browser recreate the surface")
+    func closedBrowserRecoversOnReloadAndNavigation() {
+        let state = BrowserState(engine: .chromium)
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {})
+        let host = FakeChromiumBrowserHost()
+        coordinator.attach(
+            host, navigationRequestID: 0, inspectorToggleRequestID: 0,
+            findRequestID: 0, stopFindingRequestID: 0, printRequestID: 0, savePageRequestID: 0,
+            initialURL: nil, zoom: 1, isActive: true, isSelected: true
+        )
+        coordinator.chromiumBrowserHostViewDidClose(ChromiumBrowserHostView(frame: .zero))
+        let commandsBefore = host.events.count
+
+        state.perform(.reload)
+        update(coordinator, state)
+        #expect(state.runtimeRetryRequestID == 1, "Reload recreates the closed surface")
+        #expect(state.pendingURL == nil)
+        #expect(host.events.count == commandsBefore, "The inert host receives nothing")
+
+        state.urlText = "https://example.com/"
+        state.navigate()
+        update(coordinator, state)
+        #expect(state.runtimeRetryRequestID == 2)
+
+        state.perform(.back)
+        update(coordinator, state)
+        #expect(state.runtimeRetryRequestID == 2, "History commands do not recreate the surface")
+        #expect(!state.isLoading, "and do not leave the toolbar loading")
+        #expect(state.pendingURL == nil)
+    }
+
+    @Test("A request with no attached Chromium browser does not leave the toolbar loading")
+    func unattachedBrowserRecoversWithoutLooping() {
+        let state = BrowserState(engine: .chromium)
+        let coordinator = ChromiumBrowserView.Coordinator(state: state, onSelect: {})
+        update(coordinator, state)
+        #expect(state.runtimeRetryRequestID == 0, "Nothing is retried until the user asks")
+
+        state.perform(.reload)
+        update(coordinator, state)
+        #expect(state.runtimeRetryRequestID == 1)
+        update(coordinator, state)
+        #expect(state.runtimeRetryRequestID == 1, "One request retries once")
+    }
+
     @Test("Back and forward requests reach the Chromium host")
     func historyCommandsReachChromiumHost() {
         let state = BrowserState(engine: .chromium)

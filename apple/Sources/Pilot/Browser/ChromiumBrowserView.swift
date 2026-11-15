@@ -225,6 +225,8 @@ final class ChromiumBrowserView: NSViewController {
         private var lastSavePageRequestID: Int?
         private var lastZoom: Double?
         private var wasFocused = false
+        /// Chromium closed the browser; the host view remains but is inert.
+        private var isBrowserClosed = false
         private var isActiveAndSelected = false
         private var pendingExternalOpenURL: URL?
         private var certificateNavigationURL: URL?
@@ -291,7 +293,7 @@ final class ChromiumBrowserView: NSViewController {
             isActive: Bool,
             isSelected: Bool
         ) {
-            guard let host else { return }
+            guard let host else { recoverUnattachedRequest(navigationRequestID); return }
             host.onSelect = onSelect
             applyZoom(zoom)
             applyVisibilityAndFocus(isActive: isActive, isSelected: isSelected)
@@ -348,6 +350,7 @@ final class ChromiumBrowserView: NSViewController {
         }
 
         private func consumeNavigationRequest() {
+            guard !isBrowserClosed else { recoverNavigationRequestWithoutBrowser(); return }
             guard let host, let pendingURL = state.pendingURL else { return }
             defer { state.pendingURL = nil }
 
@@ -1156,6 +1159,7 @@ final class ChromiumBrowserView: NSViewController {
                 state.canGoBack = false
                 state.canGoForward = false
                 state.estimatedProgress = 0
+                isBrowserClosed = true
                 container?.runtimeState = .closed
                 lastDiagnostic = ChromiumDiagnosticRecord.make(
                     event: .browserClosed,
@@ -1433,5 +1437,29 @@ extension ChromiumBrowserView {
               !host.isHiddenOrHasHiddenAncestor else { return false }
         host.performBrowserCommand(.focus)
         return BrowserPaneFocus.responder(window.firstResponder, isWithin: host)
+    }
+}
+
+extension ChromiumBrowserView.Coordinator {
+    /// No live browser (the runtime never attached): a new toolbar request
+    /// recovers once instead of waiting on a host that will never answer.
+    func recoverUnattachedRequest(_ navigationRequestID: Int) {
+        let isNewRequest = lastNavigationRequestID != navigationRequestID
+        lastNavigationRequestID = navigationRequestID
+        if isNewRequest { recoverNavigationRequestWithoutBrowser() }
+    }
+
+    /// A navigation or reload aimed at a browser that is gone recreates the
+    /// surface at the address; any other command just ends loading. Without
+    /// this nothing answers the toolbar and it stays in its loading state.
+    func recoverNavigationRequestWithoutBrowser() {
+        guard let pendingURL = state.pendingURL else { return }
+        switch BrowserControllerCommandRouter.command(for: pendingURL) {
+        case .navigate, .reload:
+            state.requestRuntimeRetry()
+        default:
+            state.pendingURL = nil
+            state.isLoading = false
+        }
     }
 }

@@ -109,8 +109,8 @@ final class WebViewRepresentable: NSViewController {
 
         // Handle navigation commands
         if let pending = state.pendingURL {
-            BrowserControllerCommandRouter.route(pending, to: nsView)
             state.pendingURL = nil
+            perform(BrowserControllerCommandRouter.command(for: pending), in: nsView)
         }
 
         // Toggle Web Inspector (opens in separate window)
@@ -145,6 +145,29 @@ final class WebViewRepresentable: NSViewController {
             nsView.evaluateJavaScript(
                 "document.documentElement.style.colorScheme = '\(appearanceMode == .dark ? "dark" : appearanceMode == .light ? "light" : "")'"
             )
+        }
+    }
+
+    /// Runs a toolbar command. The request already put the toolbar into its
+    /// loading state, so a command WebKit turns into no navigation must take
+    /// it back out, or Reload stays a Stop button that never ends.
+    private func perform(_ command: BrowserControllerCommand, in webView: WKWebView) {
+        switch command {
+        case .reload:
+            // WebKit only reloads a committed page. After a load that never
+            // committed (a dev server that was not up yet) or a web process
+            // that died, retry the address the user is looking at.
+            if let url = coordinator.uncommittedURL ?? (webView.url == nil ? initialURL : nil) {
+                webView.load(URLRequest(url: url))
+            } else if webView.reload() == nil {
+                state.isLoading = false
+            }
+        case .back:
+            if webView.goBack() == nil { state.isLoading = false }
+        case .forward:
+            if webView.goForward() == nil { state.isLoading = false }
+        default:
+            webView.performBrowserCommand(command)
         }
     }
 
@@ -196,6 +219,9 @@ final class WebViewRepresentable: NSViewController {
         /// Edge-trigger state for Find in Page requests.
         var lastFindRequestID = 0
         var lastStopFindingRequestID = 0
+        /// The main-frame URL whose load failed before committing, or that
+        /// was showing when the web process died: what Reload must retry.
+        private(set) var uncommittedURL: URL?
         private var urlObservation: NSKeyValueObservation?
         private var navStateObservations: [NSKeyValueObservation] = []
         private var pendingDestinations: [ObjectIdentifier: URL] = [:]
@@ -594,6 +620,7 @@ final class WebViewRepresentable: NSViewController {
             state.javaScriptDialog?.cancel()
             dialogThrottle.reset()
             annotateGrant = nil
+            uncommittedURL = nil
             state.isLoading = true
             updateNavState(webView)
         }
@@ -629,7 +656,20 @@ final class WebViewRepresentable: NSViewController {
         }
 
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            let failure = error as NSError
+            // A cancelled load was stopped or superseded, not a page to retry.
+            if !(failure.domain == NSURLErrorDomain && failure.code == NSURLErrorCancelled) {
+                uncommittedURL = failure.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+            }
             state.isLoading = false
+            updateNavState(webView)
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            // No finish or failure callback follows a dead web process.
+            uncommittedURL = webView.url ?? mainFrameURL
+            state.isLoading = false
+            state.estimatedProgress = 0
             updateNavState(webView)
         }
 
