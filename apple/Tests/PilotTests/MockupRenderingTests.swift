@@ -52,11 +52,62 @@ import Testing
 
     @Test("No backdrop still renders transparent; video frames stay sRGB")
     func transparencyAndVideoColorSpace() throws {
-        let clear = try bitmap(try #require(stage(background: .none).render(size: CGSize(width: 300, height: 300), time: nil)))
+        let clearImage = try #require(stage(background: .none).render(size: CGSize(width: 300, height: 300), time: nil))
+        let clear = try bitmap(clearImage)
         #expect(try bytes(clear, x: 3, y: 3)[3] == 0)
         let frame = try bitmap(try #require(stage(background: .solid(Self.backdrop)).render(size: CGSize(width: 300, height: 300), time: 0)))
         #expect(frame.colorSpace.cgColorSpace?.name == CGColorSpace.sRGB)
         #expect(try bytes(frame, x: 3, y: 3)[3] == 255)
+    }
+
+    @Test("The shadow darkens the backdrop away from the light, in the export and on the live stage")
+    func shadowFollowsStyleAndLight() throws {
+        let stage = stage(background: .solid(Self.backdrop))
+        let document = stage.document
+        let size = CGSize(width: 400, height: 400)
+        func green(x: Int, y: Int) throws -> Int {
+            let image = try #require(stage.render(size: size, time: nil))
+            return try bytes(try bitmap(image), x: x, y: y)[1]
+        }
+        // Just outside the phone's left and right edges, at mid height.
+        document.shadow = MockupShadow(style: .none)
+        let bare = try green(x: 28, y: 50)
+        #expect(stage.liveShadowImage() == nil)
+
+        document.shadow = MockupShadow(style: .spread, intensity: .high, lightX: 0.5, lightY: 0.5)
+        let centred = try (left: green(x: 28, y: 50), right: green(x: 72, y: 50))
+        #expect(centred.left < bare - 20)
+        #expect(abs(centred.left - centred.right) <= 6)
+        document.shadow.intensity = .low
+        #expect(try green(x: 28, y: 50) > centred.left)
+
+        // A light on the right throws the shadow left.
+        document.shadow = MockupShadow(style: .spread, intensity: .high, lightX: 1, lightY: 0.5)
+        #expect(try green(x: 28, y: 50) < green(x: 72, y: 50) - 20)
+
+        let liveImage = try #require(stage.liveShadowImage())
+        let live = try bitmap(liveImage)
+        #expect(try bytes(live, x: 28, y: 50)[3] > bytes(live, x: 72, y: 50)[3] + 20)
+        #expect(try bytes(live, x: 3, y: 3)[3] < 8)
+    }
+
+    @Test("Shadow settings clamp the light, round-trip, and persist with the studio")
+    func shadowModelAndPersistence() throws {
+        var shadow = MockupShadow()
+        shadow.setLight(x: 1.4, y: -2)
+        #expect(shadow.lightX == 1 && shadow.lightY == 0)
+        #expect(MockupShadow(style: .hug).blur < MockupShadow(style: .spread).blur)
+        #expect(MockupShadow(style: .none).isVisible == false)
+
+        let suite = "mockup-shadow-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = MockupsViewController(defaults: defaults)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+        controller.document.shadow = MockupShadow(style: .hug, intensity: .high, lightX: 0.2, lightY: 0.9)
+        controller.updatePresentation(isActive: true, isSelected: true)
+        controller.updatePresentation(isActive: false, isSelected: false)
+        #expect(MockupsViewController(defaults: defaults).document.shadow == controller.document.shadow)
     }
 
     @Test("Copy puts the exported PNG on the pasteboard")

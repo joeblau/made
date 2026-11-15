@@ -27,7 +27,8 @@ enum MockupRenderer {
     /// here, in `colorSpace`, instead of inside the 3D scene: SceneKit renders
     /// sRGB, which clips a Display P3 backdrop to a duller color. A `.none`
     /// backdrop stays transparent.
-    static func composite(devices: CGImage, over background: MockupBackground, size: CGSize, colorSpace: CGColorSpace) -> NSImage? {
+    static func composite(devices: CGImage, over background: MockupBackground, shadow: MockupShadow = MockupShadow(style: .none),
+                          size: CGSize, colorSpace: CGColorSpace) -> NSImage? {
         let width = Int(size.width.rounded()), height = Int(size.height.rounded())
         guard width > 0, height > 0,
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
@@ -41,6 +42,7 @@ enum MockupRenderer {
             NSGraphicsContext.current = previous
         }
         context.interpolationQuality = .high
+        if shadow.isVisible { shadow.apply(to: context, canvas: size) }
         context.draw(devices, in: rect)
         return context.makeImage().map { NSImage(cgImage: $0, size: size) }
     }
@@ -84,13 +86,18 @@ private final class MockupBackdropView: NSView {
 /// render through the same scene so the preview is the export.
 @MainActor
 final class MockupStageView: NSView {
-    private let document: MockupDocument
+    let document: MockupDocument
     private let scnView = SCNView(frame: .zero, options: [SCNView.Option.preferredRenderingAPI.rawValue: SCNRenderingAPI.metal.rawValue])
     private let scene = SCNScene()
     private let cameraNode = SCNNode()
     /// The backdrop sits behind a transparent scene so AppKit color-manages
     /// it to the display's full gamut; see `MockupRenderer.composite`.
     private let backdropView = MockupBackdropView()
+    /// The live shadow, between the backdrop and the scene. It is rebuilt
+    /// from a small render of the scene so it matches the exported shadow.
+    private let shadowView = NSImageView()
+    private var shadowPending = false
+    private lazy var shadowRenderer = MTLCreateSystemDefaultDevice().map { SCNRenderer(device: $0, options: nil) }
     private struct DeviceEntry {
         let key: MockupDeviceLibrary.MockupFinishKey
         let model: MockupDeviceModel
@@ -122,6 +129,8 @@ final class MockupStageView: NSView {
         scnView.setAccessibilityIdentifier("mockups.stage")
         scnView.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(selectScreen(_:))))
         addSubview(backdropView)
+        shadowView.imageScaling = .scaleAxesIndependently
+        addSubview(shadowView)
         addSubview(scnView)
         registerForDraggedTypes(MockupImageLoader.pasteboardTypes)
         setAccessibilityIdentifier("mockups.canvas")
@@ -152,6 +161,7 @@ final class MockupStageView: NSView {
     override func layout() {
         super.layout()
         backdropView.frame = bounds
+        shadowView.frame = bounds
         scnView.frame = bounds
         frameCamera(aspect: bounds.height > 0 ? bounds.width / bounds.height : 1)
         apply(currentPose)
@@ -214,6 +224,7 @@ final class MockupStageView: NSView {
             }
         }
         updateBackdrop()
+        setNeedsShadow()
         updatePlayback()
         if displayLink == nil { apply(document.basePose) }
     }
@@ -245,6 +256,36 @@ final class MockupStageView: NSView {
 
     private func updateBackdrop() {
         if backdropView.background != document.background { backdropView.background = document.background }
+    }
+
+    /// Coalesces shadow rebuilds: a slider drag or a playback tick applies
+    /// several changes before the next frame is shown.
+    private func setNeedsShadow() {
+        guard !shadowPending else { return }
+        shadowPending = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.updateShadow() }
+        }
+    }
+
+    private func updateShadow() {
+        shadowPending = false
+        shadowView.image = liveShadowImage()
+    }
+
+    /// Internal so tests can check the live shadow without a display.
+    func liveShadowImage() -> NSImage? {
+        let shadow = document.shadow
+        guard shadow.isVisible, bounds.width > 1, bounds.height > 1, entries.count == document.devices.count,
+              let renderer = shadowRenderer else { return nil }
+        // The shadow is blurred, so a small render of the silhouette is enough.
+        let scale = 320 / max(bounds.width, bounds.height)
+        let size = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
+        renderer.scene = scene
+        renderer.pointOfView = cameraNode
+        return renderer.snapshot(atTime: 0, with: size, antialiasingMode: .none)
+            .cgImage(forProposedRect: nil, context: nil, hints: nil)
+            .flatMap { MockupRenderer.shadowImage(of: $0, shadow: shadow, size: size) }
     }
 
     private func updatePlayback() {
@@ -282,6 +323,7 @@ final class MockupStageView: NSView {
             entry.pivot.scale = SCNVector3(scale, scale, scale)
             entry.model.setOpen(pose.open)
         }
+        setNeedsShadow()
     }
 
     // MARK: - Offscreen rendering (export)
@@ -305,7 +347,8 @@ final class MockupStageView: NSView {
         renderer.pointOfView = cameraNode
         let snapshot = renderer.snapshot(atTime: time ?? 0, with: size, antialiasingMode: .multisampling4X)
         guard let devices = snapshot.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
-        return MockupRenderer.composite(devices: devices, over: document.background, size: size, colorSpace: colorSpace)
+        return MockupRenderer.composite(devices: devices, over: document.background, shadow: document.shadow,
+                                        size: size, colorSpace: colorSpace)
     }
 
     // MARK: - Screenshot import
