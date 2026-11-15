@@ -200,7 +200,9 @@ final class PilotApp {
                 return TerminalFastCommandToolbarView(pane: pane)
             case .browser:
                 guard let state = pane.browserState else { return nil }
-                return BrowserToolbarView(state: state)
+                let toolbar = BrowserToolbarView(state: state)
+                toolbar.onChooseSite = { [weak pane] in pane?.returnToSitePicker() }
+                return toolbar
             case .device, .simulator, .android:
                 return (controller?.paneController(for: pane) as? CapturePaneToolbarProviding)?.makeCaptureToolbarView()
             case .editor, .agentChat:
