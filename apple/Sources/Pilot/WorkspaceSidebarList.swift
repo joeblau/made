@@ -263,7 +263,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         guard rows.indices.contains(row) else { return 28 * zoom }
         switch rows[row] {
         case .workspace, .job: return 44 * zoom
-        case .switcher: return 36 * zoom
+        case .switcher: return 46 * zoom
         default: return 28 * zoom
         }
     }
@@ -381,7 +381,9 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             NSLayoutConstraint.activate([
                 switcher.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
                 switcher.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -4),
-                switcher.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                // The heading below brings its own space above its text, so
+                // the control sits low in its row to look evenly spaced.
+                switcher.bottomAnchor.constraint(equalTo: cell.bottomAnchor, constant: -4),
             ])
             return cell
         case .job(let id):
