@@ -2,12 +2,22 @@ import AppKit
 import Observation
 
 @MainActor
-final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
+final class AgenticUseViewController: NSViewController, CockpitPanePresenting, CockpitPageToolbarProviding,
+    CockpitPageTitleProviding {
     let store: AgenticUsageStore
     private let isLive: Bool
     private let rangeControl = NSSegmentedControl()
-    private let refreshButton = CockpitRefreshButton(help: "Refresh usage and pricing", action: {})
-    private let intervalLabel = NSTextField(labelWithString: "")
+    private let refreshButton = CockpitRefreshButton(help: "Refresh usage and pricing", diameter: CockpitToolbarGroups.capsuleHeight,
+                                                     scalesWithZoom: false, action: {})
+    /// The time frames, centered in the window toolbar.
+    private let ranges = CockpitToolbarGroups()
+    /// Refresh, at the toolbar's trailing edge.
+    private let actions = CockpitToolbarGroups()
+    var pageToolbarView: NSView { loadViewIfNeeded(); return ranges }
+    var pageToolbarTrailingView: NSView? { loadViewIfNeeded(); return actions }
+    /// The date range on screen; it heads the window title.
+    private(set) var pageTitle: String?
+    var onPageTitleChange: (() -> Void)?
     private let warningLabel = NSTextField(wrappingLabelWithString: "")
     private let warningDismiss = NSButton()
     private let freshnessLabel = NSTextField(labelWithString: "")
@@ -31,19 +41,23 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         view = AgenticUseFlippedView()
         rangeControl.segmentCount = AgenticUseRange.allCases.count
         rangeControl.trackingMode = .selectOne
-        rangeControl.segmentStyle = .rounded
+        if #available(macOS 27.0, *) { rangeControl.role = .tabs } else { rangeControl.segmentStyle = .capsule }
         rangeControl.controlSize = .small
         for (index, range) in AgenticUseRange.allCases.enumerated() { rangeControl.setLabel(range.label, forSegment: index) }
         rangeControl.target = self
         rangeControl.action = #selector(rangeChanged)
         rangeControl.setAccessibilityLabel("Usage date range")
         refreshButton.action = { [weak self] in self?.refresh() }
+        ranges.setAccessibilityIdentifier("agentic-use.toolbar-ranges")
+        ranges.setGroups([[rangeControl]])
+        // The refresh circle is its own glass surface, so it is not wrapped in a group capsule.
+        actions.setAccessibilityIdentifier("agentic-use.toolbar-actions")
+        actions.addArrangedSubview(refreshButton)
         warningDismiss.bezelStyle = .rounded
         warningDismiss.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Dismiss warning")
         warningDismiss.target = self
         warningDismiss.action = #selector(dismissWarning)
         warningLabel.textColor = .systemOrange
-        intervalLabel.textColor = .secondaryLabelColor
         freshnessLabel.textColor = .secondaryLabelColor
         scanProgress.style = .bar
         scanProgress.minValue = 0
@@ -57,7 +71,7 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         stateAction.action = #selector(performStateAction)
         scroll.hasVerticalScroller = true
         scroll.drawsBackground = false
-        for child in [intervalLabel, rangeControl, refreshButton, warningLabel, warningDismiss,
+        for child in [warningLabel, warningDismiss,
                       freshnessLabel, scroll, stateTitle, stateDetail, stateAction, scanProgress] { view.addSubview(child) }
         NotificationCenter.default.addObserver(self, selector: #selector(consentChanged), name: UsageConsent.changedNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(zoomChanged), name: .cockpitUIZoomDidChange, object: nil)
@@ -105,9 +119,13 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         stateAction.isEnabled = isLive
         rangeControl.isEnabled = isLive
         refreshButton.isRefreshing = store.isRefreshing
-        intervalLabel.stringValue = store.snapshot.map {
+        let title = store.snapshot.map {
             ($0.interval.start..<$0.interval.end).formatted(.interval.month(.abbreviated).day())
-        } ?? "Agent usage"
+        }
+        if title != pageTitle {
+            pageTitle = title
+            onPageTitleChange?()
+        }
         warningLabel.stringValue = store.scanWarning ?? ""
         warningLabel.isHidden = store.scanWarning == nil
         warningDismiss.isHidden = warningLabel.isHidden
@@ -164,19 +182,9 @@ final class AgenticUseViewController: NSViewController, CockpitPanePresenting {
         super.viewDidLayout()
         let width = view.bounds.width
         let zoom = AgenticUseLayout.zoom
-        let compact = width < 650 * zoom
-        let headerHeight: CGFloat = (compact ? 76 : 44) * zoom
-        let controlsY: CGFloat = (compact ? 40 : 9) * zoom
-        intervalLabel.font = AgenticUseLayout.font(.body)
-        intervalLabel.frame = NSRect(x: 16, y: 12, width: max(0, compact ? width - 48 : width - 355 * zoom), height: 24 * zoom)
-        rangeControl.font = AgenticUseLayout.font(.meta)
-        let rangeWidth = min(240 * zoom, max(100, width - 100))
-        rangeControl.frame = NSRect(x: max(16, width - rangeWidth - 70 * zoom), y: controlsY, width: rangeWidth, height: 27 * zoom)
-        // One fixed square slot, vertically centred on the range control; the
-        // spinner replaces the button inside it while a rescan runs.
-        let refreshSide = refreshButton.slotSide
-        refreshButton.frame = NSRect(x: width - 16 - refreshSide, y: controlsY + (27 * zoom - refreshSide) / 2,
-                                     width: refreshSide, height: refreshSide)
+        // The time frames, refresh and date range live in the window toolbar
+        // and title, so the page starts at its content.
+        let headerHeight: CGFloat = 8 * zoom
         let warningHeight: CGFloat = warningLabel.isHidden ? 0 : 48 * zoom
         warningLabel.font = AgenticUseLayout.font(.body)
         warningLabel.frame = NSRect(x: 16, y: headerHeight + 4, width: max(0, width - 76), height: max(0, warningHeight - 4))

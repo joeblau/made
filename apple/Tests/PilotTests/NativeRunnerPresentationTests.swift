@@ -20,8 +20,11 @@ struct NativeRunnerPresentationTests {
         try await Task.sleep(for: .milliseconds(30))
         #expect(await probe.calls == 0)
         let buttons = buttons(in: controller.view)
-        #expect(self.buttons(in: controller.pageToolbarView).first { $0.accessibilityLabel() == "Refresh" }?.isEnabled == false)
-        let refresh = try #require(self.buttons(in: controller.pageToolbarView).first { $0.accessibilityLabel() == "Refresh" })
+        // Refresh and the filter live in the toolbar's trailing group; the layout tabs stay centered.
+        let trailing = try #require(controller.pageToolbarTrailingView)
+        #expect(self.buttons(in: controller.pageToolbarView).allSatisfy { $0.accessibilityLabel() != "Refresh" })
+        #expect(self.buttons(in: trailing).first { $0.accessibilityLabel() == "Refresh" }?.isEnabled == false)
+        let refresh = try #require(self.buttons(in: trailing).first { $0.accessibilityLabel() == "Refresh" })
         #expect((refresh.superview as? CockpitRefreshButton)?.isRefreshing == store.isRefreshing)
         #expect(buttons.first { $0.title == "Add Source" }?.isEnabled == false)
     }

@@ -26,6 +26,14 @@ extension CockpitPageToolbarProviding {
     var pageToolbarTrailingView: NSView? { nil }
 }
 
+/// A global page that names what it is showing (a date range, say). The
+/// window title becomes "<page title> — Cockpit".
+@MainActor
+protocol CockpitPageTitleProviding: AnyObject {
+    var pageTitle: String? { get }
+    var onPageTitleChange: (() -> Void)? { get set }
+}
+
 /// Called only when the user closes a pane, never when its view is detached.
 @MainActor
 protocol CockpitPaneClosing: AnyObject {
