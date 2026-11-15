@@ -102,6 +102,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var observers: [NSObjectProtocol] = []
     private var notesKeyMonitor: Any?
     private var toolbarFeature: NSToolbarItem?
+    private var toolbarPageActions: NSToolbarItem?
     private var launcher: WorkspacePaneLauncher?
     private var windowVisible = false
 
@@ -532,6 +533,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         static let sidebar = NSToolbarItem.Identifier.toggleSidebar
         static let newWorkspace = NSToolbarItem.Identifier("cockpit.new-workspace")
         static let feature = NSToolbarItem.Identifier("cockpit.feature")
+        static let pageActions = NSToolbarItem.Identifier("cockpit.page-actions")
         static let launcher = NSToolbarItem.Identifier("cockpit.launcher")
         static let draw = NSToolbarItem.Identifier("cockpit.draw")
         static let inspector = NSToolbarItem.Identifier.toggleInspector
@@ -542,7 +544,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             // New Workspace sits at the trailing edge of the sidebar's toolbar
             // region, beside the list it adds to, rather than over content.
             ? [ToolbarID.sidebar, .flexibleSpace, ToolbarID.newWorkspace, .sidebarTrackingSeparator] : []
-        return leading + [.flexibleSpace, ToolbarID.feature, .flexibleSpace, .inspectorTrackingSeparator,
+        return leading + [.flexibleSpace, ToolbarID.feature, .flexibleSpace, ToolbarID.pageActions, .inspectorTrackingSeparator,
                           ToolbarID.launcher, .space, ToolbarID.draw, ToolbarID.inspector]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
@@ -566,6 +568,12 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             toolbarFeature = item
             item.label = "Controls"
             item.view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 28))
+            item.isHidden = true
+        case ToolbarID.pageActions:
+            toolbarPageActions = item
+            item.label = "Actions"
+            item.view = NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 28))
+            item.isBordered = false
             item.isHidden = true
         case ToolbarID.sidebar:
             item.label = "Sidebar"
@@ -629,6 +637,11 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             toolbarFeature?.isEnabled = feature != nil
             toolbarFeature?.isHidden = feature == nil
             toolbarFeature?.visibilityPriority = page == nil ? .standard : .high
+            let actions = page?.pageToolbarTrailingView
+            toolbarPageActions?.view = actions ?? NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 28))
+            toolbarPageActions?.isEnabled = actions != nil
+            toolbarPageActions?.isHidden = actions == nil
+            toolbarPageActions?.visibilityPriority = .high
         }
         for item in window?.toolbar?.items ?? [] where [ToolbarID.launcher, ToolbarID.draw, ToolbarID.inspector].contains(item.itemIdentifier) {
             item.isEnabled = selectedWorkspace != nil
