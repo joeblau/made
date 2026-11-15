@@ -19,7 +19,9 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
                                                scalesWithZoom: false, action: {})
     private let toolbar = NSStackView()
     private let filters = CockpitToolbarGroups()
+    private let actions = CockpitToolbarGroups()
     var pageToolbarView: NSView { loadViewIfNeeded(); return filters }
+    var pageToolbarTrailingView: NSView? { loadViewIfNeeded(); return actions }
     private let toolbarSpacer = RRUI.spacer()
     private let body = NSView()
     private let collection = NSCollectionView()
@@ -74,10 +76,14 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
         // The layouts are views of the same fleet, so they read as tabs.
         if #available(macOS 27.0, *) { layoutPicker.role = .tabs } else { layoutPicker.segmentStyle = .capsule }
         layoutPicker.controlSize = .small
-        filters.setGroups([[search], [layoutPicker]])
+        // The layout tabs stay centered; the filter and refresh sit at the
+        // toolbar's trailing edge.
+        filters.setGroups([[layoutPicker]])
+        actions.setAccessibilityIdentifier("runners.toolbar-actions")
+        actions.setGroups([[search]])
         // The refresh circle is its own glass surface; wrapping it in a group
         // capsule would stack two glass layers.
-        filters.addArrangedSubview(refresh)
+        actions.addArrangedSubview(refresh)
         toolbar.orientation = .horizontal
         toolbar.alignment = .centerY
         toolbar.spacing = 10

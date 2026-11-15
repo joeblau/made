@@ -307,6 +307,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
                     globalControllers[mode] = controller
                     for (key, value) in globalControllers { (value as? CockpitPanePresenting)?.updatePresentation(isActive: active && key == mode, isSelected: key == mode) }
                     bodyController.setContent(controller, retainWhileHidden: true)
+                    (controller as? CockpitPageTitleProviding)?.onPageTitleChange = { [weak self] in self?.refreshGlobalWindowTitle() }
                 }
             } else {
                 let empty = NSViewController()
@@ -325,7 +326,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
                 NSLayoutConstraint.activate([stack.centerXAnchor.constraint(equalTo: empty.view.centerXAnchor), stack.centerYAnchor.constraint(equalTo: empty.view.centerYAnchor)])
                 bodyController.setContent(empty)
             }
-            window?.title = surface == .main ? "Cockpit" : PilotWindowID.extendoTitle
+            refreshGlobalWindowTitle()
         }
         sidebarContainer.sidebar.refresh()
         refreshInspector()
@@ -597,6 +598,15 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         }
         item.toolTip = item.label
         return item
+    }
+
+    /// The title while no workspace is selected: the global page's own title
+    /// (a date range, say) ahead of the app name, or the app name alone.
+    private func refreshGlobalWindowTitle() {
+        guard isWindowLoaded, selectedWorkspace == nil else { return }
+        guard surface == .main else { window?.title = PilotWindowID.extendoTitle; return }
+        let page = selectedGlobalMode.flatMap { globalControllers[$0] as? CockpitPageTitleProviding }?.pageTitle
+        window?.title = page.map { $0 + " — Cockpit" } ?? "Cockpit"
     }
 
     @objc private func newToolbarWorkspace(_ sender: Any?) { presentNewWorkspace() }
