@@ -2,14 +2,17 @@ import AppKit
 import Observation
 import UniformTypeIdentifiers
 
-/// Mock-ups studio: layout rail, shared 3D artboard, and backdrop inspector.
+/// Mock-ups studio: canvas, device, and layouts on the left; the shared 3D
+/// artboard with its position controls beneath; backdrop and shadow on the right.
 @MainActor
 final class MockupsViewController: NSViewController, CockpitPanePresenting, CockpitPageToolbarProviding {
     let document = MockupDocument()
     private let defaults: UserDefaults
     private let observation = RRObservation()
     private let filters = CockpitToolbarGroups()
+    private let actions = CockpitToolbarGroups()
     var pageToolbarView: NSView { loadViewIfNeeded(); return filters }
+    var pageToolbarTrailingView: NSView? { loadViewIfNeeded(); return actions }
 
     private let kindPicker = NSSegmentedControl(labels: MockupKind.allCases.map(\.title), trackingMode: .selectOne, target: nil, action: nil)
     private let aspectPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -107,7 +110,6 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             aspectPopup.lastItem?.representedObject = preset.id
         }
         aspectPopup.controlSize = .small
-        aspectPopup.isBordered = false
         aspectPopup.target = self
         aspectPopup.action = #selector(changeAspect)
         aspectPopup.setAccessibilityLabel("Aspect ratio")
@@ -118,7 +120,9 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         copyButton.isBordered = false
         copyButton.toolTip = "Copy the mock-up to the clipboard"
         copyButton.setAccessibilityIdentifier("mockups.copy")
-        filters.setGroups([[kindPicker], [aspectPopup], [copyButton, exportButton]])
+        actions.setAccessibilityIdentifier("mockups.toolbar-actions")
+        filters.setGroups([[kindPicker]])
+        actions.setGroups([[copyButton, exportButton]])
 
         center.stage = stage
         center.document = document
@@ -129,9 +133,10 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
 
         let rail = buildRail()
         let inspector = buildInspector()
-        let centerColumn = RRUI.stack([center, timeline], spacing: 8)
+        let position = buildPositionPanel()
+        let centerColumn = RRUI.stack([center, position, timeline], spacing: 8)
         centerColumn.alignment = .centerX
-        for item in [center, timeline] { item.widthAnchor.constraint(equalTo: centerColumn.widthAnchor).isActive = true }
+        for item in [center, position, timeline] { item.widthAnchor.constraint(equalTo: centerColumn.widthAnchor).isActive = true }
         center.setContentHuggingPriority(.defaultLow, for: .vertical)
 
         let columns = RRUI.stack([rail, centerColumn, inspector], axis: .horizontal, spacing: 0)
@@ -204,12 +209,57 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         gallery.spacing = 6
         let scroll = Self.scrolling(gallery)
         scroll.setAccessibilityIdentifier("mockups.layouts")
+        screenPopup.controlSize = .small
+        screenPopup.target = self
+        screenPopup.action = #selector(changeScreen)
+        screenPopup.setAccessibilityLabel("Screen to edit")
+        screenPopup.setAccessibilityIdentifier("mockups.screen-picker")
+        let clear = RRButton("Clear", symbol: "xmark") { [weak self] in self?.document.screenshot = nil }
+        chooseScreenshot.title = "Choose…"
+        chooseScreenshot.toolTip = "Choose a screenshot, or drop or paste an image onto the canvas"
         let stack = RRUI.stack([
+            RRUI.label("Canvas", size: 15, weight: .semibold), aspectPopup,
             RRUI.label("Device", size: 15, weight: .semibold), devicePopup, finishRow,
+            RRUI.label("Screen", size: 15, weight: .semibold), screenPopup,
+            RRUI.stack([chooseScreenshot, clear], axis: .horizontal),
             RRUI.label("Layouts", size: 15, weight: .semibold), scroll,
         ], spacing: 10)
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 12, bottom: 12, right: 12)
-        for child in [devicePopup, scroll] { child.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true }
+        for child in [aspectPopup, devicePopup, screenPopup, scroll] {
+            child.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -24).isActive = true
+        }
+        return stack
+    }
+
+    /// Device pose controls in a strip under the canvas, three to a row.
+    private func buildPositionPanel() -> NSView {
+        for slider in [rotation, scale, tiltX, tiltY, positionX, positionY, openSlider] {
+            slider.target = self
+            slider.action = #selector(slidersChanged)
+            slider.controlSize = .small
+        }
+        rotation.setAccessibilityLabel("Rotation")
+        scale.setAccessibilityLabel("Device size")
+        tiltX.setAccessibilityLabel("Tilt")
+        tiltY.setAccessibilityLabel("Turn")
+        positionX.setAccessibilityLabel("Horizontal position")
+        positionY.setAccessibilityLabel("Vertical position")
+        openSlider.setAccessibilityLabel("Open amount")
+        func row(_ views: [NSView]) -> NSStackView {
+            let row = RRUI.stack(views, axis: .horizontal, spacing: 16)
+            row.distribution = .fillEqually
+            return row
+        }
+        let stack = RRUI.stack([
+            RRUI.label("Position", size: 15, weight: .semibold),
+            row([Self.labeled("Turn", tiltY), Self.labeled("Tilt", tiltX), Self.labeled("Rotation", rotation)]),
+            row([Self.labeled("Move X", positionX), Self.labeled("Move Y", positionY), Self.labeled("Size", scale)]),
+            row([openRow, status, NSView()]),
+        ], spacing: 8)
+        stack.edgeInsets = NSEdgeInsets(top: 4, left: 24, bottom: 8, right: 24)
+        stack.setAccessibilityIdentifier("mockups.position")
+        RRUI.fillWidth(stack)
+        stack.setContentHuggingPriority(.required, for: .vertical)
         return stack
     }
 
@@ -257,24 +307,6 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         displayP3Toggle.action = #selector(toggleDisplayP3)
         displayP3Toggle.setAccessibilityLabel("Display P3")
         displayP3Toggle.toolTip = "Pick backdrop colors in the wide Display P3 gamut instead of sRGB"
-        for slider in [rotation, scale, tiltX, tiltY, positionX, positionY, openSlider] {
-            slider.target = self
-            slider.action = #selector(slidersChanged)
-            slider.controlSize = .small
-        }
-        rotation.setAccessibilityLabel("Rotation")
-        scale.setAccessibilityLabel("Device size")
-        tiltX.setAccessibilityLabel("Tilt")
-        tiltY.setAccessibilityLabel("Turn")
-        positionX.setAccessibilityLabel("Horizontal position")
-        positionY.setAccessibilityLabel("Vertical position")
-        openSlider.setAccessibilityLabel("Open amount")
-        screenPopup.controlSize = .small
-        screenPopup.target = self
-        screenPopup.action = #selector(changeScreen)
-        screenPopup.setAccessibilityLabel("Screen to edit")
-        screenPopup.setAccessibilityIdentifier("mockups.screen-picker")
-        let clear = RRButton("Clear", symbol: "xmark") { [weak self] in self?.document.screenshot = nil }
         let stack = RRUI.stack([
             RRUI.label("Backdrop", size: 15, weight: .semibold),
             styleControl,
@@ -282,19 +314,6 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             colorRow,
             chooseBackground,
             shadowPanel,
-            RRUI.label("Device", size: 15, weight: .semibold),
-            Self.labeled("Turn", tiltY),
-            Self.labeled("Tilt", tiltX),
-            Self.labeled("Rotation", rotation),
-            Self.labeled("Move X", positionX),
-            Self.labeled("Move Y", positionY),
-            Self.labeled("Size", scale),
-            openRow,
-            RRUI.label("Screen", size: 15, weight: .semibold),
-            screenPopup,
-            RRUI.stack([chooseScreenshot, clear], axis: .horizontal),
-            RRUI.label("Choose a screen, then drop or paste its image onto the canvas.", size: 11, color: .secondaryLabelColor),
-            status,
             RRUI.spacer(),
         ], spacing: 12)
         stack.edgeInsets = NSEdgeInsets(top: 16, left: 14, bottom: 16, right: 14)

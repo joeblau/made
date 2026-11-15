@@ -11,7 +11,7 @@ the layout, the pose, and a separate screenshot for each device in the layout.
   transparent background when the backdrop is set to None. **Copy** (or ⌘C on
   the canvas) puts the same image on the clipboard; in Video it copies the
   frame at the playhead.
-- **Shadow** (inspector) drops a shadow under the devices: None, Spread (a
+- **Shadow** (right panel) drops a shadow under the devices: None, Spread (a
   wide soft halo) or Hug (tight to the edges), at Low, Medium or High
   intensity. Drag the sun on the Light Source pad to move the light; the
   shadow falls away from it. The live canvas, PNG, clipboard and MP4 all use
@@ -27,8 +27,10 @@ preview and exported frame, so their poses match exactly.
 
 ## Device layouts
 
-The left rail has a device picker, finish swatches, and a scrolling layout
-gallery. It selects a distinct catalog for each device family, matching the
+The left rail has the canvas size, a device picker, finish swatches, the
+screen controls, and a scrolling layout gallery. Backdrop and Shadow are on
+the right, the Position sliders sit under the canvas, and Copy and Export are
+at the trailing edge of the toolbar. It selects a distinct catalog for each device family, matching the
 [PostSpark device editor](https://postspark.app/device-mockup) reviewed on
 2026-11-07. Thumbnails are drawn locally; no PostSpark artwork or device frames
 are used.
@@ -64,7 +66,7 @@ or iPhone 18 Pro when an iPad/Mac is selected. The iPad retains Cockpit's
 bundled Magic Keyboard and Pencil. Android, desktop displays, watches, TVs,
 and unbundled model generations are not added to the device catalog.
 
-Choose a device on the canvas or use **Screen to edit** in the inspector,
+Choose a device on the canvas or use **Screen to edit** in the left rail,
 then choose, drop, or paste its screenshot. Clear affects only that slot.
 Switching to a smaller layout hides extra slots without discarding their
 images. Switching layouts resets Turn, Tilt, Rotation, and Size, while keeping

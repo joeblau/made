@@ -17,6 +17,13 @@ protocol CockpitPanePresenting: AnyObject {
 @MainActor
 protocol CockpitPageToolbarProviding: AnyObject {
     var pageToolbarView: NSView { get }
+    /// The page's finishing actions (Export, Copy), shown at the toolbar's
+    /// trailing edge instead of beside the centered controls.
+    var pageToolbarTrailingView: NSView? { get }
+}
+
+extension CockpitPageToolbarProviding {
+    var pageToolbarTrailingView: NSView? { nil }
 }
 
 /// Called only when the user closes a pane, never when its view is detached.
