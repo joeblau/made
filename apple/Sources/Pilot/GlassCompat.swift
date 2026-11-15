@@ -93,6 +93,14 @@ final class PilotNativeSegmentedControl: NSSegmentedControl {
         sendAction(action, to: target)
     }
 
+    /// A right-click opens the menu of the tab under the pointer.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard segmentCount > 0, bounds.width > 0 else { return super.menu(for: event) }
+        let location = convert(event.locationInWindow, from: nil)
+        let segment = min(max(0, Int(location.x * CGFloat(segmentCount) / bounds.width)), segmentCount - 1)
+        return menu(forSegment: segment) ?? super.menu(for: event)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         updateCloseButton()
