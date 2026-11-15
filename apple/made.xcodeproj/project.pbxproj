@@ -460,6 +460,7 @@
 		9934A67223746B6C71D8996A /* PlotterGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8918F120AC89BE6FDE09CD52 /* PlotterGeometry.swift */; };
 		9940321786FA58A7E69AB41A /* RemoteRunnerUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38F62BBDFF86225D673083A4 /* RemoteRunnerUI.swift */; };
 		99539320BFC7A4CD3C8A317F /* DroneControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79CEFD94E2A0ED7B5C0B4F08 /* DroneControl.swift */; };
+		9A108410EACE486D2AA44226 /* BrowserSitePickerResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B2E75099CEB730D25662F54 /* BrowserSitePickerResetTests.swift */; };
 		9AED02A0C7377E6215DAD197 /* AgentChatAttachments.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5582F1F8262C4C160021AA2C /* AgentChatAttachments.swift */; };
 		9B7015566BCD76B714835579 /* performance-budgets.json in Resources */ = {isa = PBXBuildFile; fileRef = 1AE65C7964876746CBA511CB /* performance-budgets.json */; };
 		9BEDF32A9EA4BE218F5F5067 /* EditorDocumentSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 891501BF1C5DFC63468EF179 /* EditorDocumentSessionTests.swift */; };
@@ -1240,6 +1241,7 @@
 		99FBD4FF911ED668812EFC61 /* H264AnnexBAssemblerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264AnnexBAssemblerTests.swift; sourceTree = "<group>"; };
 		9A59083B564B415C04500D75 /* ActiveConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveConnection.swift; sourceTree = "<group>"; };
 		9AB7F5204116EF90ADEB355D /* iphone-air.usdz */ = {isa = PBXFileReference; lastKnownFileType = file.usdz; path = "iphone-air.usdz"; sourceTree = "<group>"; };
+		9B2E75099CEB730D25662F54 /* BrowserSitePickerResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrowserSitePickerResetTests.swift; sourceTree = "<group>"; };
 		9C197E7776E833629288F072 /* PilotWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = PilotWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		9C877FAF376467B9363E1F58 /* AirPlayReceiverWorker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AirPlayReceiverWorker.swift; sourceTree = "<group>"; };
 		9D816D1023E74A8F6E3A27AB /* RemoteScreenDiscoveryBackoffTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteScreenDiscoveryBackoffTests.swift; sourceTree = "<group>"; };
@@ -1577,6 +1579,7 @@
 				A1BF64BD7C8B9FAE9409467D /* BrowserFaviconTests.swift */,
 				608A7F99DED792AFF8623204 /* BrowserNativePresentationTests.swift */,
 				A69F0B703C7CC8F0B2CC47AD /* BrowserReloadRecoveryTests.swift */,
+				9B2E75099CEB730D25662F54 /* BrowserSitePickerResetTests.swift */,
 				A84884E4B150F3373624885B /* BrowserStartPageVisibilityTests.swift */,
 				7C50BEC46D30C65C907B5F07 /* BuildPushCoordinatorPairingTests.swift */,
 				D5EC5FBBF73CE05AC8E9EA26 /* ChromiumApplicationIntegrationTests.swift */,
@@ -3713,6 +3716,7 @@
 				E4D3CC4A2518243E28D53ECF /* BrowserFaviconTests.swift in Sources */,
 				91BCE6958FBCB48CEF734170 /* BrowserNativePresentationTests.swift in Sources */,
 				BC3B4741F5EFBF5E4A640267 /* BrowserReloadRecoveryTests.swift in Sources */,
+				9A108410EACE486D2AA44226 /* BrowserSitePickerResetTests.swift in Sources */,
 				75C16309C3A1A6AC4D329C90 /* BrowserStartPageVisibilityTests.swift in Sources */,
 				BA440C3E8E7C69D41B3B2B8F /* BuildPushCoordinatorPairingTests.swift in Sources */,
 				3994990CA085818C389E8716 /* ChromiumApplicationIntegrationTests.swift in Sources */,

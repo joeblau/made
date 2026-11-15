@@ -137,6 +137,8 @@ final class BrowserToolbarView: NSView, NSTextFieldDelegate {
     private let download = NSProgressIndicator()
     private var clearingTask: Task<Void, Never>?
     private var isClearing = false
+    /// Sends the pane back to its site list; nil where there is no pane to reset.
+    var onChooseSite: (() -> Void)?
 
     init(state: BrowserState) {
         self.state = state
@@ -249,11 +251,19 @@ final class BrowserToolbarView: NSView, NSTextFieldDelegate {
     }
 
     private func showTools() {
+        makeToolsMenu().popUp(positioning: nil, at: NSPoint(x: 0, y: tools.bounds.minY), in: tools)
+    }
+
+    func makeToolsMenu() -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
         let profile = NSMenuItem(title: "Default Profile", action: nil, keyEquivalent: "")
         profile.state = .on
         menu.addItem(profile)
+        let sites = BrowserNativeMenuItem("Choose Another Site") { [weak self] in self?.onChooseSite?() }
+        sites.isEnabled = onChooseSite != nil
+        sites.toolTip = "Close this page and pick a server again"
+        menu.addItem(sites)
         let clear = BrowserNativeMenuItem("Clear All Browser Data…") { [weak self] in self?.confirmClear() }
         clear.isEnabled = state.supports(.websiteDataReset) && !isClearing
         menu.addItem(clear)
@@ -289,7 +299,7 @@ final class BrowserToolbarView: NSView, NSTextFieldDelegate {
         }
         inspector.isEnabled = state.supports(.developerTools)
         menu.addItem(inspector)
-        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: tools.bounds.minY), in: tools)
+        return menu
     }
 
     private func confirmClear() {

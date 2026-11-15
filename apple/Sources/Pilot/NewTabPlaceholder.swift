@@ -239,6 +239,18 @@ extension Pane {
         NotificationCenter.default.post(name: .paneDidReturnToNewTab, object: id)
     }
 
+    /// A browser pane goes back to its engine's site list, with the page it
+    /// was showing discarded. Choosing a server there opens it in a fresh
+    /// browser; Esc walks back up to New Tab.
+    @MainActor
+    func returnToSitePicker() {
+        guard kind == .browser, !isChoosingMode, let state = browserState else { return }
+        state.resetForNewSite()
+        isChoosingMode = true
+        openingPath = [.root, .browser, .browserServers(state.engine)]
+        NotificationCenter.default.post(name: .paneDidReturnToNewTab, object: id)
+    }
+
     /// Converts the placeholder into its working mode. Returns false without
     /// mutating the pane when the choice is unavailable or already applied.
     @MainActor @discardableResult
@@ -300,6 +312,19 @@ extension Pane {
         if kind == .terminal { workspace?.setFrontmostTerminalPaneID(id) }
         _ = modelContext?.saveReporting(operation: "Choosing pane mode")
         return true
+    }
+}
+
+extension BrowserState {
+    /// Drops the current page and its history. The pane's next surface is a
+    /// new one, so the site chosen next starts clean instead of navigating
+    /// the old page's web view.
+    func resetForNewSite() {
+        urlText = ""
+        title = ""
+        pendingAddressSubmission = nil
+        isAddressEditing = false
+        requestRuntimeRetry()
     }
 }
 
