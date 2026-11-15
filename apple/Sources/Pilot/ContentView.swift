@@ -545,8 +545,11 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             // New Workspace sits at the trailing edge of the sidebar's toolbar
             // region, beside the list it adds to, rather than over content.
             ? [ToolbarID.sidebar, .flexibleSpace, ToolbarID.newWorkspace, .sidebarTrackingSeparator] : []
+        // The flexible space after the tracking separator keeps the pane
+        // tools at the window's trailing edge while the inspector is open,
+        // instead of at the inspector's leading edge.
         return leading + [.flexibleSpace, ToolbarID.feature, .flexibleSpace, ToolbarID.pageActions, .inspectorTrackingSeparator,
-                          ToolbarID.launcher, .space, ToolbarID.draw, ToolbarID.inspector]
+                          .flexibleSpace, ToolbarID.launcher, .space, ToolbarID.draw, ToolbarID.inspector]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { toolbarDefaultItemIdentifiers(toolbar) }
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
@@ -617,18 +620,20 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         let showsPaneTools = selectedWorkspace != nil
         if toolbarShowsPaneTools != showsPaneTools, let toolbar = window?.toolbar {
             toolbarShowsPaneTools = showsPaneTools
-            let paneItems: [NSToolbarItem.Identifier] = [.inspectorTrackingSeparator, ToolbarID.launcher,
+            // Everything from the tracking separator on is the pane region.
+            let paneItems: [NSToolbarItem.Identifier] = [.inspectorTrackingSeparator, .flexibleSpace, ToolbarID.launcher,
                                                        .space, ToolbarID.draw, ToolbarID.inspector]
+            let regionStart = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator }
             if showsPaneTools {
-                for identifier in paneItems where !toolbar.items.contains(where: { $0.itemIdentifier == identifier }) {
-                    toolbar.insertItem(withItemIdentifier: identifier, at: toolbar.items.count)
+                if regionStart == nil {
+                    for identifier in paneItems { toolbar.insertItem(withItemIdentifier: identifier, at: toolbar.items.count) }
                 }
             } else {
                 // The tracking separator reserves the inspector's toolbar
                 // region even when its items are hidden. Remove the region on
                 // global pages so their primary controls can use the full width.
-                for index in toolbar.items.indices.reversed() where paneItems.contains(toolbar.items[index].itemIdentifier) {
-                    toolbar.removeItem(at: index)
+                if let regionStart {
+                    for index in (regionStart..<toolbar.items.count).reversed() { toolbar.removeItem(at: index) }
                 }
                 launcher = nil
             }
@@ -645,7 +650,8 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             // Grouped toolbars draw their own capsules; a shared bezel would merge them.
             toolbarFeature?.isBordered = !(feature is CockpitToolbarGroups)
             toolbarFeature?.isEnabled = feature != nil
-            toolbarFeature?.isHidden = feature == nil
+            // A page with only trailing actions supplies an empty group.
+            toolbarFeature?.isHidden = feature == nil || (feature as? CockpitToolbarGroups)?.arrangedSubviews.isEmpty == true
             toolbarFeature?.visibilityPriority = page == nil ? .standard : .high
             let actions = page?.pageToolbarTrailingView
             toolbarPageActions?.view = actions ?? NSView(frame: NSRect(x: 0, y: 0, width: 1, height: 28))

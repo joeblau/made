@@ -268,6 +268,17 @@ struct RemoteDesktopGroupLayoutTests {
         view.layoutSubtreeIfNeeded()
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
         let views = descendants(view)
+        // Groups are tabs in one control; New Group is a trailing plus and
+        // Add Computer lives in the window toolbar, not the page.
+        let tabs = try #require(views.first { $0.accessibilityIdentifier() == "remote.groups" })
+        let segmented = try #require(descendants(tabs).compactMap { $0 as? NSSegmentedControl }.first)
+        #expect(segmented.segmentCount == groups.groups.count)
+        #expect((0..<segmented.segmentCount).allSatisfy { segmented.menu(forSegment: $0)?.items.first?.title == "Rename Group…" })
+        let plus = try #require(views.first { $0.accessibilityIdentifier() == "remote.new-group" })
+        #expect(plus.convert(plus.bounds, to: nil).minX > tabs.convert(tabs.bounds, to: nil).maxX)
+        #expect(!views.contains { $0.accessibilityIdentifier() == "remote.add-computer" })
+        let trailing = try #require(controller.pageToolbarTrailingView)
+        #expect(descendants(trailing).contains { $0.accessibilityIdentifier() == "remote.add-computer" })
         for machine in machines {
             #expect(views.compactMap { $0 as? NSTextField }.filter { $0.stringValue == machine.displayTitle }.count == 1,
                     "The connection title belongs in the header, not twice in the card")

@@ -5,14 +5,40 @@ import SwiftData
 /// Four stable screen slots per saved group. The controller owns presentation;
 /// RemoteDesktopSessionManager continues to own connections across navigation.
 @MainActor
-final class RemoteDesktopViewController: NSViewController, CockpitPanePresenting {
+final class RemoteDesktopViewController: NSViewController, CockpitPanePresenting, CockpitPageToolbarProviding {
     let store: WorkspaceStore
     let sessions: RemoteDesktopSessionManager
     let groups: RemoteDesktopGroups
     private let isLive: Bool
     private let isolatedDefaultsName: String?
     private let header = NSStackView()
-    private lazy var tabStrip = CockpitTabStrip(stack: header)
+    /// One tab per group, in the app's tab control. Right-click a tab to
+    /// rename or delete its group; drop a computer on a tab to move it there.
+    private lazy var groupTabs = PilotSegmentedControl<UUID>(
+        "Remote Desktop groups", selection: groups.selectedGroupID ?? UUID(), options: [],
+        title: { [weak self] id in self?.groups.groups.first { $0.id == id }?.name ?? "" },
+        controlSize: .large, liftsOnPress: false
+    ) { [weak self] id in
+        guard let self else { return }
+        self.store.selectedRemoteConnectionID = self.groups.selectGroup(id, preserving: self.store.selectedRemoteConnectionID)
+        self.render()
+    }
+    private lazy var newGroup = RRButton("", symbol: "plus") { [weak self] in
+        guard let self, self.isLive else { return }
+        let id = self.groups.addGroup()
+        self.store.selectedRemoteConnectionID = nil
+        self.render()
+        if let group = self.groups.groups.first(where: { $0.id == id }) { self.rename(group) }
+    }
+    private lazy var addComputer = RRButton("Add Computer", symbol: "plus") { [weak self] in
+        guard let self, let group = self.groups.selectedGroup else { return }
+        self.showPicker(groupID: group.id, slot: nil)
+    }
+    /// Nothing is centered for this page; Add Computer sits at the trailing edge.
+    private let centerControls = CockpitToolbarGroups()
+    private let actions = CockpitToolbarGroups()
+    var pageToolbarView: NSView { loadViewIfNeeded(); return centerControls }
+    var pageToolbarTrailingView: NSView? { loadViewIfNeeded(); return actions }
     private let grid = RemoteDesktopGridView()
     private let observation = RRObservation()
     private var panes: [UUID: RemoteConnectionViewController] = [:]
@@ -52,14 +78,43 @@ final class RemoteDesktopViewController: NSViewController, CockpitPanePresenting
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 8
-        tabStrip.setAccessibilityIdentifier("remote.groups")
-        let stack = RRUI.stack([tabStrip, grid], spacing: 4)
+        header.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 2, right: 12)
+        groupTabs.setAccessibilityIdentifier("remote.groups")
+        groupTabs.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        groupTabs.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        groupTabs.menuItems = { [weak self] id in
+            guard let self, let group = self.groups.groups.first(where: { $0.id == id }) else { return [] }
+            return [
+                PilotSegmentedMenuItem("Rename Group…", isEnabled: self.isLive) { [weak self] in self?.rename(group) },
+                PilotSegmentedMenuItem("Delete Empty Group",
+                                       isEnabled: self.isLive && group.connectionIDs.isEmpty && self.groups.groups.count > 1) { [weak self] in
+                    guard self?.isLive == true else { return }
+                    self?.groups.deleteEmptyGroup(group.id)
+                    self?.render()
+                },
+            ]
+        }
+        groupTabs.onDrop = { [weak self] pasteboard, index in
+            guard let self, self.groups.groups.indices.contains(index),
+                  let raw = pasteboard.string(forType: .string) else { return false }
+            return self.move(raw, group: self.groups.groups[index].id)
+        }
+        newGroup.toolTip = "New Group"
+        newGroup.setAccessibilityLabel("New Group")
+        newGroup.setAccessibilityIdentifier("remote.new-group")
+        for view in [groupTabs, RRUI.spacer(), newGroup] { header.addArrangedSubview(view) }
+        // The toolbar group's glass capsule is the button's chrome.
+        addComputer.isBordered = false
+        addComputer.setAccessibilityIdentifier("remote.add-computer")
+        actions.setAccessibilityIdentifier("remote.toolbar-actions")
+        actions.setGroups([[addComputer]])
+        let stack = RRUI.stack([header, grid], spacing: 4)
         RRUI.fillWidth(stack)
         RRUI.pin(stack, to: view)
         zoomObservation = RRZoomObservation { [weak self] in
             if let self {
                 RRUI.zoomControls(in: self.view)
-                self.tabStrip.needsLayout = true
+                self.groupTabs.refresh()
             }
         }
         render()
@@ -168,49 +223,13 @@ final class RemoteDesktopViewController: NSViewController, CockpitPanePresenting
     }
 
     private func renderHeader() {
-        defer { tabStrip.needsLayout = true }
-        RRUI.clear(header)
-        for group in groups.groups {
-            let button = RRButton(group.name) { [weak self] in
-                guard let self else { return }
-                self.store.selectedRemoteConnectionID = self.groups.selectGroup(group.id, preserving: self.store.selectedRemoteConnectionID)
-                self.render()
-            }
-            button.setButtonType(.pushOnPushOff)
-            button.state = group.id == groups.selectedGroupID ? .on : .off
-            button.setAccessibilityLabel("Remote Desktop group \(group.name)")
-            let menu = NSMenu()
-            menu.autoenablesItems = false
-            menu.addItem(RRMenuItem("Rename Group…", enabled: isLive) { [weak self] in self?.rename(group) })
-            menu.addItem(RRMenuItem("Delete Empty Group", enabled: isLive && group.connectionIDs.isEmpty && groups.groups.count > 1) { [weak self] in
-                guard self?.isLive == true else { return }
-                self?.groups.deleteEmptyGroup(group.id)
-                self?.render()
-            })
-            button.menu = menu
-            let drop = RemoteDesktopDropView()
-            RRUI.pin(button, to: drop)
-            drop.accept = { [weak self] raw in self?.move(raw, group: group.id) ?? false }
-            header.addArrangedSubview(drop)
-        }
-        let newGroup = RRButton("New Group", symbol: "plus") { [weak self] in
-            guard let self, self.isLive else { return }
-            let id = self.groups.addGroup()
-            self.store.selectedRemoteConnectionID = nil
-            self.render()
-            if let group = self.groups.groups.first(where: { $0.id == id }) { self.rename(group) }
-        }
+        let ids = groups.groups.map(\.id)
+        // Assigning the options rebuilds the tabs, their names and menus.
+        groupTabs.options = ids
+        if let selected = groups.selectedGroupID { groupTabs.selection = selected }
         newGroup.isEnabled = isLive
-        header.addArrangedSubview(newGroup)
-        if let group = groups.selectedGroup {
-            header.addArrangedSubview(RRUI.label("\(group.connectionIDs.count)/4", color: .secondaryLabelColor))
-            let rename = RRButton("Rename", symbol: "pencil") { [weak self] in self?.rename(group) }
-            rename.isEnabled = isLive
-            header.addArrangedSubview(rename)
-            let add = RRButton("Add Computer", symbol: "plus") { [weak self] in self?.showPicker(groupID: group.id, slot: nil) }
-            add.isEnabled = isLive && !group.isFull
-            header.addArrangedSubview(add)
-        }
+        addComputer.isEnabled = isLive && groups.selectedGroup?.isFull == false
+        addComputer.toolTip = groups.selectedGroup?.isFull == true ? "This group is full (4 computers)" : "Add a computer to this group"
     }
 
     private func connectionMenu(_ connection: RemoteDesktopConnection) -> NSMenu {
