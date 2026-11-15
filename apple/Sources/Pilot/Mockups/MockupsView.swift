@@ -73,6 +73,11 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         if let data = defaults.data(forKey: "mockups.shadow"), let saved = try? JSONDecoder().decode(MockupShadow.self, from: data) {
             document.shadow = saved
         }
+        if let saved = defaults.data(forKey: "mockups.background").flatMap(MockupBackground.init(savedData:)) {
+            document.background = saved
+            if case .solid(let color) = saved { lastSolid = color; backdropSpace = color.space }
+            if case .gradient(let gradient) = saved { lastGradient = gradient }
+        }
         if let format = defaults.string(forKey: MockupColorFormat.defaultsKey).flatMap(MockupColorFormat.init(rawValue:)) {
             colorFormat = format
         }
@@ -168,6 +173,8 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         defaults.set(document.layout.rawValue, forKey: "mockups.layout")
         defaults.set(document.motion.rawValue, forKey: "mockups.motion")
         defaults.set(try? JSONEncoder().encode(document.shadow), forKey: "mockups.shadow")
+        // An image backdrop has nothing to save, so the last color or gradient stays.
+        if let background = document.background.savedData { defaults.set(background, forKey: "mockups.background") }
         // Launch discards a timeline that fails isValid, so never persist one; the last valid save stays (#435).
         if document.timeline.isValid {
             defaults.set(try? JSONEncoder().encode(document.timeline), forKey: "mockups.timeline")

@@ -152,6 +152,54 @@ enum MockupBackground: Equatable {
     }
 }
 
+extension MockupBackground {
+    /// What a relaunch restores. An image backdrop is not kept: the picture
+    /// itself is never written to preferences.
+    private struct Saved: Codable {
+        var style: String
+        /// Each color as red, green, blue, then 1 for Display P3 or 0 for sRGB.
+        var colors: [[Double]]
+        var angle: Double?
+    }
+
+    var savedData: Data? {
+        func components(_ color: MockupColor) -> [Double] {
+            [Double(color.red), Double(color.green), Double(color.blue), color.space == .displayP3 ? 1 : 0]
+        }
+        let saved: Saved
+        switch self {
+        case .none: saved = Saved(style: Style.none.rawValue, colors: [])
+        case .solid(let color): saved = Saved(style: Style.solid.rawValue, colors: [components(color)])
+        case .gradient(let gradient):
+            saved = Saved(style: Style.gradient.rawValue, colors: [components(gradient.start), components(gradient.end)],
+                          angle: Double(gradient.angle))
+        case .image: return nil
+        }
+        return try? JSONEncoder().encode(saved)
+    }
+
+    /// Nil for anything that is not a backdrop this build wrote.
+    init?(savedData: Data) {
+        guard savedData.count <= 1_024, let saved = try? JSONDecoder().decode(Saved.self, from: savedData) else { return nil }
+        func color(_ index: Int) -> MockupColor? {
+            guard saved.colors.indices.contains(index) else { return nil }
+            let values = saved.colors[index]
+            guard values.count == 4, values.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }) else { return nil }
+            return MockupColor(red: values[0], green: values[1], blue: values[2], space: values[3] == 1 ? .displayP3 : .sRGB)
+        }
+        switch Style(rawValue: saved.style) {
+        case .some(.none): self = .none
+        case .solid:
+            guard let solid = color(0) else { return nil }
+            self = .solid(solid)
+        case .gradient:
+            guard let start = color(0), let end = color(1), let angle = saved.angle, angle.isFinite else { return nil }
+            self = .gradient(MockupGradient(start: start, end: end, angle: angle))
+        default: return nil
+        }
+    }
+}
+
 /// One shippable look of a device: which bundled Apple AR model to load and
 /// which USD variants to select inside it.
 struct MockupFinish: Hashable {

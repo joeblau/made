@@ -110,6 +110,30 @@ import Testing
         #expect(MockupsViewController(defaults: defaults).document.shadow == controller.document.shadow)
     }
 
+    @Test("The chosen backdrop color survives a relaunch")
+    func backdropPersistence() throws {
+        let suite = "mockup-backdrop-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let green = MockupColor(hex: 0x00FF3F, space: .displayP3)
+        let controller = MockupsViewController(defaults: defaults)
+        controller.view.frame = CGRect(x: 0, y: 0, width: 1100, height: 800)
+        controller.document.background = .solid(green)
+        controller.updatePresentation(isActive: true, isSelected: true)
+        controller.updatePresentation(isActive: false, isSelected: false)
+        #expect(MockupsViewController(defaults: defaults).document.background == .solid(green))
+
+        // An image backdrop is not saved, so the color is still what comes back.
+        controller.document.background = .image(NSImage(size: NSSize(width: 4, height: 4)))
+        controller.updatePresentation(isActive: true, isSelected: true)
+        controller.updatePresentation(isActive: false, isSelected: false)
+        #expect(MockupsViewController(defaults: defaults).document.background == .solid(green))
+
+        let gradient = MockupBackground.gradient(MockupGradient.presets[2])
+        #expect(try MockupBackground(savedData: #require(gradient.savedData)) == gradient)
+        #expect(MockupBackground(savedData: Data(#"{"style":"Solid","colors":[[2,0,0,1]]}"#.utf8)) == nil)
+    }
+
     @Test("Copy puts the exported PNG on the pasteboard")
     func copyWritesPNG() throws {
         let suite = "mockup-copy-\(UUID().uuidString)"
