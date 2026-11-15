@@ -448,8 +448,11 @@ enum MockupDeviceLibrary {
     private static func prepareScreen(_ screen: Screen) {
         let material = screen.material
         material.diffuse.contents = NSColor.black
-        // Apple authors a 1.75× boost SceneKit drops; restore part of it.
-        material.emission.intensity = 1.25
+        // The panel shows the screenshot's own pixels. Lit shading added
+        // studio light on top, which lifted blacks to grey and desaturated
+        // every color; a boosted emission did the same to mid-tones.
+        material.lightingModel = .constant
+        material.emission.intensity = 1
         material.emission.wrapS = .clamp
         material.emission.wrapT = .clamp
     }

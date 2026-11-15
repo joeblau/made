@@ -6,8 +6,11 @@ document: the background, the canvas aspect ratio, the device and its finish,
 the layout, the pose, and a separate screenshot for each device in the layout.
 
 - **Photo** renders a still. You set the pose with Turn, Tilt, Rotation, Size
-  and, for hinged devices, Open. Export is a PNG 3000 px on the long side. It
-  has a transparent background when the backdrop is set to None.
+  and, for hinged devices, Open. Export is a PNG 3000 px on the long side, tagged
+  Display P3 so wide-gamut backdrop colors keep their saturation. It has a
+  transparent background when the backdrop is set to None. **Copy** (or ⌘C on
+  the canvas) puts the same image on the clipboard; in Video it copies the
+  frame at the playhead.
 - **Video** plays an editable keyframe timeline. Motion presets (Turntable,
   Hero Tilt, Float, Open & Reveal, Flip In, Slide Up and Still) generate an
   initial timeline; changing a keyframe or transition makes it Custom. Export
