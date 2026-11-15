@@ -42,6 +42,7 @@
 		093213450C3467FF62413FFA /* AgentModelPickerIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F0AB2004F960BF6D29D999E /* AgentModelPickerIntegrationTests.swift */; };
 		09330D2A5DDB7E981084600B /* DroneRemoteTerminalClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A987929F39225C2CFFCED57 /* DroneRemoteTerminalClient.swift */; };
 		094EF307CA9081D03EE059EC /* SetupPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA88105961B3F738C76B55DB /* SetupPresentationTests.swift */; };
+		09C7E36DBCA8E96306C8FB96 /* MockupRenderingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 726BB077386878DEF8DAC5A4 /* MockupRenderingTests.swift */; };
 		0A48AE7E34524871F0A92274 /* CursorUsageHistoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 265694771F3D5837AA97A08B /* CursorUsageHistoryTests.swift */; };
 		0ABA4A2179B50C85A13C6EB6 /* PlotterUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6013148EE4B3B5AAC6B3719A /* PlotterUITests.swift */; };
 		0AF3B095E3BC4FFB592C5745 /* Workspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78F894A09A33E9EAE02EB8CF /* Workspace.swift */; };
@@ -1152,6 +1153,7 @@
 		71FE4BB89FE779CC8A0F7801 /* AgentChatComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentChatComposerView.swift; sourceTree = "<group>"; };
 		7202D816A88347AA9789318E /* DroneJobToolEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DroneJobToolEngine.swift; sourceTree = "<group>"; };
 		7256B05562C797566937FF0A /* CockpitObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CockpitObservation.swift; sourceTree = "<group>"; };
+		726BB077386878DEF8DAC5A4 /* MockupRenderingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockupRenderingTests.swift; sourceTree = "<group>"; };
 		7270EF11025F63E660529CD8 /* ChromiumDiagnosticsSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChromiumDiagnosticsSettings.swift; sourceTree = "<group>"; };
 		730CAADECFA121BB0719111E /* AgenticUseDailyChart.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgenticUseDailyChart.swift; sourceTree = "<group>"; };
 		73AF9BD439FA62891892E9DD /* UsageInspectorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageInspectorView.swift; sourceTree = "<group>"; };
@@ -1624,6 +1626,7 @@
 				5FE86C14933B542E638E5257 /* MarkdownTableFormatterTests.swift */,
 				23E8BC56C0FABCE1BA141984 /* MobileDeviceCacheTests.swift */,
 				E4FA7355D870F96189DB4004 /* MockupModelTests.swift */,
+				726BB077386878DEF8DAC5A4 /* MockupRenderingTests.swift */,
 				510D6A0C751370F8EA41F39C /* NativeAgentChatPresentationTests.swift */,
 				0E7FF54FEA198B2F8179DCA1 /* NativeCapturePresentationTests.swift */,
 				DDAE74E7782CB20217939EE5 /* NativeCockpitWindowTests.swift */,
@@ -3763,6 +3766,7 @@
 				124ABC7B7D664D485CC8F60E /* MarkdownTableFormatterTests.swift in Sources */,
 				527D14BECF64CB0D926A62E5 /* MobileDeviceCacheTests.swift in Sources */,
 				51D282B864C08AC756FE8BD0 /* MockupModelTests.swift in Sources */,
+				09C7E36DBCA8E96306C8FB96 /* MockupRenderingTests.swift in Sources */,
 				BF998D5F76EF4B34971C86F3 /* NativeAgentChatPresentationTests.swift in Sources */,
 				F20F3CE6B9E6E206DF7FF14E /* NativeCapturePresentationTests.swift in Sources */,
 				26F583E0D3A1AB76A0EFDE18 /* NativeCockpitWindowTests.swift in Sources */,

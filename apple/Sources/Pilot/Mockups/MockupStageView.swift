@@ -23,13 +23,35 @@ enum MockupRenderer {
         }
     }
 
-    /// Background as an image, or nil for transparent output.
-    static func backgroundImage(_ background: MockupBackground, size: CGSize, transparentWhenNone: Bool) -> NSImage? {
-        if transparentWhenNone, background == .none { return nil }
-        return NSImage(size: size, flipped: false) { rect in
-            MainActor.assumeIsolated { drawBackground(background, in: rect) }
-            return true
+    /// Lays a rendered device layer over the backdrop. The backdrop is drawn
+    /// here, in `colorSpace`, instead of inside the 3D scene: SceneKit renders
+    /// sRGB, which clips a Display P3 backdrop to a duller color. A `.none`
+    /// backdrop stays transparent.
+    static func composite(devices: CGImage, over background: MockupBackground, size: CGSize, colorSpace: CGColorSpace) -> NSImage? {
+        let width = Int(size.width.rounded()), height = Int(size.height.rounded())
+        guard width > 0, height > 0,
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        if background != .none {
+            let previous = NSGraphicsContext.current
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            drawBackground(background, in: rect)
+            NSGraphicsContext.current = previous
         }
+        context.interpolationQuality = .high
+        context.draw(devices, in: rect)
+        return context.makeImage().map { NSImage(cgImage: $0, size: size) }
+    }
+
+    static let sRGB = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    static let displayP3 = CGColorSpace(name: CGColorSpace.displayP3) ?? sRGB
+
+    /// PNG bytes that keep the image's color profile.
+    static func pngData(_ image: NSImage) -> Data? {
+        image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            .flatMap { NSBitmapImageRep(cgImage: $0).representation(using: .png, properties: [:]) }
     }
 
     private static func drawCheckerboard(in rect: CGRect) {
@@ -50,6 +72,13 @@ enum MockupRenderer {
     }
 }
 
+/// The live backdrop, drawn by AppKit beneath the transparent 3D scene.
+private final class MockupBackdropView: NSView {
+    var background: MockupBackground = .none { didSet { needsDisplay = true } }
+    override var isOpaque: Bool { true }
+    override func draw(_ dirtyRect: NSRect) { MockupRenderer.drawBackground(background, in: bounds) }
+}
+
 /// The studio stage: a composition of Apple's models under a soft studio rig.
 /// Photo mode holds the user's pose; Video mode plays a motion preset. Both
 /// render through the same scene so the preview is the export.
@@ -59,6 +88,9 @@ final class MockupStageView: NSView {
     private let scnView = SCNView(frame: .zero, options: [SCNView.Option.preferredRenderingAPI.rawValue: SCNRenderingAPI.metal.rawValue])
     private let scene = SCNScene()
     private let cameraNode = SCNNode()
+    /// The backdrop sits behind a transparent scene so AppKit color-manages
+    /// it to the display's full gamut; see `MockupRenderer.composite`.
+    private let backdropView = MockupBackdropView()
     private struct DeviceEntry {
         let key: MockupDeviceLibrary.MockupFinishKey
         let model: MockupDeviceModel
@@ -86,8 +118,10 @@ final class MockupStageView: NSView {
         scnView.scene = scene
         scnView.antialiasingMode = .multisampling4X
         scnView.backgroundColor = .clear
+        scene.background.contents = NSColor.clear
         scnView.setAccessibilityIdentifier("mockups.stage")
         scnView.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(selectScreen(_:))))
+        addSubview(backdropView)
         addSubview(scnView)
         registerForDraggedTypes(MockupImageLoader.pasteboardTypes)
         setAccessibilityIdentifier("mockups.canvas")
@@ -117,6 +151,7 @@ final class MockupStageView: NSView {
 
     override func layout() {
         super.layout()
+        backdropView.frame = bounds
         scnView.frame = bounds
         frameCamera(aspect: bounds.height > 0 ? bounds.width / bounds.height : 1)
         apply(currentPose)
@@ -209,9 +244,7 @@ final class MockupStageView: NSView {
     }
 
     private func updateBackdrop() {
-        let size = bounds.size
-        guard size.width > 1, size.height > 1 else { return }
-        scene.background.contents = MockupRenderer.backgroundImage(document.background, size: size, transparentWhenNone: false)
+        if backdropView.background != document.background { backdropView.background = document.background }
     }
 
     private func updatePlayback() {
@@ -254,30 +287,31 @@ final class MockupStageView: NSView {
     // MARK: - Offscreen rendering (export)
 
     /// Renders one frame at `size`. Video passes a time; photo passes nil and
-    /// gets the static pose. A `.none` background renders transparent.
-    func render(size: CGSize, time: Double?) -> NSImage? {
+    /// gets the static pose. A `.none` background renders transparent. Stills
+    /// pass Display P3 so a wide-gamut backdrop keeps its full saturation.
+    func render(size: CGSize, time: Double?, colorSpace: CGColorSpace = MockupRenderer.sRGB) -> NSImage? {
         guard entries.count == document.devices.count, size.width > 0, size.height > 0,
               let device = MTLCreateSystemDefaultDevice() else { return nil }
         let renderer = SCNRenderer(device: device, options: nil)
-        let previous = scene.background.contents
         let previousPose = currentPose
         let previousCanvas = canvasSize
         defer {
-            scene.background.contents = previous
             frameCamera(aspect: previousCanvas.width / previousCanvas.height)
             apply(previousPose)
         }
-        scene.background.contents = MockupRenderer.backgroundImage(document.background, size: size, transparentWhenNone: true)
-            ?? NSColor.clear
         frameCamera(aspect: size.width / max(size.height, 1))
         apply(time.map { document.timeline.pose(at: $0) } ?? document.basePose)
         renderer.scene = scene
         renderer.pointOfView = cameraNode
-        return renderer.snapshot(atTime: time ?? 0, with: size, antialiasingMode: .multisampling4X)
+        let snapshot = renderer.snapshot(atTime: time ?? 0, with: size, antialiasingMode: .multisampling4X)
+        guard let devices = snapshot.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        return MockupRenderer.composite(devices: devices, over: document.background, size: size, colorSpace: colorSpace)
     }
 
     // MARK: - Screenshot import
 
+    var onCopy: (() -> Void)?
+    @objc func copy(_ sender: Any?) { onCopy?() }
     @objc func paste(_ sender: Any?) { importImage(from: .general) }
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation { .copy }
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool { importImage(from: sender.draggingPasteboard) }

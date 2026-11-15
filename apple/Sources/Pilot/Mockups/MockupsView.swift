@@ -15,6 +15,10 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     private let aspectPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private lazy var exportButton = RRButton("Export", symbol: "square.and.arrow.up") { [weak self] in self?.export() }
 
+    private lazy var copyButton = RRButton("Copy", symbol: "doc.on.doc") { [weak self] in self?.copyToClipboard() }
+    /// Where Copy writes; tests substitute a private pasteboard.
+    var pasteboard: NSPasteboard = .general
+
     private lazy var stage = MockupStageView(document: document)
     private let exporter = MockupVideoExporter()
     private var exportTask: Task<Void, Never>?
@@ -101,10 +105,14 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         // The toolbar group's glass capsule is the button's chrome; a bezel
         // inside it drew a second button within the first.
         exportButton.isBordered = false
-        filters.setGroups([[kindPicker], [aspectPopup], [exportButton]])
+        copyButton.isBordered = false
+        copyButton.toolTip = "Copy the mock-up to the clipboard"
+        copyButton.setAccessibilityIdentifier("mockups.copy")
+        filters.setGroups([[kindPicker], [aspectPopup], [copyButton, exportButton]])
 
         center.stage = stage
         center.document = document
+        stage.onCopy = { [weak self] in self?.copyToClipboard() }
         stage.onImportFailure = { [weak self] in self?.report($0) }
         stage.onLoadFailure = { [weak self] in self?.status.stringValue = $0 }
         stage.onTimeUpdate = { [weak self] _ in self?.timeline.updatePlayhead() }
@@ -508,13 +516,25 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         }
     }
 
-    /// 3000 px on the long side; transparent when the backdrop is None.
-    private func exportPhoto(to url: URL) {
+    /// The still as PNG: 3000 px on the long side, Display P3, transparent
+    /// when the backdrop is None. Video mode gives the frame at the playhead.
+    private func stillPNG() -> Data? {
         let ratio = document.aspect.ratio
         let size = ratio >= 1 ? CGSize(width: 3000, height: (3000 / ratio).rounded()) : CGSize(width: (3000 * ratio).rounded(), height: 3000)
-        guard let image = stage.render(size: size, time: nil),
-              let data = image.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:))?.representation(using: .png, properties: [:])
-        else { status.stringValue = "Export failed."; return }
+        let time = document.kind == .video ? document.playhead : nil
+        return stage.render(size: size, time: time, colorSpace: MockupRenderer.displayP3).flatMap(MockupRenderer.pngData)
+    }
+
+    /// Puts the same image Export PNG writes on the clipboard.
+    func copyToClipboard() {
+        guard let data = stillPNG() else { status.stringValue = "Copy failed."; return }
+        pasteboard.clearContents()
+        pasteboard.setData(data, forType: .png)
+        status.stringValue = document.kind == .video ? "Copied the current frame." : "Copied to the clipboard."
+    }
+
+    private func exportPhoto(to url: URL) {
+        guard let data = stillPNG() else { status.stringValue = "Export failed."; return }
         do {
             try data.write(to: url, options: .atomic)
             status.stringValue = "Saved \(url.lastPathComponent)"
