@@ -81,11 +81,13 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         switcher.target = self
         switcher.action = #selector(switchListMode)
         switcher.segmentDistribution = .fillEqually
-        // A capsule segmented control whose selected half carries the accent.
+        // The same Liquid Glass capsule as the app's other tab pickers: the
+        // selected segment is an accent-tinted glass pill that slides.
         switcher.controlSize = .large
-        switcher.selectedSegmentBezelColor = .controlAccentColor
+        switcher.segmentStyle = .capsule
+        switcher.selectedSegmentBezelColor = LegibleAccent.nsColor
         if #available(macOS 26.0, *) { switcher.borderShape = .capsule }
-        if #available(macOS 27.0, *) { switcher.role = .valueSelection }
+        if #available(macOS 27.0, *) { switcher.role = .tabs }
         switcher.setAccessibilityIdentifier("sidebar.list-mode")
         switcher.setAccessibilityLabel("Sidebar list")
         refresh()
