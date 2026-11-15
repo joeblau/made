@@ -81,6 +81,11 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         switcher.target = self
         switcher.action = #selector(switchListMode)
         switcher.segmentDistribution = .fillEqually
+        // A capsule segmented control whose selected half carries the accent.
+        switcher.controlSize = .large
+        switcher.selectedSegmentBezelColor = .controlAccentColor
+        if #available(macOS 26.0, *) { switcher.borderShape = .capsule }
+        if #available(macOS 27.0, *) { switcher.role = .valueSelection }
         switcher.setAccessibilityIdentifier("sidebar.list-mode")
         switcher.setAccessibilityLabel("Sidebar list")
         refresh()

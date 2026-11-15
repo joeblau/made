@@ -96,7 +96,8 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         view = root
         view.setAccessibilityIdentifier("mockups.root")
 
-        kindPicker.segmentStyle = .capsule
+        // Photo and Video are two views of the page, so they read as tabs.
+        if #available(macOS 27.0, *) { kindPicker.role = .tabs } else { kindPicker.segmentStyle = .capsule }
         kindPicker.controlSize = .small
         kindPicker.target = self
         kindPicker.action = #selector(changeKind)
