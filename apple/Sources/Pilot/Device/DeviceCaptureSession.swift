@@ -804,7 +804,7 @@ final class DeviceCaptureSession: NSObject {
         }
         if consecutiveQuickFailures > Self.maxQuickFailures {
             logger.error("capture recovery gave up: feed keeps dropping")
-            failRecovery("The iPhone video feed keeps dropping. Unplug the device and reconnect it.")
+            failRecovery("The iPhone video feed keeps dropping. Restart the capture service, or unplug the device and reconnect it.")
             return
         }
 
@@ -836,7 +836,7 @@ final class DeviceCaptureSession: NSObject {
                 } else if attempt >= Self.maxReattachAttempts {
                     self.logger.error("capture recovery gave up: device never re-enumerated")
                     self.recovering = false
-                    self.failRecovery("Lost the iPhone video feed. Unplug the device and reconnect it.")
+                    self.failRecovery("Lost the iPhone video feed. Restart the capture service, or unplug the device and reconnect it.")
                 } else {
                     self.scheduleReattach(generation: generation, attempt: attempt + 1)
                 }

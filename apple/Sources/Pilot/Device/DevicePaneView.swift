@@ -99,6 +99,7 @@ final class DevicePaneViewController: CapturePaneController {
         }
         switch session.status {
         case .streaming:
+            IOSCaptureServiceRestarter.shared.captureDidRecover()
             present(key: "streaming") {
                 let host = captureHost ?? DeviceCaptureHostView(session: session)
                 captureHost = host
@@ -113,7 +114,8 @@ final class DevicePaneViewController: CapturePaneController {
             }
         case .failed(let message):
             let denied = session.isCameraPermissionDenied
-            present(key: "failed-\(message)-\(denied)") {
+            let restarter = IOSCaptureServiceRestarter.shared
+            present(key: "failed-\(message)-\(denied)-\(restarter.isRestarting)-\(restarter.nextScope)") {
                 var actions: [CapturePaneAction]
                 if denied {
                     actions = [
@@ -123,6 +125,7 @@ final class DevicePaneViewController: CapturePaneController {
                 } else {
                     actions = [
                         CapturePaneAction(title: "Retry", symbol: "arrow.clockwise", perform: { [weak self] in self?.session.retry() }),
+                        restartCaptureServiceAction(),
                         CapturePaneAction(title: "Back to Devices", symbol: "list.bullet", perform: { [weak self] in self?.session.chooseAnotherDevice() }),
                     ]
                 }
@@ -145,10 +148,13 @@ final class DevicePaneViewController: CapturePaneController {
         } else if let error = session.lastError {
             message = CapturePaneMessage("Couldn't List Devices", symbol: "exclamationmark.triangle", detail: error)
         } else {
-            message = CapturePaneMessage("No USB Devices Found", symbol: "apps.iphone", detail: "Connect an iPhone or iPad over USB, trust this Mac, and keep its screen awake.")
+            message = CapturePaneMessage("No USB Devices Found", symbol: "apps.iphone", detail: "Connect an iPhone or iPad over USB, trust this Mac, and keep its screen awake. If it is connected and still missing, restart the capture service.")
         }
+        // An iPhone that is plugged in but never listed usually means the
+        // capture daemon is wedged, so the empty picker offers the restart too.
+        let actions = items.isEmpty ? [restartCaptureServiceAction(), wirelessAction()] : [wirelessAction()]
         presentPicker(title: "iOS Device", refreshing: session.isRefreshing,
-            refresh: { [weak self] in self?.session.refreshDevices() }, actions: [wirelessAction()], items: items, message: message,
+            refresh: { [weak self] in self?.session.refreshDevices() }, actions: actions, items: items, message: message,
             detail: session.preferredDeviceName.map { "Waiting for \($0)" })
     }
 
@@ -157,6 +163,33 @@ final class DevicePaneViewController: CapturePaneController {
             self?.session.stop()
             self?.wireless.start()
         })
+    }
+
+    /// Kills macOS's wedged iPhone capture daemon behind the administrator
+    /// password prompt, then reconnects. Always a click, never automatic. If
+    /// that did not bring the device back, the same button restarts `usbmuxd`
+    /// too.
+    private func restartCaptureServiceAction() -> CapturePaneAction {
+        let restarter = IOSCaptureServiceRestarter.shared
+        return CapturePaneAction(title: restarter.nextScope.actionTitle, symbol: "wrench.and.screwdriver",
+            enabled: !restarter.isRestarting, perform: { [weak self] in self?.restartCaptureService() })
+    }
+
+    private func restartCaptureService() {
+        Task { @MainActor [weak self] in
+            let scope = IOSCaptureServiceRestarter.shared.nextScope
+            let outcome = await IOSCaptureServiceRestarter.shared.restart()
+            guard let self else { return }
+            switch outcome {
+            case .restarted:
+                self.session.captureServiceDidRestart()
+                self.showToast(scope == .captureService ? "Capture Service Restarted" : "USB & Capture Services Restarted")
+            case .failed(let message):
+                self.showToast(message, symbol: "exclamationmark.triangle.fill", duration: .seconds(4), color: .systemOrange)
+            case .cancelled, nil:
+                break
+            }
+        }
     }
 
     private func useUSB() {
