@@ -259,12 +259,23 @@ final class CockpitWorkspaceViewController: NSViewController {
                 slot = CockpitPaneSlot(pane: pane, payload: payload)
                 slot.onSelect = { [weak self, weak pane] in
                     guard let self, let pane else { return }
-                    if pane.isCollapsed { self.workspace.expandPane(pane) }
+                    // A hidden pane stays hidden: only its eye button reveals
+                    // it, so its strip controls can be used without opening it.
                     self.workspace.selectedPaneID = pane.id
-                    if pane.kind == .terminal && !pane.isChoosingMode { self.workspace.setFrontmostTerminalPaneID(pane.id) }
+                    if pane.kind == .terminal, !pane.isChoosingMode, !pane.isCollapsed {
+                        self.workspace.setFrontmostTerminalPaneID(pane.id)
+                    }
                     self.workspace.syncDefaultRootPathIfNeeded()
                     self.onSelectionChange?()
                     self.refresh(isActive: self.active)
+                }
+                slot.onReveal = { [weak self, weak pane] in
+                    guard let self, let pane else { return }
+                    self.workspace.expandPane(pane)
+                    self.workspace.syncDefaultRootPathIfNeeded()
+                    self.onSelectionChange?()
+                    self.refresh(isActive: self.active)
+                    self.focusSelectedPane()
                 }
                 slot.onFocus = { [weak self] in self?.focusSelectedPane() }
                 slot.onModeChange = { [weak self] in
@@ -294,6 +305,7 @@ final class CockpitWorkspaceViewController: NSViewController {
             slot.tab.canClose = workspace.canClosePane(pane)
             slot.tab.isSelected = workspace.selectedPaneID == pane.id && !pane.isCollapsed
             slot.tab.refresh()
+            slot.isSelectedWhileCollapsed = workspace.selectedPaneID == pane.id && pane.isCollapsed
             slot.refreshOpeningChoice()
             slot.tab.setActive(isActive && !pane.isCollapsed && !pane.isChoosingMode)
             // Collapsing must detach the constrained content before its host
@@ -334,7 +346,15 @@ final class CockpitWorkspaceViewController: NSViewController {
     }
 
     func focusSelectedPane() {
-        guard let pane = workspace.selectedPane, !pane.isCollapsed else { return }
+        guard let pane = workspace.selectedPane else { return }
+        if pane.isCollapsed {
+            // Nothing in a hidden pane can take keys; do not leave them going
+            // to the pane that was selected before.
+            if let responder = view.window?.firstResponder as? NSView, responder.isDescendant(of: view) {
+                view.window?.makeFirstResponder(nil)
+            }
+            return
+        }
         if pane.isChoosingMode { panes[pane.id]?.focusOpeningChoice(); return }
         guard let controller = cache.existingController(for: pane.id) else { return }
         if let focusing = controller as? CockpitPaneInputFocusing { focusing.focusPaneInput(); return }
@@ -378,7 +398,11 @@ private final class CockpitPaneSlot: NSView {
     private(set) var isCollapsed: Bool
     let tab: CockpitPaneTab
     var onSelect: (() -> Void)?
+    /// The eye button: the only thing that shows a hidden pane again.
+    var onReveal: (() -> Void)?
     var onFocus: (() -> Void)?
+    /// Tints the strip of a hidden pane that is the selection.
+    var isSelectedWhileCollapsed = false { didSet { if isSelectedWhileCollapsed != oldValue { updateSelectionTint() } } }
     var onModeChange: (() -> Void)?
     private let content = NSView()
     private var modePicker: CockpitNewTabView?
@@ -403,7 +427,7 @@ private final class CockpitPaneSlot: NSView {
                            height: CockpitPaneTab.preferredHeight)
         addSubview(tab); addSubview(content)
         tab.onSelect = { [weak self] in self?.onSelect?(); self?.onFocus?() }
-        reveal.perform = { [weak self] in self?.onSelect?(); self?.onFocus?() }
+        reveal.perform = { [weak self] in self?.onReveal?() }
         reveal.title = ""
         reveal.imagePosition = .imageOnly
         reveal.bezelStyle = .glass
@@ -412,6 +436,14 @@ private final class CockpitPaneSlot: NSView {
         reveal.setAccessibilityLabel("Show \(pane.displayTitle)")
     }
     required init?(coder: NSCoder) { nil }
+
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateSelectionTint() }
+    private func updateSelectionTint() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = isSelectedWhileCollapsed
+                ? NSColor.controlAccentColor.withAlphaComponent(0.17).cgColor : nil
+        }
+    }
 
     func refreshOpeningChoice() {
         isCollapsed = pane.isCollapsed
