@@ -71,7 +71,8 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
         layoutPicker.setAccessibilityLabel("Runner layout")
         refresh.action = { [weak self] in self?.refreshSelected() }
         filters.setAccessibilityIdentifier("runners.toolbar-controls")
-        layoutPicker.segmentStyle = .capsule
+        // The layouts are views of the same fleet, so they read as tabs.
+        if #available(macOS 27.0, *) { layoutPicker.role = .tabs } else { layoutPicker.segmentStyle = .capsule }
         layoutPicker.controlSize = .small
         filters.setGroups([[search], [layoutPicker]])
         // The refresh circle is its own glass surface; wrapping it in a group

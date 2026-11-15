@@ -594,7 +594,8 @@ final class CockpitToolbarGroups: NSStackView {
                 segmented.controlSize = .extraLarge
                 segmented.heightAnchor.constraint(equalToConstant: Self.capsuleHeight).isActive = true
                 if #available(macOS 26.0, *) { segmented.borderShape = .capsule }
-                if #available(macOS 27.0, *) { segmented.role = .valueSelection }
+                // A picker that asked to look like a tab view keeps that role.
+                if #available(macOS 27.0, *), segmented.role == .automatic { segmented.role = .valueSelection }
                 addArrangedSubview(segmented)
                 continue
             }
