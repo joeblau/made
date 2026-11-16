@@ -39,6 +39,10 @@ final class DevicePaneViewController: CapturePaneController {
     private let wireless: WirelessDeviceSession
     private let presentationID = UUID()
     private var polling: Task<Void, Never>?
+    /// The spinner is for the first scan only; the 2-second background polls
+    /// keep the last result on screen so the empty state doesn't flash.
+    private var hasListedDevices = false
+    private var isManualRefresh = false
     private var captureHost: DeviceCaptureHostView?
     private var copiedCount: Int
     private var silentRecordingCount: Int
@@ -143,10 +147,11 @@ final class DevicePaneViewController: CapturePaneController {
             CapturePickerItem(id: device.id, title: device.name, detail: device.detail, symbol: "apps.iphone",
                 select: { [weak self] in self?.session.connect(device) })
         }
+        if !session.isRefreshing { hasListedDevices = true; isManualRefresh = false }
         let message: NSView?
         if !items.isEmpty {
             message = nil
-        } else if session.isRefreshing {
+        } else if session.isRefreshing, !hasListedDevices {
             message = CapturePaneMessage("Looking for devices…", symbol: "apps.iphone", loading: true)
         } else if let error = session.lastError {
             message = CapturePaneMessage("Couldn't List Devices", symbol: "exclamationmark.triangle", detail: error)
@@ -156,8 +161,8 @@ final class DevicePaneViewController: CapturePaneController {
         // An iPhone that is plugged in but never listed usually means the
         // capture daemon is wedged, so the empty picker offers the restart too.
         let actions = items.isEmpty ? [restartCaptureServiceAction(), wirelessAction()] : [wirelessAction()]
-        presentPicker(title: "iOS Device", refreshing: session.isRefreshing,
-            refresh: { [weak self] in self?.session.refreshDevices() }, actions: actions, items: items, message: message,
+        presentPicker(title: "iOS Device", refreshing: session.isRefreshing && (!hasListedDevices || isManualRefresh),
+            refresh: { [weak self] in self?.isManualRefresh = true; self?.session.refreshDevices() }, actions: actions, items: items, message: message,
             detail: session.preferredDeviceName.map { "Waiting for \($0)" })
     }
 

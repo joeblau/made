@@ -288,7 +288,7 @@ struct RemoteDesktopGroupLayoutTests {
         for form in forms {
             let labels = descendants(form).compactMap { $0 as? NSTextField }.filter { !$0.isEditable }.map(\.stringValue)
             #expect(labels.contains("Username (optional)") && labels.contains("Password"))
-            let highPerformance = descendants(form).compactMap { $0 as? NSButton }.filter { $0.title == "High Performance" }
+            let highPerformance = descendants(form).compactMap { $0 as? RRSwitch }.filter { $0.title == "High Performance" }
             #expect(highPerformance.count == 1)
             #expect(highPerformance.first?.state == .off)
             #expect(form.autohidesScrollers)
