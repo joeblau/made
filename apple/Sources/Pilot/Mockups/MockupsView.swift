@@ -109,7 +109,6 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
             aspectPopup.addItem(withTitle: "\(preset.group == "General" ? "" : preset.group + " · ")\(preset.name)  \(preset.label)")
             aspectPopup.lastItem?.representedObject = preset.id
         }
-        aspectPopup.controlSize = .small
         aspectPopup.target = self
         aspectPopup.action = #selector(changeAspect)
         aspectPopup.setAccessibilityLabel("Aspect ratio")
@@ -216,6 +215,11 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         screenPopup.setAccessibilityIdentifier("mockups.screen-picker")
         let clear = RRButton("Clear", symbol: "xmark") { [weak self] in self?.document.screenshot = nil }
         chooseScreenshot.title = "Choose…"
+        for button in [chooseScreenshot, clear] { button.applyCockpitGlassStyle() }
+        for popup in [aspectPopup, devicePopup, screenPopup] {
+            popup.controlSize = .regular
+            popup.applyCockpitGlassStyle()
+        }
         chooseScreenshot.toolTip = "Choose a screenshot, or drop or paste an image onto the canvas"
         let stack = RRUI.stack([
             RRUI.label("Canvas", size: 15, weight: .semibold), aspectPopup,
@@ -283,14 +287,15 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
     }
 
     private func buildInspector() -> NSView {
-        styleControl.segmentStyle = .capsule
-        styleControl.controlSize = .small
+        styleControl.controlSize = .large
+        styleControl.applyCockpitGlassStyle()
         styleControl.target = self
         styleControl.action = #selector(changeStyle)
         styleControl.setAccessibilityLabel("Background style")
         swatches.onSelect = { [weak self] index in self?.selectSwatch(index) }
         for format in MockupColorFormat.allCases { colorFormatPopup.addItem(withTitle: format.rawValue) }
-        colorFormatPopup.controlSize = .small
+        colorFormatPopup.controlSize = .regular
+        colorFormatPopup.applyCockpitGlassStyle()
         colorFormatPopup.target = self
         colorFormatPopup.action = #selector(changeColorFormat)
         colorFormatPopup.setAccessibilityLabel("Color format")
@@ -302,11 +307,12 @@ final class MockupsViewController: NSViewController, CockpitPanePresenting, Cock
         colorField.setAccessibilityLabel("Backdrop color value")
         colorField.widthAnchor.constraint(greaterThanOrEqualToConstant: 96).isActive = true
         for row in colorRow.arrangedSubviews { row.widthAnchor.constraint(equalTo: colorRow.widthAnchor).isActive = true }
-        displayP3Toggle.controlSize = .small
+        displayP3Toggle.controlSize = .regular
         displayP3Toggle.target = self
         displayP3Toggle.action = #selector(toggleDisplayP3)
         displayP3Toggle.setAccessibilityLabel("Display P3")
         displayP3Toggle.toolTip = "Pick backdrop colors in the wide Display P3 gamut instead of sRGB"
+        chooseBackground.applyCockpitGlassStyle()
         let stack = RRUI.stack([
             RRUI.label("Backdrop", size: 15, weight: .semibold),
             styleControl,

@@ -41,6 +41,8 @@
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Cockpit uses the microphone when you allow audio capture in a browser preview.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Cockpit acts as a Bluetooth pointer and keyboard for your iPhone, so you can control it from the Device pane through AssistiveTouch.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Cockpit accesses an attached iPhone camera feed so its Device pane can preview, capture, and record the device screen.</string>
 	<key>NSLocalNetworkUsageDescription</key>

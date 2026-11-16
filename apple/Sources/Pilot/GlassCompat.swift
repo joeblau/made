@@ -20,6 +20,28 @@ struct PilotSegmentedMenuItem {
     }
 }
 
+extension NSSegmentedControl {
+    /// The app's Liquid Glass picker (Workspaces/Inbox, Remote Desktop
+    /// groups, Notes): a capsule track whose selected segment is a glass
+    /// pill that slides between equal-width segments.
+    func applyCockpitGlassStyle() {
+        segmentStyle = .capsule
+        segmentDistribution = .fillEqually
+        selectedSegmentBezelColor = LegibleAccent.nsColor
+        borderShape = .capsule
+        if #available(macOS 27.0, *) { role = .tabs }
+    }
+}
+
+extension NSButton {
+    /// A Liquid Glass capsule for push buttons and pop-up menus.
+    func applyCockpitGlassStyle() {
+        isBordered = true
+        bezelStyle = .glass
+        borderShape = .capsule
+    }
+}
+
 @MainActor
 final class PilotNativeSegmentedControl: NSSegmentedControl {
     var onDrop: ((NSPasteboard, Int) -> Bool)?
@@ -219,13 +241,9 @@ final class PilotSegmentedControl<Value: Hashable>: NSView {
         super.init(frame: .zero)
         control.controlSize = controlSize
         control.liftsOnPress = liftsOnPress
-        control.segmentStyle = .capsule
-        control.segmentDistribution = .fillEqually
+        control.applyCockpitGlassStyle()
         control.trackingMode = .selectOne
         control.setAccessibilityLabel(accessibilityLabel)
-        control.selectedSegmentBezelColor = LegibleAccent.nsColor
-        if #available(macOS 26.0, *) { control.borderShape = .capsule }
-        if #available(macOS 27.0, *) { control.role = .tabs }
         actionTarget.action = { [weak self] sender in
             guard let self, let segmented = sender as? NSSegmentedControl,
                   self.options.indices.contains(segmented.selectedSegment) else { return }

@@ -49,6 +49,7 @@ final class RemoteDesktopConnection {
 enum VNCPreferences {
     private static let clipboardPrefix = "vnc.clipboard."
     private static let autoConnectPrefix = "vnc.autoConnect."
+    private static let highPerformancePrefix = "vnc.highPerformance."
 
     static func isClipboardRedirectionEnabled(id: UUID, defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: clipboardPrefix + id.uuidString)
@@ -83,9 +84,22 @@ enum VNCPreferences {
         defaults.set(enabled, forKey: autoConnectPrefix + id.uuidString)
     }
 
+    static func isHighPerformanceEnabled(id: UUID, defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: highPerformancePrefix + id.uuidString)
+    }
+
+    static func setHighPerformanceEnabled(
+        _ enabled: Bool,
+        id: UUID,
+        defaults: UserDefaults = .standard
+    ) {
+        defaults.set(enabled, forKey: highPerformancePrefix + id.uuidString)
+    }
+
     static func remove(id: UUID, defaults: UserDefaults = .standard) {
         defaults.removeObject(forKey: clipboardPrefix + id.uuidString)
         defaults.removeObject(forKey: autoConnectPrefix + id.uuidString)
+        defaults.removeObject(forKey: highPerformancePrefix + id.uuidString)
     }
 }
 

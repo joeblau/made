@@ -164,6 +164,33 @@ targets:
           fi
           "$SRCROOT/bin/verify-installed-chromiumkit.sh"
 
+  # Bluetooth HID + MobileDevice bridge that lets the Device pane drive a
+  # physical iPhone through AssistiveTouch (docs/iphone-control.md). Private
+  # Apple interfaces stay inside this Objective-C target; Pilot sees only
+  # include/PhoneHIDKit/PhoneHIDKit.h.
+  PhoneHIDKit:
+    type: framework.static
+    platform: macOS
+    sources:
+      - path: Sources/PhoneHIDKit
+        excludes:
+          - "include/**"
+          - "CBHIDSocket.h"
+      - path: Sources/PhoneHIDKit/CBHIDSocket.h
+        buildPhase: none
+      - path: Sources/PhoneHIDKit/include/PhoneHIDKit/PhoneHIDKit.h
+        buildPhase: headers
+        headerVisibility: public
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.blau.phonehidkit
+        PRODUCT_NAME: PhoneHIDKit
+        CLANG_ENABLE_MODULES: true
+        CLANG_ENABLE_OBJC_ARC: true
+        DEFINES_MODULE: true
+        GENERATE_INFOPLIST_FILE: true
+        SKIP_INSTALL: true
+
   Pilot:
     type: application
     platform: macOS
@@ -192,6 +219,10 @@ targets:
         product: Sparkle
       - target: ChromiumKit
         embed: false
+      - target: PhoneHIDKit
+        embed: false
+      - sdk: CoreBluetooth.framework
+      - sdk: IOBluetooth.framework
       - target: PilotChromiumHelperTemplate
         embed: false
       - package: CodeEditSourceEditor
@@ -629,6 +660,8 @@ targets:
     dependencies:
       - target: Pilot
       - target: ChromiumKit
+        embed: false
+      - target: PhoneHIDKit
         embed: false
       - package: RoyalVNCKit
         product: RoyalVNCKit

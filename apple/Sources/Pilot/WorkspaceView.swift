@@ -285,9 +285,12 @@ final class CockpitWorkspaceViewController: NSViewController {
                     self.focusSelectedPane()
                 }
                 slot.tab.onClose = { [weak self, weak pane] in if let pane { self?.onClosePane?(pane) } }
-                slot.tab.onHide = { [weak self, weak pane] in
+                slot.tab.onHide = { [weak self, weak pane, weak slot] in
                     guard let self, let pane else { return }
-                    if pane.isCollapsed { self.workspace.expandPane(pane) } else { self.workspace.collapsePane(pane) }
+                    // On a hidden pane's wide strip the header's eye is the
+                    // reveal button, so it shows and focuses like that one.
+                    if pane.isCollapsed { slot?.onReveal?(); return }
+                    self.workspace.collapsePane(pane)
                     self.refresh(isActive: self.active)
                 }
                 slot.tab.onDrop = { [weak self, weak pane] payload in
@@ -303,9 +306,10 @@ final class CockpitWorkspaceViewController: NSViewController {
                 panes[pane.id] = slot
             }
             slot.tab.canClose = workspace.canClosePane(pane)
-            slot.tab.isSelected = workspace.selectedPaneID == pane.id && !pane.isCollapsed
+            // A hidden pane's strip is the same glass bubble, tinted the same
+            // way when it is the selection.
+            slot.tab.isSelected = workspace.selectedPaneID == pane.id
             slot.tab.refresh()
-            slot.isSelectedWhileCollapsed = workspace.selectedPaneID == pane.id && pane.isCollapsed
             slot.refreshOpeningChoice()
             slot.tab.setActive(isActive && !pane.isCollapsed && !pane.isChoosingMode)
             // Collapsing must detach the constrained content before its host
@@ -401,8 +405,6 @@ private final class CockpitPaneSlot: NSView {
     /// The eye button: the only thing that shows a hidden pane again.
     var onReveal: (() -> Void)?
     var onFocus: (() -> Void)?
-    /// Tints the strip of a hidden pane that is the selection.
-    var isSelectedWhileCollapsed = false { didSet { if isSelectedWhileCollapsed != oldValue { updateSelectionTint() } } }
     var onModeChange: (() -> Void)?
     private let content = NSView()
     private var modePicker: CockpitNewTabView?
@@ -432,18 +434,12 @@ private final class CockpitPaneSlot: NSView {
         reveal.imagePosition = .imageOnly
         reveal.bezelStyle = .glass
         reveal.borderShape = .circle
+        reveal.controlSize = .small
+        reveal.symbolConfiguration = .init(pointSize: 11, weight: .medium)
         reveal.toolTip = "Show \(pane.displayTitle)"
         reveal.setAccessibilityLabel("Show \(pane.displayTitle)")
     }
     required init?(coder: NSCoder) { nil }
-
-    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateSelectionTint() }
-    private func updateSelectionTint() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = isSelectedWhileCollapsed
-                ? NSColor.controlAccentColor.withAlphaComponent(0.17).cgColor : nil
-        }
-    }
 
     func refreshOpeningChoice() {
         isCollapsed = pane.isCollapsed
@@ -524,27 +520,46 @@ private final class CockpitPaneSlot: NSView {
         let inset = LiquidGlassMetrics.Spacing.xSmall
         content.isHidden = isCollapsed
         if isCollapsed {
-            tab.isHidden = true
+            // The hidden pane keeps its header bubble so it can still be
+            // selected, dragged to reorder, and dropped on. A wide strip
+            // (stacked panes) shows the full header, whose eye reveals the
+            // pane; a tall strip (side-by-side panes) shows a bare bubble
+            // with the eye at the top and Fast Commands below it.
             let padding = min(inset, min(bounds.width, bounds.height) / 2)
-            reveal.frame = NSRect(x: padding, y: padding,
-                                  width: min(CockpitPaneTab.preferredHeight, max(0, bounds.width - 2 * padding)),
-                                  height: min(CockpitPaneTab.preferredHeight, max(0, bounds.height - 2 * padding)))
-            if let actions = collapsedActions, actions.superview === self {
-                // A tall strip (side-by-side panes) lists the controls down
-                // its length; a wide one (stacked panes) lists them across.
-                let vertical = bounds.height >= bounds.width
+            let bubble = bounds.insetBy(dx: padding, dy: padding)
+            let vertical = bounds.height >= bounds.width
+            let actions = collapsedActions.flatMap { $0.superview === self ? $0 : nil }
+            let gap = TerminalFastCommandToolbarActions.glassSpacing
+            tab.isHidden = bubble.width <= 0 || bubble.height <= 0
+            tab.isCompact = vertical
+            tab.trailingAccessoryWidth = !vertical && actions != nil ? actions!.preferredLength + gap : 0
+            tab.frame = tab.isHidden ? .zero : bubble
+            if vertical {
+                let side = min(24, max(0, bubble.width - 8), max(0, bubble.height - 8))
+                reveal.isHidden = side <= 0
+                reveal.frame = NSRect(x: bubble.midX - side / 2, y: bubble.minY + (bubble.width - side) / 2,
+                                      width: side, height: side)
+            } else {
+                reveal.isHidden = true
+            }
+            if let actions {
                 actions.orientation = vertical ? .vertical : .horizontal
-                let gap = TerminalFastCommandToolbarActions.glassSpacing
                 let length = actions.preferredLength
-                actions.frame = vertical
-                    ? NSRect(x: reveal.frame.midX - 14, y: reveal.frame.maxY + gap, width: 28,
-                             height: min(length, max(0, bounds.height - reveal.frame.maxY - gap - padding)))
-                    : NSRect(x: reveal.frame.maxX + gap, y: reveal.frame.midY - 14,
-                             width: min(length, max(0, bounds.width - reveal.frame.maxX - gap - padding)), height: 28)
+                if vertical {
+                    let top = reveal.frame.maxY + gap
+                    actions.frame = NSRect(x: bubble.midX - 14, y: top, width: 28,
+                                           height: min(length, max(0, bubble.maxY - top - 2)))
+                } else {
+                    let slot = convert(tab.trailingAccessoryFrame, from: tab)
+                    actions.frame = NSRect(x: slot.minX, y: bubble.midY - 14,
+                                           width: min(length, max(0, slot.width - gap)), height: 28)
+                }
                 actions.isHidden = actions.frame.width < 28 || actions.frame.height < 28
             }
             return
         }
+        tab.isCompact = false
+        tab.trailingAccessoryWidth = 0
         let top = min(inset, bounds.height)
         let height = min(CockpitPaneTab.preferredHeight, max(0, bounds.height - top))
         tab.isHidden = height == 0

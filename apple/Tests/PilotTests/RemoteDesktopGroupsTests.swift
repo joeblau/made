@@ -288,6 +288,9 @@ struct RemoteDesktopGroupLayoutTests {
         for form in forms {
             let labels = descendants(form).compactMap { $0 as? NSTextField }.filter { !$0.isEditable }.map(\.stringValue)
             #expect(labels.contains("Username (optional)") && labels.contains("Password"))
+            let highPerformance = descendants(form).compactMap { $0 as? NSButton }.filter { $0.title == "High Performance" }
+            #expect(highPerformance.count == 1)
+            #expect(highPerformance.first?.state == .off)
             #expect(form.autohidesScrollers)
             if size.height == 800 { #expect(form.verticalScroller?.isHidden == true) }
             let connect = try #require(descendants(form).compactMap { $0 as? NSButton }.first { $0.title == "Connect" })
@@ -314,6 +317,13 @@ struct RemoteDesktopGroupLayoutTests {
             let dividerFrame = divider.convert(divider.bounds, to: nil)
             #expect(dividerFrame.height >= 1 && dividerFrame.width >= cardFrame.width - 1, "A full-width divider separates the footer")
             #expect(dividerFrame.minY >= footerFrame.maxY - 1, "The divider sits directly above the footer")
+            let header = try #require(descendants(card).first { $0.accessibilityIdentifier() == "remote.card.header" })
+            let body = try #require(descendants(card).first { $0.accessibilityIdentifier() == "remote.card.content" })
+            let footer = try #require(descendants(card).first { $0.accessibilityIdentifier() == "remote.card.footer" })
+            #expect(abs(header.frame.height - 30 * RRUI.zoom) < 1)
+            #expect(abs(footer.frame.height - 32 * RRUI.zoom) < 1)
+            #expect(body.frame.height > card.frame.height * 0.5, "Content, not the footer, absorbs the card's spare height")
+            #expect(body.convert(body.bounds, to: nil).minY >= footer.convert(footer.bounds, to: nil).maxY - 1)
         }
         let options = views.compactMap { $0 as? NSButton }.filter { $0.accessibilityLabel()?.hasPrefix("Options for") == true }
         #expect(options.count == machines.count)

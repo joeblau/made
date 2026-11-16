@@ -112,8 +112,8 @@ final class MockupShadowPanel: NSStackView {
         spacing = 10
         for (control, label, action) in [(styleControl, "Shadow style", #selector(changeStyle)),
                                          (intensityControl, "Shadow intensity", #selector(changeIntensity))] {
-            control.segmentStyle = .capsule
-            control.controlSize = .small
+            control.controlSize = .large
+            control.applyCockpitGlassStyle()
             control.target = self
             control.action = action
             control.setAccessibilityLabel(label)
@@ -127,6 +127,7 @@ final class MockupShadowPanel: NSStackView {
             view.widthAnchor.constraint(equalTo: widthAnchor).isActive = true
         }
         lightPad.heightAnchor.constraint(equalToConstant: 150).isActive = true
+        resetButton.applyCockpitGlassStyle()
         refresh()
     }
     required init?(coder: NSCoder) { nil }
