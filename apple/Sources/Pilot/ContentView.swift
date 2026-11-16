@@ -84,6 +84,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var sidebarItem: NSSplitViewItem?
     private var inspectorItem: NSSplitViewItem!
     private var workspaceController: CockpitWorkspaceViewController?
+    private var workspaceControllers: [UUID: CockpitWorkspaceViewController] = [:]
     private var globalControllers: [SidebarSelection: NSViewController] = [:]
     private var inspectorController: NSViewController?
     private var lastInspectorWorkspaceID: UUID?
@@ -274,26 +275,41 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         }
         // A removed pane can remain a detached SwiftData object. Membership,
         // rather than a fetch of every Pane record, defines session ownership.
-        let liveWorkspaces = sources + extensionController.mountedWorkspaces.map(\.workspace)
+        let mountedWorkspaces = extensionController.mountedWorkspaces.map(\.workspace)
+        let liveWorkspaces = sources + mountedWorkspaces
         paneCache.retainOnly(Set(liveWorkspaces.flatMap { $0.panes.map(\.id) }))
+        let presentedWorkspaces = surface == .main ? sources : mountedWorkspaces
+        let presentedWorkspaceIDs = Set(presentedWorkspaces.map(\.id))
+        for id in workspaceControllers.keys.filter({ !presentedWorkspaceIDs.contains($0) }) {
+            guard let stale = workspaceControllers.removeValue(forKey: id) else { continue }
+            stale.deactivate()
+            bodyController.release(stale)
+        }
         let active = windowVisible && window?.occlusionState.contains(.visible) == true
         if let workspace = selectedWorkspace {
             if workspaceController?.workspace !== workspace {
                 workspaceController?.deactivate()
-                workspaceController = CockpitWorkspaceViewController(workspace: workspace,
-                    projectID: surface == .extension ? (store.selectedWorkspaceID ?? workspace.id) : workspace.id,
-                    surface: surface, cache: paneCache, factory: paneFactory,
-                    onDrop: { [weak self, weak workspace] payload, target in
-                        guard let self, let workspace else { return false }
-                        return self.store.movePane(payload, to: workspace, onto: target)
-                    })
-                workspaceController?.onSelectionChange = { [weak self] in self?.scheduleRefresh() }
-                workspaceController?.onClosePane = { [weak self] pane in self?.closePane(pane) }
+                let controller: CockpitWorkspaceViewController
+                if let cached = workspaceControllers[workspace.id] {
+                    controller = cached
+                } else {
+                    controller = CockpitWorkspaceViewController(workspace: workspace,
+                        projectID: surface == .extension ? (store.selectedWorkspaceID ?? workspace.id) : workspace.id,
+                        surface: surface, cache: paneCache, factory: paneFactory,
+                        onDrop: { [weak self, weak workspace] payload, target in
+                            guard let self, let workspace else { return false }
+                            return self.store.movePane(payload, to: workspace, onto: target)
+                        })
+                    workspaceControllers[workspace.id] = controller
+                }
+                controller.onSelectionChange = { [weak self] in self?.scheduleRefresh() }
+                controller.onClosePane = { [weak self] pane in self?.closePane(pane) }
+                workspaceController = controller
                 setDrawingActive(false)
             }
             for controller in globalControllers.values { (controller as? CockpitPanePresenting)?.updatePresentation(isActive: false, isSelected: false) }
             if let workspaceController {
-                bodyController.setContent(workspaceController)
+                bodyController.setContent(workspaceController, retainWhileHidden: true)
                 workspaceController.refresh(isActive: active)
             }
             window?.title = Self.windowTitle(workspaceName: workspace.name, surface: surface)
@@ -505,17 +521,18 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         let workspace = selectedWorkspace
         let presented = workspace?.isInspectorPresented == true
         if let workspace, presented {
-            if lastInspectorWorkspaceID != workspace.id || inspectorController == nil {
+            let canUpdateWorkspace = inspectorController is InspectorViewController
+            if inspectorController == nil || (lastInspectorWorkspaceID != workspace.id && !canUpdateWorkspace) {
                 (inspectorController as? InspectorViewController)?.setPresentationActive(false)
                 inspectorController?.view.removeFromSuperview(); inspectorController?.removeFromParent()
                 inspectorController = inspectorFactory?(workspace)
-                lastInspectorWorkspaceID = workspace.id
                 if let controller = inspectorController {
                     controller.view.removeFromSuperview(); controller.removeFromParent()
                     inspectorContainer.addChild(controller)
                     pinToSafeArea(controller.view, in: inspectorContainer.view)
                 }
             }
+            lastInspectorWorkspaceID = workspace.id
             (inspectorController as? InspectorViewController)?.update(workspace: workspace)
         }
         let collapsed = !presented || inspectorController == nil
@@ -740,6 +757,12 @@ private final class CockpitWindowBodyController: NSViewController {
         controller.view.isHidden = false
         content = controller
         if replacingContent { CockpitMotion.reveal(controller.view) }
+    }
+    func release(_ controller: NSViewController) {
+        retainedControllers.remove(ObjectIdentifier(controller))
+        guard content !== controller else { return }
+        controller.view.removeFromSuperview()
+        controller.removeFromParent()
     }
     func setRemoteOverlay(_ controller: NSViewController?) { replaceOverlay(remote, with: controller); remote = controller }
     private func replaceOverlay(_ old: NSViewController?, with next: NSViewController?) {

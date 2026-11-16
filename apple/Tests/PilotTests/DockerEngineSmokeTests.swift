@@ -17,6 +17,23 @@ struct DockerEngineSmokeTests {
         DockerSocketLocator.resolve().map { DockerEngineClient(socketPath: $0) }
     }
 
+    @Test("Event framing preserves fragmented and batched JSON within its bound")
+    func eventFraming() throws {
+        var framer = DockerEventLineBuffer(maximumPendingBytes: 1024)
+        #expect(try framer.append(Data(#"{"Type":"container","Action":"st"#.utf8)).isEmpty)
+        let lines = try framer.append(Data("art\"}\n\n{\"Type\":\"container\",\"Action\":\"stop\"}\n".utf8))
+        let events = try lines.map { try JSONDecoder().decode(DockerEngineEvent.self, from: $0) }
+        #expect(events.map(\.action) == ["start", "stop"])
+
+        var bounded = DockerEventLineBuffer(maximumPendingBytes: 4)
+        do {
+            _ = try bounded.append(Data("12345".utf8))
+            Issue.record("An unterminated event beyond the bound should fail")
+        } catch DockerTransportError.responseTooLarge(let limit) {
+            #expect(limit == 4)
+        }
+    }
+
     @Test("A live daemon answers the version handshake")
     func readsVersion() async throws {
         guard let client else { return }

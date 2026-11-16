@@ -362,7 +362,8 @@ final class NativeCockpitWindowTests: XCTestCase {
         window.contentView?.layoutSubtreeIfNeeded()
         try await Task.sleep(for: .milliseconds(100))
         window.contentView?.layoutSubtreeIfNeeded()
-        let remote = try XCTUnwrap(split.splitViewItems[1].viewController.children.first as? RemoteDesktopViewController)
+        let remote = try XCTUnwrap(split.splitViewItems[1].viewController.children.first { $0 is RemoteDesktopViewController } as? RemoteDesktopViewController)
+        XCTAssertFalse(remote.view.isHiddenOrHasHiddenAncestor)
         let emptyLabel = try XCTUnwrap(descendants(remote.view).compactMap { $0 as? NSTextField }.first { $0.stringValue == "Empty Screen" })
         let emptySurface = try XCTUnwrap(emptyLabel.superview?.superview)
         for appearance in [NSAppearance.Name.aqua, .darkAqua, .accessibilityHighContrastAqua, .aqua] {
@@ -1030,6 +1031,23 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
+    private func keyEvent(code: UInt16, window: NSWindow) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                        windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+                        isARepeat: false, keyCode: code)!
+    }
+
+    @MainActor
+    private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+    @MainActor
+    private func flattened(_ menu: NSMenu) -> [NSMenuItem] {
+        menu.items.flatMap { [$0] + ($0.submenu.map(flattened) ?? []) }
+    }
+}
+
+// Navigation and Inbox tests live in an extension to keep the class body within the lint limit.
+extension NativeCockpitWindowTests {
+    @MainActor
     func testExplicitPaneInputFocusWinsOverGenericDescendantSearch() {
         let cache = CockpitPaneControllerCache()
         defer { cache.closeAll() }
@@ -1045,22 +1063,71 @@ final class NativeCockpitWindowTests: XCTestCase {
     }
 
     @MainActor
-    private func keyEvent(code: UInt16, window: NSWindow) -> NSEvent {
-        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
-                        windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
-                        isARepeat: false, keyCode: code)!
+    func testInspectorControllerAndRowsSurviveWorkspaceSwitches() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkingWorkspace()
+        let first = try XCTUnwrap(fixture.store.selectedWorkspace)
+        first.setInspectorPresented(true)
+        fixture.store.addWorkingWorkspace()
+        let second = try XCTUnwrap(fixture.store.selectedWorkspace)
+        second.setInspectorPresented(true)
+        let controller = fixture.window()
+        var creations = 0
+        controller.inspectorFactory = { workspace in
+            creations += 1
+            return InspectorViewController(workspace: workspace, usageStore: UsageStore(defaults: fixture.defaults),
+                                           defaults: fixture.defaults, isLive: false)
+        }
+        controller.showWindow(nil)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.orderOut(nil); controller.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
+        let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
+        let inspector = try XCTUnwrap(split.splitViewItems[2].viewController.children.first as? InspectorViewController)
+        let table = try XCTUnwrap(descendants(inspector.view).compactMap { $0 as? NSTableView }.first)
+        let tableParent = try XCTUnwrap(table.superview)
+
+        controller.select(.workspace(first.id))
+        XCTAssertEqual(creations, 1)
+        XCTAssertTrue(split.splitViewItems[2].viewController.children.first === inspector)
+        XCTAssertEqual(inspector.workspace.id, first.id)
+        XCTAssertTrue(table.superview === tableParent)
+        XCTAssertFalse(inspector.view.isHiddenOrHasHiddenAncestor)
+
+        controller.select(.workspace(second.id))
+        XCTAssertEqual(creations, 1)
+        XCTAssertEqual(inspector.workspace.id, second.id)
     }
 
     @MainActor
-    private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-    @MainActor
-    private func flattened(_ menu: NSMenu) -> [NSMenuItem] {
-        menu.items.flatMap { [$0] + ($0.submenu.map(flattened) ?? []) }
-    }
-}
+    func testWorkspaceShellIsRetainedWhileGlobalPageIsVisible() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkingWorkspace()
+        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        let controller = fixture.window()
+        controller.showWindow(nil)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.orderOut(nil); controller.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
+        let split = try XCTUnwrap(window.contentViewController as? NSSplitViewController)
+        let workspaceController = try XCTUnwrap(split.splitViewItems[1].viewController.children.first as? CockpitWorkspaceViewController)
+        let workspaceView = workspaceController.view
 
-// The Inbox lives in an extension to keep the class body within the lint limit.
-extension NativeCockpitWindowTests {
+        controller.select(.notes)
+        XCTAssertTrue(workspaceView.isHiddenOrHasHiddenAncestor)
+        XCTAssertTrue(workspaceView.window === window)
+
+        controller.select(.workspace(workspace.id))
+        XCTAssertTrue(split.splitViewItems[1].viewController.children.first === workspaceController)
+        XCTAssertFalse(workspaceView.isHiddenOrHasHiddenAncestor)
+
+        controller.select(.notes)
+        XCTAssertTrue(fixture.store.deleteWorkspace(workspace))
+        controller.refresh()
+        XCTAssertNil(workspaceView.superview)
+        XCTAssertNil(workspaceController.parent)
+    }
+
     @MainActor
     func testSidebarInboxListsAgentJobsByStateAndOpensTheirPane() throws {
         let fixture = try Fixture()

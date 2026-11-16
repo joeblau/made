@@ -22,6 +22,14 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
     private var row: NSStackView!
     private var icon: NSView!
     private var agentBadge: AgentChatTabBadge?
+    private struct ContentSignature: Equatable {
+        let kind: PaneKind
+        let isChoosingMode: Bool
+        let title: String
+        let isCollapsed: Bool
+        let zoom: Double
+    }
+    private var contentSignature: ContentSignature?
     private var downPoint: NSPoint?
     private var statusTask: Task<Void, Never>?
     private var pathObserver: NSObjectProtocol?
@@ -90,6 +98,13 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
     override var isFlipped: Bool { true }
 
     func refresh() {
+        var displayTitle = pane.tabTitle
+        if pane.terminalDestination.kind == .drone { displayTitle += " · " + (pane.terminalDroneNameRaw ?? "Drone") }
+        let signature = ContentSignature(kind: pane.kind, isChoosingMode: pane.isChoosingMode, title: displayTitle,
+                                         isCollapsed: pane.isCollapsed, zoom: CockpitUIZoomController.shared.factor)
+        setAccessibilityValue(pane.isCollapsed ? "Collapsed" : (isSelected ? "Selected" : ""))
+        guard contentSignature != signature else { return }
+        contentSignature = signature
         if pane.kind == .browser, !pane.isChoosingMode, let state = pane.browserState, !(icon is BrowserFaviconView) {
             // A new-tab placeholder can become a browser after its tab exists.
             replaceIcon(with: BrowserFaviconView(state: state))
@@ -106,12 +121,10 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
         agentBadge?.isHidden = pane.kind != .agentChat
         title.font = CockpitTypography.font(size: 12)
         status.font = CockpitTypography.font(size: 10)
-        title.stringValue = pane.tabTitle
-        if pane.terminalDestination.kind == .drone { title.stringValue += " · " + (pane.terminalDroneNameRaw ?? "Drone") }
-        title.toolTip = title.stringValue
+        title.stringValue = displayTitle
+        title.toolTip = displayTitle
         hideButton.image = NSImage(systemSymbolName: pane.isCollapsed ? "eye" : "eye.slash", accessibilityDescription: nil)
-        setAccessibilityLabel(title.stringValue)
-        setAccessibilityValue(pane.isCollapsed ? "Collapsed" : (isSelected ? "Selected" : ""))
+        setAccessibilityLabel(displayTitle)
         updateAppearance()
     }
 

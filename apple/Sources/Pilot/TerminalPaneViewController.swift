@@ -32,7 +32,9 @@ final class TerminalPaneViewController: NSViewController, CockpitPanePresenting,
             addChild(controller)
             install(controller.view)
         } else if case .local = pane.terminalSession.bootstrap(workingDirectory: pane.currentDirectory) {
-            if let app = GhosttyRuntime.shared.app {
+            let runtime = GhosttyRuntime.shared
+            runtime.userZoomFactor = CockpitUIZoomController.shared.factor
+            if let app = runtime.app {
                 let terminal = GhosttyMetalView(app: app, pane: pane)
                 terminalView = terminal
                 install(terminal)

@@ -45,6 +45,29 @@ struct DockerEngineEvent: Sendable, Decodable {
     }
 }
 
+struct DockerEventLineBuffer {
+    private var buffer = Data()
+    private let maximumPendingBytes: Int
+
+    init(maximumPendingBytes: Int) {
+        self.maximumPendingBytes = maximumPendingBytes
+    }
+
+    mutating func append(_ chunk: Data) throws -> [Data] {
+        buffer.append(chunk)
+        guard buffer.count <= maximumPendingBytes else {
+            throw DockerTransportError.responseTooLarge(maximumPendingBytes)
+        }
+        guard buffer.contains(0x0A) else { return [] }
+        let parts = buffer.split(separator: 0x0A, omittingEmptySubsequences: true)
+        let terminated = buffer.last == 0x0A
+        let completeCount = terminated ? parts.count : parts.count - 1
+        let lines = parts.prefix(completeCount).map(Data.init)
+        buffer = terminated ? Data() : Data(parts[parts.count - 1])
+        return lines
+    }
+}
+
 /// The Engine API surface the Docker section depends on. ``DockerEngineClient``
 /// is the only production conformer; the seam exists so store behavior around
 /// slow, overlapping, or late replies can be exercised without a live daemon.
@@ -148,7 +171,8 @@ struct DockerEngineClient: DockerEngineAPI {
         let (stream, continuation) = AsyncThrowingStream<DockerEngineEvent, any Error>.makeStream()
         let maxPending = Self.maxPendingEventBytes
         let task = Task {
-            var buffer = Data()
+            var framer = DockerEventLineBuffer(maximumPendingBytes: maxPending)
+            let decoder = JSONDecoder()
             do {
                 for try await event in streaming.stream(request) {
                     switch event {
@@ -157,15 +181,8 @@ struct DockerEngineClient: DockerEngineAPI {
                             throw DockerTransportError.httpStatus(code: status, message: "")
                         }
                     case .body(let chunk):
-                        buffer.append(chunk)
-                        guard buffer.count <= maxPending else {
-                            throw DockerTransportError.responseTooLarge(maxPending)
-                        }
-                        while let newline = buffer.firstIndex(of: 0x0A) {
-                            let line = Data(buffer[buffer.startIndex..<newline])
-                            buffer.removeSubrange(buffer.startIndex...newline)
-                            guard !line.isEmpty,
-                                  let decoded = try? JSONDecoder().decode(DockerEngineEvent.self, from: line)
+                        for line in try framer.append(chunk) {
+                            guard let decoded = try? decoder.decode(DockerEngineEvent.self, from: line)
                             else { continue }
                             continuation.yield(decoded)
                         }

@@ -131,6 +131,48 @@ struct DashboardPublisherTests {
         #expect(published.last?.usage == nil)
     }
 
+    @Test("Store changes publish on demand and stopping cancels observation")
+    func observationDrivenPublication() async throws {
+        let suite = "DashboardPublisherTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defaults.removePersistentDomain(forName: suite)
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        let runner = GitHubRunner(id: 1, name: "mac", os: "macos", status: "online", busy: false, labels: [])
+        let runners = RunnersStore(defaults: defaults, now: { now }, fetch: { _ in [runner] })
+        runners.add(RunnerScope(kind: .enterprise, name: "example"))
+        let publisher = DashboardPublisher(
+            actionWatcher: WorkspaceActionWatcher(),
+            usageStore: UsageStore(defaults: defaults),
+            agenticUsageStore: AgenticUsageStore(defaults: defaults, sources: [], cacheURL: nil),
+            runnersStore: runners,
+            defaults: defaults,
+            snapshotStore: DashboardSnapshotStore(directory: directory),
+            reloadTimelines: { _ in }
+        )
+        var published: [DashboardSnapshotEnvelope] = []
+        publisher.onEnvelopeChange = { published.append($0) }
+        publisher.start()
+        defer { publisher.stop() }
+
+        await runners.refreshSelected()
+        for _ in 0..<100 where publisher.envelope.runners == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(publisher.envelope.runners?.enterpriseName == "example")
+        #expect(!published.isEmpty)
+
+        publisher.stop()
+        let count = published.count
+        now = now.addingTimeInterval(60)
+        await runners.refreshSelected()
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(published.count == count)
+    }
+
     private func workflowRun(id: Int, checkedAt: Date) -> BuildWorkflowRun {
         BuildWorkflowRun(
             workspaceID: UUID(),

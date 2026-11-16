@@ -100,7 +100,9 @@ final class CockpitPresentationPerformanceTests: XCTestCase {
                 try await Task.sleep(for: .milliseconds(250))
             }
         }
-        try await measureStream(fixtures: fixtures, samples: samples)
+        if ProcessInfo.processInfo.environment["MADE_INTERACTION_SKIP_STREAM"] != "1" {
+            try await measureStream(fixtures: fixtures, samples: samples)
+        }
         heartbeat.cancel()
         let report = InteractionReport(
             configuration: "Optimized hosted XCTest; visible production windows; in-memory stores and scripted ACP",

@@ -285,6 +285,32 @@ struct AppKitDesignTests {
         #expect(closed == 1 && hidden == 1)
     }
 
+    @Test("Pane tabs retain symbols on no-op refreshes and update selection and mode")
+    func paneTabRefreshSignature() throws {
+        let pane = Pane(kind: .terminal)
+        let tab = CockpitPaneTab(pane: pane, payload: WorkspacePaneDragPayload(
+            paneID: pane.id, sourceWorkspaceID: UUID(), projectID: UUID(), sourceSurface: .main))
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let icon = try #require(descendants(tab).compactMap { $0 as? NSImageView }.first)
+        let image = try #require(icon.image)
+        let title = try #require(descendants(tab).first { $0.accessibilityIdentifier() == "pane.title" } as? NSTextField)
+
+        tab.refresh()
+        #expect(icon.image === image)
+        tab.isSelected = true
+        tab.refresh()
+        #expect(icon.image === image)
+        #expect(tab.accessibilityValue() as? String == "Selected")
+
+        pane.kind = .agentChat
+        tab.refresh()
+        #expect(icon.image !== image)
+        #expect(title.stringValue.contains("Agent"))
+        pane.isCollapsed = true
+        tab.refresh()
+        #expect(tab.accessibilityValue() as? String == "Collapsed")
+    }
+
     @Test("New-tab placeholder fits narrow and wide panes and dismisses after one choice")
     func newTabLayout() throws {
         let pane = Pane(kind: .terminal)

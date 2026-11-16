@@ -53,6 +53,53 @@ struct NativeInspectorTests {
         #expect(repository.repoPath == "/fixture/repository")
     }
 
+    @Test("Repository row measurements follow content width and zoom changes")
+    func repositoryRowMeasurementInputs() throws {
+        let suite = "NativeInspectorTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func pullRequest(_ title: String) -> GitPullRequest {
+            .init(id: 1, title: title, url: "https://github.com/example/pull/1", state: "OPEN",
+                  isDraft: false, author: "developer", headBranch: "appkit", elapsed: "1m")
+        }
+        let repository = RepositoryStore()
+        repository.repoPath = "/fixture/repository"
+        repository.pullRequests = [pullRequest("Tiny")]
+        let workspace = Workspace(name: "Fixture")
+        let controller = InspectorViewController(workspace: workspace, usageStore: UsageStore(defaults: defaults),
+                                                 gitStore: repository, defaults: defaults, isLive: false)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 380, height: 700)
+        controller.setPresentationActive(true)
+        defer { controller.setPresentationActive(false) }
+        controller.selectTab(.pullRequests)
+        controller.view.layoutSubtreeIfNeeded()
+        let table = try #require(descendants(controller.view).compactMap { $0 as? NSTableView }.first)
+        let shortHeight = table.rect(ofRow: 0).height
+
+        repository.pullRequests = [pullRequest(String(repeating: "A much longer pull request title ", count: 8))]
+        controller.selectTab(.actions)
+        controller.selectTab(.pullRequests)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(table.rect(ofRow: 0).height > shortHeight)
+
+        let title = "Pull request title with enough words to wrap"
+        repository.pullRequests = [pullRequest(title)]
+        controller.selectTab(.actions)
+        controller.selectTab(.pullRequests)
+        controller.view.layoutSubtreeIfNeeded()
+        let wideHeight = table.rect(ofRow: 0).height
+        controller.view.frame.size.width = 250
+        controller.view.layoutSubtreeIfNeeded()
+        let narrowHeight = table.rect(ofRow: 0).height
+        #expect(narrowHeight > wideHeight)
+
+        defaults.set(2.0, forKey: "ui.zoom")
+        controller.selectTab(.actions)
+        controller.selectTab(.pullRequests)
+        controller.view.layoutSubtreeIfNeeded()
+        #expect(table.rect(ofRow: 0).height > narrowHeight)
+    }
+
     @Test("Settings only inspect opted-in accounts and ignore a result after consent is revoked")
     func consentAndStaleDetection() async throws {
         let suite = "NativeInspectorTests.\(UUID().uuidString)"
