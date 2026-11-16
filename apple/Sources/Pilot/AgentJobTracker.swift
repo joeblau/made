@@ -11,6 +11,9 @@ enum AgentJobState: Int, CaseIterable, Sendable {
     /// A turn finished and its pane has not been looked at since.
     case completed
 
+    /// The Inbox lists what is running first, then what needs the user.
+    static let inboxOrder: [AgentJobState] = [.working, .waiting, .completed]
+
     var title: String {
         switch self {
         case .waiting: "Waiting for Input"

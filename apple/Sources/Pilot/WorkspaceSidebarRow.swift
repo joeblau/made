@@ -153,3 +153,62 @@ final class WorkspaceOpenTaskBadgeView: NSButton {
         needsDisplay = true
     }
 }
+
+/// An Inbox section title: a disclosure chevron, the title, and how many jobs
+/// the section holds. Clicking anywhere on it collapses or expands the section.
+@MainActor
+final class InboxSectionHeaderView: NSView {
+    let count: Int
+    let isExpanded: Bool
+    private let onToggle: () -> Void
+    private let badge = NSTextField(labelWithString: "")
+
+    init(title: String, count: Int, expanded: Bool, onToggle: @escaping () -> Void) {
+        self.count = count
+        isExpanded = expanded
+        self.onToggle = onToggle
+        super.init(frame: .zero)
+        let chevron = NSImageView(image: NSImage(systemSymbolName: expanded ? "chevron.down" : "chevron.right",
+                                                 accessibilityDescription: nil) ?? NSImage())
+        chevron.symbolConfiguration = .init(pointSize: 9, weight: .semibold)
+        chevron.contentTintColor = .tertiaryLabelColor
+        chevron.widthAnchor.constraint(equalToConstant: 12).isActive = true
+        let label = shellLabel(title, secondary: true)
+        label.font = CockpitTypography.font(size: 11, weight: .semibold)
+        badge.stringValue = WorkspaceOpenTaskBadgeView.displayText(for: count)
+        badge.font = .monospacedDigitSystemFont(ofSize: 10, weight: .semibold)
+        badge.textColor = .secondaryLabelColor
+        badge.alignment = .center
+        badge.wantsLayer = true
+        badge.layer?.cornerRadius = 8
+        badge.heightAnchor.constraint(equalToConstant: 16).isActive = true
+        badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 22).isActive = true
+        badge.setAccessibilityIdentifier("sidebar.section.count")
+        let row = shellStack([chevron, label, badge], orientation: .horizontal, spacing: 5)
+        addSubview(row)
+        row.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            row.leadingAnchor.constraint(equalTo: leadingAnchor),
+            row.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            row.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.disclosureTriangle)
+        setAccessibilityLabel("\(title), \(count) \(count == 1 ? "job" : "jobs")")
+        setAccessibilityExpanded(expanded)
+        toolTip = (expanded ? "Collapse " : "Expand ") + title
+        updateBadgeFill()
+    }
+    required init?(coder: NSCoder) { nil }
+
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateBadgeFill() }
+    private func updateBadgeFill() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            badge.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.1).cgColor
+        }
+    }
+
+    func toggle() { onToggle() }
+    override func mouseDown(with event: NSEvent) { toggle() }
+    override func accessibilityPerformPress() -> Bool { toggle(); return true }
+}
