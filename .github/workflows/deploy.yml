@@ -27,6 +27,10 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       rendezvous: ${{ steps.filter.outputs.rendezvous }}
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
@@ -51,6 +55,10 @@ jobs:
   quality:
     runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Isolate this job's home directory
         run: .github/scripts/isolate-job-home.sh
@@ -75,6 +83,10 @@ jobs:
       name: production
       url: https://blau.app/made
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Isolate this job's home directory
         run: .github/scripts/isolate-job-home.sh
@@ -104,6 +116,10 @@ jobs:
       name: production
       url: https://rendezvous.blau.app/healthz
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Isolate this job's home directory
         run: .github/scripts/isolate-job-home.sh

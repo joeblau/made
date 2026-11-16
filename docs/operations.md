@@ -42,7 +42,10 @@ system `/bin/bash` 3.2 and BSD userland; keep workflow shell portable to both.
   the GhosttyKit bootstrap.
 - **git-lfs.** The minis don't ship it, so every LFS checkout is preceded by
   an inline step that installs a pinned, SHA-256 verified `git-lfs` into
-  `RUNNER_TEMP`. Bump the version and digest together.
+  `RUNNER_TEMP`. Bump the version and digest together. Workspaces persist
+  between jobs, and an LFS checkout leaves hooks and filters that fail
+  without `git-lfs`, so jobs that don't fetch LFS objects delete the
+  workspace's `.git` before checkout.
 - **CMake and tmux.** The same script puts a pinned, SHA-256 verified CMake
   on `PATH` (cached per machine) for the CEF wrapper build. The minis have no
   passwordless sudo, so CI installs its pinned tmux build into the first
