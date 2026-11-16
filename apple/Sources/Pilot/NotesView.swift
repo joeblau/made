@@ -46,7 +46,15 @@ final class NotesViewController: NSViewController, CockpitPanePresenting {
     let store: WorkspaceStore
     private let defaults: UserDefaults
     private let canvas = NotesCanvasView()
-    private var tabs: [UUID: NoteTabView] = [:]
+    /// Titles shown by the tab control, keyed by note.
+    private var tabTitles: [UUID: String] = [:]
+    /// The same Liquid Glass tab control as the Remote Desktop groups:
+    /// right-click a tab to rename, reorder, or close its note.
+    private lazy var tabControl = PilotSegmentedControl<UUID>(
+        "Notes", selection: UUID(), options: [],
+        title: { [weak self] id in self?.tabTitles[id] ?? "" },
+        controlSize: .large, liftsOnPress: false
+    ) { [weak self] id in self?.selectNote(id) }
     private var editors: [UUID: NoteTextView] = [:]
     private var recentEditors: [UUID] = []
     private var currentNoteID: UUID?
@@ -58,7 +66,6 @@ final class NotesViewController: NSViewController, CockpitPanePresenting {
     private var presentationActive = true
     private var presentedCloseID: UUID?
     private var closeAlert: NSAlert?
-    private var lastTabOrder: [UUID] = []
     private var lastZoom: Double = 0
 
     init(store: WorkspaceStore, defaults: UserDefaults = .standard) {
@@ -74,10 +81,10 @@ final class NotesViewController: NSViewController, CockpitPanePresenting {
         view = canvas
         canvas.newNoteButton.target = self
         canvas.newNoteButton.action = #selector(addNote)
-        canvas.newNoteButton.onDrop = { [weak self] id in
-            self?.store.moveNoteToEnd(id)
-            self?.refresh()
-        }
+        tabControl.setAccessibilityIdentifier("notes.tabs")
+        tabControl.onClose = { [weak self] id in self?.closeNote(id) }
+        tabControl.menuItems = { [weak self] id in self?.tabMenuItems(id) ?? [] }
+        canvas.setTabControl(tabControl)
         canvas.emptyCreateButton.target = self
         canvas.emptyCreateButton.action = #selector(addNote)
         canvas.wordWrapPopup.target = self
@@ -229,44 +236,46 @@ final class NotesViewController: NSViewController, CockpitPanePresenting {
 
     private func updateTabs(_ notes: [Note]) {
         let ids = notes.map(\.id)
-        var presentationChanged = false
-        for id in Array(tabs.keys) where !ids.contains(id) {
-            tabs.removeValue(forKey: id)?.removeFromSuperview()
+        for id in Array(editors.keys) where !ids.contains(id) {
             editors.removeValue(forKey: id)
             recentEditors.removeAll { $0 == id }
         }
-        for note in notes {
-            let tab = tabs[note.id] ?? makeTab(note)
-            if tab.update(title: note.displayTitle, selected: store.selectedNoteID == note.id) {
-                presentationChanged = true
-            }
-            tab.applyZoom(zoom)
-            tabs[note.id] = tab
+        let titles = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0.displayTitle) })
+        let titlesChanged = titles != tabTitles
+        tabTitles = titles
+        if tabControl.options != ids {
+            tabControl.options = ids
+        } else if titlesChanged {
+            tabControl.refresh()
         }
-        if lastTabOrder != ids {
-            lastTabOrder = ids
-            canvas.setTabs(ids.compactMap { tabs[$0] })
-        } else if presentationChanged {
-            canvas.needsLayout = true
+        if let selected = store.selectedNoteID, tabControl.selection != selected {
+            tabControl.selection = selected
         }
+        canvas.setTabTitles(ids.compactMap { titles[$0] })
     }
 
-    private func makeTab(_ note: Note) -> NoteTabView {
-        let id = note.id
-        let tab = NoteTabView(noteID: id)
-        tab.onSelect = { [weak self] in self?.selectNote(id) }
-        tab.onClose = { [weak self, weak note] in
-            guard let self, let note else { return }
-            self.commitPendingEdits()
-            self.store.requestCloseNote(note)
-            self.refresh()
-        }
-        tab.onRename = { [weak self] in self?.editTitle(id) }
-        tab.onDrop = { [weak self] draggedID in
-            self?.store.moveNote(draggedID, before: id)
-            self?.refresh()
-        }
-        return tab
+    private func closeNote(_ id: UUID) {
+        guard let note = store.notes.first(where: { $0.id == id }) else { return }
+        commitPendingEdits()
+        store.requestCloseNote(note)
+        refresh()
+    }
+
+    private func tabMenuItems(_ id: UUID) -> [PilotSegmentedMenuItem] {
+        let ids = tabControl.options
+        guard let index = ids.firstIndex(of: id) else { return [] }
+        return [
+            PilotSegmentedMenuItem("Rename Note…") { [weak self] in self?.editTitle(id) },
+            PilotSegmentedMenuItem("Move Left", isEnabled: index > 0) { [weak self] in
+                self?.store.moveNote(id, before: ids[index - 1])
+                self?.refresh()
+            },
+            PilotSegmentedMenuItem("Move Right", isEnabled: index < ids.count - 1) { [weak self] in
+                self?.store.moveNote(ids[index + 1], before: id)
+                self?.refresh()
+            },
+            PilotSegmentedMenuItem("Close Note", isDestructive: true) { [weak self] in self?.closeNote(id) },
+        ]
     }
 
     private func selectNote(_ id: UUID) {
@@ -276,7 +285,7 @@ final class NotesViewController: NSViewController, CockpitPanePresenting {
         refresh()
         if let editor = editors[id] { view.window?.makeFirstResponder(editor.textView) }
         canvas.layoutSubtreeIfNeeded()
-        if let tab = tabs[id] { canvas.tabDocument.scrollToVisible(tab.frame) }
+        canvas.scrollTabToVisible(tabControl.options.firstIndex(of: id))
     }
 
     /// Titles are derived from the first content line. Rename edits that line
@@ -362,7 +371,6 @@ final class NotesViewController: NSViewController, CockpitPanePresenting {
         if lastZoom != zoom {
             lastZoom = zoom
             canvas.applyZoom(zoom)
-            for tab in tabs.values { tab.applyZoom(zoom) }
         }
     }
 
@@ -567,7 +575,7 @@ final class NoteTextView: NSView, NSTextViewDelegate {
 private final class NotesCanvasView: NSView {
     let tabScroll = NSScrollView()
     let tabDocument = NotesFlippedView()
-    let newNoteButton = NoteDropButton(title: "+", target: nil, action: nil)
+    let newNoteButton = NSButton(title: "+", target: nil, action: nil)
     let wordWrapLabel = NSTextField(labelWithString: "Word Wrap")
     let wordWrapPopup = NSPopUpButton()
     let disclosure = NSTextField(wrappingLabelWithString:
@@ -577,7 +585,8 @@ private final class NotesCanvasView: NSView {
     let emptyCreateButton = NSButton(title: "New Note", target: nil, action: nil)
     let toast = NSVisualEffectView()
     let toastLabel = NSTextField(labelWithString: "✓ Copied")
-    private var tabs: [NoteTabView] = []
+    private weak var tabControl: NSView?
+    private var tabTitles: [String] = []
     private weak var editor: NSView?
     private var zoom = 1.0
 
@@ -590,7 +599,8 @@ private final class NotesCanvasView: NSView {
         tabScroll.hasHorizontalScroller = true
         tabScroll.autohidesScrollers = true
         tabScroll.verticalScrollElasticity = .none
-        newNoteButton.bezelStyle = .roundRect
+        newNoteButton.applyCockpitGlassStyle()
+        newNoteButton.borderShape = .circle
         newNoteButton.toolTip = "New Note"
         newNoteButton.setAccessibilityLabel("New Note")
         newNoteButton.setAccessibilityIdentifier("notes.new")
@@ -621,10 +631,32 @@ private final class NotesCanvasView: NSView {
 
     @objc private func scrollerStyleChanged() { needsLayout = true }
 
-    func setTabs(_ tabs: [NoteTabView]) {
-        self.tabs = tabs
-        for tab in tabs where tab.superview !== tabDocument { tabDocument.addSubview(tab) }
+    func setTabControl(_ control: NSView) {
+        tabControl?.removeFromSuperview()
+        tabControl = control
+        tabDocument.addSubview(control)
         needsLayout = true
+    }
+
+    /// Equal-width segments sized for the longest title, so a long strip
+    /// scrolls instead of truncating every tab.
+    func setTabTitles(_ titles: [String]) {
+        guard titles != tabTitles else { return }
+        tabTitles = titles
+        needsLayout = true
+    }
+
+    func scrollTabToVisible(_ index: Int?) {
+        guard let index, let tabControl, !tabTitles.isEmpty else { return }
+        let width = tabControl.frame.width / CGFloat(tabTitles.count)
+        tabDocument.scrollToVisible(NSRect(x: tabControl.frame.minX + width * CGFloat(index), y: tabControl.frame.minY,
+                                           width: width, height: tabControl.frame.height))
+    }
+
+    private var segmentWidth: CGFloat {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize(for: .large) * zoom)
+        let widest = tabTitles.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return min(220 * zoom, max(96 * zoom, widest + 48 * zoom))
     }
 
     func setEditor(_ editor: NSView?) {
@@ -663,9 +695,11 @@ private final class NotesCanvasView: NSView {
         let buttonX = max(8, tabAreaWidth - tabHeight - 8)
         let scrollWidth = max(0, buttonX - 4)
         var x: CGFloat = 8
-        for tab in tabs {
-            tab.frame = NSRect(x: x, y: 4, width: tab.preferredWidth, height: tabHeight)
-            x += tab.frame.width + 6
+        if let tabControl {
+            let width = segmentWidth * CGFloat(tabTitles.count)
+            tabControl.isHidden = tabTitles.isEmpty
+            tabControl.frame = NSRect(x: x, y: 4, width: width, height: tabHeight)
+            x += width
         }
         let contentHeight = tabHeight + 8
         let stripHeight = NSScrollView.frameSize(
@@ -703,173 +737,4 @@ private final class NotesCanvasView: NSView {
 
 private final class NotesFlippedView: NSView {
     override var isFlipped: Bool { true }
-}
-
-private final class NoteTabView: NSView {
-    private let titleButton: NoteDragButton
-    private let closeButton = NSButton()
-    var onSelect: (() -> Void)?
-    var onClose: (() -> Void)?
-    var onRename: (() -> Void)?
-    var onDrop: ((UUID) -> Void)? { didSet { titleButton.onDrop = onDrop } }
-    private var selected = false
-    private var zoom = 1.0
-
-    init(noteID: UUID) {
-        titleButton = NoteDragButton(noteID: noteID)
-        super.init(frame: .zero)
-        titleButton.target = self
-        titleButton.action = #selector(selectTab)
-        titleButton.bezelStyle = .roundRect
-        titleButton.isBordered = false
-        titleButton.lineBreakMode = .byTruncatingTail
-        titleButton.font = .systemFont(ofSize: 12, weight: .medium)
-        titleButton.setAccessibilityIdentifier("notes.tab.\(noteID.uuidString)")
-        closeButton.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Close Note")
-        closeButton.bezelStyle = .circular
-        closeButton.isBordered = false
-        closeButton.target = self
-        closeButton.action = #selector(closeTab)
-        closeButton.toolTip = "Close Note"
-        closeButton.setAccessibilityLabel("Close Note")
-        addSubview(titleButton)
-        addSubview(closeButton)
-        wantsLayer = true
-        layer?.cornerRadius = 12
-        let menu = NSMenu()
-        let rename = menu.addItem(withTitle: "Rename Note…", action: #selector(renameTab), keyEquivalent: "")
-        rename.target = self
-        let close = menu.addItem(withTitle: "Close Note", action: #selector(closeTab), keyEquivalent: "")
-        close.target = self
-        titleButton.menu = menu
-        self.menu = menu
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    var preferredWidth: CGFloat { min(300 * zoom, max(80, titleButton.intrinsicContentSize.width + 34 * zoom)) }
-
-    @discardableResult
-    func update(title: String, selected: Bool) -> Bool {
-        guard titleButton.title != title || self.selected != selected else { return false }
-        titleButton.title = title
-        titleButton.toolTip = title
-        titleButton.setAccessibilityLabel(title)
-        titleButton.setAccessibilityValue(selected ? "Selected" : "")
-        self.selected = selected
-        updateAppearance()
-        needsLayout = true
-        return true
-    }
-
-    func applyZoom(_ zoom: Double) {
-        guard self.zoom != zoom else { return }
-        self.zoom = zoom
-        titleButton.font = .systemFont(ofSize: 12 * zoom, weight: .medium)
-        closeButton.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 10 * zoom, weight: .regular)
-        needsLayout = true
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        updateAppearance()
-    }
-
-    private func updateAppearance() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (selected ? NSColor.controlAccentColor.withAlphaComponent(0.18)
-                : NSColor.quaternaryLabelColor.withAlphaComponent(0.08)).cgColor
-        }
-    }
-
-    override func layout() {
-        super.layout()
-        titleButton.frame = NSRect(x: 4, y: 0, width: max(0, bounds.width - 29 * zoom), height: bounds.height)
-        closeButton.frame = NSRect(x: bounds.width - 25 * zoom, y: (bounds.height - 20 * zoom) / 2,
-                                   width: 20 * zoom, height: 20 * zoom)
-    }
-
-    @objc private func selectTab() { onSelect?() }
-    @objc private func closeTab() { onClose?() }
-    @objc private func renameTab() { onRename?() }
-}
-
-private class NoteDropButton: NSButton {
-    var onDrop: ((UUID) -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        registerForDraggedTypes([NoteTabTransfer.pasteboardType])
-    }
-
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        registerForDraggedTypes([NoteTabTransfer.pasteboardType])
-    }
-
-    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        guard NoteTabTransfer.read(from: sender.draggingPasteboard) != nil else { return [] }
-        CockpitMotion.setDropHighlight(true, on: self)
-        return .move
-    }
-
-    override func draggingExited(_ sender: (any NSDraggingInfo)?) { CockpitMotion.setDropHighlight(false, on: self) }
-    override func draggingEnded(_ sender: any NSDraggingInfo) { CockpitMotion.setDropHighlight(false, on: self) }
-
-    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        CockpitMotion.setDropHighlight(false, on: self)
-        guard let transfer = NoteTabTransfer.read(from: sender.draggingPasteboard), let onDrop else { return false }
-        onDrop(transfer.id)
-        return true
-    }
-}
-
-private final class NoteDragButton: NoteDropButton, NSDraggingSource {
-    private let noteID: UUID
-    private var dragStart: NSEvent?
-
-    init(noteID: UUID) {
-        self.noteID = noteID
-        super.init(frame: .zero)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { nil }
-
-    override func mouseDown(with event: NSEvent) {
-        dragStart = event
-        highlight(true)
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        highlight(false)
-        guard dragStart != nil else { return }
-        dragStart = nil
-        if bounds.contains(convert(event.locationInWindow, from: nil)) { performClick(nil) }
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        guard let start = dragStart,
-              hypot(event.locationInWindow.x - start.locationInWindow.x,
-                    event.locationInWindow.y - start.locationInWindow.y) > 4,
-              let data = try? JSONEncoder().encode(NoteTabTransfer(id: noteID)) else { return }
-        dragStart = nil
-        highlight(false)
-        let item = NSPasteboardItem()
-        item.setData(data, forType: NoteTabTransfer.pasteboardType)
-        let draggingItem = NSDraggingItem(pasteboardWriter: item)
-        let image = NSImage(size: bounds.size)
-        if let bitmap = bitmapImageRepForCachingDisplay(in: bounds) {
-            cacheDisplay(in: bounds, to: bitmap)
-            image.addRepresentation(bitmap)
-        }
-        draggingItem.setDraggingFrame(bounds, contents: image)
-        beginDraggingSession(with: [draggingItem], event: event, source: self)
-    }
-
-    func draggingSession(_ session: NSDraggingSession,
-                         sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        context == .withinApplication ? .move : []
-    }
 }

@@ -72,6 +72,17 @@ final class TerminalFastCommandToolbarActions: NSView {
     private var actionTask: Task<Void, Never>?
     private var isRunningAction = false
     private var generation = 0
+    private var shownRunSymbol = ""
+
+    /// While a process runs in the pane, the run button restarts it (the
+    /// command already stops the active process first), so it shows restart.
+    static func runButtonPresentation(command: String?, activity: TerminalProcessActivity)
+        -> (symbol: String, label: String, toolTip: String) {
+        guard let command else { return ("play.fill", "Run Fast Command", "Set a Fast Command in the terminal toolbar") }
+        return activity == .running
+            ? ("arrow.clockwise", "Restart Fast Command", "Stop the active process and restart \(command)")
+            : ("play.fill", "Run Fast Command", "Run \(command)")
+    }
 
     init(pane: Pane) {
         self.pane = pane
@@ -174,7 +185,13 @@ final class TerminalFastCommandToolbarActions: NSView {
     @objc private func refreshControls() {
         let command = TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: pane.id))
         play.isEnabled = !isRunningAction && command != nil
-        play.toolTip = command.map { "Stop the active process and run \($0)" } ?? "Set a Fast Command in the terminal toolbar"
+        let presentation = Self.runButtonPresentation(command: command, activity: activity)
+        if shownRunSymbol != presentation.symbol {
+            shownRunSymbol = presentation.symbol
+            play.image = NSImage(systemSymbolName: presentation.symbol, accessibilityDescription: presentation.label)
+        }
+        play.setAccessibilityLabel(presentation.label)
+        play.toolTip = presentation.toolTip
         stopButton.isEnabled = !isRunningAction && activity == .running
         if isRunningAction { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
         if spinner.isHidden == isRunningAction {

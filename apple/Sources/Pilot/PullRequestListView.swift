@@ -204,7 +204,12 @@ final class InspectorViewController: NSViewController {
     required init?(coder: NSCoder) { nil }
     override func loadView() {
         view = NSView()
-        tabs.segmentStyle = .rounded
+        // The same Liquid Glass picker as the sidebar's Workspaces/Inbox.
+        tabs.controlSize = .large
+        tabs.applyCockpitGlassStyle()
+        // A narrow inspector truncates the labels instead of being held open
+        // by the large control's intrinsic width.
+        tabs.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         tabs.target = self
         tabs.action = #selector(tabChanged)
         tabs.setAccessibilityLabel("Inspector view")
@@ -336,7 +341,7 @@ final class InspectorViewController: NSViewController {
         let changingTab = displayedTab != nil && displayedTab != tab
         defer { if changingTab { CockpitMotion.reveal(bodyHost) } }
         tabs.selectedSegment = InspectorTab.allCases.firstIndex(of: tab) ?? 0
-        tabs.font = InspectorNativeUI.font(11, defaults: defaults)
+        tabs.font = InspectorNativeUI.font(NSFont.systemFontSize(for: .large), defaults: defaults)
         synchronizePolling(tab: tab, root: workspace.effectiveRootPath)
         statusStore.setPolling(isLive && isActive && tab == .actions, for: self)
         header.update(githubStatus: tab == .actions ? statusStore.status : nil, defaults: defaults)

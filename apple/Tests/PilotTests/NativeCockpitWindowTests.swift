@@ -253,7 +253,7 @@ final class NativeCockpitWindowTests: XCTestCase {
         XCTAssertGreaterThan(table.visibleRect.height, 150)
         let notesRow = try XCTUnwrap(table.view(atColumn: 0, row: 0, makeIfNecessary: false), "Visible rows must have native cell views")
         XCTAssertTrue(descendants(notesRow).contains { ($0 as? NSTextField)?.stringValue == "Notes" })
-        let noteTab = try XCTUnwrap(views.first { $0.accessibilityIdentifier().hasPrefix("notes.tab.") })
+        let noteTab = try XCTUnwrap(views.first { $0.accessibilityIdentifier() == "notes.tabs" })
         let tabInWindow = noteTab.convert(noteTab.bounds, to: nil)
         XCTAssertTrue(window.contentLayoutRect.contains(tabInWindow), "The Notes tabs must be below the native window toolbar")
         XCTAssertTrue(views.contains { $0 is NoteTextView }, "Notes must mount the production native editor")
