@@ -309,6 +309,18 @@ struct TerminalFastCommandTests {
         #expect(TerminalFastCommandStore.executableCommand(from: "\n\t ") == nil)
     }
 
+    @Test("A running process turns the run button into restart")
+    @MainActor
+    func runButtonShowsRestartWhileRunning() {
+        let idle = TerminalFastCommandToolbarActions.runButtonPresentation(command: "bun dev", activity: .idle)
+        #expect(idle.symbol == "play.fill" && idle.label == "Run Fast Command")
+        let running = TerminalFastCommandToolbarActions.runButtonPresentation(command: "bun dev", activity: .running)
+        #expect(running.symbol == "arrow.clockwise" && running.label == "Restart Fast Command")
+        #expect(running.toolTip.contains("bun dev"))
+        let unset = TerminalFastCommandToolbarActions.runButtonPresentation(command: nil, activity: .running)
+        #expect(unset.symbol == "play.fill")
+    }
+
     @Test("Clearing a command removes its preference")
     func clearingCommandRemovesPreference() throws {
         let suiteName = "TerminalFastCommandTests.\(UUID().uuidString)"
