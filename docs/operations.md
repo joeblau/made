@@ -23,7 +23,10 @@ jobs still deploy before deleting the old token.
 
 Every macOS job (CI, release, and the GhosttyKit and ChromiumKit bootstraps)
 runs on the Blau enterprise's **Mini Cluster** runner group, labels
-`[self-hosted, macOS, ARM64, macmini]`. Linux jobs stay on GitHub-hosted
+`[self-hosted, macOS, ARM64, macmini]`, except CI's `apple-chromium-smoke`.
+That job ad-hoc signs Cockpit, and Xcode 27.2 on the minis requires a
+provisioning profile for its `group.app.blau.pilot` App Group, so it stays on
+GitHub-hosted `xcode-27` for now. Linux jobs stay on GitHub-hosted
 `ubuntu-latest`. The repository must be selected in that group, and because
 `openblau/made` is public, the group must allow public repositories (an
 enterprise setting).

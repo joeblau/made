@@ -274,8 +274,11 @@ jobs:
     needs: [changes, chromium-runtime]
     # Public repo: fork pull requests never run on the self-hosted minis.
     if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
-    runs-on: [self-hosted, macOS, ARM64, macmini]
+    # Stays on GitHub-hosted Xcode 27 for now: Xcode 27.2 (the minis) refuses
+    # to ad-hoc sign Cockpit's macOS App Group (group.app.blau.pilot) without
+    # a provisioning profile, and the archive validator checks Pilot's
+    # entitlements exactly. Move it to the minis once the group is settled.
+    runs-on: xcode-27
     permissions:
       attestations: read
       contents: read
