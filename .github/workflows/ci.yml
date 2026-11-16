@@ -117,8 +117,6 @@ jobs:
     # A hung xcodebuild otherwise burns the 6-hour runner default (seen when a
     # deployment-target change stalled Network.framework-dependent tests).
     timeout-minutes: 90
-    env:
-      BLAU_SOURCE_PACKAGES: ${{ github.workspace }}/apple/.ci-source-packages
     steps:
       # The minis don't ship git-lfs; checkout needs it on PATH before the
       # repository (and its scripts) exist, so install a pinned copy inline.
@@ -146,10 +144,6 @@ jobs:
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Validate Chromium artifact lock
         run: |
           bash apple/bin/package-chromiumkit.sh manifest
@@ -272,7 +266,6 @@ jobs:
       attestations: read
       contents: read
     env:
-      BLAU_SOURCE_PACKAGES: ${{ github.workspace }}/apple/.ci-source-packages
       CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.cef-download-cache
     steps:
       # The minis don't ship git-lfs; checkout needs it on PATH before the
@@ -301,10 +294,6 @@ jobs:
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |

@@ -38,8 +38,11 @@ enterprise setting).
   `RUNNER_TEMP`. Bump the version and digest together.
 - **Isolation.** The minis are persistent and run two runners per machine, so
   the same script gives each job its own `TMPDIR` and derived data under
-  `RUNNER_TEMP`. Signing jobs prepend a temporary keychain to the search list
-  and delete it in an `always()` step.
+  `RUNNER_TEMP`. CI keeps SwiftPM checkouts in a per-runner directory under
+  `~/Library/Caches/blau-ci/` instead of `actions/cache`, because SwiftPM
+  records absolute workspace paths; release jobs resolve packages from scratch.
+  Signing jobs prepend a temporary keychain to the search list and delete it
+  in an `always()` step.
 - **Fork pull requests** never run on the minis. Apple jobs are skipped for
   them, and the `complete` gate fails a fork PR that changes Apple code, so a
   maintainer pushes it to a branch in this repository to run self-hosted CI.

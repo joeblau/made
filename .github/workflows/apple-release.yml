@@ -505,10 +505,6 @@ jobs:
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.release-source-packages
-          key: apple-release-macos-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Import Developer ID identity
         shell: bash
         env:
@@ -822,10 +818,6 @@ jobs:
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.release-source-packages
-          key: apple-release-mobile-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift') }}
       - name: Install App Store Connect API key
         shell: bash
         run: |
