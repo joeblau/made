@@ -113,21 +113,23 @@ class GhosttyMetalView: NSView, CALayerDelegate {
         // Persistent tmux sessions can outlive Pilot, which makes app-scoped
         // pid files stale after relaunch. Workspace asks tmux for each pane's
         // root shell pid instead.
-        let zdotdir = Self.setupOSC7ZdotDir()
-        let envVars: [(key: String, value: String)] = zdotdir != nil
-            ? [
-                ("ZDOTDIR", zdotdir!),
-                ("__PILOT_REAL_ZDOTDIR", NSHomeDirectory()),
-              ]
-            : []
         let bootstrap = pane.terminalSession.bootstrap(workingDirectory: persistedDirectory)
-        guard case .local(let persistentSessionInput) = bootstrap else { return }
+        guard case .local(let persistentSessionCommand) = bootstrap else { return }
+        // With tmux, Ghostty launches the attach command directly, so the
+        // user's shell starts once, inside tmux. The OSC 7 ZDOTDIR hook is
+        // only for the plain-shell fallback: handing its per-launch temp
+        // directory to a tmux server that outlives Pilot would leave later
+        // pane shells pointing at a deleted ZDOTDIR and skip the user's rc.
+        var envVars: [(key: String, value: String)] = []
+        if persistentSessionCommand == nil, let zdotdir = Self.setupOSC7ZdotDir() {
+            envVars = [("ZDOTDIR", zdotdir), ("__PILOT_REAL_ZDOTDIR", NSHomeDirectory())]
+        }
 
         let surface = Self.makeSurface(
             app: app,
             view: self,
             workingDirectory: persistedDirectory,
-            initialInput: persistentSessionInput,
+            command: persistentSessionCommand,
             envVars: envVars
         )
 
@@ -1129,12 +1131,12 @@ class GhosttyMetalView: NSView, CALayerDelegate {
         app: ghostty_app_t,
         view: GhosttyMetalView,
         workingDirectory: String?,
-        initialInput: String?,
+        command: String?,
         envVars: [(key: String, value: String)] = []
     ) -> ghostty_surface_t? {
         func build(
             _ directory: UnsafePointer<CChar>?,
-            _ input: UnsafePointer<CChar>?,
+            _ command: UnsafePointer<CChar>?,
             _ envPtrs: UnsafeMutablePointer<ghostty_env_var_s>?,
             _ envCount: Int
         ) -> ghostty_surface_t? {
@@ -1166,7 +1168,7 @@ class GhosttyMetalView: NSView, CALayerDelegate {
             surfaceCfg.scale_factor = initialScale
             surfaceCfg.font_size = initialFontSize
             surfaceCfg.working_directory = directory
-            surfaceCfg.initial_input = input
+            surfaceCfg.command = command
             surfaceCfg.env_vars = envPtrs
             surfaceCfg.env_var_count = envCount
             return ghostty_surface_new(app, &surfaceCfg)
@@ -1180,8 +1182,8 @@ class GhosttyMetalView: NSView, CALayerDelegate {
 
         if envVars.isEmpty {
             return withOptionalCString(workingDirectory) { dirPtr in
-                withOptionalCString(initialInput) { inputPtr in
-                    build(dirPtr, inputPtr, nil, 0)
+                withOptionalCString(command) { commandPtr in
+                    build(dirPtr, commandPtr, nil, 0)
                 }
             }
         }
@@ -1196,9 +1198,9 @@ class GhosttyMetalView: NSView, CALayerDelegate {
         _ = nsValues
 
         return withOptionalCString(workingDirectory) { dirPtr in
-            withOptionalCString(initialInput) { inputPtr in
+            withOptionalCString(command) { commandPtr in
                 envArray.withUnsafeMutableBufferPointer { buf in
-                    build(dirPtr, inputPtr, buf.baseAddress, buf.count)
+                    build(dirPtr, commandPtr, buf.baseAddress, buf.count)
                 }
             }
         }

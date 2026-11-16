@@ -400,7 +400,7 @@ private final class WalkieRecordingSession: CockpitTerminalSession, @unchecked S
     }
 
     func bootstrap(workingDirectory: String?) -> TerminalSessionBootstrap {
-        destination.kind == .local ? .local(initialInput: nil) : .remote
+        destination.kind == .local ? .local(command: nil) : .remote
     }
 
     func restore(workingDirectory: String?) async throws -> TerminalSessionRestoration {

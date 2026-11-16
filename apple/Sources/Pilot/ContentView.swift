@@ -138,7 +138,9 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         window.delegate = self
         splitController.onToggleInspector = { [weak self] in self?.toggleInspector() }
         splitController.splitView.isVertical = true
-        if isLive { splitController.splitView.autosaveName = surface == .main ? "cockpit-main-columns" : "cockpit-extendo-columns" }
+        // v2: the inspector narrowed to 330–450pt; a fresh key keeps a
+        // width saved under the old 440pt floor from overriding it.
+        if isLive { splitController.splitView.autosaveName = surface == .main ? "cockpit-main-columns-v2" : "cockpit-extendo-columns-v2" }
         if surface == .main {
             let sidebar = NSSplitViewItem(sidebarWithViewController: sidebarContainer)
             sidebar.minimumThickness = 180
@@ -153,8 +155,8 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         inspectorContainer.view = NSView()
         inspectorItem = NSSplitViewItem(inspectorWithViewController: inspectorContainer)
         // Leave room for the pane launchers, annotation button, and inspector toggle.
-        inspectorItem.minimumThickness = 440
-        inspectorItem.maximumThickness = 600
+        inspectorItem.minimumThickness = 330
+        inspectorItem.maximumThickness = 450
         inspectorItem.canCollapse = true
         inspectorItem.collapseBehavior = .preferResizingSiblingsWithFixedSplitView
         inspectorItem.isCollapsed = true
