@@ -702,14 +702,16 @@ final class AgentJobSidebarCell: NSTableCellView {
         self.job = job
         title.font = CockpitTypography.font(size: 12)
         detail.font = CockpitTypography.font(size: 10)
-        title.stringValue = job.title
-        let parts = [workspaceName, job.agentName, job.statusText].filter { !$0.isEmpty }
+        // Jobs are agent terminals, so the pane's own title ("Terminal") says
+        // nothing; the workspace names the job and the detail says who/what.
+        title.stringValue = workspaceName.isEmpty ? job.title : workspaceName
+        let parts = [job.agentName, job.statusText].filter { !$0.isEmpty }
         detail.stringValue = parts.joined(separator: " · ")
         status.image = NSImage(systemSymbolName: Self.symbolName(for: job), accessibilityDescription: nil)
         status.toolTip = job.statusText
         updateStatusTint()
         setAccessibilityIdentifier("sidebar.job")
-        setAccessibilityLabel(([job.title] + parts).joined(separator: ", "))
+        setAccessibilityLabel(([title.stringValue] + parts).joined(separator: ", "))
     }
 
     private func updateStatusTint() {

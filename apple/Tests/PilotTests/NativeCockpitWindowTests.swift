@@ -1165,7 +1165,7 @@ extension NativeCockpitWindowTests {
         XCTAssertEqual(section.count, 1, "The section title carries its job count")
         XCTAssertTrue(section.isExpanded)
         let cell = try XCTUnwrap(sidebar.tableView(table, viewFor: table.tableColumns[0], row: 8) as? AgentJobSidebarCell)
-        XCTAssertEqual(cell.accessibilityLabel(), "Fix the build, \(workspace.name), Claude, Finished")
+        XCTAssertEqual(cell.accessibilityLabel(), "\(workspace.name), Claude, Finished", "The workspace names the job, not the pane")
 
         // Collapsing a section hides its jobs and is remembered; the count stays.
         section.toggle()
@@ -1176,7 +1176,7 @@ extension NativeCockpitWindowTests {
         XCTAssertEqual(collapsed.count, 1)
         collapsed.toggle()
         XCTAssertEqual(table.numberOfRows, 9)
-        XCTAssertEqual(AgentJobState.inboxOrder.first, .working, "Working is the first Inbox section")
+        XCTAssertEqual(AgentJobState.inboxOrder, [.waiting, .working, .completed], "Waiting for Input is the first Inbox section")
 
         table.selectRowIndexes(IndexSet(integer: 8), byExtendingSelection: false)
         XCTAssertEqual(selections, [.workspace(workspace.id)])
