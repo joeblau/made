@@ -8,6 +8,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     /// agentic job across them grouped by state.
     enum ListMode: String { case workspaces, inbox }
     static let listModeKey = "sidebar.listMode"
+    /// Titles of the Inbox sections the user has collapsed.
+    static let collapsedInboxSectionsKey = "sidebar.inbox.collapsedSections"
 
     private enum Row: Hashable {
         case mode(SidebarSelection)
@@ -15,6 +17,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         case job(UUID)
         case emptyInbox
         case heading(String)
+        case jobSection(AgentJobState)
         case workspace(UUID, group: UUID?)
         case group(UUID)
         case emptyGroup(UUID)
@@ -22,6 +25,7 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     private enum RowContent: Equatable {
         case fixed
         case disclosure(String, Bool)
+        case jobSection(Int, Bool)
         case workspace(String, String?, Int, Int)
         case job(AgentJob, String)
     }
@@ -155,11 +159,11 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
         updateSwitcher(attention: inbox.count(where: \.needsAttention))
         switch listMode {
         case .inbox:
-            for state in AgentJobState.allCases {
+            for state in AgentJobState.inboxOrder {
                 let section = inbox.filter { $0.state == state }
                 guard !section.isEmpty else { continue }
-                next.append(.heading(state.title))
-                next += section.map { .job($0.paneID) }
+                next.append(.jobSection(state))
+                if !collapsedInboxSections.contains(state) { next += section.map { .job($0.paneID) } }
             }
             if inbox.isEmpty { next.append(.emptyInbox) }
         case .workspaces:
@@ -188,6 +192,8 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             case .group(let id):
                 guard let group = store.workspaceGroups.group(id) else { return .fixed }
                 return .disclosure(group.name, group.isExpanded)
+            case .jobSection(let state):
+                return .jobSection(inbox.count { $0.state == state }, !collapsedInboxSections.contains(state))
             default: return .fixed
             }
         }
@@ -270,14 +276,28 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
         guard rows.indices.contains(row) else { return false }
         switch rows[row] {
-        case .heading, .emptyGroup, .switcher, .emptyInbox: return false
+        case .heading, .jobSection, .emptyGroup, .switcher, .emptyInbox: return false
         default: return true
         }
     }
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool {
         guard rows.indices.contains(row) else { return false }
-        if case .heading = rows[row] { return true }
-        return false
+        switch rows[row] {
+        case .heading, .jobSection: return true
+        default: return false
+        }
+    }
+
+    private var collapsedInboxSections: Set<AgentJobState> {
+        let titles = defaults.stringArray(forKey: Self.collapsedInboxSectionsKey) ?? []
+        return Set(AgentJobState.allCases.filter { titles.contains($0.title) })
+    }
+
+    func setInboxSection(_ state: AgentJobState, collapsed: Bool) {
+        var sections = collapsedInboxSections
+        if collapsed { sections.insert(state) } else { sections.remove(state) }
+        defaults.set(sections.map(\.title).sorted(), forKey: Self.collapsedInboxSectionsKey)
+        refresh()
     }
     private func isDisclosure(_ row: Row) -> Bool {
         switch row {
@@ -410,6 +430,13 @@ final class WorkspaceSidebarViewController: NSViewController, NSTableViewDataSou
             label.setAccessibilityIdentifier("sidebar.section." + title.lowercased().replacingOccurrences(of: " ", with: "-"))
             label.setAccessibilityRoleDescription("Section heading")
             return label
+        case .jobSection(let state):
+            guard rowContents.indices.contains(row), case .jobSection(let count, let expanded) = rowContents[row] else { return nil }
+            let header = InboxSectionHeaderView(title: state.title, count: count, expanded: expanded) { [weak self] in
+                self?.setInboxSection(state, collapsed: expanded)
+            }
+            header.setAccessibilityIdentifier("sidebar.section." + state.title.lowercased().replacingOccurrences(of: " ", with: "-"))
+            return header
         case .group(let id):
             guard let group = store.workspaceGroups.group(id) else { return nil }
             return disclosureView(title: group.name, expanded: group.isExpanded, row: rows[row], identifier: "sidebar.group." + id.uuidString)
