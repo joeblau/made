@@ -319,6 +319,23 @@ jobs:
     env:
       CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.release-cef-download-cache
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
@@ -415,6 +432,23 @@ jobs:
       RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
       RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
@@ -730,6 +764,23 @@ jobs:
       RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
       RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true

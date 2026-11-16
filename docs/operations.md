@@ -33,6 +33,9 @@ enterprise setting).
   (26 for the pinned CEF and GhosttyKit reproductions, 27 for everything else)
   and fails with the installed list if none matches. Keep both majors on every
   mini.
+- **git-lfs.** The minis don't ship it, so every LFS checkout is preceded by
+  an inline step that installs a pinned, SHA-256 verified `git-lfs` into
+  `RUNNER_TEMP`. Bump the version and digest together.
 - **Isolation.** The minis are persistent and run two runners per machine, so
   the same script gives each job its own `TMPDIR` and derived data under
   `RUNNER_TEMP`. Signing jobs prepend a temporary keychain to the search list
