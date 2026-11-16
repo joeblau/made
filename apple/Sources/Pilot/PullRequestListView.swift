@@ -188,6 +188,7 @@ final class InspectorViewController: NSViewController {
                                           trackingMode: .selectOne, target: nil, action: nil)
     private let list = InspectorRepositoryListView()
     private lazy var usage = UsageViewController(store: usageStore, defaults: defaults)
+    private lazy var tabsHeight = tabs.heightAnchor.constraint(equalToConstant: CockpitPaneTab.preferredHeight)
 
     init(workspace: Workspace, usageStore: UsageStore, gitStore: RepositoryStore = RepositoryStore(),
          tasksStore: GitHubTasksStore = GitHubTasksStore(), statusStore: GitHubStatusStore = GitHubStatusStore(),
@@ -212,11 +213,13 @@ final class InspectorViewController: NSViewController {
         let tabHeader = NSView()
         tabHeader.addSubview(tabs)
         let inset = LiquidGlassMetrics.Spacing.xSmall
-        tabs.cockpitPinToEdges(of: tabHeader, insets: NSEdgeInsets(top: 0, left: inset, bottom: 0, right: inset))
+        // Same top inset and height as the workspace pane headers, so the
+        // picker and the pane bubbles line up in one row across the window.
+        tabs.cockpitPinToEdges(of: tabHeader, insets: NSEdgeInsets(top: inset, left: inset, bottom: 0, right: inset))
         let layout = InspectorNativeUI.vertical([tabHeader, header, bodyHost], spacing: 0)
         layout.fillsWidth = true
         InspectorNativeUI.pin(layout, in: view)
-        tabs.heightAnchor.constraint(greaterThanOrEqualToConstant: 32).isActive = true
+        tabsHeight.isActive = true
         bodyHost.setContentHuggingPriority(.defaultLow, for: .vertical)
         header.refresh = { [weak self] in self?.refreshSelectedTab() }
         list.onOpen = { [weak self] row in self?.open(row) }
@@ -336,6 +339,7 @@ final class InspectorViewController: NSViewController {
         let changingTab = displayedTab != nil && displayedTab != tab
         defer { if changingTab { CockpitMotion.reveal(bodyHost) } }
         tabs.selectedSegment = InspectorTab.allCases.firstIndex(of: tab) ?? 0
+        if tabsHeight.constant != CockpitPaneTab.preferredHeight { tabsHeight.constant = CockpitPaneTab.preferredHeight }
         tabs.font = InspectorNativeUI.font(11, defaults: defaults)
         synchronizePolling(tab: tab, root: workspace.effectiveRootPath)
         statusStore.setPolling(isLive && isActive && tab == .actions, for: self)

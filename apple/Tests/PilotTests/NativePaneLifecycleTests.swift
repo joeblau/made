@@ -66,13 +66,14 @@ final class NativePaneLifecycleTests: XCTestCase {
         var eye: NSButton?
         var stack: [NSView] = [presentation.view]
         while let view = stack.popLast() {
-            if let button = view as? NSButton, button.toolTip == "Show \(terminal.displayTitle)" { eye = button }
+            if let button = view as? NSButton, button.toolTip == "Show \(terminal.displayTitle)",
+               !button.isHiddenOrHasHiddenAncestor { eye = button }
             stack.append(contentsOf: view.subviews)
         }
         let reveal = try XCTUnwrap(eye)
         let strip = try XCTUnwrap(reveal.superview)
 
-        // The strip's tab is hidden while collapsed, but it carries the same
+        // The strip keeps the pane's header bubble, which carries the same
         // selection callback a click on the strip runs.
         var tab: CockpitPaneTab?
         stack = [strip]
@@ -83,12 +84,14 @@ final class NativePaneLifecycleTests: XCTestCase {
         try XCTUnwrap(tab).onSelect?()
         XCTAssertTrue(terminal.isCollapsed, "Selecting a hidden pane must not reveal it")
         XCTAssertEqual(workspace.selectedPaneID, terminal.id)
-        XCTAssertNotNil(strip.layer?.backgroundColor, "The selected strip is tinted")
+        XCTAssertTrue(try XCTUnwrap(tab).isSelected, "The selected strip's bubble is tinted")
+        XCTAssertFalse(try XCTUnwrap(tab).isHidden, "The hidden pane keeps a draggable bubble")
 
         reveal.performClick(nil)
         XCTAssertFalse(terminal.isCollapsed, "The eye reveals the pane")
         XCTAssertEqual(workspace.selectedPaneID, terminal.id)
-        XCTAssertNil(strip.layer?.backgroundColor)
+        XCTAssertTrue(try XCTUnwrap(tab).isSelected)
+        XCTAssertFalse(try XCTUnwrap(tab).isCompact)
     }
 
     @MainActor
@@ -468,12 +471,19 @@ final class NativePaneLifecycleTests: XCTestCase {
             let reveal = try XCTUnwrap(descendants(presentation.view).compactMap { $0 as? NSButton }.first {
                 $0.toolTip?.hasPrefix("Show ") == true && !$0.isHiddenOrHasHiddenAncestor
             })
-            let host = try XCTUnwrap(reveal.superview)
-            XCTAssertTrue(host.isFlipped)
-            XCTAssertEqual(reveal.frame.minX, 8, accuracy: 0.1)
-            XCTAssertEqual(reveal.frame.minY, 8, accuracy: 0.1)
-            XCTAssertTrue(host.bounds.contains(reveal.frame))
-            XCTAssertEqual(reveal.frame.height, CockpitPaneTab.preferredHeight, accuracy: 0.1)
+            // The strip is the pane's glass bubble, inset like an expanded
+            // header; the eye sits inside it at the top or trailing end.
+            let bubble = try XCTUnwrap(descendants(presentation.view).compactMap { $0 as? CockpitPaneTab }.first)
+            let strip = try XCTUnwrap(bubble.superview)
+            XCTAssertTrue(strip.isFlipped)
+            XCTAssertFalse(bubble.isHidden)
+            XCTAssertEqual(bubble.isCompact, !horizontal)
+            XCTAssertEqual(bubble.frame.minX, 8, accuracy: 0.1)
+            XCTAssertEqual(bubble.frame.minY, 8, accuracy: 0.1)
+            XCTAssertEqual(horizontal ? bubble.frame.height : bubble.frame.width, CockpitPaneTab.preferredHeight, accuracy: 0.1)
+            let eyeFrame = reveal.convert(reveal.bounds, to: strip)
+            XCTAssertTrue(bubble.frame.insetBy(dx: -0.5, dy: -0.5).contains(eyeFrame))
+            XCTAssertLessThan(horizontal ? bubble.frame.maxX - eyeFrame.maxX : eyeFrame.minY - bubble.frame.minY, 8)
             XCTAssertEqual(reveal.imagePosition, .imageOnly)
             reveal.performClick(nil)
             presentation.view.layoutSubtreeIfNeeded()
@@ -481,7 +491,7 @@ final class NativePaneLifecycleTests: XCTestCase {
             XCTAssertTrue(child.parent === presentation)
             XCTAssertEqual(child.closeCount, 0)
             let header = try XCTUnwrap(descendants(presentation.view).compactMap { $0 as? CockpitPaneTab }.first)
-            XCTAssertEqual(header.frame.minY, reveal.frame.minY, accuracy: 0.1)
+            XCTAssertEqual(header.frame.minY, 8, accuracy: 0.1)
         }
     }
 

@@ -3,12 +3,28 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class CockpitPaneTab: NSView, NSDraggingSource {
-    /// Keep room for the native buttons even at the smallest text size.
-    static var preferredHeight: CGFloat { max(28, 28 * CGFloat(CockpitUIZoomController.shared.factor)) }
+    /// Matches the inspector's Actions/Tasks/PRs/Usage picker, so pane
+    /// headers and that picker share one row height across the window.
+    static let baseHeight: CGFloat = 32
+    static var preferredHeight: CGFloat { max(baseHeight, 28 * CGFloat(CockpitUIZoomController.shared.factor) + 4) }
 
     let pane: Pane
     var canClose = true { didSet { closeButton.isEnabled = canClose } }
-    var isSelected = false { didSet { updateAppearance() } }
+    var isSelected = false { didSet { if isSelected != oldValue { updateAppearance() } } }
+    /// A hidden pane's tall strip: only the glass bubble shows (the strip lays
+    /// its reveal button and Fast Command controls over it), but the bubble
+    /// still selects, drags, accepts drops, and offers the context menu.
+    var isCompact = false { didSet { if isCompact != oldValue { row.isHidden = isCompact; needsLayout = true } } }
+    /// Room kept before the eye button for controls the strip overlays there.
+    var trailingAccessoryWidth: CGFloat = 0 {
+        didSet {
+            guard trailingAccessoryWidth != oldValue else { return }
+            accessorySpacerWidth.constant = trailingAccessoryWidth
+            accessorySpacer.isHidden = trailingAccessoryWidth == 0
+        }
+    }
+    /// Where the strip may overlay controls, in this view's coordinates.
+    var trailingAccessoryFrame: NSRect { layoutSubtreeIfNeeded(); return convert(accessorySpacer.frame, from: row) }
     var payload: WorkspacePaneDragPayload
     var onSelect: (() -> Void)?
     var onClose: (() -> Void)?
@@ -20,6 +36,10 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
     private let closeButton: ShellActionButton
     private let hideButton: ShellActionButton
     private var row: NSStackView!
+    private let accessorySpacer = NSView()
+    private var accessorySpacerWidth: NSLayoutConstraint!
+    /// Liquid Glass capsule behind the row; nil with Reduce Transparency.
+    private var glass: NSView?
     private var icon: NSView!
     private var agentBadge: AgentChatTabBadge?
     private struct ContentSignature: Equatable {
@@ -51,7 +71,7 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
             MainActor.assumeIsolated { self?.refresh() }
         }
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = Self.preferredHeight / 2
         title.lineBreakMode = .byTruncatingTail
         title.font = .systemFont(ofSize: 12)
         status.font = .systemFont(ofSize: 10)
@@ -74,13 +94,17 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
             button.controlSize = .small
             button.symbolConfiguration = .init(pointSize: 11, weight: .medium)
             button.widthAnchor.constraint(equalToConstant: 32).isActive = true
-            button.heightAnchor.constraint(equalToConstant: 20).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 24).isActive = true
         }
         if let state = pane.browserState, pane.kind == .browser { icon = BrowserFaviconView(state: state) } else { icon = NSImageView(image: NSImage(systemSymbolName: pane.kind.systemImageName, accessibilityDescription: nil) ?? NSImage()) }
         icon.widthAnchor.constraint(equalToConstant: 16).isActive = true
         icon.heightAnchor.constraint(equalToConstant: 16).isActive = true
-        row = shellStack([closeButton, icon, title, status, hideButton], orientation: .horizontal, spacing: 4)
+        accessorySpacerWidth = accessorySpacer.widthAnchor.constraint(equalToConstant: 0)
+        accessorySpacerWidth.isActive = true
+        accessorySpacer.isHidden = true
+        row = shellStack([closeButton, icon, title, status, accessorySpacer, hideButton], orientation: .horizontal, spacing: 4)
         row.distribution = .fill
+        row.detachesHiddenViews = true
         shellPin(row, to: self, inset: 4)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         title.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -124,6 +148,7 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
         title.stringValue = displayTitle
         title.toolTip = displayTitle
         hideButton.image = NSImage(systemSymbolName: pane.isCollapsed ? "eye" : "eye.slash", accessibilityDescription: nil)
+        hideButton.toolTip = pane.isCollapsed ? "Show \(displayTitle)" : "Hide \(displayTitle)"
         setAccessibilityLabel(displayTitle)
         updateAppearance()
     }
@@ -178,12 +203,37 @@ final class CockpitPaneTab: NSView, NSDraggingSource {
         let hideStatus = status.stringValue.isEmpty || bounds.width < 240 * CGFloat(CockpitUIZoomController.shared.factor)
         if status.isHidden != hideStatus { status.isHidden = hideStatus }
         super.layout()
+        let radius = min(bounds.width, bounds.height) / 2
+        layer?.cornerRadius = radius
+        if #available(macOS 26.0, *), let glass = glass as? NSGlassEffectView, glass.cornerRadius != radius {
+            glass.cornerRadius = radius
+        }
     }
 
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateAppearance() }
     private func updateAppearance() {
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = (isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.17) : NSColor.quaternaryLabelColor.withAlphaComponent(0.08)).cgColor
+        let selectedTint = NSColor.controlAccentColor.withAlphaComponent(0.17)
+        if #available(macOS 26.0, *), !NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency {
+            let surface: NSGlassEffectView
+            if let current = glass as? NSGlassEffectView { surface = current } else {
+                // Behind the row: clicks and drags on the bare glass travel up
+                // the responder chain to this tab, and drops find its
+                // registered types through the superview chain.
+                surface = NSGlassEffectView()
+                surface.frame = bounds
+                surface.autoresizingMask = [.width, .height]
+                surface.cornerRadius = min(bounds.width, bounds.height) / 2
+                addSubview(surface, positioned: .below, relativeTo: nil)
+                glass = surface
+            }
+            surface.tintColor = isSelected ? selectedTint : nil
+            layer?.backgroundColor = nil
+        } else {
+            glass?.removeFromSuperview()
+            glass = nil
+            effectiveAppearance.performAsCurrentDrawingAppearance {
+                layer?.backgroundColor = (isSelected ? selectedTint : NSColor.quaternaryLabelColor.withAlphaComponent(0.08)).cgColor
+            }
         }
     }
     override func mouseDown(with event: NSEvent) { downPoint = convert(event.locationInWindow, from: nil); onSelect?() }
