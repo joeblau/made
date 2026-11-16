@@ -23,6 +23,14 @@ struct WorkspacePaneDragPayload: Codable, Hashable, Transferable {
     }
 }
 
+/// A pane whose content can run under the pane header's Liquid Glass, so the
+/// glass shows what scrolls beneath it. The slot gives the content the full
+/// pane and reports how much of its top the header covers, padding included.
+@MainActor
+protocol CockpitPaneHeaderUnderlaying: AnyObject {
+    func setHeaderInset(_ inset: CGFloat)
+}
+
 private enum PaneLayoutMetrics {
     static let dividerLineThickness: CGFloat = 1
     static let dividerHitThickness: CGFloat = 6
@@ -427,7 +435,9 @@ private final class CockpitPaneSlot: NSView {
         // size before the first split-view layout resolves its actual frame.
         tab.frame = NSRect(x: 0, y: 0, width: PaneSizing.minimumPaneLength,
                            height: CockpitPaneTab.preferredHeight)
-        addSubview(tab); addSubview(content)
+        // The header sits above the content so underlaying content shows
+        // through its glass.
+        addSubview(content); addSubview(tab)
         tab.onSelect = { [weak self] in self?.onSelect?(); self?.onFocus?() }
         reveal.perform = { [weak self] in self?.onReveal?() }
         reveal.title = ""
@@ -567,7 +577,13 @@ private final class CockpitPaneSlot: NSView {
             tab.frame = NSRect(x: inset, y: top, width: max(0, bounds.width - 2 * inset), height: height)
         }
         let contentTop = top + height
-        content.frame = NSRect(x: 0, y: contentTop, width: bounds.width, height: max(0, bounds.height - contentTop))
+        // Layout must not read the SwiftData model: a deleted pane traps.
+        if modePicker == nil, let underlay = controller as? CockpitPaneHeaderUnderlaying {
+            content.frame = bounds
+            underlay.setHeaderInset(min(bounds.height, contentTop + inset))
+        } else {
+            content.frame = NSRect(x: 0, y: contentTop, width: bounds.width, height: max(0, bounds.height - contentTop))
+        }
         controller?.view.frame = content.bounds
     }
     override func hitTest(_ point: NSPoint) -> NSView? {

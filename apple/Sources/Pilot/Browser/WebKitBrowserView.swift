@@ -88,6 +88,12 @@ final class WebViewRepresentable: NSViewController {
         view = webView
     }
 
+    /// Points of the page's top edge under the pane header's glass.
+    func setObscuredTopInset(_ top: CGFloat) {
+        guard let webView, webView.obscuredContentInsets.top != top else { return }
+        webView.obscuredContentInsets = NSEdgeInsets(top: top, left: 0, bottom: 0, right: 0)
+    }
+
     func synchronize() {
         guard let nsView = webView else { return }
         _ = navigationRequestID
