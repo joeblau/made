@@ -159,15 +159,30 @@ jobs:
       # step reuses the compiled Cockpit, Walkie, and Kneeboard hosts.
       - name: Compile every application
         run: apple/bin/build-ci.sh
-      # The Drone terminal proof drives real tmux sessions; the runner image
-      # does not ship tmux. Build it from SHA-256 pinned sources rather than a
-      # runner-dependent Homebrew bottle, and fail unless the tmux the apps
-      # select is exactly that pinned version.
+      # The Drone terminal proof drives real tmux sessions. Build tmux from
+      # SHA-256 pinned sources rather than a runner-dependent Homebrew bottle,
+      # and fail unless the tmux the apps select is exactly that pinned version.
+      # The apps look in /opt/homebrew/bin, /usr/local/bin, then /usr/bin. The
+      # minis have Homebrew and no passwordless sudo, so the pinned build goes
+      # into the first of those directories that is writable (renamed into
+      # place, so a concurrent job never sees a partial binary); elsewhere it
+      # falls back to sudo into /usr/local/bin.
       - name: Install pinned tmux
         run: |
           tmux_binary="$(apple/bin/install-tmux.sh path)"
-          sudo install -d /usr/local/bin
-          sudo install -m 0755 "$tmux_binary" /usr/local/bin/tmux
+          installed=""
+          for dir in /opt/homebrew/bin /usr/local/bin; do
+            [[ -d "$dir" && -w "$dir" ]] || continue
+            staged="$(mktemp "$dir/.tmux.XXXXXX")"
+            install -m 0755 "$tmux_binary" "$staged"
+            mv -f "$staged" "$dir/tmux"
+            installed="$dir/tmux"
+            break
+          done
+          if [[ -z "$installed" ]]; then
+            sudo -n install -d /usr/local/bin
+            sudo -n install -m 0755 "$tmux_binary" /usr/local/bin/tmux
+          fi
           apple/bin/install-tmux.sh verify
       - name: Run unit tests
         run: apple/bin/test.sh all

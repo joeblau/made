@@ -37,6 +37,10 @@ enterprise setting).
 - **git-lfs.** The minis don't ship it, so every LFS checkout is preceded by
   an inline step that installs a pinned, SHA-256 verified `git-lfs` into
   `RUNNER_TEMP`. Bump the version and digest together.
+- **CMake and tmux.** The same script puts a pinned, SHA-256 verified CMake
+  on `PATH` (cached per machine) for the CEF wrapper build. The minis have no
+  passwordless sudo, so CI installs its pinned tmux build into the first
+  writable directory the apps search (`/opt/homebrew/bin` on the minis).
 - **Isolation.** The minis are persistent and run two runners per machine, so
   the same script gives each job its own `TMPDIR` and derived data under
   `RUNNER_TEMP`. CI keeps SwiftPM checkouts in a per-runner directory under
