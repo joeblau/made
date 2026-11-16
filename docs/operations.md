@@ -19,6 +19,28 @@ No DNS write, account administration, KV, R2, or user permissions are needed.
 Rotate the token if its scope is broader and confirm all
 jobs still deploy before deleting the old token.
 
+### macOS runners
+
+Every macOS job (CI, release, and the GhosttyKit and ChromiumKit bootstraps)
+runs on the Blau enterprise's **Mini Cluster** runner group, labels
+`[self-hosted, macOS, ARM64, macmini]`. Linux jobs stay on GitHub-hosted
+`ubuntu-latest`. The repository must be selected in that group, and because
+`openblau/made` is public, the group must allow public repositories (an
+enterprise setting).
+
+- **Xcode.** Each job runs `.github/scripts/prepare-macos-runner.sh <major>`
+  first. It picks the newest `/Applications/Xcode*.app` with that major version
+  (26 for the pinned CEF and GhosttyKit reproductions, 27 for everything else)
+  and fails with the installed list if none matches. Keep both majors on every
+  mini.
+- **Isolation.** The minis are persistent and run two runners per machine, so
+  the same script gives each job its own `TMPDIR` and derived data under
+  `RUNNER_TEMP`. Signing jobs prepend a temporary keychain to the search list
+  and delete it in an `always()` step.
+- **Fork pull requests** never run on the minis. Apple jobs are skipped for
+  them, and the `complete` gate fails a fork PR that changes Apple code, so a
+  maintainer pushes it to a branch in this repository to run self-hosted CI.
+
 All Actions and build tools are pinned. Dependabot proposes weekly Bun-workspace
 and GitHub Actions updates, which must pass the same CI gates before merge.
 

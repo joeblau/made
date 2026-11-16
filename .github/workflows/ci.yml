@@ -86,13 +86,16 @@ jobs:
 
   apple-lint:
     needs: changes
-    if: needs.changes.outputs.apple == 'true'
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported toolchain
         run: |
           xcodebuild -version
@@ -107,9 +110,10 @@ jobs:
 
   apple-build-test:
     needs: changes
-    if: needs.changes.outputs.apple == 'true'
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     # A hung xcodebuild otherwise burns the 6-hour runner default (seen when a
     # deployment-target change stalled Network.framework-dependent tests).
     timeout-minutes: 90
@@ -119,6 +123,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported toolchain
         run: |
           xcodebuild -version
@@ -160,12 +166,14 @@ jobs:
   # the release workflow remains the only lane with real credentials.
   chromium-runtime:
     needs: changes
-    if: needs.changes.outputs.apple == 'true'
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     # The pinned CEF runtime reproduces byte-for-byte only under Xcode 26
     # (buildToolchain.xcodeVersionPrefix in cef-artifacts.json). The xcode-27
     # image carries no Xcode 26, so reproduce the runtime here and hand it to
     # the Xcode 27 app build through the cache.
-    runs-on: macos-26
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     permissions:
       attestations: read
       contents: read
@@ -175,6 +183,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
+      - name: Prepare macOS runner (Xcode 26)
+        run: .github/scripts/prepare-macos-runner.sh 26
       - name: Verify artifact toolchain
         run: |
           xcodebuild -version
@@ -220,9 +230,10 @@ jobs:
 
   apple-chromium-smoke:
     needs: [changes, chromium-runtime]
-    if: needs.changes.outputs.apple == 'true'
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     permissions:
       attestations: read
       contents: read
@@ -233,6 +244,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported toolchain
         run: |
           xcodebuild -version
@@ -282,8 +295,16 @@ jobs:
       - name: Require every selected gate
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          APPLE_CHANGED: ${{ needs.changes.outputs.apple }}
+          FORK_PULL_REQUEST: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           case " $RESULTS " in
             *" failure "*|*" cancelled "*) exit 1 ;;
           esac
+          # Apple jobs are skipped on fork PRs, so a fork's Apple change can't
+          # pass here; a maintainer re-pushes it to a branch in this repo.
+          if [[ "$FORK_PULL_REQUEST" == "true" && "$APPLE_CHANGED" == "true" ]]; then
+            echo "::error::Apple changes from a fork need a maintainer to push them to a branch in openblau/made for self-hosted CI."
+            exit 1
+          fi
           echo "Selected CI gates passed: $RESULTS"

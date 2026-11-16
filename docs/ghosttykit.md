@@ -33,7 +33,7 @@ its SHA-256 is included in the release metadata.
 ## Reproduce the release
 
 The authoritative path is the manually dispatched
-`GhosttyKit Pinned Release Candidate` workflow on a `macos-26` runner:
+`GhosttyKit Pinned Release Candidate` workflow on a self-hosted Mac mini with Xcode 26:
 
 ```bash
 gh workflow run ghosttykit-bootstrap.yml \

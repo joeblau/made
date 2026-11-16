@@ -13,7 +13,8 @@ concurrency:
 
 jobs:
   build-validate-release:
-    runs-on: macos-26
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     environment: chromiumkit-release
     timeout-minutes: 240
     env:
@@ -58,6 +59,8 @@ jobs:
             jq -e '.enabled == true'
           gh release verify --help >/dev/null
           gh release verify-asset --help >/dev/null
+      - name: Prepare macOS runner (Xcode 26)
+        run: .github/scripts/prepare-macos-runner.sh 26
       - name: Verify supported Xcode and lock
         run: |
           xcodebuild -version
@@ -79,7 +82,13 @@ jobs:
             -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security list-keychains -d user -s "$keychain"
+          # Prepend, don't replace: the minis are persistent and shared.
+          existing=()
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] && existing+=("$entry")
+          done < <(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          printf 'CHROMIUM_KEYCHAIN=%s\n' "$keychain" >> "$GITHUB_ENV"
           security find-identity -v -p codesigning "$keychain"
       - name: Package twice from pinned archives
         run: |
@@ -272,3 +281,10 @@ jobs:
             chromiumkit-release-assets.sha256; do
             cmp "$RUNNER_TEMP/$asset" "$downloaded/$asset"
           done
+      - name: Remove signing credentials
+        if: ${{ always() }}
+        run: |
+          if [[ -n "${CHROMIUM_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$CHROMIUM_KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/chromium-signing.p12"

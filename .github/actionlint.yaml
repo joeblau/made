@@ -1,0 +1,4 @@
+# Labels of the Blau enterprise's self-hosted Mac mini runner group.
+self-hosted-runner:
+  labels:
+    - macmini
