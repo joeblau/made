@@ -26,6 +26,8 @@ documented in [device pairing and FrameLink](docs/device-pairing-and-framelink.m
 and [secure messaging](docs/p2p-secure-messaging.md). The reviewed Drone execution
 architecture and versioned protocol baseline are in
 [Drone execution protocol](docs/drone-execution-protocol.md).
+Driving a wired iPhone from the Device pane over Bluetooth HID is described in
+[iPhone control](docs/iphone-control.md).
 
 ## Project identity
 
