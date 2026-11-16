@@ -19,13 +19,18 @@ concurrency:
   group: cloudflare-production
   cancel-in-progress: false
 
+# Every job runs on the Blau enterprise's Mac mini cluster (docs/operations.md).
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     outputs:
       web: ${{ steps.filter.outputs.web }}
       rendezvous: ${{ steps.filter.outputs.rendezvous }}
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
@@ -48,9 +53,15 @@ jobs:
               - 'eslint.config.js'
 
   quality:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Isolate this job's home directory
+        run: .github/scripts/isolate-job-home.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.4
@@ -67,12 +78,18 @@ jobs:
   web:
     needs: [changes, quality]
     if: needs.changes.outputs.web == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     environment:
       name: production
       url: https://blau.app/made
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Isolate this job's home directory
+        run: .github/scripts/isolate-job-home.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.4
@@ -94,12 +111,18 @@ jobs:
   rendezvous:
     needs: [changes, quality]
     if: needs.changes.outputs.rendezvous == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     environment:
       name: production
       url: https://rendezvous.blau.app/healthz
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Isolate this job's home directory
+        run: .github/scripts/isolate-job-home.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.4

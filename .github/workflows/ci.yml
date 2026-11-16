@@ -21,12 +21,19 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    # Every job runs on the Blau enterprise's Mac mini cluster. On a fork pull
+    # request only this job and `complete` run, and neither executes code from
+    # the pull request.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     outputs:
       apple: ${{ steps.filter.outputs.apple || steps.filter-all.outputs.apple }}
       docs: ${{ steps.filter.outputs.docs || steps.filter-all.outputs.docs }}
       workers: ${{ steps.filter.outputs.workers || steps.filter-all.outputs.workers }}
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Only pull requests are path-filtered. Main pushes and manual runs
       # select every gate so each commit a release can tag is fully proven.
@@ -59,18 +66,30 @@ jobs:
 
   docs:
     needs: changes
-    if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.docs == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bin/check-docs.sh
 
   workers:
     needs: changes
-    if: needs.changes.outputs.workers == 'true'
-    runs-on: ubuntu-latest
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.workers == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Isolate this job's home directory
+        run: .github/scripts/isolate-job-home.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.4
@@ -86,13 +105,20 @@ jobs:
 
   apple-lint:
     needs: changes
-    if: needs.changes.outputs.apple == 'true'
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported toolchain
         run: |
           xcodebuild -version
@@ -107,26 +133,40 @@ jobs:
 
   apple-build-test:
     needs: changes
-    if: needs.changes.outputs.apple == 'true'
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     # A hung xcodebuild otherwise burns the 6-hour runner default (seen when a
     # deployment-target change stalled Network.framework-dependent tests).
     timeout-minutes: 90
-    env:
-      BLAU_SOURCE_PACKAGES: ${{ github.workspace }}/apple/.ci-source-packages
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           lfs: true
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported toolchain
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Validate Chromium artifact lock
         run: |
           bash apple/bin/package-chromiumkit.sh manifest
@@ -142,49 +182,86 @@ jobs:
       # step reuses the compiled Cockpit, Walkie, and Kneeboard hosts.
       - name: Compile every application
         run: apple/bin/build-ci.sh
-      # The Drone terminal proof drives real tmux sessions; the runner image
-      # does not ship tmux. Build it from SHA-256 pinned sources rather than a
-      # runner-dependent Homebrew bottle, and fail unless the tmux the apps
-      # select is exactly that pinned version.
+      # The Drone terminal proof drives real tmux sessions. Build tmux from
+      # SHA-256 pinned sources rather than a runner-dependent Homebrew bottle,
+      # and fail unless the tmux the apps select is exactly that pinned version.
+      # The apps look in /opt/homebrew/bin, /usr/local/bin, then /usr/bin. The
+      # minis have Homebrew and no passwordless sudo, so the pinned build goes
+      # into the first of those directories that is writable (renamed into
+      # place, so a concurrent job never sees a partial binary); elsewhere it
+      # falls back to sudo into /usr/local/bin.
       - name: Install pinned tmux
         run: |
           tmux_binary="$(apple/bin/install-tmux.sh path)"
-          sudo install -d /usr/local/bin
-          sudo install -m 0755 "$tmux_binary" /usr/local/bin/tmux
+          installed=""
+          for dir in /opt/homebrew/bin /usr/local/bin; do
+            [[ -d "$dir" && -w "$dir" ]] || continue
+            staged="$(mktemp "$dir/.tmux.XXXXXX")"
+            install -m 0755 "$tmux_binary" "$staged"
+            mv -f "$staged" "$dir/tmux"
+            installed="$dir/tmux"
+            break
+          done
+          if [[ -z "$installed" ]]; then
+            sudo -n install -d /usr/local/bin
+            sudo -n install -m 0755 "$tmux_binary" /usr/local/bin/tmux
+          fi
           apple/bin/install-tmux.sh verify
+      # The minis' runners are LaunchDaemons, and XCTest only reaches
+      # testmanagerd from the console user's GUI session.
       - name: Run unit tests
-        run: apple/bin/test.sh all
+        run: .github/scripts/run-in-gui-session.sh apple/bin/test.sh all
 
   # Exercises the signed Chromium assembly + validation path on every PR so
   # signing regressions surface here instead of at release time. Signs ad-hoc;
   # the release workflow remains the only lane with real credentials.
   chromium-runtime:
     needs: changes
-    if: needs.changes.outputs.apple == 'true'
-    # The pinned CEF runtime reproduces byte-for-byte only under Xcode 26
-    # (buildToolchain.xcodeVersionPrefix in cef-artifacts.json). The xcode-27
-    # image carries no Xcode 26, so reproduce the runtime here and hand it to
-    # the Xcode 27 app build through the cache.
-    runs-on: macos-26
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # The pinned CEF runtime reproduces byte-for-byte only under the pinned
+    # Xcode major (buildToolchain.xcodeVersionPrefix in cef-artifacts.json).
+    # Reproduce it once here and hand it to the app build through the cache.
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     permissions:
       attestations: read
       contents: read
     env:
       CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.cef-download-cache
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify artifact toolchain
         run: |
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.cef-download-cache
-          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
       - name: Install the pinned Chromium runtime
         env:
           GH_TOKEN: ${{ github.token }}
@@ -220,33 +297,51 @@ jobs:
 
   apple-chromium-smoke:
     needs: [changes, chromium-runtime]
-    if: needs.changes.outputs.apple == 'true'
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # Stays on GitHub-hosted Xcode 27 for now: Xcode 27.2 (the minis) refuses
+    # to ad-hoc sign Cockpit's macOS App Group (group.app.blau.pilot) without
+    # a provisioning profile, and the archive validator checks Pilot's
+    # entitlements exactly. Move it to the minis once the group is settled.
     runs-on: xcode-27
     permissions:
       attestations: read
       contents: read
     env:
-      BLAU_SOURCE_PACKAGES: ${{ github.workspace }}/apple/.ci-source-packages
       CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.cef-download-cache
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported toolchain
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: apple/.ci-source-packages
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.cef-download-cache
-          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
           # The chromium-runtime job reproduced the runtime under this exact
           # key; a miss here means the handoff broke, not that this Xcode 27
           # job should rebuild it.
@@ -277,13 +372,21 @@ jobs:
   complete:
     if: always()
     needs: [changes, docs, workers, apple-lint, apple-build-test, chromium-runtime, apple-chromium-smoke]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
       - name: Require every selected gate
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          GATES_SELECTED: ${{ needs.changes.outputs.apple == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workers == 'true' }}
+          FORK_PULL_REQUEST: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           case " $RESULTS " in
             *" failure "*|*" cancelled "*) exit 1 ;;
           esac
+          # Every gate is skipped on a fork PR, so a fork's change can't pass
+          # here; a maintainer re-pushes it to a branch in this repo.
+          if [[ "$FORK_PULL_REQUEST" == "true" && "$GATES_SELECTED" == "true" ]]; then
+            echo "::error::Pull requests from a fork need a maintainer to push them to a branch in openblau/made for self-hosted CI."
+            exit 1
+          fi
           echo "Selected CI gates passed: $RESULTS"

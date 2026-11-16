@@ -23,7 +23,7 @@ write_lock() {
       commit: ("cef-" + $release_id),
       chromiumCommit: ("chromium-" + $release_id),
       sandboxCompatibilityCommit: ("sandbox-" + $release_id),
-      requiredXcodeMajorVersion: 26
+      requiredXcodeMajorVersion: 27
     },
     sourceArchives: [
       {

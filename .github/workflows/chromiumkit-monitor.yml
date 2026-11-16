@@ -14,9 +14,14 @@ concurrency:
 
 jobs:
   verify-support:
-    runs-on: ubuntu-latest
+    # The Blau enterprise's Mac mini cluster (docs/operations.md).
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     timeout-minutes: 5
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require latest supported stable Chromium
         run: bash apple/bin/verify-chromiumkit-support.sh

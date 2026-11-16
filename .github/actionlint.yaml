@@ -1,0 +1,6 @@
+# Runner labels actionlint doesn't know: the Blau enterprise's self-hosted Mac
+# mini group, and GitHub's Xcode 27 preview image (apple-chromium-smoke).
+self-hosted-runner:
+  labels:
+    - macmini
+    - xcode-27

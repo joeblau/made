@@ -13,7 +13,8 @@ concurrency:
 
 jobs:
   build-validate-release:
-    runs-on: macos-26
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     environment: chromiumkit-release
     timeout-minutes: 240
     env:
@@ -25,6 +26,10 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Scope the CEF download cache to this run
         run: |
@@ -58,10 +63,12 @@ jobs:
             jq -e '.enabled == true'
           gh release verify --help >/dev/null
           gh release verify-asset --help >/dev/null
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported Xcode and lock
         run: |
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
           bash apple/bin/package-chromiumkit.sh manifest
           bash apple/bin/verify-chromiumkit-support.sh
       - name: Import Developer ID identity
@@ -79,7 +86,13 @@ jobs:
             -T /usr/bin/codesign -T /usr/bin/security
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security list-keychains -d user -s "$keychain"
+          # Prepend, don't replace: the minis are persistent and shared.
+          existing=()
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] && existing+=("$entry")
+          done < <(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          printf 'CHROMIUM_KEYCHAIN=%s\n' "$keychain" >> "$GITHUB_ENV"
           security find-identity -v -p codesigning "$keychain"
       - name: Package twice from pinned archives
         run: |
@@ -114,11 +127,18 @@ jobs:
           BLAU_CHROMIUM_TEST_CODE_SIGN_IDENTITY: ${{ env.MACOS_SIGNING_IDENTITY }}
           BLAU_CHROMIUM_TEST_DEVELOPMENT_TEAM: ${{ env.APPLE_TEAM_ID }}
         run: |
-          for architecture in arm64 x86_64; do
-            DEVELOPER_DIR="$(xcode-select -p)" \
-              BLAU_CHROMIUM_TEST_ARCHITECTURE="$architecture" \
-              apple/bin/test-chromium-runtime.sh
-          done
+          # XCTest only reaches testmanagerd from the console user's GUI
+          # session, and a keychain unlocked in the runner's session is still
+          # locked there, so unlock it again inside that session.
+          # shellcheck disable=SC2016
+          .github/scripts/run-in-gui-session.sh /bin/bash -euo pipefail -c '
+            security unlock-keychain -p "$RUNNER_TEMP-$GITHUB_RUN_ID" "$CHROMIUM_KEYCHAIN"
+            for architecture in arm64 x86_64; do
+              DEVELOPER_DIR="$(xcode-select -p)" \
+                BLAU_CHROMIUM_TEST_ARCHITECTURE="$architecture" \
+                apple/bin/test-chromium-runtime.sh
+            done
+          '
       - name: Archive signed universal Pilot
         run: |
           archive="$RUNNER_TEMP/Pilot.xcarchive"
@@ -272,3 +292,10 @@ jobs:
             chromiumkit-release-assets.sha256; do
             cmp "$RUNNER_TEMP/$asset" "$downloaded/$asset"
           done
+      - name: Remove signing credentials
+        if: ${{ always() }}
+        run: |
+          if [[ -n "${CHROMIUM_KEYCHAIN:-}" ]]; then
+            security delete-keychain "$CHROMIUM_KEYCHAIN" || true
+          fi
+          rm -f "$RUNNER_TEMP/chromium-signing.p12"

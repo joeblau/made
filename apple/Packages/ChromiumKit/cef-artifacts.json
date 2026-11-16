@@ -6,7 +6,7 @@
     "commit": "7c1aa68455db1f1fad159c2b83070ad318212b3d",
     "chromiumCommit": "e69b30bba288603e514cffb4c79c359cac68e923",
     "sandboxCompatibilityCommit": "6c5b35ad81055c14",
-    "requiredXcodeMajorVersion": 26
+    "requiredXcodeMajorVersion": 27
   },
   "sourceArchives": [
     {
@@ -34,7 +34,7 @@
     "credits": "CREDITS.html"
   },
   "buildToolchain": {
-    "xcodeVersionPrefix": "26.",
+    "xcodeVersionPrefix": "27.",
     "cmakeGenerator": "Xcode",
     "cmakeConfiguration": "Release",
     "macOSDeploymentTarget": "15.0",

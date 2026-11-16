@@ -12,10 +12,17 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-26
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     timeout-minutes: 120
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prepare macOS runner (Xcode 26)
+        run: .github/scripts/prepare-macos-runner.sh 26
       - name: Verify supported Xcode
         run: |
           xcodebuild -version

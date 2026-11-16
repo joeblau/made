@@ -25,13 +25,18 @@ concurrency:
 
 jobs:
   release-metadata:
-    runs-on: ubuntu-latest
+    # The Blau enterprise's Mac mini cluster (docs/operations.md).
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     outputs:
       build-number: ${{ steps.release.outputs.build-number }}
       commit: ${{ steps.release.outputs.commit }}
       tag: ${{ steps.release.outputs.tag }}
       version: ${{ steps.release.outputs.version }}
     steps:
+      # The minis keep workspaces between jobs. An earlier LFS checkout leaves
+      # hooks and filters that need git-lfs, which this job doesn't install.
+      - name: Reset the persistent workspace
+        run: rm -rf "$GITHUB_WORKSPACE/.git"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
@@ -306,11 +311,11 @@ jobs:
   chromium-runtime:
     name: Reproduce the pinned Chromium runtime
     needs: release-metadata
-    # The pinned CEF runtime reproduces byte-for-byte only under Xcode 26
-    # (buildToolchain.xcodeVersionPrefix in cef-artifacts.json). The xcode-27
-    # image carries no Xcode 26, so reproduce the runtime here and hand it to
-    # the Xcode 27 release build through the cache.
-    runs-on: macos-26
+    # The pinned CEF runtime reproduces byte-for-byte only under the pinned
+    # Xcode major (buildToolchain.xcodeVersionPrefix in cef-artifacts.json).
+    # Reproduce it once here and hand it to the release build through the cache.
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     timeout-minutes: 120
     permissions:
       attestations: read
@@ -318,6 +323,23 @@ jobs:
     env:
       CEF_DOWNLOAD_CACHE: ${{ github.workspace }}/apple/.release-cef-download-cache
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
@@ -340,16 +362,18 @@ jobs:
               "$head" "$RELEASE_COMMIT" >&2
             exit 1
           }
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify artifact toolchain
         run: |
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.release-cef-download-cache
-          key: release-cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: release-cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
       - name: Install the pinned Chromium runtime
         shell: bash
         env:
@@ -390,8 +414,8 @@ jobs:
   macos:
     name: Signed and notarized Pilot
     needs: [release-metadata, chromium-runtime]
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     environment: apple-release
     timeout-minutes: 240
     permissions:
@@ -412,6 +436,23 @@ jobs:
       RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
       RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
@@ -462,14 +503,12 @@ jobs:
               exit 1
             }
           done
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported Xcode
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.release-source-packages
-          key: apple-release-macos-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift', 'apple/Packages/ChromiumKit/Package.swift', 'apple/Packages/ChromiumKit/cef-artifacts.json') }}
       - name: Import Developer ID identity
         shell: bash
         env:
@@ -488,7 +527,12 @@ jobs:
           security set-key-partition-list \
             -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security list-keychains -d user -s "$keychain"
+          # Prepend, don't replace: the minis are persistent and shared.
+          existing=()
+          while IFS= read -r entry; do
+            [[ -n "$entry" ]] && existing+=("$entry")
+          done < <(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"[[:space:]]*$//')
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
           security find-identity -v -p codesigning "$keychain" |
             grep -F "$MACOS_SIGNING_IDENTITY"
           printf 'RELEASE_KEYCHAIN=%s\n' "$keychain" >> "$GITHUB_ENV"
@@ -509,7 +553,7 @@ jobs:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.release-cef-download-cache
-          key: release-cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: release-cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
           # The chromium-runtime job reproduced the runtime under this exact
           # key; a miss here means the handoff broke, not that this Xcode 27
           # job should rebuild it.
@@ -529,11 +573,18 @@ jobs:
           BLAU_CHROMIUM_TEST_DEVELOPMENT_TEAM: ${{ env.APPLE_TEAM_ID }}
           BLAU_CHROMIUM_TEST_RESULT_ROOT: ${{ runner.temp }}/chromium-gate-results
         run: |
-          for architecture in arm64 x86_64; do
-            DEVELOPER_DIR="$(xcode-select -p)" \
-            BLAU_CHROMIUM_TEST_ARCHITECTURE="$architecture" \
-              apple/bin/test-chromium-runtime.sh
-          done
+          # XCTest only reaches testmanagerd from the console user's GUI
+          # session, and a keychain unlocked in the runner's session is still
+          # locked there, so unlock it again inside that session.
+          # shellcheck disable=SC2016
+          .github/scripts/run-in-gui-session.sh /bin/bash -euo pipefail -c '
+            security unlock-keychain -p "$RUNNER_TEMP-$GITHUB_RUN_ID" "$RELEASE_KEYCHAIN"
+            for architecture in arm64 x86_64; do
+              DEVELOPER_DIR="$(xcode-select -p)" \
+              BLAU_CHROMIUM_TEST_ARCHITECTURE="$architecture" \
+                apple/bin/test-chromium-runtime.sh
+            done
+          '
       - name: Upload Chromium gate results
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -701,8 +752,8 @@ jobs:
     name: TestFlight (${{ matrix.scheme }})
     needs: release-metadata
     if: ${{ github.event_name == 'push' }}
-    # Xcode 27 ships on its own preview image; macos-26 only carries Xcode 26.x.
-    runs-on: xcode-27
+    # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     environment: apple-release
     timeout-minutes: 120
     strategy:
@@ -720,6 +771,23 @@ jobs:
       RELEASE_BUILD_NUMBER: ${{ needs.release-metadata.outputs.build-number }}
       RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
     steps:
+      # The minis don't ship git-lfs; checkout needs it on PATH before the
+      # repository (and its scripts) exist, so install a pinned copy inline.
+      - name: Install git-lfs (pinned)
+        env:
+          GIT_LFS_VERSION: 3.8.1
+          GIT_LFS_SHA256: 0ba10e897e0496412cd86eacaed4ed554c97ddc29bc5c709d28faa5eaaa2222c
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/git-lfs"
+          zip="$dir/git-lfs.zip"
+          mkdir -p "$dir"
+          curl --fail --silent --show-error --location --retry 3 --output "$zip" \
+            "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-darwin-arm64-v${GIT_LFS_VERSION}.zip"
+          echo "${GIT_LFS_SHA256}  ${zip}" | shasum -a 256 --check --strict
+          unzip -q -j -o "$zip" "git-lfs-${GIT_LFS_VERSION}/git-lfs" -d "$dir"
+          "$dir/git-lfs" version
+          echo "$dir" >> "$GITHUB_PATH"
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
@@ -755,14 +823,12 @@ jobs:
               exit 1
             }
           done
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported Xcode
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: apple/.release-source-packages
-          key: apple-release-mobile-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/made.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'apple/Packages/GhosttyKit/Package.swift') }}
       - name: Install App Store Connect API key
         shell: bash
         run: |
@@ -852,7 +918,8 @@ jobs:
         (needs.testflight.result == 'success' ||
           needs.testflight.result == 'skipped')
       }}
-    runs-on: ubuntu-latest
+    # The Blau enterprise's Mac mini cluster (docs/operations.md).
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     # Serialize publication across tags so the ordering check and
     # `gh release create --latest` cannot interleave with another release.
     concurrency:

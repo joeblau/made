@@ -19,6 +19,64 @@ No DNS write, account administration, KV, R2, or user permissions are needed.
 Rotate the token if its scope is broader and confirm all
 jobs still deploy before deleting the old token.
 
+### Self-hosted runners
+
+Every job in every workflow (CI, deploy, release, the ChromiumKit monitor, and
+the GhosttyKit and ChromiumKit bootstraps) runs on the Blau enterprise's
+**Mini Cluster** runner group, labels `[self-hosted, macOS, ARM64, macmini]`,
+except CI's `apple-chromium-smoke`. That job ad-hoc signs Cockpit, and Xcode
+27.2 on the minis requires a provisioning profile for its
+`group.app.blau.pilot` App Group, so it stays on GitHub-hosted `xcode-27` for
+now. The repository must be selected in that group, and because
+`openblau/made` is public, the group must allow public repositories (an
+enterprise setting).
+
+The minis run macOS only, so jobs that used to run on Linux now run under the
+system `/bin/bash` 3.2 and BSD userland; keep workflow shell portable to both.
+
+- **Xcode.** Each job runs `.github/scripts/prepare-macos-runner.sh <major>`
+  first. It picks the newest `/Applications/Xcode*.app` with that major version
+  (27 for CI, releases, and the pinned CEF runtime; 26 only for the manual
+  GhosttyKit reproduction) and fails with the installed list if none matches.
+  Every mini needs Xcode 27; install Xcode 26 on at least one before running
+  the GhosttyKit bootstrap.
+- **git-lfs.** The minis don't ship it, so every LFS checkout is preceded by
+  an inline step that installs a pinned, SHA-256 verified `git-lfs` into
+  `RUNNER_TEMP`. Bump the version and digest together. Workspaces persist
+  between jobs, and an LFS checkout leaves hooks and filters that fail
+  without `git-lfs`, so jobs that don't fetch LFS objects delete the
+  workspace's `.git` before checkout.
+- **CMake and tmux.** The same script puts a pinned, SHA-256 verified CMake
+  on `PATH` (cached per machine) for the CEF wrapper build. The minis have no
+  passwordless sudo, so CI installs its pinned tmux build into the first
+  writable directory the apps search (`/opt/homebrew/bin` on the minis).
+- **Isolation.** The minis are persistent and run two runners per machine, so
+  the same script gives each job its own `TMPDIR` and derived data under
+  `RUNNER_TEMP`. CI keeps SwiftPM checkouts in a per-runner directory under
+  `~/Library/Caches/blau-ci/` instead of `actions/cache`, because SwiftPM
+  records absolute workspace paths; release jobs resolve packages from scratch.
+  Signing jobs prepend a temporary keychain to the search list and delete it
+  in an `always()` step.
+- **GUI session.** The runners are LaunchDaemons: they run as the console
+  user but outside its GUI session, where XCTest cannot reach `testmanagerd`.
+  Steps that run tests go through `.github/scripts/run-in-gui-session.sh`,
+  which submits the command to the user's `gui/<uid>` launchd domain (no sudo)
+  and relays its output and exit status. It needs that user logged in at the
+  console, so keep auto-login enabled on every mini. Signing steps wrapped
+  this way unlock their temporary keychain again inside the GUI session.
+- **Bun jobs.** Bun, its install cache, and Wrangler write under `~`, which
+  both runners on a mini share. `.github/scripts/isolate-job-home.sh` points
+  `HOME` at `RUNNER_TEMP` for the rest of the job. The deploy jobs' Cloudflare
+  credentials exist only in the step environment and are not written to disk.
+- **Fork pull requests.** Only `changes` and `complete` run for them, and
+  neither executes code from the pull request; every other job is skipped and
+  `complete` fails, so a maintainer pushes the change to a branch in this
+  repository to run CI. These `if:` guards live in the workflow file, which a
+  fork can edit, so they are not the security boundary. The boundary is the
+  repository's Actions setting **Require approval for all external
+  contributors** (Settings → Actions → General); keep it enabled, and read a
+  fork's workflow changes before approving a run.
+
 All Actions and build tools are pinned. Dependabot proposes weekly Bun-workspace
 and GitHub Actions updates, which must pass the same CI gates before merge.
 

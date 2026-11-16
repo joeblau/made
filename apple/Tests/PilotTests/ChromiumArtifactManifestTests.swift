@@ -117,7 +117,7 @@ final class ChromiumArtifactManifestTests: XCTestCase {
             manifest.cef.sandboxCompatibilityCommit,
             "6c5b35ad81055c14"
         )
-        XCTAssertEqual(manifest.cef.requiredXcodeMajorVersion, 26)
+        XCTAssertEqual(manifest.cef.requiredXcodeMajorVersion, 27)
         XCTAssertEqual(
             ChromiumArtifactRevision.releaseID,
             manifest.releaseID
