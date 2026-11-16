@@ -392,6 +392,7 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
     private let password = NSSecureTextField(string: "")
     private let save = NSButton(checkboxWithTitle: "Save password", target: nil, action: nil)
     private let automatic = NSButton(checkboxWithTitle: "Connect automatically", target: nil, action: nil)
+    private let highPerformance = NSButton(checkboxWithTitle: "High Performance", target: nil, action: nil)
     private let clipboard = NSButton(checkboxWithTitle: "Share clipboard", target: nil, action: nil)
     private let reconnect = RRButton("Reconnect", action: {})
     private var viewer: RemoteDesktopViewer?
@@ -421,6 +422,7 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         view.layer?.cornerRadius = 12
         view.layer?.masksToBounds = true
         let header = RemoteConnectionHeader(id: connection.id, title: connection.displayTitle)
+        header.setAccessibilityIdentifier("remote.card.header")
         header.onActivate = { [weak self] in self?.onActivate() }
         header.menuProvider = { [weak self] in self?.makeMenu() ?? NSMenu() }
         let headerHeight = header.heightAnchor.constraint(equalToConstant: 30)
@@ -434,6 +436,7 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         password.isEnabled = isLive
         save.isEnabled = isLive
         automatic.isEnabled = isLive
+        highPerformance.isEnabled = isLive
         clipboard.isEnabled = isLive
         reconnect.isEnabled = isLive
         password.target = self
@@ -442,27 +445,46 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         save.action = #selector(saveChanged)
         automatic.target = self
         automatic.action = #selector(autoChanged)
+        highPerformance.target = self
+        highPerformance.action = #selector(highPerformanceChanged)
+        highPerformance.toolTip = "Preferred connection mode. This build currently connects using Standard VNC."
+        highPerformance.state = isLive && VNCPreferences.isHighPerformanceEnabled(id: connection.id) ? .on : .off
         clipboard.target = self
         clipboard.action = #selector(clipboardChanged)
         clipboard.toolTip = "Allows this remote VNC server to read and replace your Mac clipboard."
         clipboard.state = isLive && VNCPreferences.isClipboardRedirectionEnabled(id: connection.id) ? .on : .off
         reconnect.perform = { [weak self] in self?.reconnectSession() }
         let footer = RRUI.stack([clipboard, RRUI.spacer(), status, reconnect], axis: .horizontal)
+        footer.setAccessibilityIdentifier("remote.card.footer")
         footer.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+        content.setAccessibilityIdentifier("remote.card.content")
         let divider = NSBox()
         divider.boxType = .separator
-        // The card body takes every spare point so the clipboard/status bar
-        // stays pinned to the bottom edge as a footer instead of riding up
-        // under the sign-in form (a gravity-area stack leaves the slack below).
-        content.setContentHuggingPriority(.init(1), for: .vertical)
-        content.setContentCompressionResistancePriority(.init(1), for: .vertical)
-        footer.setContentHuggingPriority(.required, for: .vertical)
-        let stack = RRUI.stack([header, content, divider, footer], spacing: 0)
-        stack.distribution = .fill
-        RRUI.fillWidth(stack)
-        RRUI.pin(stack, to: view)
+        let footerHeight = footer.heightAnchor.constraint(equalToConstant: 32 * RRUI.zoom)
+        for section in [header, content, divider, footer] {
+            section.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(section)
+        }
+        NSLayoutConstraint.activate([
+            header.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            header.topAnchor.constraint(equalTo: view.topAnchor),
+            content.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            content.topAnchor.constraint(equalTo: header.bottomAnchor),
+            content.bottomAnchor.constraint(equalTo: divider.topAnchor),
+            divider.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            divider.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            divider.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            divider.heightAnchor.constraint(equalToConstant: 1),
+            footer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            footerHeight,
+        ])
         zoomObservation = RRZoomObservation { [weak self] in
             headerHeight.constant = 30 * RRUI.zoom
+            footerHeight.constant = 32 * RRUI.zoom
             if let self { RRUI.zoomControls(in: self.view) }
         }
         render()
@@ -565,7 +587,7 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         }
         viewer?.update(generation: session.framebufferGeneration, onActivate: onActivate)
         switch session.status {
-        case .connected: status.stringValue = "Connected"; status.textColor = .systemGreen
+        case .connected: status.stringValue = "Connected · Standard VNC"; status.textColor = .systemGreen
         case .connecting: status.stringValue = "Connecting…"; status.textColor = .systemOrange
         case .failed: status.stringValue = "Not connected"; status.textColor = .systemRed
         case .idle, .disconnected: status.stringValue = "Not connected"; status.textColor = .secondaryLabelColor
@@ -601,11 +623,11 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         ], spacing: LiquidGlassMetrics.Spacing.xxSmall)
         RRUI.fillWidth(usernameGroup)
         RRUI.fillWidth(passwordGroup)
-        let options = RRUI.stack([save, automatic], spacing: 6)
-        let form = RRUI.stack([identity, usernameGroup, passwordGroup, options], spacing: 12)
-        form.setCustomSpacing(16, after: identity)
-        form.setCustomSpacing(16, after: passwordGroup)
-        form.setCustomSpacing(16, after: options)
+        let options = RRUI.stack([save, automatic, highPerformance], spacing: 4)
+        let form = RRUI.stack([identity, usernameGroup, passwordGroup, options], spacing: 10)
+        form.setCustomSpacing(12, after: identity)
+        form.setCustomSpacing(12, after: passwordGroup)
+        form.setCustomSpacing(12, after: options)
         if let error {
             let message = RRUI.label(error, size: 12, color: .systemRed)
             message.maximumNumberOfLines = 3
@@ -656,6 +678,7 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         _ = connection.modelContext?.saveReporting(operation: "Saving remote desktop username")
         VNCPreferences.setClipboardRedirectionEnabled(clipboard.state == .on, id: connection.id)
         VNCPreferences.setAutoConnectEnabled(automatic.state == .on, id: connection.id)
+        VNCPreferences.setHighPerformanceEnabled(highPerformance.state == .on, id: connection.id)
         session.connect(host: connection.host, port: connection.port, username: connection.username,
                         password: password.stringValue, savePasswordOnSuccess: save.state == .on,
                         isClipboardRedirectionEnabled: clipboard.state == .on)
@@ -669,6 +692,10 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
     @objc private func autoChanged() {
         guard isLive else { return }
         VNCPreferences.setAutoConnectEnabled(automatic.state == .on, id: connection.id)
+    }
+    @objc private func highPerformanceChanged() {
+        guard isLive else { return }
+        VNCPreferences.setHighPerformanceEnabled(highPerformance.state == .on, id: connection.id)
     }
     @objc private func clipboardChanged() {
         guard isLive else { return }
