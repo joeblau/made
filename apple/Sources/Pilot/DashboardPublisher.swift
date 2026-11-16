@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import WidgetKit
 
 struct UsageProviderProjection {
@@ -129,7 +130,8 @@ final class DashboardPublisher {
     private let notificationCenter: NotificationCenter
     private let reloadTimelines: (DashboardFamily) -> Void
 
-    private var timer: Timer?
+    private var isRunning = false
+    private var observationGeneration = 0
     private var sharingObserver: NSObjectProtocol?
     private var initializedFamilies: Set<DashboardFamily> = []
     private var persistedActions: ActionsDashboardSnapshot?
@@ -167,8 +169,8 @@ final class DashboardPublisher {
     }
 
     func start() {
-        guard timer == nil else { return }
-        publish()
+        guard !isRunning else { return }
+        isRunning = true
         sharingObserver = notificationCenter.addObserver(
             forName: UsageDashboardSharing.changedNotification,
             object: nil,
@@ -176,18 +178,28 @@ final class DashboardPublisher {
         ) { [weak self] _ in
             Task { @MainActor in self?.publish() }
         }
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.publish() }
-        }
+        observe()
     }
 
     func stop() {
-        timer?.invalidate()
-        timer = nil
+        isRunning = false
+        observationGeneration += 1
         if let sharingObserver {
             notificationCenter.removeObserver(sharingObserver)
         }
         sharingObserver = nil
+    }
+
+    private func observe() {
+        let generation = observationGeneration
+        withObservationTracking {
+            publish()
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self, self.isRunning, self.observationGeneration == generation else { return }
+                self.observe()
+            }
+        }
     }
 
     func republish() {

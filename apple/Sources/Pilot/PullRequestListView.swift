@@ -642,6 +642,15 @@ private final class InspectorRepositoryCell: NSTableCellView {
     private static let columnSpacing: CGFloat = 8
     private static let lineSpacing: CGFloat = 2
     private static let measuring = InspectorRepositoryCell()
+    private struct HeightKey: Hashable {
+        let title: String
+        let detail: String
+        let metadata: String
+        let issueNumber: Int?
+        let width: CGFloat
+        let zoom: Double
+    }
+    private static var heights: [HeightKey: CGFloat] = [:]
 
     private let icon = NSImageView()
     private let spinner = NSProgressIndicator()
@@ -659,15 +668,21 @@ private final class InspectorRepositoryCell: NSTableCellView {
     /// Exact row height for `width`, measured with the same views and fonts the
     /// visible cell uses so wrapping and truncation never disagree.
     static func preferredHeight(for row: InspectorRepositoryRow, width: CGFloat, defaults: UserDefaults) -> CGFloat {
+        let key = HeightKey(title: row.title, detail: row.detail, metadata: row.metadata,
+                            issueNumber: row.issueNumber, width: width, zoom: InspectorNativeUI.zoom(defaults: defaults))
+        if let cached = heights[key] { return cached }
         let cell = measuring
         cell.configure(row, defaults: defaults, open: {}, implement: {})
         let textWidth = max(1, width - 2 * horizontalInset - cell.leadingWidth.constant - columnSpacing)
         cell.title.preferredMaxLayoutWidth = textWidth
-        var height = cell.title.intrinsicContentSize.height
+        var measuredHeight = cell.title.intrinsicContentSize.height
         for field in [cell.detail, cell.metadata] where !field.isHidden {
-            height += lineSpacing + field.intrinsicContentSize.height
+            measuredHeight += lineSpacing + field.intrinsicContentSize.height
         }
-        return ceil(height + 2 * verticalInset)
+        let height = ceil(measuredHeight + 2 * verticalInset)
+        if heights.count >= 512 { heights.removeAll(keepingCapacity: true) }
+        heights[key] = height
+        return height
     }
 
     override init(frame: NSRect) {

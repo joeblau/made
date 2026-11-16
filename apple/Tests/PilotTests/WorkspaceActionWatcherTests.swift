@@ -31,6 +31,27 @@ struct WorkspaceActionWatcherTests {
         #expect(WorkspaceActionWatcher.openTaskCount(from: Data("not json".utf8)) == nil)
     }
 
+    @Test("Recent runs are deduplicated by attempt and ordered by activity")
+    func recentRunProjection() {
+        let first = UUID(), second = UUID(), other = UUID()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func run(workspaceID: UUID, runID: Int, status: String, checkedAt: Date) -> BuildWorkflowRun {
+            BuildWorkflowRun(
+                workspaceID: workspaceID, workspaceName: "Workspace", repository: "blau/made",
+                runID: runID, attempt: 1, branch: "main", workflow: "CI", title: "Build",
+                state: BuildActivityState(status: status, checkedAt: checkedAt.timeIntervalSince1970)
+            )
+        }
+        let older = run(workspaceID: first, runID: 1, status: "completed", checkedAt: now.addingTimeInterval(-60))
+        let newer = run(workspaceID: second, runID: 1, status: "completed", checkedAt: now)
+        let active = run(workspaceID: other, runID: 2, status: "in_progress", checkedAt: now.addingTimeInterval(-120))
+        let projected = WorkspaceActionWatcher.projectedRecentRuns(from: [
+            first: [older], second: [newer], other: [active],
+        ])
+        #expect(projected.map(\.runID) == [2, 1])
+        #expect(projected.last?.workspaceID == second)
+    }
+
     @Test("Selected-workspace completions are recorded but never badge later")
     func selectedWorkspaceDoesNotDeferBadge() {
         var tracker = ActionCompletionTracker()

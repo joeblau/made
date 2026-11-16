@@ -431,7 +431,6 @@ final class PilotApp {
         guard !didStartServices, !setupProgress.needsInitialSetup, !isIsolated,
               !UserDefaults.standard.bool(forKey: "demoMode") else { return }
         didStartServices = true
-        GhosttyRuntime.shared.userZoomFactor = CockpitUIZoomController.shared.factor
         try? updaterController.updater.start()
         RepositoryPollingEnvironmentMonitor.shared.start()
         headphoneDetector.start()

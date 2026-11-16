@@ -30,12 +30,15 @@ struct ActionCompletionTracker {
 /// repo's open-task count. Complements the terminal-bell badge (which already
 /// covers "a CLI finished"). The active inspectors only poll the selected repo,
 /// so this sweeps them all through the shared repository scheduler.
+@Observable
 @MainActor
 final class WorkspaceActionWatcher {
     private(set) var workflowRuns: [UUID: [BuildWorkflowRun]] = [:]
     private(set) var lastSuccessfulFetchAt: Date?
 
-    var recentRuns: [BuildWorkflowRun] {
+    private(set) var recentRuns: [BuildWorkflowRun] = []
+
+    nonisolated static func projectedRecentRuns(from workflowRuns: [UUID: [BuildWorkflowRun]]) -> [BuildWorkflowRun] {
         // Multiple worktrees can advertise the same GitHub attempt.
         let unique = Dictionary(grouping: workflowRuns.values.flatMap { $0 }, by: \.id).values.compactMap { matches in
             matches.sorted {
@@ -49,11 +52,16 @@ final class WorkspaceActionWatcher {
             return $0.id < $1.id
         }.prefix(60))
     }
-    private weak var store: WorkspaceStore?
-    private var timer: Timer?
-    private var trackers: [UUID: ActionCompletionTracker] = [:]
-    private var fetchTasks: [UUID: Task<Void, Never>] = [:]
-    private var fetchGenerations: [UUID: Int] = [:]
+
+    private func updateRecentRuns() {
+        let next = Self.projectedRecentRuns(from: workflowRuns)
+        if next != recentRuns { recentRuns = next }
+    }
+    @ObservationIgnored private weak var store: WorkspaceStore?
+    @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var trackers: [UUID: ActionCompletionTracker] = [:]
+    @ObservationIgnored private var fetchTasks: [UUID: Task<Void, Never>] = [:]
+    @ObservationIgnored private var fetchGenerations: [UUID: Int] = [:]
 
     /// Cadence adapts to whether anything is actually running.
     ///
@@ -130,6 +138,7 @@ final class WorkspaceActionWatcher {
                             self.store?.openTaskCounts[wsID] = openTaskCount
                         }
                         self.workflowRuns[wsID] = snapshot.runs
+                        self.updateRecentRuns()
                         let checkedAt = snapshot.runs.map(\.state.checkedAt).max()
                             ?? Date().timeIntervalSince1970
                         let previous = self.lastSuccessfulFetchAt?.timeIntervalSince1970 ?? -.infinity
@@ -158,6 +167,7 @@ final class WorkspaceActionWatcher {
         let liveIDs = Set(store.workspaces.map(\.id))
         workspacesWithActiveRuns.formIntersection(liveIDs)
         workflowRuns = workflowRuns.filter { liveIDs.contains($0.key) }
+        updateRecentRuns()
         let rootedIDs = Set(store.workspaces.compactMap { $0.effectiveRootPath == nil ? nil : $0.id })
         let openTaskCounts = store.openTaskCounts.filter { rootedIDs.contains($0.key) }
         if store.openTaskCounts != openTaskCounts { store.openTaskCounts = openTaskCounts }

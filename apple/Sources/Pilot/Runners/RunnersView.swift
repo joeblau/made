@@ -34,6 +34,12 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
     private var refreshTask: Task<Void, Never>?
     private var footnoteTimer: Timer?
     private var previousScope: String?
+    private struct TabSignature: Equatable {
+        let scopes: [RunnerScope]
+        let selectedScopeID: String?
+        let isLive: Bool
+    }
+    private var tabSignature: TabSignature?
     private var currentContent: NSView?
     private var layout: RunnerLayout
     private var zoomObservation: RRZoomObservation?
@@ -209,7 +215,10 @@ final class RunnersViewController: NSViewController, CockpitPanePresenting, Cock
     }
 
     private func renderTabs() {
-        defer { tabStrip.needsLayout = true }
+        let signature = TabSignature(scopes: store.scopes, selectedScopeID: store.selectedScopeID, isLive: isLive)
+        guard tabSignature != signature else { return }
+        tabSignature = signature
+        tabStrip.needsLayout = true
         RRUI.clear(tabs)
         for scope in store.scopes {
             let button = RRButton(scope.name, symbol: scope.kind.symbol) { [weak self] in

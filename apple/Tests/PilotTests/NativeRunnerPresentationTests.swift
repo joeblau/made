@@ -29,6 +29,28 @@ struct NativeRunnerPresentationTests {
         #expect(buttons.first { $0.title == "Add Source" }?.isEnabled == false)
     }
 
+    @Test("Unchanged source tabs survive redraws and presentation switches")
+    func sourceTabsAreRetained() async throws {
+        let suite = "NativeRunnerPresentation.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = RunnersStore(defaults: defaults) { _ in [] }
+        store.add(RunnerScope(kind: .organization, name: "example"))
+        let controller = RunnersViewController(store: store, defaults: defaults, isLive: false)
+        controller.updatePresentation(isActive: true, isSelected: true)
+        defer { controller.updatePresentation(isActive: false, isSelected: false) }
+        let original = try #require(buttons(in: controller.view).first { $0.title == "example" })
+
+        controller.updatePresentation(isActive: false, isSelected: false)
+        controller.updatePresentation(isActive: true, isSelected: true)
+        #expect(buttons(in: controller.view).first { $0.title == "example" } === original)
+
+        store.add(RunnerScope(kind: .organization, name: "second"))
+        try await Task.sleep(for: .milliseconds(30))
+        #expect(original.superview == nil)
+        #expect(buttons(in: controller.view).contains { $0.title == "second" })
+    }
+
     @Test("Constructing an offscreen runner view does not fetch GitHub")
     func offscreenViewDoesNotFetch() async throws {
         let suite = "NativeRunnerPresentation.\(UUID().uuidString)"
