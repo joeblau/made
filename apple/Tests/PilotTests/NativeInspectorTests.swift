@@ -53,6 +53,29 @@ struct NativeInspectorTests {
         #expect(repository.repoPath == "/fixture/repository")
     }
 
+    @Test("The view picker is the Liquid Glass capsule at its own height, centered in the pane-header row")
+    func viewPickerKeepsGlassCapsule() throws {
+        let suite = "NativeInspectorTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = InspectorViewController(workspace: Workspace(name: "Fixture"), usageStore: UsageStore(defaults: defaults),
+                                                 gitStore: RepositoryStore(), defaults: defaults, isLive: false)
+        controller.view.frame = NSRect(x: 0, y: 0, width: 380, height: 700)
+        controller.setPresentationActive(true)
+        defer { controller.setPresentationActive(false) }
+        controller.view.layoutSubtreeIfNeeded()
+        let picker = try #require(descendants(controller.view).compactMap { $0 as? NSSegmentedControl }
+            .first { $0.identifier?.rawValue == "inspector.tabs" })
+        #expect(picker.segmentStyle == .capsule)
+        #expect(picker.borderShape == .capsule)
+        #expect(picker.segmentDistribution == .fillEqually)
+        // A forced height past the intrinsic one renders the flat divided style.
+        #expect(abs(picker.frame.height - picker.intrinsicContentSize.height) < 0.5)
+        let row = try #require(picker.superview)
+        #expect(abs(row.frame.height - CockpitPaneTab.preferredHeight) < 0.5)
+        #expect(abs(picker.frame.midY - row.bounds.midY) < 0.5)
+    }
+
     @Test("Repository row measurements follow content width and zoom changes")
     func repositoryRowMeasurementInputs() throws {
         let suite = "NativeInspectorTests.\(UUID().uuidString)"

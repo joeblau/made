@@ -188,7 +188,12 @@ final class InspectorViewController: NSViewController {
                                           trackingMode: .selectOne, target: nil, action: nil)
     private let list = InspectorRepositoryListView()
     private lazy var usage = UsageViewController(store: usageStore, defaults: defaults)
-    private lazy var tabsHeight = tabs.heightAnchor.constraint(equalToConstant: CockpitPaneTab.preferredHeight)
+    /// The picker's row matches the pane headers' height; the picker keeps
+    /// its own intrinsic height and is centered in that row. Forcing the glass
+    /// capsule taller than AppKit sizes it drops it back to the flat,
+    /// divided segment style.
+    private lazy var tabRowHeight = tabRow.heightAnchor.constraint(equalToConstant: CockpitPaneTab.preferredHeight)
+    private let tabRow = NSView()
 
     init(workspace: Workspace, usageStore: UsageStore, gitStore: RepositoryStore = RepositoryStore(),
          tasksStore: GitHubTasksStore = GitHubTasksStore(), statusStore: GitHubStatusStore = GitHubStatusStore(),
@@ -216,15 +221,22 @@ final class InspectorViewController: NSViewController {
         tabs.setAccessibilityLabel("Inspector view")
         tabs.identifier = .init("inspector.tabs")
         let tabHeader = NSView()
-        tabHeader.addSubview(tabs)
+        tabHeader.addSubview(tabRow)
+        tabRow.addSubview(tabs)
         let inset = LiquidGlassMetrics.Spacing.xSmall
-        // Same top inset and height as the workspace pane headers, so the
+        // Same top inset and row height as the workspace pane headers, so the
         // picker and the pane bubbles line up in one row across the window.
-        tabs.cockpitPinToEdges(of: tabHeader, insets: NSEdgeInsets(top: inset, left: inset, bottom: 0, right: inset))
+        tabRow.cockpitPinToEdges(of: tabHeader, insets: NSEdgeInsets(top: inset, left: inset, bottom: 0, right: inset))
+        tabs.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            tabs.leadingAnchor.constraint(equalTo: tabRow.leadingAnchor),
+            tabs.trailingAnchor.constraint(equalTo: tabRow.trailingAnchor),
+            tabs.centerYAnchor.constraint(equalTo: tabRow.centerYAnchor),
+        ])
         let layout = InspectorNativeUI.vertical([tabHeader, header, bodyHost], spacing: 0)
         layout.fillsWidth = true
         InspectorNativeUI.pin(layout, in: view)
-        tabsHeight.isActive = true
+        tabRowHeight.isActive = true
         bodyHost.setContentHuggingPriority(.defaultLow, for: .vertical)
         header.refresh = { [weak self] in self?.refreshSelectedTab() }
         list.onOpen = { [weak self] row in self?.open(row) }
@@ -344,7 +356,7 @@ final class InspectorViewController: NSViewController {
         let changingTab = displayedTab != nil && displayedTab != tab
         defer { if changingTab { CockpitMotion.reveal(bodyHost) } }
         tabs.selectedSegment = InspectorTab.allCases.firstIndex(of: tab) ?? 0
-        if tabsHeight.constant != CockpitPaneTab.preferredHeight { tabsHeight.constant = CockpitPaneTab.preferredHeight }
+        if tabRowHeight.constant != CockpitPaneTab.preferredHeight { tabRowHeight.constant = CockpitPaneTab.preferredHeight }
         tabs.font = InspectorNativeUI.font(NSFont.systemFontSize(for: .large), defaults: defaults)
         synchronizePolling(tab: tab, root: workspace.effectiveRootPath)
         statusStore.setPolling(isLive && isActive && tab == .actions, for: self)

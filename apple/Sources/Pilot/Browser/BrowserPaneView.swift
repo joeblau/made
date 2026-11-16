@@ -3,7 +3,8 @@ import AppKit
 import WebKit
 
 @MainActor
-final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, CockpitPaneInputFocusing, CockpitPaneClosing {
+final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, CockpitPaneInputFocusing, CockpitPaneClosing,
+    CockpitPaneHeaderUnderlaying {
     let pane: Pane
     let state: BrowserState
     var onSelect: () -> Void = {}
@@ -23,6 +24,7 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
     private var zoomObserver: NSObjectProtocol?
     private var sheetObserver: NSObjectProtocol?
     private var closeObserver: NSObjectProtocol?
+    private var headerInset: CGFloat = 0
 
     init(pane: Pane) {
         self.pane = pane
@@ -129,6 +131,7 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
                 append(controller.view)
             }
             startPage?.setPresentation(isActive: isActive, isSelected: isSelected)
+            applyHeaderInset()
             return
         }
         hasLoadedAnyURL = true
@@ -185,6 +188,24 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
             controller.synchronize()
         }
         synchronizeDialog()
+        applyHeaderInset()
+    }
+
+    func setHeaderInset(_ inset: CGFloat) {
+        guard headerInset != inset else { return }
+        headerInset = inset
+        if isViewLoaded { applyHeaderInset() }
+    }
+
+    /// A WebKit page scrolls under the pane header: it fills the pane and
+    /// starts its content below the header, so the header's glass shows the
+    /// page as it scrolls up. The start page, the find bar, and Chromium sit
+    /// below the header with the same padding instead.
+    private func applyHeaderInset() {
+        let webKit = startPage == nil && findBar == nil ? surface as? WebViewRepresentable : nil
+        let top = webKit == nil ? headerInset : 0
+        if stack.edgeInsets.top != top { stack.edgeInsets.top = top }
+        (surface as? WebViewRepresentable)?.setObscuredTopInset(webKit == nil ? 0 : headerInset)
     }
 
     private func append(_ child: NSView) {
