@@ -59,12 +59,12 @@ jobs:
             jq -e '.enabled == true'
           gh release verify --help >/dev/null
           gh release verify-asset --help >/dev/null
-      - name: Prepare macOS runner (Xcode 26)
-        run: .github/scripts/prepare-macos-runner.sh 26
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify supported Xcode and lock
         run: |
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
           bash apple/bin/package-chromiumkit.sh manifest
           bash apple/bin/verify-chromiumkit-support.sh
       - name: Import Developer ID identity

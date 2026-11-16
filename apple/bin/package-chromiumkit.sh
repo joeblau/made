@@ -36,7 +36,7 @@ validate_manifest() {
   jq -e '
     .schemaVersion == 1 and
     (.releaseID | type == "string" and length > 0) and
-    (.cef.requiredXcodeMajorVersion == 26) and
+    (.cef.requiredXcodeMajorVersion == 27) and
     (.cef.version as $version |
       all(.sourceArchives[];
         (.distributionDirectory |
@@ -58,7 +58,7 @@ validate_manifest() {
     (.artifactLayout.credits | endswith("/CREDITS.html")) and
     (.inputLayout.wrapperSources == "libcef_dll") and
     (.inputLayout.credits == "CREDITS.html") and
-    (.buildToolchain.xcodeVersionPrefix == "26.") and
+    (.buildToolchain.xcodeVersionPrefix == "27.") and
     (.buildToolchain.cmakeGenerator == "Xcode") and
     (.buildToolchain.cmakeConfiguration == "Release") and
     (.buildToolchain.macOSDeploymentTarget == "15.0") and

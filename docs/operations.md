@@ -30,9 +30,10 @@ enterprise setting).
 
 - **Xcode.** Each job runs `.github/scripts/prepare-macos-runner.sh <major>`
   first. It picks the newest `/Applications/Xcode*.app` with that major version
-  (26 for the pinned CEF and GhosttyKit reproductions, 27 for everything else)
-  and fails with the installed list if none matches. Keep both majors on every
-  mini.
+  (27 for CI, releases, and the pinned CEF runtime; 26 only for the manual
+  GhosttyKit reproduction) and fails with the installed list if none matches.
+  Every mini needs Xcode 27; install Xcode 26 on at least one before running
+  the GhosttyKit bootstrap.
 - **git-lfs.** The minis don't ship it, so every LFS checkout is preceded by
   an inline step that installs a pinned, SHA-256 verified `git-lfs` into
   `RUNNER_TEMP`. Bump the version and digest together.

@@ -110,13 +110,15 @@ the size, SHA-1, or SHA-256 differs.
 
 ## Chromium feasibility and runtime gates
 
-The pinned distribution's macOS README requires Xcode 26 consumers to convert
+The pinned distribution's macOS README requires Xcode 26 and later consumers to convert
 the supplied unversioned framework into a `Versions/A` framework layout with
 relative symlinks. The packaging script owns that conversion so local and CI
 builds cannot diverge.
 
-The original feasibility proof used Xcode 26, which remains the pinned
-artifact build toolchain. The current application runtime gate uses Xcode 27.
+The original feasibility proof used Xcode 26. The pinned artifact build
+toolchain is now Xcode 27 (`buildToolchain.xcodeVersionPrefix`), the same
+major as the application runtime gate, so the self-hosted CI minis need only
+Xcode 27 for Chromium.
 The gate is complete only when both architectures prove all of the following:
 
 - `Chromium Embedded Framework.framework` compiles and loads with Xcode 27.

@@ -179,10 +179,9 @@ jobs:
     needs: changes
     # Public repo: fork pull requests never run on the self-hosted minis.
     if: needs.changes.outputs.apple == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    # The pinned CEF runtime reproduces byte-for-byte only under Xcode 26
-    # (buildToolchain.xcodeVersionPrefix in cef-artifacts.json). The xcode-27
-    # image carries no Xcode 26, so reproduce the runtime here and hand it to
-    # the Xcode 27 app build through the cache.
+    # The pinned CEF runtime reproduces byte-for-byte only under the pinned
+    # Xcode major (buildToolchain.xcodeVersionPrefix in cef-artifacts.json).
+    # Reproduce it once here and hand it to the app build through the cache.
     # The Blau enterprise's Mac mini cluster; each job selects its Xcode.
     runs-on: [self-hosted, macOS, ARM64, macmini]
     permissions:
@@ -211,18 +210,18 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           lfs: true
-      - name: Prepare macOS runner (Xcode 26)
-        run: .github/scripts/prepare-macos-runner.sh 26
+      - name: Prepare macOS runner (Xcode 27)
+        run: .github/scripts/prepare-macos-runner.sh 27
       - name: Verify artifact toolchain
         run: |
           xcodebuild -version
-          xcodebuild -version | grep -E '^Xcode 26\.'
+          xcodebuild -version | grep -E '^Xcode 27\.'
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.cef-download-cache
-          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
       - name: Install the pinned Chromium runtime
         env:
           GH_TOKEN: ${{ github.token }}
@@ -299,7 +298,7 @@ jobs:
           path: |
             apple/Packages/ChromiumKit/Artifacts
             apple/.cef-download-cache
-          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode26-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
+          key: cef-runtime-${{ runner.os }}-${{ runner.arch }}-xcode27-${{ hashFiles('apple/Packages/ChromiumKit/cef-artifacts.json', 'apple/bin/package-chromiumkit.sh', 'apple/bin/update-chromiumkit-artifact.sh') }}
           # The chromium-runtime job reproduced the runtime under this exact
           # key; a miss here means the handoff broke, not that this Xcode 27
           # job should rebuild it.
