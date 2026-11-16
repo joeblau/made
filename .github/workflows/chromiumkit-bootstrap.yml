@@ -123,11 +123,18 @@ jobs:
           BLAU_CHROMIUM_TEST_CODE_SIGN_IDENTITY: ${{ env.MACOS_SIGNING_IDENTITY }}
           BLAU_CHROMIUM_TEST_DEVELOPMENT_TEAM: ${{ env.APPLE_TEAM_ID }}
         run: |
-          for architecture in arm64 x86_64; do
-            DEVELOPER_DIR="$(xcode-select -p)" \
-              BLAU_CHROMIUM_TEST_ARCHITECTURE="$architecture" \
-              apple/bin/test-chromium-runtime.sh
-          done
+          # XCTest only reaches testmanagerd from the console user's GUI
+          # session, and a keychain unlocked in the runner's session is still
+          # locked there, so unlock it again inside that session.
+          # shellcheck disable=SC2016
+          .github/scripts/run-in-gui-session.sh /bin/bash -euo pipefail -c '
+            security unlock-keychain -p "$RUNNER_TEMP-$GITHUB_RUN_ID" "$CHROMIUM_KEYCHAIN"
+            for architecture in arm64 x86_64; do
+              DEVELOPER_DIR="$(xcode-select -p)" \
+                BLAU_CHROMIUM_TEST_ARCHITECTURE="$architecture" \
+                apple/bin/test-chromium-runtime.sh
+            done
+          '
       - name: Archive signed universal Pilot
         run: |
           archive="$RUNNER_TEMP/Pilot.xcarchive"

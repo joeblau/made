@@ -21,7 +21,10 @@ concurrency:
 
 jobs:
   changes:
-    runs-on: ubuntu-latest
+    # Every job runs on the Blau enterprise's Mac mini cluster. On a fork pull
+    # request only this job and `complete` run, and neither executes code from
+    # the pull request.
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     outputs:
       apple: ${{ steps.filter.outputs.apple || steps.filter-all.outputs.apple }}
       docs: ${{ steps.filter.outputs.docs || steps.filter-all.outputs.docs }}
@@ -59,18 +62,22 @@ jobs:
 
   docs:
     needs: changes
-    if: needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.docs == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: bin/check-docs.sh
 
   workers:
     needs: changes
-    if: needs.changes.outputs.workers == 'true'
-    runs-on: ubuntu-latest
+    # Public repo: fork pull requests never run on the self-hosted minis.
+    if: needs.changes.outputs.workers == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Isolate this job's home directory
+        run: .github/scripts/isolate-job-home.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22.23.4
@@ -184,8 +191,10 @@ jobs:
             sudo -n install -m 0755 "$tmux_binary" /usr/local/bin/tmux
           fi
           apple/bin/install-tmux.sh verify
+      # The minis' runners are LaunchDaemons, and XCTest only reaches
+      # testmanagerd from the console user's GUI session.
       - name: Run unit tests
-        run: apple/bin/test.sh all
+        run: .github/scripts/run-in-gui-session.sh apple/bin/test.sh all
 
   # Exercises the signed Chromium assembly + validation path on every PR so
   # signing regressions surface here instead of at release time. Signs ad-hoc;
@@ -347,21 +356,21 @@ jobs:
   complete:
     if: always()
     needs: [changes, docs, workers, apple-lint, apple-build-test, chromium-runtime, apple-chromium-smoke]
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64, macmini]
     steps:
       - name: Require every selected gate
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
-          APPLE_CHANGED: ${{ needs.changes.outputs.apple }}
+          GATES_SELECTED: ${{ needs.changes.outputs.apple == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.workers == 'true' }}
           FORK_PULL_REQUEST: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         run: |
           case " $RESULTS " in
             *" failure "*|*" cancelled "*) exit 1 ;;
           esac
-          # Apple jobs are skipped on fork PRs, so a fork's Apple change can't
-          # pass here; a maintainer re-pushes it to a branch in this repo.
-          if [[ "$FORK_PULL_REQUEST" == "true" && "$APPLE_CHANGED" == "true" ]]; then
-            echo "::error::Apple changes from a fork need a maintainer to push them to a branch in openblau/made for self-hosted CI."
+          # Every gate is skipped on a fork PR, so a fork's change can't pass
+          # here; a maintainer re-pushes it to a branch in this repo.
+          if [[ "$FORK_PULL_REQUEST" == "true" && "$GATES_SELECTED" == "true" ]]; then
+            echo "::error::Pull requests from a fork need a maintainer to push them to a branch in openblau/made for self-hosted CI."
             exit 1
           fi
           echo "Selected CI gates passed: $RESULTS"
