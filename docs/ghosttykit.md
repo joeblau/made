@@ -45,7 +45,8 @@ gh workflow run ghosttykit-bootstrap.yml \
   --ref ghosttykit-1.3.1-blau.3
 ```
 
-It installs the checksummed Homebrew formula from the recorded homebrew/core
+It installs Xcode's Metal Toolchain component if the mini lacks it (Ghostty
+compiles its shaders with `xcrun metal`), installs the checksummed Homebrew formula from the recorded homebrew/core
 commit, builds Zig 0.15.2_1 from source against pinned major LLVM/LLD formulae,
 records canonical dependency receipts, builds GhosttyKit twice from empty
 source/cache roots, compares all five outputs byte-for-byte, and uploads the

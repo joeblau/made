@@ -27,6 +27,17 @@ jobs:
         run: |
           xcodebuild -version
           xcodebuild -version | grep -E '^Xcode 27\.'
+      # Ghostty compiles its Metal shaders with `xcrun metal`. Since Xcode 26
+      # the Metal Toolchain is a separate component; Apple signs and serves it
+      # for the selected Xcode build. Install it once per mini, then record the
+      # exact toolchain the build used.
+      - name: Install Metal Toolchain
+        run: |
+          if ! xcodebuild -showComponent MetalToolchain | grep -q '^Status: installed'; then
+            xcodebuild -downloadComponent MetalToolchain
+          fi
+          xcodebuild -showComponent MetalToolchain
+          xcrun metal --version
       - name: Install pinned Zig 0.15.2
         shell: bash
         run: |
