@@ -81,8 +81,13 @@ final class WebViewRepresentable: NSViewController {
         coordinator.lastFindRequestID = findRequestID
         coordinator.lastStopFindingRequestID = stopFindingRequestID
         coordinator.observeURL(of: webView)
+        // Behind a page that has not painted yet, match the window instead of
+        // flashing white in dark mode.
+        webView.underPageBackgroundColor = .windowBackgroundColor
         if let url = initialURL {
             webView.load(URLRequest(url: url))
+        } else {
+            state.emptyPage = BrowserEmptyPage()
         }
         self.webView = webView
         view = webView
@@ -634,6 +639,7 @@ final class WebViewRepresentable: NSViewController {
         func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
             // Earliest reliable point — URL is now the real destination
             // (after any provisional redirects).
+            state.emptyPage = Self.isBlank(webView.url) ? BrowserEmptyPage() : nil
             if let url = webView.url {
                 state.acceptCommittedURL(url)
                 state.commitFaviconPage(url)
@@ -666,6 +672,11 @@ final class WebViewRepresentable: NSViewController {
             // A cancelled load was stopped or superseded, not a page to retry.
             if !(failure.domain == NSURLErrorDomain && failure.code == NSURLErrorCancelled) {
                 uncommittedURL = failure.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+                // A failure while a page is showing leaves that page in place;
+                // only a pane with nothing on screen gets the server list.
+                if webView.url == nil || Self.isBlank(webView.url) || state.emptyPage != nil {
+                    state.emptyPage = BrowserEmptyPage(failedURL: uncommittedURL, reason: failure.localizedDescription)
+                }
             }
             state.isLoading = false
             updateNavState(webView)
@@ -674,9 +685,16 @@ final class WebViewRepresentable: NSViewController {
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
             // No finish or failure callback follows a dead web process.
             uncommittedURL = webView.url ?? mainFrameURL
+            state.emptyPage = BrowserEmptyPage(failedURL: uncommittedURL, reason: "The page stopped responding.")
             state.isLoading = false
             state.estimatedProgress = 0
             updateNavState(webView)
+        }
+
+        /// No document, or WebKit's empty `about:blank`.
+        static func isBlank(_ url: URL?) -> Bool {
+            guard let url else { return true }
+            return url.scheme == "about" && url.absoluteString.hasPrefix("about:blank")
         }
 
         private func refreshFavicon(in webView: WKWebView) {

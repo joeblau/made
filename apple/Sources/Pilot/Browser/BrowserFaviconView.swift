@@ -52,6 +52,18 @@ final class BrowserRuntimeState {
     var savePageRequestID: Int = 0
     var downloadStatusText: String = ""
     var downloadProgress: Double? = nil
+    /// Set while the engine shows nothing useful (a load that never
+    /// committed, a dead web process, a blank document). The pane covers that
+    /// blank surface with its local-server list.
+    var emptyPage: BrowserEmptyPage? = nil
+}
+
+/// Why a browser pane's page is empty, for the server list shown over it.
+struct BrowserEmptyPage: Equatable {
+    /// The address that failed, which Try Again reloads; nil for a blank page.
+    var failedURL: URL?
+    /// The engine's description of the failure; nil for a blank page.
+    var reason: String?
 }
 
 @MainActor

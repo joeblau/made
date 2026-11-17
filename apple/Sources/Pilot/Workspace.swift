@@ -525,6 +525,7 @@ final class BrowserState {
     var savePageRequestID: Int { get { runtime.savePageRequestID } set { runtime.savePageRequestID = newValue } }
     var downloadStatusText: String { get { runtime.downloadStatusText } set { runtime.downloadStatusText = newValue } }
     var downloadProgress: Double? { get { runtime.downloadProgress } set { runtime.downloadProgress = newValue } }
+    var emptyPage: BrowserEmptyPage? { get { runtime.emptyPage } set { if runtime.emptyPage != newValue { runtime.emptyPage = newValue } } }
 
     var appearanceMode: AppearanceMode {
         get { AppearanceMode(rawValue: appearanceModeRaw) ?? .system }
