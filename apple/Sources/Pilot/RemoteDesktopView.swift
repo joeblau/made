@@ -390,9 +390,9 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
     private let status = RRUI.label("Not connected", size: 11, color: .secondaryLabelColor)
     private let username = NSTextField(string: "")
     private let password = NSSecureTextField(string: "")
-    private let save = NSButton(checkboxWithTitle: "Save password", target: nil, action: nil)
-    private let automatic = NSButton(checkboxWithTitle: "Connect automatically", target: nil, action: nil)
-    private let highPerformance = NSButton(checkboxWithTitle: "High Performance", target: nil, action: nil)
+    private let save = RRSwitch("Save password")
+    private let automatic = RRSwitch("Connect automatically")
+    private let highPerformance = RRSwitch("High Performance")
     private let clipboard = NSButton(checkboxWithTitle: "Share clipboard", target: nil, action: nil)
     private let reconnect = RRButton("Reconnect", action: {})
     private var viewer: RemoteDesktopViewer?
@@ -623,11 +623,12 @@ private final class RemoteConnectionViewController: NSViewController, NSTextFiel
         ], spacing: LiquidGlassMetrics.Spacing.xxSmall)
         RRUI.fillWidth(usernameGroup)
         RRUI.fillWidth(passwordGroup)
-        let options = RRUI.stack([save, automatic, highPerformance], spacing: 4)
+        let options = RRUI.stack([save.row, automatic.row, highPerformance.row], spacing: 0)
+        RRUI.fillWidth(options)
         let form = RRUI.stack([identity, usernameGroup, passwordGroup, options], spacing: 10)
         form.setCustomSpacing(12, after: identity)
-        form.setCustomSpacing(12, after: passwordGroup)
-        form.setCustomSpacing(12, after: options)
+        form.setCustomSpacing(8, after: passwordGroup)
+        form.setCustomSpacing(8, after: options)
         if let error {
             let message = RRUI.label(error, size: 12, color: .systemRed)
             message.maximumNumberOfLines = 3

@@ -68,6 +68,10 @@ final class AndroidPaneViewController: CapturePaneController {
     private var copiedCount: Int
     private var droppedCount: Int
     private var polling: Task<Void, Never>?
+    /// The spinner is for the first scan only; the 2-second background polls
+    /// keep the last result on screen so the empty state doesn't flash.
+    private var hasListedDevices = false
+    private var isManualRefresh = false
     private var captureHost: AndroidCaptureHostView?
 
     override init(pane: Pane) {
@@ -170,10 +174,11 @@ final class AndroidPaneViewController: CapturePaneController {
                 items.append(CapturePickerItem(id: "avd-\(avd)", title: EmulatorBridge.displayName(for: avd), detail: "Not running — select to boot", symbol: "play.circle", select: { [weak self] in self?.session.bootAVD(avd) }))
             }
         }
+        if !session.isRefreshing { hasListedDevices = true; isManualRefresh = false }
         let message: NSView?
         if !items.isEmpty {
             message = nil
-        } else if session.isRefreshing {
+        } else if session.isRefreshing, !hasListedDevices {
             message = CapturePaneMessage("Looking for devices…", symbol: "smartphone", loading: true)
         } else if let error = session.lastError {
             message = CapturePaneMessage("Couldn't List Devices", symbol: "exclamationmark.triangle", detail: error)
@@ -193,8 +198,8 @@ final class AndroidPaneViewController: CapturePaneController {
             }
             message = CapturePaneMessage(title, symbol: "smartphone", detail: guidance)
         }
-        presentPicker(title: session.target?.pickerTitle ?? "Android", refreshing: session.isRefreshing,
-            refresh: { [weak self] in self?.session.refreshDevices() }, items: items, message: message)
+        presentPicker(title: session.target?.pickerTitle ?? "Android", refreshing: session.isRefreshing && (!hasListedDevices || isManualRefresh),
+            refresh: { [weak self] in self?.isManualRefresh = true; self?.session.refreshDevices() }, items: items, message: message)
     }
 
     override func toolbarActions() -> [CapturePaneAction] {

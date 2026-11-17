@@ -340,9 +340,15 @@ final class CaptureDevicePicker: NSView, NSTableViewDataSource, NSTableViewDeleg
         }
         self.actions.isHidden = actions.isEmpty
         updateRows(next)
+        scroll.isHidden = next.isEmpty && message != nil
+        // Polling re-renders every couple of seconds; keep an identical message
+        // in place instead of rebuilding it, which flashes the pane.
+        if next.isEmpty, let current = self.message as? CapturePaneMessage,
+           let incoming = message as? CapturePaneMessage, current.contentKey == incoming.contentKey {
+            return
+        }
         self.message?.removeFromSuperview()
         self.message = nil
-        scroll.isHidden = next.isEmpty && message != nil
         if next.isEmpty, let message {
             message.translatesAutoresizingMaskIntoConstraints = false
             content.addSubview(message)
@@ -394,8 +400,11 @@ final class CaptureDevicePicker: NSView, NSTableViewDataSource, NSTableViewDeleg
         }
         let selection = IndexSet(next.indices.filter { selectedIDs.contains(next[$0].id) && next[$0].enabled && !next[$0].group })
         if selection != table.selectedRowIndexes { table.selectRowIndexes(selection, byExtendingSelection: false) }
-        scroll.contentView.scroll(to: scrollOrigin)
-        scroll.reflectScrolledClipView(scroll.contentView)
+        // Restoring an unchanged origin still flashes the overlay scroller.
+        if scroll.contentView.bounds.origin != scrollOrigin {
+            scroll.contentView.scroll(to: scrollOrigin)
+            scroll.reflectScrolledClipView(scroll.contentView)
+        }
     }
     func numberOfRows(in tableView: NSTableView) -> Int { items.count }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { items.indices.contains(row) && items[row].enabled && !items[row].group }
@@ -485,6 +494,8 @@ final class CapturePaneMessage: NSView {
     private let titleLabel: NSTextField
     private let detailLabel: NSTextField
     private let stack: NSStackView
+    /// Everything the message renders, so an identical re-render can be skipped.
+    let contentKey: String
     private var wordFloor: CGFloat {
         [titleLabel, detailLabel].map { label in
             label.stringValue.split(whereSeparator: { $0.isWhitespace }).map {
@@ -494,6 +505,8 @@ final class CapturePaneMessage: NSView {
     }
 
     init(_ title: String, symbol: String, detail: String? = nil, loading: Bool = false, dark: Bool = false, actions: [CapturePaneAction] = []) {
+        contentKey = ([title, symbol, detail ?? "", "\(loading)", "\(dark)"]
+            + actions.map { "\($0.title)|\($0.symbol)|\($0.enabled)|\($0.selected)" }).joined(separator: "\u{1F}")
         titleLabel = CockpitUI.label(title, size: 17, weight: .semibold)
         detailLabel = CockpitUI.label(detail ?? "", size: 12, color: .secondaryLabelColor)
         titleLabel.alignment = .center

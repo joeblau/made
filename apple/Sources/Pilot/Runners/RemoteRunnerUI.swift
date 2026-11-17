@@ -166,3 +166,45 @@ enum RRUI {
         window.sheetParent?.endSheet(window)
     }
 }
+
+/// A trailing `NSSwitch` with a leading label, matching a SwiftUI
+/// `Toggle(...).toggleStyle(.switch)` row. The label dims with the switch and
+/// clicking it toggles the switch like a checkbox title would.
+final class RRSwitch: NSSwitch {
+    let label: NSTextField
+    let row: NSStackView
+
+    init(_ title: String) {
+        label = RRUI.label(title)
+        row = RRUI.stack(axis: .horizontal, spacing: 8)
+        super.init(frame: .zero)
+        controlSize = .small
+        setAccessibilityLabel(title)
+        setContentHuggingPriority(.required, for: .horizontal)
+        label.maximumNumberOfLines = 1
+        label.lineBreakMode = .byTruncatingTail
+        label.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        let spacer = RRUI.spacer()
+        spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        for view in [label, spacer, self] as [NSView] { row.addArrangedSubview(view) }
+        label.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(labelClicked)))
+    }
+
+    @MainActor required init?(coder: NSCoder) { nil }
+
+    var title: String { label.stringValue }
+
+    override var isEnabled: Bool {
+        didSet { label.textColor = isEnabled ? .labelColor : .disabledControlTextColor }
+    }
+
+    override var toolTip: String? {
+        didSet { label.toolTip = toolTip }
+    }
+
+    @objc private func labelClicked() {
+        guard isEnabled else { return }
+        state = state == .on ? .off : .on
+        if let action { NSApp.sendAction(action, to: target, from: self) }
+    }
+}
