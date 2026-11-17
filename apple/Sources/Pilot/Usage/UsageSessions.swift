@@ -1,5 +1,4 @@
 import Foundation
-import SQLite3
 
 /// Reads the OAuth sessions that the `codex`, `claude`, `grok`, and `kimi`
 /// CLIs and the Cursor editor already store on this Mac, so we can query each
@@ -577,91 +576,6 @@ enum UsageSessions {
             if let parsed = formatter.date(from: string) { return parsed }
             formatter.formatOptions = [.withInternetDateTime]
             return formatter.date(from: string)
-        }
-    }
-
-    // MARK: - Cursor (Anysphere)
-
-    /// The Cursor editor's web session, read from the IDE's local state
-    /// database. Cursor's CLI config holds only identity (no tokens), so the
-    /// IDE's `cursorAuth/accessToken` item is the one usable credential on
-    /// disk. The token is a JWT whose `sub` claim doubles as the dashboard
-    /// user id (`WorkosCursorSessionToken` is `sub::token`).
-    struct CursorSession: Sendable {
-        let accessToken: String
-        /// JWT `sub`, e.g. `github|1218847`.
-        let userId: String
-        let expiresAt: Date?
-
-        var isExpired: Bool { isExpired(at: Date()) }
-
-        func isExpired(at date: Date) -> Bool {
-            guard let expiresAt else { return false }
-            return expiresAt.timeIntervalSince(date) <= 60
-        }
-
-        /// Load from the IDE's state database (read-only).
-        static func load() -> CursorSession? {
-            guard let token = readStateItem(
-                key: "cursorAuth/accessToken",
-                databaseURL: stateDatabaseURL()
-            ) else { return nil }
-            return parse(token: token)
-        }
-
-        /// Decode the JWT's `sub` and `exp` claims. Internal so tests can
-        /// cover it with fabricated tokens.
-        static func parse(token: String) -> CursorSession? {
-            let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            let segments = trimmed.split(separator: ".")
-            guard segments.count == 3,
-                  let payload = base64URLDecode(String(segments[1])),
-                  let claims = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
-                  let subject = claims["sub"] as? String,
-                  !subject.isEmpty else { return nil }
-            let expiresAt = (claims["exp"] as? NSNumber).map {
-                Date(timeIntervalSince1970: $0.doubleValue)
-            }
-            return CursorSession(accessToken: trimmed, userId: subject, expiresAt: expiresAt)
-        }
-
-        static func stateDatabaseURL() -> URL {
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
-        }
-
-        /// Read one `ItemTable` value. Internal so tests can point at a
-        /// fixture database instead of a developer's real IDE state.
-        static func readStateItem(key: String, databaseURL: URL) -> String? {
-            var database: OpaquePointer?
-            guard sqlite3_open_v2(
-                databaseURL.path, &database, SQLITE_OPEN_READONLY, nil
-            ) == SQLITE_OK, let database else {
-                sqlite3_close(database)
-                return nil
-            }
-            defer { sqlite3_close(database) }
-
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(
-                database, "SELECT value FROM ItemTable WHERE key = ?1", -1, &statement, nil
-            ) == SQLITE_OK, let statement else { return nil }
-            defer { sqlite3_finalize(statement) }
-
-            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-            sqlite3_bind_text(statement, 1, key, -1, transient)
-            guard sqlite3_step(statement) == SQLITE_ROW,
-                  let value = sqlite3_column_text(statement, 0) else { return nil }
-            let text = String(cString: value).trimmingCharacters(in: .whitespacesAndNewlines)
-            return text.isEmpty ? nil : text
-        }
-
-        private static func base64URLDecode(_ segment: String) -> Data? {
-            var base64 = segment
-                .replacingOccurrences(of: "-", with: "+")
-                .replacingOccurrences(of: "_", with: "/")
-            while base64.count % 4 != 0 { base64.append("=") }
-            return Data(base64Encoded: base64)
         }
     }
 

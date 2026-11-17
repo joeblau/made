@@ -61,7 +61,7 @@ final class UsageStore {
         static let live = Fetchers(
             claude: { await ClaudeUsageAdapter.fetch(session: UsageSessions.ClaudeSession.load()) },
             codex: { await CodexUsageAdapter.fetch(session: UsageSessions.CodexSession.load()) },
-            cursor: { await CursorUsageAdapter.fetch(session: UsageSessions.CursorSession.load()) },
+            cursor: { await CursorUsageAdapter.fetchLive() },
             grok: {
                 // Read the installed version only once a session exists.
                 guard let session = UsageSessions.GrokSession.load() else { return .notSignedIn }
@@ -90,6 +90,7 @@ final class UsageStore {
     private var loadTask: Task<Void, Never>?
     private var pollTimer: Timer?
     private var retryTimer: Timer?
+    private var consentObserver: NSObjectProtocol?
     private var activeProviders: Set<Provider> = []
     private let defaults: UserDefaults
     private let fetchers: Fetchers
@@ -160,6 +161,13 @@ final class UsageStore {
 
     /// Begin (or restart) periodic refresh. Safe to call repeatedly.
     func start() {
+        if consentObserver == nil {
+            consentObserver = NotificationCenter.default.addObserver(
+                forName: UsageConsent.changedNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.reload() }
+            }
+        }
         if pollTimer == nil {
             pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
                 Task { @MainActor in self?.reload() }
@@ -169,6 +177,8 @@ final class UsageStore {
     }
 
     func stop() {
+        if let consentObserver { NotificationCenter.default.removeObserver(consentObserver) }
+        consentObserver = nil
         pollTimer?.invalidate()
         pollTimer = nil
         retryTimer?.invalidate()

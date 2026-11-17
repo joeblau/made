@@ -11,6 +11,17 @@ private typealias JSON = UsageJSON
 /// (post-2025) memberships actually budget on: the weekly included-usage
 /// window and the monthly metered spend, both in cents.
 enum CursorUsageAdapter {
+    @concurrent static func fetchLive() async -> ProviderFetch {
+        do {
+            let session = try UsageSessions.CursorSession.loadChecked()
+            return await fetch(session: session)
+        } catch let error as UsageSessions.CursorSession.LoadError {
+            return .failure(error.message)
+        } catch {
+            return .failure(UsageSessions.CursorSession.LoadError.unreadableToken.message)
+        }
+    }
+
     static let summaryEndpoint = URL(string: "https://cursor.com/api/usage-summary")!
     static let statusEndpoint = URL(
         string: "https://cursor.com/api/dashboard/v2/usage-status?scope=user"
@@ -22,7 +33,7 @@ enum CursorUsageAdapter {
     ) async -> ProviderFetch {
         guard let session else { return .notSignedIn }
         guard !session.isExpired else {
-            return .failure("Cursor: session expired — sign in to the Cursor app, then refresh.")
+            return .failure(UsageSessions.CursorSession.LoadError.expired.message)
         }
         let headers = [
             "Cookie": cookie(for: session),
@@ -34,6 +45,9 @@ enum CursorUsageAdapter {
                 url: summaryEndpoint, headers: headers, transport: transport
             )
         } catch {
+            if case UsageFetchError.http(let status, _) = error, status == 401 || status == 403 {
+                return .failure(UsageSessions.CursorSession.LoadError.expired.message)
+            }
             return UsageHTTP.classify(error, provider: "Cursor", cli: "cursor")
         }
         // The v2 status is unified-membership only; a failure there must not

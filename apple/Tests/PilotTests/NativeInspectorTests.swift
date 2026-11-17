@@ -300,18 +300,18 @@ struct NativeInspectorTests {
 
 private actor InspectorSessionProbe {
     private(set) var requested: [UsageAccount] = []
-    private var continuations: [CheckedContinuation<Bool, Never>] = []
+    private var continuations: [CheckedContinuation<UsageSettingsViewController.ConnectionStatus, Never>] = []
     private var finished = false
-    func detect(_ account: UsageAccount) async -> Bool {
+    func detect(_ account: UsageAccount) async -> UsageSettingsViewController.ConnectionStatus {
         requested.append(account)
-        if finished { return true }
+        if finished { return .available }
         return await withCheckedContinuation { continuations.append($0) }
     }
     func finish() {
         finished = true
         let pending = continuations
         continuations.removeAll()
-        pending.forEach { $0.resume(returning: true) }
+        pending.forEach { $0.resume(returning: .available) }
     }
 }
 

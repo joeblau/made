@@ -136,7 +136,7 @@ struct UsageProviderAdapterTests {
             == "Claude: this session lacks the user:profile scope — re-run `claude` to sign in.")
         #expect(failureMessage(kimi) == "Kimi: session expired — re-run `kimi login` to sign in.")
         #expect(failureMessage(cursor)
-            == "Cursor: session expired — sign in to the Cursor app, then refresh.")
+            == UsageSessions.CursorSession.LoadError.expired.message)
         #expect(await stub.requests.isEmpty)
     }
 
@@ -236,6 +236,14 @@ struct UsageProviderAdapterTests {
             #expect(request.value(forHTTPHeaderField: "Cookie")
                 == "WorkosCursorSessionToken=github%7C1218847%3A%3Acursor-token")
         }
+    }
+
+    @Test("Cursor authentication failures direct the user to the desktop session")
+    func cursorAuthenticationRecovery() async {
+        let stub = StubTransport(status: 401)
+        let result = await CursorUsageAdapter.fetch(session: Self.cursorSession, transport: await stub.transport)
+        #expect(failureMessage(result) == UsageSessions.CursorSession.LoadError.expired.message)
+        #expect(await stub.requests.count == 1)
     }
 
     @Test("An expired Grok session refreshes before the request instead of failing")
