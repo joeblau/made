@@ -124,7 +124,8 @@ enum TerminalSessionFailure: Error, Equatable, Sendable {
 }
 
 enum TerminalSessionBootstrap: Sendable {
-    case local(initialInput: String?)
+    /// A local pane. `command` replaces the default shell when non-nil.
+    case local(command: String?)
     case remote
     case unavailable(TerminalSessionFailure)
 }
@@ -212,7 +213,7 @@ struct LocalTerminalSession: CockpitTerminalSession {
     }
 
     func bootstrap(workingDirectory: String?) -> TerminalSessionBootstrap {
-        .local(initialInput: PersistentTerminalSession.bootstrapCommand(
+        .local(command: PersistentTerminalSession.bootstrapCommand(
             sessionName: persistentSessionName,
             workingDirectory: workingDirectory
         ))

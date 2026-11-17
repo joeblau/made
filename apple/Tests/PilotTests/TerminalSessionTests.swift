@@ -294,10 +294,88 @@ final class TerminalSessionTests: XCTestCase {
         XCTAssertNotEqual(try Self.runTmux(tmux, ["has-session", "-t", sessionName]), 0)
     }
 
+    /// Runs the bootstrap exactly as Ghostty does on macOS (`bash -c "exec -l
+    /// <command>"` on a pty) with a leaked NO_COLOR, then checks one client
+    /// creates a configured session in a quoted directory and a second client
+    /// attaches to it instead of creating another.
+    func testBootstrapCommandCreatesThenAttachesOneConfiguredSession() async throws {
+        guard let tmux = Self.tmuxExecutablePath() else { throw XCTSkip("tmux is not installed") }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("pilot boot's \(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sessionName = "pilot-test-\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+        let command = try XCTUnwrap(PersistentTerminalSession.bootstrapCommand(sessionName: sessionName, workingDirectory: root.path))
+        XCTAssertFalse(command.hasPrefix("exec "), "Ghostty already prefixes exec -l")
+        defer { _ = try? Self.runTmux(tmux, ["kill-session", "-t", sessionName]) }
+
+        func launchClient() throws -> Process {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/script")
+            process.arguments = ["-q", "/dev/null", "/bin/bash", "--noprofile", "--norc", "-c", "exec -l \(command)"]
+            var environment = ProcessInfo.processInfo.environment
+            environment["NO_COLOR"] = "1"
+            environment["TERM"] = "xterm-256color"
+            environment.removeValue(forKey: "TMUX")
+            process.environment = environment
+            process.standardInput = Pipe()
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            return process
+        }
+        func tmuxOutput(_ arguments: [String]) async throws -> String {
+            let result = try await ProcessRunner.run(ProcessInvocation(
+                executableURL: URL(fileURLWithPath: tmux), arguments: arguments, timeout: .seconds(2)
+            ))
+            return result.standardOutputString.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let first = try launchClient()
+        defer { if first.isRunning { first.terminate() } }
+        try await waitForNativeTerminal(timeout: .seconds(10), message: "bootstrap never created the session") {
+            (try? Self.runTmux(tmux, ["has-session", "-t", sessionName])) == 0
+        }
+        try await waitForNativeTerminal(timeout: .seconds(10), message: "first client never attached") {
+            Self.clientCount(tmux, sessionName) == 1
+        }
+        let status = try await tmuxOutput(["show-options", "-t", sessionName, "-v", "status"])
+        let mouse = try await tmuxOutput(["show-options", "-t", sessionName, "-v", "mouse"])
+        let colorTerm = try await tmuxOutput(["show-environment", "-t", sessionName, "COLORTERM"])
+        // show-environment exits 1 when the variable is absent altogether.
+        let noColor = (try? await tmuxOutput(["show-environment", "-t", sessionName, "NO_COLOR"])) ?? ""
+        let path = try await tmuxOutput(["display-message", "-p", "-t", sessionName, "#{pane_current_path}"])
+        XCTAssertEqual(status, "off")
+        XCTAssertEqual(mouse, "on")
+        XCTAssertEqual(colorTerm, "COLORTERM=truecolor")
+        XCTAssertTrue(noColor.isEmpty || noColor == "-NO_COLOR", "NO_COLOR leaked into the session: \(noColor)")
+        XCTAssertEqual(URL(fileURLWithPath: path).resolvingSymlinksInPath().path, root.resolvingSymlinksInPath().path)
+
+        let second = try launchClient()
+        defer { if second.isRunning { second.terminate() } }
+        try await waitForNativeTerminal(timeout: .seconds(10), message: "second client never attached") {
+            Self.clientCount(tmux, sessionName) == 2
+        }
+        let sessions = try await tmuxOutput(["list-sessions", "-F", "#{session_name}"])
+        XCTAssertEqual(sessions.split(separator: "\n").filter { $0 == sessionName }.count, 1)
+    }
+
     private static func tmuxExecutablePath() -> String? {
         ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"].first {
             FileManager.default.isExecutableFile(atPath: $0)
         }
+    }
+
+    private static func clientCount(_ executable: String, _ sessionName: String) -> Int {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["list-clients", "-t", sessionName, "-F", "#{client_name}"]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return -1 }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").count
     }
 
     private static func runTmux(_ executable: String, _ arguments: [String]) throws -> Int32 {

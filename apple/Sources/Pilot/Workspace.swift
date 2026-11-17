@@ -190,41 +190,34 @@ enum PersistentTerminalSession {
         "/usr/bin/tmux",
     ]
 
+    /// The command Ghostty launches for a local pane: one tmux client that
+    /// attaches to the pane's session, creating it first if needed.
+    ///
+    /// Ghostty runs it in place of an interactive shell, so the user's shell
+    /// startup files run once (in the tmux pane) rather than twice. The
+    /// session options ride the same client invocation as a `\;` chain, so a
+    /// new terminal costs one tmux process instead of seven.
     static func bootstrapCommand(sessionName: String, workingDirectory: String?) -> String? {
         guard let tmuxPath = tmuxExecutablePath() else { return nil }
-
-        let escapedSessionName = shellEscape(sessionName)
-        let tmux = shellEscape(tmuxPath)
-        let createCommand: String
+        let name = shellEscape(sessionName)
+        // `-c` only applies when the session is created; `-A` attaches an
+        // existing session without changing its working directory.
+        let directory = validWorkingDirectory(workingDirectory).map { " -c \(shellEscape($0))" } ?? ""
         // Panes render in Ghostty, a truecolor terminal, so a NO_COLOR leaked
         // from whatever launched Pilot (agent shells, scripts) must not reach
         // pane shells: the tmux server snapshots its environment at birth and
-        // seeds every session from it. Strip it from the server, the session,
-        // and the server-creating new-session itself.
-        let configureSessionCommand = """
-        \(tmux) set-option -t \(escapedSessionName) status off >/dev/null 2>&1
-        \(tmux) set-option -t \(escapedSessionName) mouse on >/dev/null 2>&1
-        \(tmux) set-environment -gu NO_COLOR >/dev/null 2>&1
-        \(tmux) set-environment -t \(escapedSessionName) -u NO_COLOR >/dev/null 2>&1
-        \(tmux) set-environment -t \(escapedSessionName) COLORTERM truecolor >/dev/null 2>&1
-        """
-
-        if let workingDirectory = validWorkingDirectory(workingDirectory) {
-            createCommand = "env -u NO_COLOR \(tmux) new-session -d -s \(escapedSessionName) -c \(shellEscape(workingDirectory))"
-        } else {
-            createCommand = "env -u NO_COLOR \(tmux) new-session -d -s \(escapedSessionName)"
-        }
-
-        return """
-        if \(tmux) has-session -t \(escapedSessionName) 2>/dev/null; then
-          \(configureSessionCommand)
-          exec \(tmux) attach-session -t \(escapedSessionName)
-        else
-          \(createCommand)
-          \(configureSessionCommand)
-          exec \(tmux) attach-session -t \(escapedSessionName)
-        fi
-        """ + "\n"
+        // seeds every session from it. Strip it from the client that may start
+        // the server, from the server, and from the session. An inherited TMUX
+        // would make tmux refuse to attach as a nested client.
+        // No leading `exec`: Ghostty on macOS already runs the command as
+        // `bash -c "exec -l <command>"`.
+        return "env -u NO_COLOR -u TMUX \(shellEscape(tmuxPath)) new-session -A -s \(name)\(directory)"
+            + " -e COLORTERM=truecolor"
+            + " \\; set-option status off"
+            + " \\; set-option mouse on"
+            + " \\; set-environment -gu NO_COLOR"
+            + " \\; set-environment -u NO_COLOR"
+            + " \\; set-environment COLORTERM truecolor"
     }
 
     static func closeSession(sessionName: String) async -> Bool {
