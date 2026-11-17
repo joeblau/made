@@ -156,6 +156,45 @@ struct NewTabPlaceholderTests {
         #expect(view.rows.first?.serverIsLive == true, "The listening server must show as live without other UI changes")
     }
 
+    @Test("An empty browser page lists live servers with working shortcuts and retries the failed address")
+    func browserEmptyPageServerList() async throws {
+        let root = "/projects/hig"
+        let catalog = LocalServerCatalog(scanner: { _ in
+            [LocalServer(port: 3905, name: "hig-docs"), LocalServer(port: 8081, name: "hig-native-fixture")]
+        })
+        _ = await catalog.refresh(rootPath: root)
+        let source = NewTabLiveSource(paneID: UUID(), serverCatalog: catalog, serverProbe: { $0 == 8081 })
+        let state = BrowserState(engine: .webKit)
+        let failed = try #require(URL(string: "http://localhost:5173/"))
+        state.emptyPage = BrowserEmptyPage(failedURL: failed, reason: "Could not connect to the server.")
+        let view = BrowserEmptyPageView(paneID: UUID(), state: state, rootPath: { root }, source: source)
+        var opened: [URL] = []
+        view.onNavigate = { opened.append($0) }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 500),
+                              styleMask: [.titled], backing: .buffered, defer: true)
+        window.isReleasedWhenClosed = false
+        defer { view.setLive(false); window.contentView = nil }
+        window.contentView = view
+        view.setLive(true)
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while view.rows.first(where: { $0.port == 8081 })?.serverIsLive != true, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        #expect(view.rows.first(where: { $0.port == 8081 })?.serverIsLive == true, "Liveness updates without other UI changes")
+        #expect(view.rows.map(\.shortcut) == ["r", "1", "2", "0"])
+        #expect(BrowserEmptyPageView.heading(for: state.emptyPage, engine: .webKit) == "Can’t open localhost:5173")
+        #expect(BrowserEmptyPageView.heading(for: BrowserEmptyPage(), engine: .webKit) == "Safari")
+
+        #expect(view.press("2"))
+        #expect(opened.last?.port == 8081)
+        #expect(view.press("r"))
+        #expect(opened.last == failed)
+        #expect(view.press("0"))
+        #expect(state.needsAddressFocus, "0 hands typing to the address field")
+        #expect(!view.press("9"))
+    }
+
     @Test("The tab title follows the chosen rows: New Tab, Terminal, Terminal / Agent")
     func tabTitleBreadcrumb() throws {
         let pane = Pane(kind: .terminal)

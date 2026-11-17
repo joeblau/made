@@ -19,6 +19,9 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
     private var surfaceIdentity: String?
     private var startPage: BrowserStartPageViewController?
     private var findBar: BrowserFindBar?
+    /// The server list over a page that shows nothing (WebKit only; Chromium
+    /// draws its own error pages and runtime overlays).
+    private var emptyOverlay: BrowserEmptyPageView?
     private let stack = NSStackView()
     private var dialogPresenter: BrowserJavaScriptDialogPresenter?
     private var zoomObserver: NSObjectProtocol?
@@ -92,6 +95,10 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
             startPage.focusInput()
             return
         }
+        if let emptyOverlay, !emptyOverlay.isHidden, !state.needsAddressFocus {
+            window.makeFirstResponder(emptyOverlay)
+            return
+        }
         let focused: Bool
         if let controller = surface as? WebViewRepresentable {
             focused = controller.focusContent()
@@ -144,6 +151,8 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
         }
         let identity = "\(state.engine.rawValue):\(state.websiteDataResetRequestID):\(state.runtimeRetryRequestID)"
         if surfaceIdentity != identity {
+            // The overlay is pinned to the surface it covers.
+            removeEmptyOverlay()
             if let surface {
                 (surface as? WebViewRepresentable)?.close()
                 (surface as? ChromiumBrowserView)?.close()
@@ -187,6 +196,7 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
             controller.isSelected = isSelected
             controller.synchronize()
         }
+        synchronizeEmptyOverlay()
         synchronizeDialog()
         applyHeaderInset()
     }
@@ -206,6 +216,54 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
         let top = webKit == nil ? headerInset : 0
         if stack.edgeInsets.top != top { stack.edgeInsets.top = top }
         (surface as? WebViewRepresentable)?.setObscuredTopInset(webKit == nil ? 0 : headerInset)
+    }
+
+    private func synchronizeEmptyOverlay() {
+        guard state.engine == .webKit, state.emptyPage != nil, let surfaceView = surface?.view else {
+            removeEmptyOverlay(refocus: true)
+            return
+        }
+        let overlay: BrowserEmptyPageView
+        if let emptyOverlay { overlay = emptyOverlay } else {
+            overlay = BrowserEmptyPageView(paneID: pane.id, state: state,
+                                           rootPath: { [weak pane] in pane?.workspace?.effectiveRootPath })
+            overlay.onNavigate = { [weak self] url in
+                guard let self else { return }
+                self.onSelect()
+                self.state.urlText = url.absoluteString
+                self.state.navigate()
+            }
+            overlay.acceptsKeys = { [weak self] in (self?.isActive ?? false) && (self?.isSelected ?? false) }
+            overlay.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(overlay, positioned: .above, relativeTo: stack)
+            NSLayoutConstraint.activate([
+                overlay.leadingAnchor.constraint(equalTo: surfaceView.leadingAnchor),
+                overlay.trailingAnchor.constraint(equalTo: surfaceView.trailingAnchor),
+                overlay.topAnchor.constraint(equalTo: surfaceView.topAnchor),
+                overlay.bottomAnchor.constraint(equalTo: surfaceView.bottomAnchor),
+            ])
+            emptyOverlay = overlay
+        }
+        overlay.isHidden = !isActive
+        overlay.setLive(isActive)
+        // Take keys from this pane's blank page, but never from the address
+        // field or another pane.
+        if isActive, isSelected, !state.isAddressEditing, !state.needsAddressFocus, let window = view.window,
+           window.attachedSheet == nil {
+            let responder = window.firstResponder
+            if responder === window || responder == nil || BrowserPaneFocus.responder(responder, isWithin: surfaceView) {
+                window.makeFirstResponder(overlay)
+            }
+        }
+    }
+
+    private func removeEmptyOverlay(refocus: Bool = false) {
+        guard let overlay = emptyOverlay else { return }
+        let hadFocus = overlay.window.map { BrowserPaneFocus.responder($0.firstResponder, isWithin: overlay) } ?? false
+        overlay.setLive(false)
+        overlay.removeFromSuperview()
+        emptyOverlay = nil
+        if refocus, hadFocus { focusPaneInput() }
     }
 
     private func append(_ child: NSView) {
@@ -249,6 +307,7 @@ final class BrowserPaneViewController: NSViewController, CockpitPanePresenting, 
         (surface as? WebViewRepresentable)?.close()
         (surface as? ChromiumBrowserView)?.close()
         startPage?.setActive(false)
+        emptyOverlay?.setLive(false)
     }
 
     isolated deinit { closePane() }

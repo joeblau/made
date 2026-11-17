@@ -319,3 +319,180 @@ final class ServerPortBadge: NSView {
         label.frame = NSRect(x: 0, y: (bounds.height - height) / 2, width: bounds.width, height: height)
     }
 }
+
+/// Covers a browser page that shows nothing (a dev server that is not up,
+/// a dead web process, `about:blank`) with the same server list as New Tab,
+/// painted in the window's background so it follows light and dark mode.
+/// Choosing a server navigates this pane in place; 1–9 open servers, 0 focuses
+/// the address field, and R retries the address that failed.
+@MainActor
+final class BrowserEmptyPageView: NSView {
+    let state: BrowserState
+    var rootPath: () -> String?
+    var onNavigate: ((URL) -> Void)?
+    /// Whether keys typed here belong to this pane (it is shown and selected).
+    var acceptsKeys: () -> Bool = { true }
+    private let source: NewTabLiveSource
+    private let heading = CockpitUI.label("", role: .sectionTitle)
+    private let reason = CockpitUI.label("", size: 12, color: .secondaryLabelColor)
+    private let hint = CockpitUI.label("", size: 11, color: .tertiaryLabelColor)
+    private let pageView = NewTabPageView()
+    private var content = NewTabContent(rows: [])
+    private var highlightedID: String?
+    private var isLive = false
+    private lazy var observation = CockpitObservation(owner: self) { $0.render() }
+    override var isFlipped: Bool { true }
+    override var acceptsFirstResponder: Bool { !isHidden }
+
+    var rows: [NewTabRow] { content.rows }
+    private var page: NewTabPage { .browserServers(state.engine) }
+
+    init(paneID: UUID, state: BrowserState, rootPath: @escaping () -> String?, source: NewTabLiveSource? = nil) {
+        self.state = state
+        self.rootPath = rootPath
+        self.source = source ?? NewTabLiveSource(paneID: paneID)
+        super.init(frame: .zero)
+        wantsLayer = true
+        setAccessibilityIdentifier("browser.empty-page")
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        for label in [heading, reason, hint] {
+            label.alignment = .center
+            label.lineBreakMode = .byTruncatingTail
+            label.maximumNumberOfLines = 1
+        }
+        reason.maximumNumberOfLines = 2
+        reason.lineBreakMode = .byWordWrapping
+        pageView.onActivate = { [weak self] row in self?.activate(row) }
+        pageView.onHover = { [weak self] id in self?.setHighlight(id) }
+        [heading, reason, pageView, hint].forEach(addSubview)
+        updateBackground()
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    isolated deinit { source.deactivate() }
+
+    /// Starts or stops the server scan and liveness polling.
+    func setLive(_ live: Bool) {
+        guard live != isLive else { return }
+        isLive = live
+        if live {
+            source.activate(page, rootPath: rootPath())
+            observation.start()
+        } else {
+            observation.stop()
+            source.deactivate()
+        }
+    }
+
+    private func render() {
+        // Reading the engine and root here re-renders when either changes.
+        let currentRoot = rootPath()
+        if isLive { source.activate(page, rootPath: currentRoot) }
+        let failure = state.emptyPage
+        var next = source.content(for: page)
+        if let url = failure?.failedURL {
+            next.rows.insert(NewTabRow(id: "retry", title: "Try Again", detail: url.absoluteString,
+                                       symbol: "arrow.clockwise", shortcut: "r",
+                                       action: .open(.browser(state.engine, url))), at: 0)
+        }
+        heading.stringValue = Self.heading(for: failure, engine: state.engine)
+        reason.stringValue = failure?.reason ?? ""
+        reason.isHidden = reason.stringValue.isEmpty
+        hint.stringValue = failure?.failedURL == nil ? "Press 1–9 to open a server, 0 for an address"
+            : "Press R to try again, 1–9 to open a server, 0 for an address"
+        setAccessibilityLabel(heading.stringValue)
+        if let highlightedID, !next.rows.contains(where: { $0.id == highlightedID && $0.isSelectable }) { self.highlightedID = nil }
+        guard next != content else { return }
+        content = next
+        pageView.update(rows: next.rows, message: next.message, highlightedID: highlightedID)
+        needsLayout = true
+    }
+
+    static func heading(for failure: BrowserEmptyPage?, engine: BrowserEngine) -> String {
+        guard let url = failure?.failedURL else { return NewTabPage.browserServers(engine).title }
+        let host = url.host.map { host in url.port.map { "\(host):\($0)" } ?? host }
+        return "Can’t open \(host ?? url.absoluteString)"
+    }
+
+    @discardableResult
+    func press(_ key: String) -> Bool {
+        guard let row = content.rows.first(where: { $0.shortcut == key.lowercased() && $0.isSelectable }) else { return false }
+        activate(row)
+        return true
+    }
+
+    func activate(_ row: NewTabRow) {
+        guard row.isSelectable else { return }
+        switch row.action {
+        case .open(.browser(_, let url?)):
+            onNavigate?(url)
+        case .open(.browser(_, nil)):
+            state.requestAddressFocus()
+        default:
+            break
+        }
+    }
+
+    private func setHighlight(_ id: String?) {
+        highlightedID = id
+        pageView.setHighlight(id)
+    }
+
+    private func moveHighlight(by delta: Int) {
+        let selectable = content.rows.filter(\.isSelectable)
+        guard !selectable.isEmpty else { return }
+        let index = selectable.firstIndex { $0.id == highlightedID }
+        let next = index.map { min(max($0 + delta, 0), selectable.count - 1) } ?? (delta > 0 ? 0 : selectable.count - 1)
+        setHighlight(selectable[next].id)
+        pageView.scrollToHighlight()
+    }
+
+    override func mouseDown(with event: NSEvent) { window?.makeFirstResponder(self) }
+
+    override func keyDown(with event: NSEvent) {
+        // Only this focused overlay handles keys, never window-wide shortcuts.
+        guard acceptsKeys(), !isHiddenOrHasHiddenAncestor, !event.isARepeat,
+              event.modifierFlags.intersection([.command, .control, .option]).isEmpty else {
+            super.keyDown(with: event); return
+        }
+        switch event.keyCode {
+        case 125: moveHighlight(by: 1); return // Down Arrow
+        case 126: moveHighlight(by: -1); return // Up Arrow
+        case 36, 76: // Return, Enter
+            if let row = content.rows.first(where: { $0.id == highlightedID }) { activate(row); return }
+        default:
+            if let key = event.charactersIgnoringModifiers, key.count == 1, press(key) { return }
+        }
+        super.keyDown(with: event)
+    }
+
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateBackground() }
+    private func updateBackground() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        let zoom = CGFloat(CockpitUIZoomController.shared.factor)
+        let width = min(440 * zoom, max(0, bounds.width - 32))
+        let left = (bounds.width - width) / 2
+        let headingHeight = heading.intrinsicContentSize.height
+        let reasonHeight = reason.isHidden ? 0 : ceil(reason.sizeThatFits(NSSize(width: width, height: .greatestFiniteMagnitude)).height)
+        let reasonGap: CGFloat = reason.isHidden ? 0 : 6
+        let hintHeight = hint.intrinsicContentSize.height
+        let chrome = headingHeight + reasonGap + reasonHeight + 20 + 16 + hintHeight
+        let listHeight = min(pageView.preferredHeight(width: width), max(0, bounds.height - 24 - chrome))
+        var top = max(12, (bounds.height - chrome - listHeight) / 2)
+        heading.frame = NSRect(x: left, y: top, width: width, height: headingHeight)
+        top += headingHeight + reasonGap
+        reason.frame = NSRect(x: left, y: top, width: width, height: reasonHeight)
+        top += reasonHeight + 20
+        pageView.frame = NSRect(x: left, y: top, width: width, height: listHeight)
+        top += listHeight + 16
+        hint.frame = NSRect(x: left, y: top, width: width, height: hintHeight)
+    }
+}

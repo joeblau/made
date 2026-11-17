@@ -882,9 +882,10 @@ final class CockpitNewTabView: NSView {
     }
 }
 
-/// A scrollable column of rows for one page.
+/// A scrollable column of rows for one page. Also shown over an empty
+/// browser page, so both server lists look and behave the same.
 @MainActor
-private final class NewTabPageView: NSScrollView {
+final class NewTabPageView: NSScrollView {
     var onActivate: ((NewTabRow) -> Void)?
     var onHover: ((String?) -> Void)?
     private(set) var rows: [NewTabRow] = []
