@@ -3,7 +3,11 @@
 Pilot consumes Ghostty's internal embedding API through a checksummed SwiftPM
 binary target. Normal clones do not download the old 566 MB of raw Git LFS
 archives; SwiftPM fetches one stripped, compressed XCFramework from the
-`ghosttykit-1.3.1-blau.2` GitHub release.
+`ghosttykit-1.3.1-blau.2` GitHub release, which was built with Xcode 26.
+
+The packager now requires Xcode 27 and produces `ghosttykit-1.3.1-blau.3`.
+Until that release is published and `Package.swift` points at it, consumers
+keep resolving `blau.2`.
 
 ## Provenance
 
@@ -13,7 +17,8 @@ archives; SwiftPM fetches one stripped, compressed XCFramework from the
 - Commit: `332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28`
 - Required Zig: Homebrew `0.15.2_1`, which adds Xcode 26.4+ Darwin TBD
   matching to upstream Zig 0.15.2
-- blau artifact release: `ghosttykit-1.3.1-blau.2`
+- blau artifact release: `ghosttykit-1.3.1-blau.2` (published, Xcode 26);
+  next candidate `ghosttykit-1.3.1-blau.3` (Xcode 27)
 
 The immutable packaging commit and script hashes, upstream commit and tag
 object, Xcode version, canonical Zig/Homebrew dependency receipts, Zig binary
@@ -33,11 +38,11 @@ its SHA-256 is included in the release metadata.
 ## Reproduce the release
 
 The authoritative path is the manually dispatched
-`GhosttyKit Pinned Release Candidate` workflow on a self-hosted Mac mini with Xcode 26:
+`GhosttyKit Pinned Release Candidate` workflow on a self-hosted Mac mini with Xcode 27:
 
 ```bash
 gh workflow run ghosttykit-bootstrap.yml \
-  --ref ghosttykit-1.3.1-blau.2
+  --ref ghosttykit-1.3.1-blau.3
 ```
 
 It installs the checksummed Homebrew formula from the recorded homebrew/core
@@ -59,7 +64,7 @@ peeled commit, applies the audited build-graph-only patch, runs upstream's
 universal XCFramework build in `ReleaseFast`,
 preserves the unstripped libraries/symbol bundles separately, strips runtime
 debug symbols with Apple's `strip -S`, refreshes archive indexes, and creates
-normalized ZIPs in `release-artifacts/ghosttykit-1.3.1-blau.2/`.
+normalized ZIPs in `release-artifacts/ghosttykit-1.3.1-blau.3/`.
 
 Before producing checksums it fails unless:
 
@@ -82,7 +87,7 @@ and installed-app launch are release checks after SwiftPM resolves the binary.
 
 1. Compare a second clean build's runtime, symbols, license, metadata, and
    checksum manifest byte-for-byte.
-2. Create an annotated `ghosttykit-1.3.1-blau.2` tag at the exact packaging
+2. Create an annotated `ghosttykit-1.3.1-blau.3` tag at the exact packaging
    revision recorded in the metadata, then create its release.
 3. Upload `GhosttyKit.xcframework.zip`, `GhosttyKit.symbols.zip`,
    `LICENSE.ghostty`, `GhosttyKit.release.json`, and

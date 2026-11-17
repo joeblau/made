@@ -36,10 +36,8 @@ system `/bin/bash` 3.2 and BSD userland; keep workflow shell portable to both.
 
 - **Xcode.** Each job runs `.github/scripts/prepare-macos-runner.sh <major>`
   first. It picks the newest `/Applications/Xcode*.app` with that major version
-  (27 for CI, releases, and the pinned CEF runtime; 26 only for the manual
-  GhosttyKit reproduction) and fails with the installed list if none matches.
-  Every mini needs Xcode 27; install Xcode 26 on at least one before running
-  the GhosttyKit bootstrap.
+  (27 for CI, releases, and the pinned CEF and GhosttyKit bootstraps) and fails
+  with the installed list if none matches. Every mini needs Xcode 27.
 - **git-lfs.** The minis don't ship it, so every LFS checkout is preceded by
   an inline step that installs a pinned, SHA-256 verified `git-lfs` into
   `RUNNER_TEMP`. Bump the version and digest together. Workspaces persist
