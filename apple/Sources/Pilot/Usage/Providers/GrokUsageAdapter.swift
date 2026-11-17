@@ -127,20 +127,18 @@ enum GrokUsageAdapter {
             ))
         }
 
-        if let prepaid = cents(payload, keys: ["prepaidBalance", "prepaid_balance"]) {
-            usage.credits = CreditInfo(
-                balance: prepaid / 100.0,
-                unit: .currency("USD")
-            )
-        } else if let cap = cents(payload, keys: ["onDemandCap", "on_demand_cap"]), cap > 0 {
-            let used = cents(payload, keys: ["onDemandUsed", "on_demand_used"])
-            usage.credits = CreditInfo(
-                balance: nil,
-                unit: .currency("USD"),
-                used: used.map { $0 / 100.0 },
-                limit: cap / 100.0
-            )
-        }
+        // A prepaid wallet and an on-demand cap can coexist. Keep both;
+        // selecting the wallet used to hide the metered-usage bar entirely.
+        let prepaid = cents(payload, keys: ["prepaidBalance", "prepaid_balance"])
+        let cap = cents(payload, keys: ["onDemandCap", "on_demand_cap"])
+        let used = cents(payload, keys: ["onDemandUsed", "on_demand_used"])
+        let credits = CreditInfo(
+            balance: prepaid.flatMap { $0.isFinite ? $0 / 100.0 : nil },
+            unit: .currency("USD"),
+            used: used.flatMap { $0.isFinite ? $0 / 100.0 : nil },
+            limit: cap.flatMap { $0.isFinite && $0 > 0 ? $0 / 100.0 : nil }
+        )
+        if !credits.isEmpty { usage.credits = credits }
         return usage
     }
 

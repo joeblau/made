@@ -47,6 +47,15 @@ enum UsageAccount: Int, CaseIterable, Sendable {
         }
     }
     var displayName: String { self == .claude || self == .kimi ? title + " Code" : title }
+    var creditTitle: String {
+        switch self {
+        case .claude: "Extra usage"
+        case .codex: "Codex credits"
+        case .kimi: "Booster credits"
+        case .grok: "Prepaid & on-demand"
+        case .cursor: "On-demand usage"
+        }
+    }
     var consentKey: String {
         switch self {
         case .claude: UsageConsent.claudeKey
@@ -76,7 +85,7 @@ enum UsageAccount: Int, CaseIterable, Sendable {
     }
     var signInMessage: String {
         switch self {
-        case .cursor: "Not signed in. Sign in to the Cursor app, then refresh."
+        case .cursor: UsageSessions.CursorSession.LoadError.missingToken.message
         case .kimi: "Not signed in. Run kimi login in a terminal to log in, then refresh."
         default: "Not signed in. Run \(title.lowercased()) in a terminal to log in, then refresh."
         }
@@ -103,7 +112,7 @@ enum UsageAccount: Int, CaseIterable, Sendable {
         case .grok:
             "When enabled, Cockpit reads $GROK_HOME/auth.json (or ~/.grok/auth.json) and sends its bearer token only to xAI's usage and sign-in endpoints. Grok's six-hour tokens rotate on refresh, so when the stored token has expired Cockpit refreshes it and saves the rotated token back to auth.json — keeping both Cockpit and the grok CLI signed in."
         case .cursor:
-            "When enabled, Cockpit reads the Cursor app's local state database (~/Library/Application Support/Cursor) and sends its session token only to cursor.com's usage endpoints."
+            "When enabled, Cockpit reads the Cursor desktop app's session and its Cursor Safe Storage Keychain item. macOS may ask for access. The session is sent only to cursor.com's usage endpoints; Cockpit never rewrites it. Website and agent CLI logins are separate."
         }
     }
     @MainActor func state(in store: UsageStore) -> ProviderState {
@@ -142,6 +151,7 @@ final class UsageViewController: NSViewController {
         stack.fillsWidth = true
         for account in UsageAccount.allCases {
             let card = NativeProviderUsageCard(account: account, defaults: defaults)
+            card.identifier = .init("usage.card.\(account.title.lowercased())")
             card.enable = { [weak self] in
                 guard let self else { return }
                 self.defaults.set(true, forKey: account.consentKey)
@@ -155,6 +165,13 @@ final class UsageViewController: NSViewController {
             cards[account] = card
             stack.addArrangedSubview(card)
         }
+        let manage = InspectorActionButton("Manage Subscriptions", symbol: "slider.horizontal.3") { [weak self] in
+            guard let self else { return }
+            self.defaults.set(SettingsTab.usage, forKey: SettingsTab.storageKey)
+            self.onOpenSettings?()
+        }
+        manage.identifier = .init("usage.manage-subscriptions")
+        stack.addArrangedSubview(manage)
         InspectorNativeUI.scrollDocument(stack, in: scroll, inset: 8)
         let layout = InspectorNativeUI.vertical([header, scroll], spacing: 0)
         layout.fillsWidth = true
@@ -208,9 +225,14 @@ final class UsageViewController: NSViewController {
     }
     private func render(force: Bool = false) {
         guard isViewLoaded else { return }
-        header.update(title: "Plan Usage", symbol: "chart.bar.xaxis", loading: store.isLoading,
+        header.update(title: "Usage & Credits", symbol: "chart.bar.xaxis", loading: store.isLoading,
                       refreshHelp: "Refresh usage", defaults: defaults)
-        for account in UsageAccount.allCases { cards[account]?.update(state: account.state(in: store), force: force) }
+        for account in UsageAccount.allCases {
+            let state = account.state(in: store)
+            let card = cards[account]
+            card?.isHidden = !defaults.bool(forKey: account.consentKey)
+            card?.update(state: state, force: force)
+        }
         let needsTimer = isActive && cards.values.contains { $0.hasCountdown }
         if needsTimer, timer == nil {
             timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -305,6 +327,9 @@ private final class NativeProviderUsageCard: NSView {
         if usage.windows.isEmpty && usage.credits == nil {
             stack.addArrangedSubview(label("No usage reported for this window.", color: .secondaryLabelColor))
         }
+        if !usage.windows.isEmpty {
+            stack.addArrangedSubview(label("Subscription", size: 11, weight: .semibold, color: .secondaryLabelColor))
+        }
         for window in usage.windowsInDisplayOrder {
             let value = label("\(Int((window.utilization * 100).rounded()))%", weight: .semibold,
                               color: window.utilization >= 0.9 ? .systemRed : .labelColor)
@@ -317,7 +342,10 @@ private final class NativeProviderUsageCard: NSView {
             stack.addArrangedSubview(level)
             if let reset = window.resetsAt { appendCountdown(reset, retry: false) }
         }
-        if let credits = usage.credits, !credits.isEmpty { appendCredits(credits) }
+        if let credits = usage.credits, !credits.isEmpty {
+            stack.addArrangedSubview(label(account.creditTitle, size: 11, weight: .semibold, color: .secondaryLabelColor))
+            appendCredits(credits)
+        }
     }
     private func appendCountdown(_ deadline: Date, retry: Bool) {
         let field = label("", color: .secondaryLabelColor)
@@ -333,19 +361,29 @@ private final class NativeProviderUsageCard: NSView {
             creditLine(credits.balance == nil && credits.used == nil ? "Credits" : "Monthly limit", "Unlimited")
         } else if let used = credits.used, let limit = credits.limit {
             creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(amount(used, unit: credits.unit)) / \(amount(limit, unit: credits.unit)) used")
-        } else if let utilization = credits.utilization {
+        } else if let utilization = credits.utilization, utilization.isFinite {
             creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(Int((utilization * 100).rounded()))% used")
         } else if let used = credits.used {
             creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(amount(used, unit: credits.unit)) used")
         } else if let limit = credits.limit {
             creditLine(credits.balance == nil ? "Credits" : "Monthly", "\(amount(limit, unit: credits.unit)) limit")
         }
+        if let fraction = credits.fractionUsed {
+            let level = UsageProgressBar(fraction: fraction, tint: fraction >= 0.9 ? .systemRed : account.tint)
+            level.identifier = .init("usage.credits.\(account.title.lowercased())")
+            level.setAccessibilityLabel(account.creditTitle)
+            level.setAccessibilityValue("\(Int((fraction * 100).rounded()))% used")
+            stack.addArrangedSubview(level)
+        } else if credits.balance != nil, !hasMonthly {
+            stack.addArrangedSubview(label("Remaining balance · total allowance not reported", size: 10, color: .secondaryLabelColor))
+        }
     }
     private func creditLine(_ title: String, _ value: String) {
         stack.addArrangedSubview(InspectorNativeUI.horizontal([label(title, weight: .medium, color: .secondaryLabelColor), NSView(), label(value)]))
     }
     private func amount(_ value: Double, unit: CreditUnit) -> String {
-        switch unit {
+        guard value.isFinite else { return "Unavailable" }
+        return switch unit {
         case .credits: "\(value.formatted(.number.grouping(.automatic).precision(.fractionLength(0...2)))) credits"
         case .currency(let code): value.formatted(.currency(code: code).precision(.fractionLength(2)))
         }

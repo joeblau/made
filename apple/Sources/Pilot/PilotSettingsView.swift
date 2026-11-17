@@ -19,7 +19,8 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
                 searchTerms: (["Sidebar", "show", "hide"] + SidebarFeature.allCases.map(\.title)).joined(separator: " ")),
         Section(id: SettingsTab.drones, title: "Drones", symbol: "antenna.radiowaves.left.and.right",
                 searchTerms: "Drones remote workers pairing Bonjour"),
-        Section(id: SettingsTab.usage, title: "Usage", symbol: "chart.bar", searchTerms: "Usage Claude Codex Kimi Grok")
+        Section(id: SettingsTab.usage, title: "Usage", symbol: "chart.bar",
+                searchTerms: "Usage subscriptions API credits billing Claude Codex Kimi Grok Cursor setup sign in")
     ]
     private let updater: SPUUpdater
     private let droneStore: DroneStore
@@ -285,7 +286,8 @@ final class PilotSettingsViewController: NSViewController, NSTableViewDataSource
                 if runsLiveChecks {
                     controller = UsageSettingsViewController(defaults: defaults, showsPageHeader: false)
                 } else {
-                    controller = UsageSettingsViewController(defaults: defaults, showsPageHeader: false, detector: { _ in false })
+                    controller = UsageSettingsViewController(defaults: defaults, showsPageHeader: false,
+                                                             detector: { .needsSetup($0.signInMessage) })
                 }
             default:
                 controller = GeneralSettingsViewController(

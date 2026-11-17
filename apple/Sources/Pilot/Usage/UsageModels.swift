@@ -26,6 +26,17 @@ struct CreditInfo: Equatable, Sendable {
     /// Monthly-credit utilization (0...1), when reported instead of a balance.
     var utilization: Double? = nil
 
+    /// A usage bar needs a provider-reported denominator. A balance alone
+    /// cannot tell us what fraction of purchased credit remains.
+    var fractionUsed: Double? {
+        guard !unlimited else { return nil }
+        if let used, used.isFinite, let limit, limit.isFinite, limit > 0 {
+            return min(max(used / limit, 0), 1)
+        }
+        guard let utilization, utilization.isFinite else { return nil }
+        return min(max(utilization, 0), 1)
+    }
+
     var isEmpty: Bool {
         balance == nil && used == nil && limit == nil && !unlimited && utilization == nil
     }

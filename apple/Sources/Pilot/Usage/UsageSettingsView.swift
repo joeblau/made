@@ -5,7 +5,11 @@ import AppKit
 /// dismissed page or a provider whose consent has since been revoked.
 @MainActor
 final class UsageSettingsViewController: NSViewController {
-    typealias SessionDetector = @Sendable (UsageAccount) async -> Bool
+    enum ConnectionStatus: Equatable, Sendable {
+        case available
+        case needsSetup(String)
+    }
+    typealias SessionDetector = @Sendable (UsageAccount) async -> ConnectionStatus
     let defaults: UserDefaults
     let showsPageHeader: Bool
     private let detector: SessionDetector
@@ -13,7 +17,7 @@ final class UsageSettingsViewController: NSViewController {
     private var toggles: [UsageAccount: NSSwitch] = [:]
     private var statuses: [UsageAccount: NSTextField] = [:]
     private var enabled: [UsageAccount: Bool] = [:]
-    private var signedIn: [UsageAccount: Bool] = [:]
+    private var signedIn: [UsageAccount: ConnectionStatus] = [:]
     private var sharingToggle: NSSwitch?
     private var isActive = false
     private var detectionGeneration = 0
@@ -40,14 +44,14 @@ final class UsageSettingsViewController: NSViewController {
         var providerRows: [NSView] = []
         for account in UsageAccount.allCases {
             // Provider disclosures stay available on hover instead of as page text.
-            let toggle = NativeSettingsUI.toggle("Allow Cockpit to read \(account.displayName) credentials and usage",
+            let toggle = NativeSettingsUI.toggle("Show \(account.title) subscription and credits",
                                                  help: account.disclosure)
             toggle.target = self
             toggle.action = #selector(consentChanged(_:))
             toggle.tag = account.rawValue
             toggle.identifier = .init("usage.consent.\(account.title.lowercased())")
             let status = InspectorNativeUI.label("Disabled", size: 11, color: .secondaryLabelColor, defaults: defaults)
-            status.maximumNumberOfLines = 1
+            status.maximumNumberOfLines = 0
             status.setAccessibilityLabel("\(account.title) sign-in status")
             status.identifier = .init("usage.status.\(account.title.lowercased())")
             let setup = InspectorActionButton("", symbol: "arrow.up.forward.app") {
@@ -61,9 +65,32 @@ final class UsageSettingsViewController: NSViewController {
             toggles[account] = toggle
             statuses[account] = status
         }
-        let providers = NativeSettingsUI.group("Providers", providerRows)
+        let providers = NativeSettingsUI.group("Subscriptions", providerRows)
         providers.toolTip = "All providers are disabled by default. Cockpit does not read auth files, query Keychain, or make usage requests until you enable that provider. Cockpit keeps no token store of its own; the only credentials it ever writes are Grok's and Kimi's rotated tokens, back into each CLI's own credential file."
         stack.addArrangedSubview(providers)
+        let guide = InspectorNativeUI.label(
+            "Enable the subscriptions you use. Turning one off hides its card and stops Cockpit from reading its credentials or requesting its usage.",
+            size: 11, color: .secondaryLabelColor, defaults: defaults
+        )
+        stack.addArrangedSubview(guide)
+        let cursorHelp = InspectorNativeUI.label(
+            "Cockpit uses your Cursor desktop session. Open Cursor and sign in there, even if cursor.com or the agent CLI already says you’re connected. macOS may ask to unlock Cursor’s saved session. Updating the agent CLI is not required.",
+            size: 11, color: .secondaryLabelColor, defaults: defaults
+        )
+        let openCursor = InspectorActionButton("Open Cursor", symbol: "arrow.up.forward.app") {
+            let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.todesktop.230313mzl4w4u92")
+                ?? URL(string: "https://cursor.com/download")!
+            NSWorkspace.shared.open(url)
+        }
+        let checkAgain = InspectorActionButton("Check Again", symbol: "arrow.clockwise") { [weak self] in
+            self?.detect()
+            NotificationCenter.default.post(name: UsageConsent.changedNotification, object: nil)
+        }
+        checkAgain.identifier = .init("usage.check-again")
+        stack.addArrangedSubview(NativeSettingsUI.group("Connection Setup", [
+            cursorHelp,
+            NativeSettingsUI.formRow("Cursor desktop", accessories: [openCursor, checkAgain]),
+        ]))
         let sharing = NativeSettingsUI.toggle(
             "Share AI Usage on Lock Screen and Companions",
             help: "Shares only aggregate estimated cost, token totals, and plan utilization with widgets and paired companions. Raw usage records, logs, and session identifiers are never included. Turning this off removes published usage snapshots."
@@ -174,8 +201,14 @@ final class UsageSettingsViewController: NSViewController {
             status?.stringValue = "Disabled"
             status?.textColor = .secondaryLabelColor
         } else if let value = signedIn[account] {
-            status?.stringValue = value ? "Signed in" : "Not signed in"
-            status?.textColor = value ? .systemGreen : .secondaryLabelColor
+            switch value {
+            case .available:
+                status?.stringValue = account == .cursor ? "Desktop session ready" : "Credentials found"
+                status?.textColor = .systemGreen
+            case .needsSetup(let message):
+                status?.stringValue = message
+                status?.textColor = .secondaryLabelColor
+            }
         } else {
             status?.stringValue = "Checking sign-in…"
             status?.textColor = .secondaryLabelColor
@@ -192,10 +225,10 @@ final class UsageSettingsViewController: NSViewController {
         let enabledAccounts = UsageAccount.allCases.filter { enabled[$0] == true }
         let detector = self.detector
         detectionTask = Task { @MainActor [weak self] in
-            await withTaskGroup(of: (UsageAccount, Bool).self) { group in
+            await withTaskGroup(of: (UsageAccount, ConnectionStatus).self) { group in
                 for account in enabledAccounts {
                     group.addTask {
-                        guard !Task.isCancelled else { return (account, false) }
+                        guard !Task.isCancelled else { return (account, .needsSetup("Check cancelled")) }
                         return (account, await detector(account))
                     }
                 }
@@ -210,21 +243,28 @@ final class UsageSettingsViewController: NSViewController {
         }
     }
 
-    nonisolated static func detectSession(_ account: UsageAccount) async -> Bool {
-        guard !Task.isCancelled else { return false }
+    nonisolated static func detectSession(_ account: UsageAccount) async -> ConnectionStatus {
+        guard !Task.isCancelled else { return .needsSetup("Check cancelled") }
         return await Task.detached {
-            guard !Task.isCancelled else { return false }
+            guard !Task.isCancelled else { return ConnectionStatus.needsSetup("Check cancelled") }
+            let found: Bool
             switch account {
-            case .claude: return UsageSessions.ClaudeSession.load() != nil
-            case .codex: return UsageSessions.CodexSession.load() != nil
-            case .grok: return UsageSessions.GrokSession.load() != nil
+            case .claude: found = UsageSessions.ClaudeSession.load() != nil
+            case .codex: found = UsageSessions.CodexSession.load() != nil
+            case .grok: found = UsageSessions.GrokSession.load() != nil
             case .cursor:
-                guard let session = UsageSessions.CursorSession.load() else { return false }
-                return !session.isExpired
+                do {
+                    let session = try UsageSessions.CursorSession.loadChecked()
+                    return session.isExpired ? .needsSetup(UsageSessions.CursorSession.LoadError.expired.message) : .available
+                } catch let error as UsageSessions.CursorSession.LoadError {
+                    return .needsSetup(error.message)
+                } catch {
+                    return .needsSetup(UsageSessions.CursorSession.LoadError.unreadableToken.message)
+                }
             case .kimi:
-                guard let session = UsageSessions.KimiSession.load() else { return false }
-                return !session.isExpired
+                found = UsageSessions.KimiSession.load().map { !$0.isExpired || $0.canRefresh } ?? false
             }
+            return found ? .available : .needsSetup(account.signInMessage)
         }.value
     }
 }
