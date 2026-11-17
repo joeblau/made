@@ -54,8 +54,8 @@ Cockpit…**. The terminal, editor, notes, and browser are included.
 The prerequisites below are for **building from source**.
 
 - macOS with **Xcode 27.x** selected by `xcode-select` (the version enforced in
-  CI). The pinned GhosttyKit/ChromiumKit binary artifacts are still reproduced
-  on Xcode 26 until they are re-bootstrapped.
+  CI). The GhosttyKit and ChromiumKit bootstraps also use Xcode 27; the
+  currently published GhosttyKit `blau.2` artifact was built with Xcode 26.
 - [Homebrew](https://brew.sh/) for the Apple command-line tool set, including
   Fastlane for reproducible screenshot capture.
 - Git LFS. Current checkouts download GhosttyKit through SwiftPM, while
