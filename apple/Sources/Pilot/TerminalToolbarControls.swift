@@ -63,6 +63,7 @@ final class TerminalFastCommandToolbarField: NSView, NSTextFieldDelegate {
 @MainActor
 final class TerminalFastCommandToolbarActions: NSView {
     let pane: Pane
+    private let paneID: UUID
     private let play = NSButton(image: NSImage(systemSymbolName: "play.fill", accessibilityDescription: "Run Fast Command")!, target: nil, action: nil)
     private let stopButton = NSButton(image: NSImage(systemSymbolName: "stop.fill", accessibilityDescription: "Stop Terminal Process")!, target: nil, action: nil)
     private let spinner = NSProgressIndicator()
@@ -86,6 +87,7 @@ final class TerminalFastCommandToolbarActions: NSView {
 
     init(pane: Pane) {
         self.pane = pane
+        paneID = pane.id
         super.init(frame: NSRect(x: 0, y: 0, width: 60, height: 28))
         for button in [play, stopButton] {
             button.isBordered = false
@@ -175,27 +177,31 @@ final class TerminalFastCommandToolbarActions: NSView {
             while !Task.isCancelled {
                 let activity = await session.foregroundActivity(unavailableActivity: .idle)
                 guard let self, generation == request, window != nil else { return }
-                self.activity = activity
-                refreshControls()
+                if self.activity != activity {
+                    self.activity = activity
+                    refreshControls()
+                }
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
     }
 
     @objc private func refreshControls() {
-        let command = TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: pane.id))
-        play.isEnabled = !isRunningAction && command != nil
+        let command = TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: paneID))
+        let canRun = !isRunningAction && command != nil
+        if play.isEnabled != canRun { play.isEnabled = canRun }
         let presentation = Self.runButtonPresentation(command: command, activity: activity)
         if shownRunSymbol != presentation.symbol {
             shownRunSymbol = presentation.symbol
             play.image = NSImage(systemSymbolName: presentation.symbol, accessibilityDescription: presentation.label)
+            play.setAccessibilityLabel(presentation.label)
         }
-        play.setAccessibilityLabel(presentation.label)
-        play.toolTip = presentation.toolTip
-        stopButton.isEnabled = !isRunningAction && activity == .running
-        if isRunningAction { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        if play.toolTip != presentation.toolTip { play.toolTip = presentation.toolTip }
+        let canStop = !isRunningAction && activity == .running
+        if stopButton.isEnabled != canStop { stopButton.isEnabled = canStop }
         if spinner.isHidden == isRunningAction {
             spinner.isHidden = !isRunningAction
+            if isRunningAction { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
             invalidateIntrinsicContentSize()
             superview?.needsLayout = true
         }
@@ -203,7 +209,7 @@ final class TerminalFastCommandToolbarActions: NSView {
 
     @objc private func run() {
         guard !isRunningAction,
-              let command = TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: pane.id)) else { return }
+              let command = TerminalFastCommandStore.executableCommand(from: TerminalFastCommandStore.command(for: paneID)) else { return }
         perform { [pane] in _ = await pane.terminalSession.runFastCommand(command) }
     }
 

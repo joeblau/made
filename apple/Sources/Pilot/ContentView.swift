@@ -562,9 +562,9 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         let leading: [NSToolbarItem.Identifier] = surface == .main
-            // New Workspace sits at the trailing edge of the sidebar's toolbar
-            // region, beside the list it adds to, rather than over content.
-            ? [ToolbarID.sidebar, .flexibleSpace, ToolbarID.newWorkspace, .sidebarTrackingSeparator] : []
+            // A narrow sidebar only has room for the window controls and toggle.
+            // Let New Workspace use the content region beside the divider.
+            ? [ToolbarID.sidebar, .sidebarTrackingSeparator, ToolbarID.newWorkspace] : []
         // The flexible space after the tracking separator keeps the pane
         // tools at the window's trailing edge while the inspector is open,
         // instead of at the inspector's leading edge.
