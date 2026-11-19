@@ -1219,6 +1219,49 @@ private final class Fixture {
     func cleanUp() { cache.closeAll(); defaults.removePersistentDomain(forName: defaultsName) }
 }
 
+extension NativeCockpitWindowTests {
+    @MainActor
+    func testTerminalControlsStayVisibleBesideNewTabWithInspectorOpen() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkingWorkspace()
+        let controller = fixture.window()
+        controller.inspectorFactory = { _ in FixturePaneController() }
+        controller.featureToolbarFactory = { TerminalFastCommandToolbarView(pane: $0) }
+        let window = try XCTUnwrap(controller.window)
+        controller.showWindow(nil)
+        defer { window.orderOut(nil); controller.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
+        window.setContentSize(NSSize(width: 1440, height: 920))
+        controller.toggleInspector()
+        let toolbar = try XCTUnwrap(window.toolbar)
+        for _ in 0..<6 {
+            try await Task.sleep(for: .milliseconds(250))
+            let visible = Set(toolbar.visibleItems?.map(\.itemIdentifier) ?? [])
+            for item in toolbar.items where !item.isHidden && (item.action != nil || item.itemIdentifier.rawValue == "cockpit.feature") {
+                XCTAssertTrue(visible.contains(item.itemIdentifier), "Unexpected overflow of \(item.itemIdentifier)")
+            }
+        }
+    }
+
+    @MainActor
+    func testWorkspaceRefreshKeepsToolbarPresentationStable() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanUp() }
+        fixture.store.addWorkspace()
+        let controller = fixture.window(paneFactory: { _, _ in FixturePaneController() })
+        controller.showWindow(nil)
+        let window = try XCTUnwrap(controller.window)
+        defer { window.orderOut(nil); controller.windowWillClose(Notification(name: NSWindow.willCloseNotification)) }
+        let draw = try XCTUnwrap(window.toolbar?.items.first { $0.itemIdentifier.rawValue == "cockpit.draw" })
+        XCTAssertFalse(window.toolbar?.items.contains { $0.itemIdentifier == .inspectorTrackingSeparator } == true)
+        let image = try XCTUnwrap(draw.image)
+        for _ in 0..<3 {
+            controller.refresh()
+            XCTAssertTrue(draw.image === image, "A background refresh must preserve the toolbar image")
+        }
+    }
+}
+
 @MainActor
 private final class SplitWidthSamples {
     var widths: [CGFloat] = []

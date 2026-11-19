@@ -91,7 +91,6 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var lastToolbarPaneID: UUID?
     private var lastToolbarKind: PaneKind?
     private var lastToolbarGlobalMode: SidebarSelection?
-    private var toolbarShowsPaneTools: Bool?
     private var lastExtensionState: ExtensionWorkspaceSyncState?
     private var observedGeneration = 0
     private var refreshScheduled = false
@@ -102,6 +101,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     private lazy var workspaceDirectoryFinder = DirectoryFinder()
     private var observers: [NSObjectProtocol] = []
     private var notesKeyMonitor: Any?
+    private weak var toolbarDraw: NSToolbarItem?
     private var toolbarFeature: NSToolbarItem?
     private var toolbarPageActions: NSToolbarItem?
     private var launcher: WorkspacePaneLauncher?
@@ -314,7 +314,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
                 bodyController.setContent(workspaceController, retainWhileHidden: true)
                 workspaceController.refresh(isActive: active)
             }
-            window?.title = Self.windowTitle(workspaceName: workspace.name, surface: surface)
+            setWindowTitle(Self.windowTitle(workspaceName: workspace.name, surface: surface))
         } else {
             workspaceController?.deactivate()
             workspaceController = nil
@@ -482,6 +482,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
         guard let workspace = selectedWorkspace else { return }
         workspace.setInspectorPresented(!workspace.isInspectorPresented)
         refreshInspector(animated: true)
+        refreshToolbar()
     }
     func toggleSidebar() { if let sidebarItem { sidebarItem.animator().isCollapsed.toggle() } }
     func toggleDrawing() { setDrawingActive(!isDrawingActive) }
@@ -499,7 +500,7 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             drawingOverlay = nil
         }
         isDrawingActive = enabled
-        refreshToolbar()
+        updateDrawingToolbarImage()
         if !enabled, windowVisible { focusSelectedPane() }
     }
     private func layoutDrawingOverlay() {
@@ -561,9 +562,9 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         let leading: [NSToolbarItem.Identifier] = surface == .main
-            // New Workspace sits at the trailing edge of the sidebar's toolbar
-            // region, beside the list it adds to, rather than over content.
-            ? [ToolbarID.sidebar, .flexibleSpace, ToolbarID.newWorkspace, .sidebarTrackingSeparator] : []
+            // A narrow sidebar only has room for the window controls and toggle.
+            // Let New Workspace use the content region beside the divider.
+            ? [ToolbarID.sidebar, .sidebarTrackingSeparator, ToolbarID.newWorkspace] : []
         // The flexible space after the tracking separator keeps the pane
         // tools at the window's trailing edge while the inspector is open,
         // instead of at the inspector's leading edge.
@@ -608,8 +609,9 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             item.image = NSImage(systemSymbolName: "plus", accessibilityDescription: item.label)
             item.action = #selector(newToolbarWorkspace(_:))
         case ToolbarID.draw:
+            toolbarDraw = item
             item.label = "Annotate"
-            item.image = NSImage(systemSymbolName: "pencil.tip.crop.circle", accessibilityDescription: item.label)
+            updateDrawingToolbarImage()
             item.action = #selector(toggleToolbarDrawing(_:))
         case ToolbarID.inspector:
             item.label = "Inspector"
@@ -626,9 +628,14 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     /// (a date range, say) ahead of the app name, or the app name alone.
     private func refreshGlobalWindowTitle() {
         guard isWindowLoaded, selectedWorkspace == nil else { return }
-        guard surface == .main else { window?.title = PilotWindowID.extendoTitle; return }
+        guard surface == .main else { setWindowTitle(PilotWindowID.extendoTitle); return }
         let page = selectedGlobalMode.flatMap { globalControllers[$0] as? CockpitPageTitleProviding }?.pageTitle
-        window?.title = page.map { $0 + " — Cockpit" } ?? "Cockpit"
+        setWindowTitle(page.map { $0 + " — Cockpit" } ?? "Cockpit")
+    }
+
+    private func setWindowTitle(_ title: String) {
+        guard let window, window.title != title else { return }
+        window.title = title
     }
 
     @objc private func newToolbarWorkspace(_ sender: Any?) { presentNewWorkspace() }
@@ -637,27 +644,29 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
     private func refreshToolbar() {
         guard isWindowLoaded else { return }
         let showsPaneTools = selectedWorkspace != nil
-        if toolbarShowsPaneTools != showsPaneTools, let toolbar = window?.toolbar {
-            toolbarShowsPaneTools = showsPaneTools
-            // Everything from the tracking separator on is the pane region.
-            let paneItems: [NSToolbarItem.Identifier] = [.inspectorTrackingSeparator, .flexibleSpace, ToolbarID.launcher,
-                                                       .space, ToolbarID.draw, ToolbarID.inspector]
-            let regionStart = toolbar.items.firstIndex { $0.itemIdentifier == .inspectorTrackingSeparator }
-            if showsPaneTools {
-                if regionStart == nil {
-                    for identifier in paneItems { toolbar.insertItem(withItemIdentifier: identifier, at: toolbar.items.count) }
+        if let toolbar = window?.toolbar,
+           let actionsIndex = toolbar.items.firstIndex(where: { $0.itemIdentifier == ToolbarID.pageActions }) {
+            let regionStart = actionsIndex + 1
+            let hasPaneTools = toolbar.items.contains { $0.itemIdentifier == ToolbarID.launcher }
+            if showsPaneTools && !hasPaneTools {
+                for identifier in [NSToolbarItem.Identifier.flexibleSpace, ToolbarID.launcher, .space, ToolbarID.draw, ToolbarID.inspector] {
+                    toolbar.insertItem(withItemIdentifier: identifier, at: toolbar.items.count)
                 }
-            } else {
-                // The tracking separator reserves the inspector's toolbar
-                // region even when its items are hidden. Remove the region on
-                // global pages so their primary controls can use the full width.
-                if let regionStart {
-                    for index in (regionStart..<toolbar.items.count).reversed() { toolbar.removeItem(at: index) }
-                }
+            } else if hasPaneTools && !showsPaneTools {
+                for index in (regionStart..<toolbar.items.count).reversed() { toolbar.removeItem(at: index) }
                 launcher = nil
             }
+            // Track the inspector divider only while it occupies horizontal space.
+            // A collapsed inspector leaves the trailing tools in the content region.
+            let tracksInspector = toolbar.items.dropFirst(regionStart).first?.itemIdentifier == .inspectorTrackingSeparator
+            let needsTracking = showsPaneTools && selectedWorkspace?.isInspectorPresented == true && inspectorController != nil
+            if needsTracking && !tracksInspector {
+                toolbar.insertItem(withItemIdentifier: .inspectorTrackingSeparator, at: regionStart)
+            } else if tracksInspector && !needsTracking {
+                toolbar.removeItem(at: regionStart)
+            }
         }
-        launcher?.workspace = selectedWorkspace
+        if launcher?.workspace !== selectedWorkspace { launcher?.workspace = selectedWorkspace }
         let pane = selectedPane.flatMap { $0.isCollapsed ? nil : $0 }
         let mode = selectedGlobalMode
         if pane?.id != lastToolbarPaneID || pane?.kind != lastToolbarKind || mode != lastToolbarGlobalMode {
@@ -678,14 +687,11 @@ final class CockpitWindowController: NSWindowController, NSWindowDelegate, NSToo
             toolbarPageActions?.isHidden = actions == nil
             toolbarPageActions?.visibilityPriority = .high
         }
-        for item in window?.toolbar?.items ?? [] where [ToolbarID.launcher, ToolbarID.draw, ToolbarID.inspector].contains(item.itemIdentifier) {
-            item.isEnabled = selectedWorkspace != nil
-            item.isHidden = selectedWorkspace == nil
-            if item.itemIdentifier == ToolbarID.draw {
-                item.image = NSImage(systemSymbolName: isDrawingActive ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle",
-                                     accessibilityDescription: "Annotate")
-            }
-        }
+    }
+
+    private func updateDrawingToolbarImage() {
+        let symbol = isDrawingActive ? "pencil.tip.crop.circle.fill" : "pencil.tip.crop.circle"
+        toolbarDraw?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Annotate")
     }
 
     private func installNotesKeyMonitor() {
